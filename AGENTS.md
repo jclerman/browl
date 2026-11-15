@@ -22,6 +22,7 @@ Key decisions, detailed in the design doc:
 - **Poetry ≥ 2.5.1.** Dependencies go under `[tool.poetry.dependencies]` (`[project]` declares `dynamic = ["dependencies"]`).
 - **Python ≥ 3.12.**
 - Commit `poetry.lock`. After changing `pyproject.toml`, run `poetry lock` and `poetry check`.
+- Agent shells may lack the Poetry venv, so run tools and commits via `poetry run` (e.g. `poetry run git commit`); the local mypy pre-commit hook needs `mypy` on PATH.
 
 ## Code
 

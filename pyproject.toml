@@ -18,6 +18,34 @@ priority = "primary"
 [tool.poetry.dependencies]
 fastapi = "^0.163"
 
+[tool.poetry.group.dev.dependencies]
+mypy = "^2.4.1"
+pre-commit = "^4.7.0"
+
+[tool.ruff]
+# Max line length for the formatter, the import sorter, and E501.
+line-length = 120
+
+[tool.ruff.lint]
+# Enable these rule sets on top of ruff's defaults (E4, E7, E9, F):
+#   E   = pycodestyle errors (all of them, not just the default subset)
+#   W   = pycodestyle warnings
+#   I   = isort (import sorting)
+#   UP  = pyupgrade (modernize syntax for the target Python version)
+#   B   = flake8-bugbear (likely bugs and design problems)
+#   C4  = flake8-comprehensions (simpler/faster comprehensions)
+#   T20 = flake8-print (flag print() and pprint() calls)
+#   D   = pydocstyle, as in flake8-docstrings (docstring presence and style)
+extend-select = ["E", "W", "I", "UP", "B", "C4", "T20", "D"]
+# Rules to skip:
+#   B028 = warnings.warn() without an explicit stacklevel
+#   D206, D300 = conflict with ruff-format, which already handles them
+ignore = ["B028", "D206", "D300"]
+
+[tool.ruff.lint.pydocstyle]
+# Which docstring style D enforces (Google style, per AGENTS.md).
+convention = "google"
+
 [build-system]
 requires = ["poetry-core>=2.5.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
