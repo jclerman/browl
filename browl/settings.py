@@ -52,7 +52,7 @@ JavaHeap = Annotated[str, AfterValidator(_java_heap)]
 
 
 class Settings(BaseSettings):
-    """Every operator setting, validated.
+    """Every operator setting.
 
     Attributes:
         base_url: Where the service is served; IRIs under it get their native paths (O-2). Stored without a trailing
