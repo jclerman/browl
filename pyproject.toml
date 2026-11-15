@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "Host an OWL ontology as a browsable website, with a page for every entity at a URL implied by its IRI."
 readme = "README.md"
 authors = [{ name = "Jeffrey C. Lerman" }]
-# Provisional: to be settled in the coding-standards doc.
 requires-python = ">=3.12"
 dynamic = ["dependencies"]
 
@@ -29,7 +28,8 @@ pytest-sugar = "^1.1.1"
 # An xfail test that unexpectedly passes is a failure, not a silent pass.
 xfail_strict = true
 # When run with --cov, record which test covered each line; no effect otherwise.
-addopts = ["--cov-context=test"]
+addopts = ["--cov-context=test", "--strict-markers"]
+markers = ["jvm: needs a JVM and robot.jar; skipped when Java is not available"]
 # Show full assertion diffs (as with -vv) without making other output verbose.
 verbosity_assertions = 2
 
@@ -40,6 +40,8 @@ source = ["browl"]
 [tool.coverage.report]
 # Show coverage percentages to two decimal places.
 precision = 2
+# Fail (under --cov) when line coverage drops below this.
+fail_under = 90
 
 [tool.coverage.html]
 # In the HTML report, show which tests covered each line (record them with
@@ -63,11 +65,17 @@ line-length = 120
 #   C4  = flake8-comprehensions (simpler/faster comprehensions)
 #   T20 = flake8-print (flag print() and pprint() calls)
 #   D   = pydocstyle, as in flake8-docstrings (docstring presence and style)
-extend-select = ["E", "W", "I", "UP", "B", "C4", "T20", "D"]
+#   RUF = ruff's own rules
+#   SIM = flake8-simplify (simpler equivalents)
+#   N   = pep8-naming
+extend-select = ["E", "W", "I", "UP", "B", "C4", "T20", "D", "RUF", "SIM", "N"]
 # Rules to skip:
 #   B028 = warnings.warn() without an explicit stacklevel
 #   D206, D300 = conflict with ruff-format, which already handles them
-ignore = ["B028", "D206", "D300"]
+#   SIM108 = prefer a ternary over if/else assignment, even where that reads worse
+ignore = ["B028", "D206", "D300", "SIM108"]
+# The en dash is used deliberately (e.g. "N-1–N-3"), so RUF001-003 shouldn't flag it.
+allowed-confusables = ["–"]
 
 [tool.ruff.lint.pydocstyle]
 # Which docstring style D enforces (Google style, per AGENTS.md).
