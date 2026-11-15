@@ -15,7 +15,7 @@ OWL-Browse (`browl`) hosts an OWL ontology as a browsable website. Every declare
 ## Architecture
 
 - A Python web app ([FastAPI](https://github.com/fastapi/fastapi), Jinja2 templates, htmx), with no front-end build step.
-- The ontology is held in memory by the OWLAPI, which runs in the app's process through [JPype](https://github.com/jpype-project/jpype). The OWLAPI also renders Manchester syntax.
+- The ontology is held in memory by the [OWLAPI](https://github.com/owlcs/owlapi), which runs in the app's process through [JPype](https://github.com/jpype-project/jpype). The OWLAPI also renders Manchester syntax.
 - Reasoning runs [ROBOT](https://github.com/ontodev/robot) as a separate process, with time and memory limits.
 - Data that needs the whole ontology (names, hierarchy counts, the search index) is computed once per load and stored in SQLite. Rendered pages are kept in a small cache.
 - Deployed as a single Docker container.
