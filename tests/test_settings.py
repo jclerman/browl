@@ -157,6 +157,14 @@ def test_auth_settings_required(env: pytest.MonkeyPatch, missing: str) -> None:
         load_settings()
 
 
+def test_errors_never_show_the_client_secret(env: pytest.MonkeyPatch) -> None:
+    """Check that the OIDC client secret doesn't appear in a validation error."""
+    env.delenv("OIDC_CLIENT_ID")
+    with pytest.raises(ValidationError) as error:
+        load_settings()
+    assert "client-secret" not in str(error.value)
+
+
 def test_seed_admins_lowercased(env: pytest.MonkeyPatch) -> None:
     """Check that seed admin addresses are lowercased."""
     assert load_settings().seed_admins == ["admin@example.org"]

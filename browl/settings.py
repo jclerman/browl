@@ -7,9 +7,8 @@ e.g. `LANGUAGE_RANKING='["en", "fr", "none"]'`.
 import logging
 import re
 from pathlib import Path
-from typing import Self
 
-from pydantic import Field, HttpUrl, SecretStr, field_validator, model_validator
+from pydantic import Field, HttpUrl, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -137,19 +136,19 @@ class Settings(BaseSettings):
             raise ValueError(f"not email addresses: {', '.join(invalid)}")
         return _unique([address.lower() for address in value])
 
-    @model_validator(mode="after")
-    def check_auth(self) -> Self:
+    @field_validator("auth_disabled")
+    @classmethod
+    def check_auth(cls, value: bool, info: ValidationInfo) -> bool:
         """Require the OIDC settings and seed admins unless authentication is disabled (O-6, O-7)."""
-        if not self.auth_disabled:
-            required = {
-                "OIDC_CLIENT_ID": self.oidc_client_id,
-                "OIDC_CLIENT_SECRET": self.oidc_client_secret,
-                "SEED_ADMINS": self.seed_admins,
-            }
-            missing = [name for name, value in required.items() if not value]
+        # A field validator, not a model validator: its error shows only this field's value, never the client secret.
+        # The fields it checks are declared earlier, so they're validated first; one that failed is absent from
+        # info.data and has its own error already.
+        if not value:
+            required = ("oidc_client_id", "oidc_client_secret", "seed_admins")
+            missing = [field.upper() for field in required if field in info.data and not info.data[field]]
             if missing:
                 raise ValueError(f"{', '.join(missing)} required unless AUTH_DISABLED is true")
-        return self
+        return value
 
 
 def load_settings() -> Settings:
