@@ -14,6 +14,10 @@ for NCBITaxon on every restart. This spike measures two alternatives:
 
 **Both fix the restart problem; A is the better fit, so I recommend it.**
 
+In the table, "current design" is the one in `docs/DESIGN.md` today: the app loads the whole ontology into an
+in-process OWLAPI (via JPype) at startup, renders pages from it, and keeps derived data (dictionary, counts, `usage`) in
+SQLite.
+
 | | Current design | **A: Fuseki on demand** | B: pre-rendered SQLite |
 | --- | --- | --- | --- |
 | Ready after a restart | 71–74 s (NCBITaxon) | **0.6–0.9 s** | about instant (opens a file) |
