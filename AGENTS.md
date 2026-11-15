@@ -16,9 +16,11 @@ browl hosts an OWL ontology as a browsable website: every declared entity gets a
 Key decisions, detailed in the design doc:
 
 - FastAPI and Jinja2, with htmx for tree expansion, tabs and autocomplete. No SPA framework or front-end build step.
-- The OWLAPI, loaded in-process from `robot.jar` via JPype, holds the ontology in memory and renders Manchester syntax.
+- Fuseki (TDB2) holds the ontology, queried with SPARQL on demand. It runs in its own container.
+- The OWLAPI, loaded in-process from `robot.jar` via JPype, renders Manchester syntax from the triples fetched for each
+  page.
 - Reasoning (ELK, HermiT) runs ROBOT as a subprocess.
-- Load-time computed data and the search index live in SQLite. No triple store.
+- Whole-ontology data computed once per load, and the search index, live in SQLite.
 
 ## Agent-specific instructions
 

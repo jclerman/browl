@@ -58,7 +58,8 @@ instructions specific to coding agents. Requirements and architecture are in [`D
 
 - **Logging:** the standard library's `logging`, configured in one place, with plain-text output. Modules get their
   logger with `logging.getLogger(__name__)`. Don't use `print`.
-- **Async:** request handlers never block the event loop. Java (OWLAPI) and SQLite calls run in the thread pool.
+- **Async:** request handlers never block the event loop. Java (OWLAPI) and SQLite calls run in the thread pool;
+  Fuseki is called with an async HTTP client.
 - **SQL:** the standard library's `sqlite3` with hand-written SQL; no ORM. The derived database is rebuilt on every
   load and needs no migrations. The persistent database (job state, admins) records a schema version and migrates
   forward from it.
