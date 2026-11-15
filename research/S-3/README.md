@@ -1,23 +1,25 @@
 # S-3: scale test with a large ontology — findings
 
 Spike for [#13](https://github.com/jclerman/browl/issues/13): at N-1 scale (millions of entities), how much heap does
-the
-OWLAPI need, how long does loading take, can distinct descendant counts be computed, and how big are the `usage` table
-and the derived database? Design context: [`docs/DESIGN.md`](../../docs/DESIGN.md) §2.4, §2.5, §2.12, §2.14. Builds on
-[S-1](../S-1/README.md), whose JVM and loading code it reuses.
+the OWLAPI need, how long does loading take, can distinct descendant counts be computed, and how big are the `usage`
+table and the derived database? Design context: [`docs/DESIGN.md`](../../docs/DESIGN.md) §2.4, §2.5, §2.12, §2.14.
+Builds on [S-1](../S-1/README.md), whose JVM and loading code it reuses.
 
 **Conclusion: N-1 scale is workable on one machine: NCBITaxon loads from `.ofn` in a 6 GB heap.** Serve the ontology
-from `.ofn`, which loads twice as fast and needs half the heap. Count descendants with roaring bitmaps (compressed sets
+from `.ofn`, which loads 1.6–1.8× faster and needs half the heap. Count descendants with roaring bitmaps (compressed
+sets
 of integers; see [Descendant counts](#descendant-counts)). Keep the `usage` table: the OWLAPI can't find references by
-annotation value, and its IRI lookup is a full scan.
+annotation value, and its IRI lookup takes seconds.
 
 ## Setup
 
 - Same machine as S-1: Apple M3 Pro (12 cores), 36 GB RAM; OpenJDK 17.0.17; Python 3.12.8; ROBOT v1.9.11 (OWLAPI 4.5);
   JPype 1.7.1; [pyroaring](https://github.com/Ezibenroc/PyRoaringBitMap) 1.2.0 (roaring bitmaps, below).
 - **NCBITaxon** release v2026-11-09 (`ncbitaxon.owl`, RDF/XML, 2.1 GB): 21,334,880 axioms, 3,025,030 classes, a pure
-  tree (no class has two parents), 3.56 M label and synonym values, 5.5 M annotation values that are IRIs (mostly
-  `has_rank`).
+  tree (no class has two parents), 3.56 M label and synonym values, 15.3 M annotation assertions. The 5.5 M annotation
+  values that are IRIs are
+  all ranks: each of 2.76 M taxa states its rank twice, with `ncbitaxon#has_rank` and with TAXRANK's own "has rank"
+  property; the species rank is the value about 2.5 M times.
 - Uberon (S-1's timing ontology) re-run for a hierarchy with multiple parents: 26,739 classes, 8,170 with more than one
   parent.
 - `scale.py` runs every step in one process (24 GB heap limit) and writes a prototype of the derived database
@@ -33,14 +35,14 @@ annotation value, and its IRI lookup is a full scan.
 | `.ofn` | 71–74 s | 3.4–3.7 GB | `-Xmx6g` |
 
 - Converting to `.ofn` with ROBOT took 163 s once (`-Xmx24g`), giving a 1.7 GB file.
-- Retained heap is about 0.32 KB per axiom from RDF/XML, and about half that from `.ofn`. Uberon (S-1) retained about
-  0.45 KB per axiom from RDF/XML, so the per-axiom figure depends on the ontology's shape.
+- Retained heap is about 0.33 KB per axiom from RDF/XML, and about half that from `.ofn`. Uberon retained 0.40–0.47 KB
+  per axiom (S-1 and S-3 runs) from RDF/XML, so the per-axiom figure depends on the ontology's shape.
 - With a generous limit, the JVM's observed peak was 16–20 GB, but that reflects how much it chose to use, not how much
   it needs: the "Loads with" column is the measured requirement.
 
 **→ design (§2.4): serve from `.ofn`.** Save the built ontology as `.ofn`, whatever format was uploaded: ROBOT's
 reasoning step can write it directly, and an upload without reasoning gets a one-time conversion. Every later load (app
-restarts) is then about 2× faster and needs about half the heap.
+restarts) is then 1.6–1.8× faster and needs about half the heap.
 
 **→ design (§2.12): `APP_JVM_MAX_HEAP`** defaults to `8g`: NCBITaxon served from `.ofn` loads in 6 GB, and the rest is
 headroom for rendering. Smaller deployments can lower it; the upload page reports "memory limit" when it's too small.
@@ -55,11 +57,11 @@ of the time goes:
 | --- | --- | --- |
 | Classes and named subclass edges | Asks the OWLAPI for every class (3.0 M IRIs, copied into Python strings and numbered), then walks all 3.0 M `SubClassOf` axioms, keeping those with a named class on both sides and recording the pair of numbers. About six Java calls per axiom. | 54 s |
 | Descendant counts | Pure Python and pyroaring over those edges; no Java calls. | 4.2 s |
-| Annotation scan | Walks every annotation assertion (about 15 M), keeping the label and synonym values (3.56 M) and counting the values that are IRIs (5.5 M, mostly `has_rank`). Each assertion's property, value and subject cross into Python. | 146 s |
+| Annotation scan | Walks every annotation assertion (15.3 M), keeping the label and synonym values (3.56 M) and counting the values that are IRIs (5.5 M, all ranks). Each assertion's property, value and subject cross into Python. | 146 s |
 | Core tables | SQLite only: inserts `entity`, `name_value`, `edge` and `counts`, then builds their indexes. | 22 s |
-| `usage` table | Inserts a row per subclass edge, then walks all annotation assertions a second time through JPype to add a row per value that is a known entity (8.5 M rows in all). The second walk is avoidable; done in the first scan, this step would be mostly SQLite inserts. | 97 s |
+| `usage` table | Inserts a row per subclass edge, then walks all annotation assertions a second time through JPype to add a row per value that is a known class (8.5 M rows in all). The second walk is avoidable; done in the first scan, this step would be mostly SQLite inserts. | 97 s |
 
-That's roughly 8–18 µs per axiom for the steps that cross from Java to Python. Load plus pre-caching comes to roughly
+That's roughly 10–18 µs per axiom for the steps that cross from Java to Python. Load plus pre-caching comes to roughly
 6–9 minutes for NCBITaxon, which the design already accepts for uploads (§2.4); restarts skip pre-caching. The process
 peaked at about 12 GB resident (JVM and Python together).
 
@@ -73,8 +75,9 @@ measures how much faster that is.
 re-parsed the ontology, 71–74 s for NCBITaxon from `.ofn`. Pre-caching is skipped. That one parse is the whole cost.
 
 **Upload**, NCBITaxon, no reasoner: about 2.5 min converting to `.ofn` (once), 1.2 min loading, then about 5 min of
-pre-caching, of which about 3.3 min is moving data from Java to Python through JPype and 2 min is SQLite inserts and
-indexes. Reasoning would add its own time (S-2).
+pre-caching, of which about 3.3 min is the two main walks through JPype (edges, annotations) and 1.6 min the `usage`
+step,
+much of which is its avoidable second walk; the core SQLite tables take 22 s. Reasoning would add its own time (S-2).
 
 So the current design is never ready in under about 70 s at this scale, even on restart. Two designs could change that,
 and are left to a separate spike, [S-4](https://github.com/jclerman/browl/issues/47):
@@ -96,22 +99,23 @@ plain bitmap for many, or ranges for long consecutive runs), and unions work blo
 engines and databases. [pyroaring](https://github.com/Ezibenroc/PyRoaringBitMap) is its Python binding, wrapping the C
 library CRoaring.
 
-The bottom-up pass over roaring bitmaps handled NCBITaxon's 3.0 M classes in 4.2 s and Uberon's DAG in under
-0.1 s, with no memory problem: a node's set is freed as soon as all its parents have merged it, and run-length
-compression keeps tree-shaped sets small. No SQLite closure-table fallback is needed.
+The bottom-up pass over roaring bitmaps handled NCBITaxon's 3.0 M classes in 4.2 s and Uberon's DAG in under 0.1 s, with
+no memory problem: a node's set is freed as soon as all its parents have merged it, and run-length compression keeps
+tree-shaped sets small. No SQLite closure-table fallback is needed.
 
 **→ design (§2.5): use roaring bitmaps** (`pyroaring`), not Python ints: an int bitset costs memory proportional to the
-highest index, about 370 KB per set at this scale.
+highest index, up to about 380 KB per set at this scale.
 
 ### Usage
 
 | Lookup (NCBITaxon) | Time |
 | --- | --- |
-| References to an entity, OWLAPI index (up to 47,785 referencing axioms) | 0.3–8 ms |
+| References to an entity, OWLAPI index (up to 47,785 referencing axioms) | 0.3–8 ms (50 ms for the first, cold call) |
 | References to an IRI, OWLAPI `getReferencingAxioms(IRI)` | 4.8–11 s |
 
-- Lookup by entity is indexed and fast. Lookup by IRI is a full scan, and it doesn't find annotation assertions whose
-  *value* is the IRI: for the most frequently used `has_rank` value (the species rank), it found 4.
+- Lookup by entity is indexed and fast. Lookup by IRI takes 5–11 s whatever the IRI, consistent with a full scan, and it
+  doesn't find annotation assertions whose *value* is the IRI: for the species rank, the value of about 2.5 M rank
+  assertions, it found 4.
 - U-26 requires those annotation-value references, so they can only come from browl's own table.
 - The `usage` table (subclass references plus annotation values that are entities) has 8.5 M rows and adds about
   400 MB to the database.

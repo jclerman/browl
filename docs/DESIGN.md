@@ -216,7 +216,7 @@ server worker reports it consistently. _(Q7b, Q14a)_
 | --- | --- |
 | **uploading** | The file is streamed to the data volume. The site switches to the "loading" page (U-16) and the page cache is cleared. |
 | **reasoning** (optional) | A build script runs ROBOT `reason` with ELK or HermiT. The built output, written as `.ofn`, replaces the uploaded file as the ontology that gets served. Without a reasoner, the upload is converted to `.ofn` once instead. _(Q7a)_ |
-| **loading** | The previous ontology is released and the built ontology is loaded into a fresh OWLAPI ontology manager in the app's JVM. It is always the `.ofn` built in the previous stage: for NCBITaxon, `.ofn` loads about 2× faster than RDF/XML and needs about half the heap, which also speeds every restart ([S-3 findings](../research/S-3/README.md)). _(Q15)_ |
+| **loading** | The previous ontology is released and the built ontology is loaded into a fresh OWLAPI ontology manager in the app's JVM. It is always the `.ofn` built in the previous stage: for NCBITaxon, `.ofn` loads 1.6–1.8× faster than RDF/XML and needs about half the heap, which also speeds every restart ([S-3 findings](../research/S-3/README.md)). _(Q15)_ |
 | **pre-caching** | The derived SQLite database is built from the in-memory ontology ([2.5](#25-derived-data-pre-caching)), as a new file then swapped in atomically. |
 | **ready** | The new generation number is recorded; pages are served again. |
 
@@ -234,11 +234,10 @@ the ontology into the OWLAPI (showing the "loading" page meanwhile) and reuses t
 number matches, skipping pre-caching.
 
 **App JVM heap:** set by `APP_JVM_MAX_HEAP`. It must fit the largest ontology to be served: NCBITaxon (21 M axioms)
-keeps 3.7 GB
-of heap when loaded from `.ofn`, and loads in a 6 GB heap ([S-3 findings](../research/S-3/README.md)). If the ontology
-doesn't fit, the loading stage fails with a "memory limit" reason, like the reasoner. After a
-heap failure the app restarts its process instead of carrying on, because the error can also kill JPype's internal
-reference-cleanup thread ([S-1 findings](../research/S-1/README.md)).
+keeps 3.7 GB of heap when loaded from `.ofn`, and loads in a 6 GB heap ([S-3 findings](../research/S-3/README.md)). If
+the ontology doesn't fit, the loading stage fails with a "memory limit" reason, like the reasoner. After a heap failure
+the app restarts its process instead of carrying on, because the error can also kill JPype's internal reference-cleanup
+thread ([S-1 findings](../research/S-1/README.md)).
 
 **Missing imports:** the ontology is loaded with the OWLAPI's `MissingImportHandlingStrategy.SILENT`, so an
 `owl:imports` target that can't be fetched doesn't stop the load. The upload page lists the imports that were skipped.
@@ -258,7 +257,7 @@ Built once per load, stored in the derived SQLite database. Proposed tables:
 | `hash_prefix` | distinct URL paths that have hash entities under them |
 | `prefix` | CURIE prefix → namespace (ontology's own, built-ins, configured overrides) |
 | `meta` | ontology IRI, version IRI, reasoner used, load time, generation number |
-| `usage` | referenced entity → referring entity, axiom kind (one row per pair and kind), built from the OWLAPI's referencing-axiom index, plus annotation assertions whose value is an entity. An axiom with no single subject, such as a general class axiom or `DisjointClasses(A, B, C)`, gets a row for every named entity it mentions. Used for the Usage tab's count and paging. Needed: the OWLAPI can't find annotation assertions by value, and its IRI lookup is a full scan (5–11 s on NCBITaxon). On NCBITaxon the table has 8.5 M rows, about 400 MB ([S-3 findings](../research/S-3/README.md)). |
+| `usage` | referenced entity → referring entity, axiom kind (one row per pair and kind), built from the OWLAPI's referencing-axiom index, plus annotation assertions whose value is an entity. An axiom with no single subject, such as a general class axiom or `DisjointClasses(A, B, C)`, gets a row for every named entity it mentions. Used for the Usage tab's count and paging. Needed: the OWLAPI can't find annotation assertions by value, and its IRI lookup takes 5–11 s on NCBITaxon. On NCBITaxon the table has 8.5 M rows, about 400 MB ([S-3 findings](../research/S-3/README.md)). |
 
 **Hierarchies.** Named direct parents, taken from the OWLAPI's subclass and sub-property axioms (asserted, or inferred
 if a reasoner ran). Roots are nodes with no named parent. For classes this includes children of `owl:Thing`.
