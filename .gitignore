@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# Temporary files: any directory named tmp, at any depth
+tmp/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+/build/
+/dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# IDE settings
+# PyCharm and other JetBrains IDEs
+.idea/
+*.iml
+# VS Code
+.vscode/
