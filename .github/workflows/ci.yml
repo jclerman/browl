@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Cancel an in-progress run when a newer commit is pushed to the same branch or PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Installed before setup-python so setup-python can cache Poetry's venvs.
+      - name: Install Poetry
+        run: pipx install poetry==2.5.1
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: poetry
+
+      # Reuse pre-commit's hook environments between runs.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Install dependencies, lint, and test
+        run: make install ci
