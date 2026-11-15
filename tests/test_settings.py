@@ -177,9 +177,7 @@ def test_seed_admins_rejects_invalid(env: pytest.MonkeyPatch, value: str) -> Non
         settings_with(env, SEED_ADMINS=value)
 
 
-def test_auth_disabled_needs_no_auth_settings_and_warns(
-    env: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_load_settings_warns_when_auth_disabled(env: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Check that AUTH_DISABLED makes the auth settings optional and logs a warning (O-7)."""
     for name in AUTH:
         env.delenv(name)
@@ -189,11 +187,20 @@ def test_auth_disabled_needs_no_auth_settings_and_warns(
     assert "authentication is OFF" in caplog.text
 
 
-def test_no_warning_with_auth(env: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+def test_load_settings_no_warning_with_auth(env: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Check that nothing is logged when authentication is on."""
     with caplog.at_level(logging.WARNING):
         load_settings()
     assert caplog.text == ""
+
+
+def test_load_settings_rejects_invalid_settings(env: pytest.MonkeyPatch) -> None:
+    """Check that load_settings raises ValidationError, listing every invalid setting."""
+    env.setenv("PAGE_CACHE_SIZE", "-1")
+    env.setenv("RESERVED_PREFIX", "browl")
+    with pytest.raises(ValidationError) as error:
+        load_settings()
+    assert {e["loc"][0] for e in error.value.errors()} == {"page_cache_size", "reserved_prefix"}
 
 
 def test_secret_is_not_shown(env: pytest.MonkeyPatch) -> None:
