@@ -21,6 +21,14 @@ fastapi = "^0.163"
 [tool.poetry.group.dev.dependencies]
 mypy = "^2.4.1"
 pre-commit = "^4.7.0"
+pytest = "^9.2.0"
+
+[tool.pytest]
+# An xfail test that unexpectedly passes is a failure, not a silent pass.
+xfail_strict = true
+
+[tool.mypy]
+disallow_untyped_defs = true
 
 [tool.ruff]
 # Max line length for the formatter, the import sorter, and E501.
