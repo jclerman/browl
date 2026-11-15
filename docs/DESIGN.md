@@ -150,7 +150,9 @@ Tooling and code conventions are in [`CODING-STANDARDS.md`](CODING-STANDARDS.md)
 - **ROBOT as a subprocess** runs the optional reasoning, in its own JVM so time and memory limits can be enforced and a
   runaway run killed. _(Q7c)_
 - **One server worker process,** so the ontology is held in memory once. Concurrency comes from async request handling;
-  Java calls run in a thread pool.
+  all OWLAPI calls run on one dedicated thread. Parallel threads gave no extra throughput, because each page alternates
+  Java and Python work, and Python's GIL serializes the Python part; one thread renders thousands of pages per second
+  ([S-1 findings](../research/S-1/README.md)).
 - **No triple store.** Fuseki was there for reliable RDFS entailment; the entailments browl needs are computed during
   pre-caching instead ([2.5](#25-derived-data-pre-caching)). _(post-log; supersedes Q7)_
 - **Owlready2 is not used.** _(Q6)_
@@ -232,7 +234,13 @@ the ontology into the OWLAPI (showing the "loading" page meanwhile) and reuses t
 number matches, skipping pre-caching.
 
 **App JVM heap:** set by `APP_JVM_MAX_HEAP`. It must fit the largest ontology to be served; spike S-3 measures how much
-that is. If the ontology doesn't fit, the loading stage fails with a "memory limit" reason, like the reasoner.
+that is. If the ontology doesn't fit, the loading stage fails with a "memory limit" reason, like the reasoner. After a
+heap failure the app restarts its process instead of carrying on, because the error can also kill JPype's internal
+reference-cleanup thread ([S-1 findings](../research/S-1/README.md)).
+
+**Missing imports:** the ontology is loaded with the OWLAPI's `MissingImportHandlingStrategy.SILENT`, so an
+`owl:imports` target that can't be fetched doesn't stop the load. The upload page lists the imports that were skipped.
+By default the OWLAPI and ROBOT refuse such ontologies ([S-1 findings](../research/S-1/README.md)).
 
 ### 2.5 Derived data (pre-caching)
 
@@ -248,7 +256,7 @@ Built once per load, stored in the derived SQLite database. Proposed tables:
 | `hash_prefix` | distinct URL paths that have hash entities under them |
 | `prefix` | CURIE prefix → namespace (ontology's own, built-ins, configured overrides) |
 | `meta` | ontology IRI, version IRI, reasoner used, load time, generation number |
-| `usage` | referenced entity → referring entity, axiom kind (one row per pair and kind), built from the OWLAPI's referencing-axiom index. An axiom with no single subject, such as a general class axiom or `DisjointClasses(A, B, C)`, gets a row for every named entity it mentions. Used for the Usage tab's count and paging. |
+| `usage` | referenced entity → referring entity, axiom kind (one row per pair and kind), built from the OWLAPI's referencing-axiom index. An axiom with no single subject, such as a general class axiom or `DisjointClasses(A, B, C)`, gets a row for every named entity it mentions. Used for the Usage tab's count and paging. S-1 found the OWLAPI's own index returns counts and a first page in about 1 ms, so P-27 decides whether this table is needed once S-3 confirms that at scale ([S-1 findings](../research/S-1/README.md)). |
 
 **Hierarchies.** Named direct parents, taken from the OWLAPI's subclass and sub-property axioms (asserted, or inferred
 if a reasoner ran). Roots are nodes with no named parent. For classes this includes children of `owl:Thing`.
@@ -363,15 +371,17 @@ Tabs (U-28; see [2.9](#29-page-layout)):
 **Manchester rendering** _(post-log; supersedes Q6's hand-written renderer)_: the OWLAPI's own Manchester syntax
 renderer, the one Protégé uses, covers all of OWL 2. Entity names become links like this:
 
-1. A custom OWLAPI short-form provider returns a placeholder token for each entity (e.g. a private-use character plus an
-   index), instead of a name.
-2. The OWLAPI renders the axiom to text with those tokens.
-3. Python HTML-escapes the text, then replaces each token with a link showing the entity's display name
-   ([2.7](#27-display-names)).
-4. Manchester keywords are wrapped for light styling ([2.9](#29-page-layout)).
+1. The renderer is given the OWLAPI's `DefaultPrefixManager` with no prefixes as its short-form provider, so every
+   entity is rendered as its full IRI, `<…>`.
+2. Python HTML-escapes the text, then replaces each `<IRI>` that is a declared entity with a link showing the entity's
+   display name ([2.7](#27-display-names)). IRIs that aren't entities, and `<…>` inside literals, stay as text.
+3. Manchester keywords are wrapped for light styling ([2.9](#29-page-layout)).
+4. An axiom that renders as an empty string (OWLAPI 4 does this for `DatatypeDefinition`) is shown in functional
+   syntax instead.
 
-The short-form provider is a Python class implementing the Java interface through JPype, so no Java code is needed.
-Spike S-1 confirms this works and measures render time.
+No Java code is needed, and no Python code runs inside the renderer. Spike S-1 also tried the earlier plan, a Python
+short-form provider returning placeholder tokens: it worked but was slower, and missed IRIs the renderer prints without
+asking the provider. A page renders in about 0.3 ms at p95 on Uberon ([S-1 findings](../research/S-1/README.md)).
 
 ### 2.9 Page layout
 
@@ -473,8 +483,8 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 
 | Risk | Mitigation |
 | --- | --- |
-| OWLAPI heap needed for the largest ontologies is too large | Spike S-3 measures it. Fallbacks: py-horned-owl (lower memory, weaker Manchester support), or the OWLAPI in a separate process. |
-| JPype quirks: thread safety of concurrent OWLAPI reads; Python–Java call overhead | Spike S-1 measures concurrent render throughput. If needed, serialize OWLAPI calls through one thread. |
+| OWLAPI heap needed for the largest ontologies is too large | Spike S-3 measures it. Uberon needs ~180 MB retained, ~384 MB to load ([S-1 findings](../research/S-1/README.md)). Fallback: the OWLAPI in a separate process. py-horned-owl is not one: it used about 5× the memory on Uberon, and its Manchester output is whole-ontology only, with gaps. |
+| JPype quirks: thread safety of concurrent OWLAPI reads; Python–Java call overhead | Resolved by S-1: concurrent reads were safe, but gave no extra throughput, so OWLAPI calls run on one thread (2.1). Call overhead is small: ~0.3 ms per page ([S-1 findings](../research/S-1/README.md)). |
 | Memory limit can't be reported reliably | Spike S-2; at worst report "reasoner failed" with ROBOT's output. |
 | Descendant counts too slow or memory-hungry at millions of classes | Spike S-3; bitset approach, SQLite closure fallback. |
 | Loading and pre-caching a very large ontology takes many minutes | Accepted for uploads (Q14a), shown on the status page. Restarts skip pre-caching (2.4). S-3 measures both. |
@@ -507,7 +517,7 @@ go into this document.
 | P-28 | Coding-standards doc; settle the choices marked provisional | | | [#10](https://github.com/jclerman/browl/issues/10) |
 | P-2 | Settings module with validation (reserved-prefix rule, `AUTH_DISABLED` warning) | O-2–O-8, O-10, O-11 | P-1 | [#9](https://github.com/jclerman/browl/issues/9) |
 | P-3 | Docker Compose: one app container with a Java runtime and `robot.jar`, volumes, health check | O-1, O-9 | P-1 | [#11](https://github.com/jclerman/browl/issues/11) |
-| P-4 | OWLAPI bridge: start the JVM via JPype, load and release ontologies, run Java calls in a thread pool | | P-2, P-3, S-1 | [#15](https://github.com/jclerman/browl/issues/15) |
+| P-4 | OWLAPI bridge: start the JVM via JPype, load and release ontologies, run Java calls on one dedicated thread | | P-2, P-3, S-1 | [#15](https://github.com/jclerman/browl/issues/15) |
 
 ### Phase 2: Loading
 
