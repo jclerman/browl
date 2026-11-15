@@ -77,33 +77,38 @@ class Settings(BaseSettings):
 
     @field_validator("base_url", "fuseki_url")
     @classmethod
-    def _check_service_url(cls, value: HttpUrl) -> HttpUrl:
+    def check_service_url(cls, value: HttpUrl) -> HttpUrl:
+        """Reject a URL with a query string or fragment."""
         if value.query or value.fragment:
             raise ValueError("must not have a query string or fragment")
         return value
 
     @field_validator("reasoner_max_heap", "app_jvm_max_heap")
     @classmethod
-    def _check_java_heap(cls, value: str) -> str:
+    def check_java_heap(cls, value: str) -> str:
+        """Require a Java heap size in `-Xmx` syntax, such as 512m or 8g."""
         if not _JAVA_HEAP.fullmatch(value):
             raise ValueError("must be a Java heap size, such as 512m or 8g")
         return value
 
     @field_validator("name_properties")
     @classmethod
-    def _check_name_properties(cls, value: list[str]) -> list[str]:
+    def check_name_properties(cls, value: list[str]) -> list[str]:
+        """Reject duplicate name properties."""
         return _unique(value)
 
     @field_validator("reserved_prefix")
     @classmethod
-    def _check_reserved_prefix(cls, value: str) -> str:
+    def check_reserved_prefix(cls, value: str) -> str:
+        """Require one URL-safe path segment that starts with '_' (O-3)."""
         if not _RESERVED_PREFIX.fullmatch(value):
             raise ValueError("must start with '_' and be one path segment of letters, digits and '._~-', e.g. _browl")
         return value
 
     @field_validator("language_ranking")
     @classmethod
-    def _check_language_ranking(cls, value: list[str]) -> list[str]:
+    def check_language_ranking(cls, value: list[str]) -> list[str]:
+        """Lowercase and check the language tags, appending `UNTAGGED` when it isn't listed (O-5)."""
         ranking = [tag.lower() for tag in value]
         invalid = [tag for tag in ranking if tag != UNTAGGED and not _LANGUAGE_TAG.fullmatch(tag)]
         if invalid:
@@ -114,7 +119,8 @@ class Settings(BaseSettings):
 
     @field_validator("extra_prefixes")
     @classmethod
-    def _check_extra_prefixes(cls, value: dict[str, str]) -> dict[str, str]:
+    def check_extra_prefixes(cls, value: dict[str, str]) -> dict[str, str]:
+        """Require valid prefix names and absolute namespace IRIs (O-11)."""
         for prefix, namespace in value.items():
             if not _PREFIX_NAME.fullmatch(prefix):
                 raise ValueError(f"invalid prefix name {prefix!r}")
@@ -124,14 +130,16 @@ class Settings(BaseSettings):
 
     @field_validator("seed_admins")
     @classmethod
-    def _check_seed_admins(cls, value: list[str]) -> list[str]:
+    def check_seed_admins(cls, value: list[str]) -> list[str]:
+        """Check and lowercase the seed admin email addresses, rejecting duplicates."""
         invalid = [address for address in value if not re.fullmatch(r"[^@\s]+@[^@\s]+", address)]
         if invalid:
             raise ValueError(f"not email addresses: {', '.join(invalid)}")
         return _unique([address.lower() for address in value])
 
     @model_validator(mode="after")
-    def _check_auth(self) -> Self:
+    def check_auth(self) -> Self:
+        """Require the OIDC settings and seed admins unless authentication is disabled (O-6, O-7)."""
         if not self.auth_disabled:
             required = {
                 "OIDC_CLIENT_ID": self.oidc_client_id,
