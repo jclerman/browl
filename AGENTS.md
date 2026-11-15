@@ -28,6 +28,7 @@ Key decisions, detailed in the design doc:
 
 - **Reuse before writing.** Use the standard library or a well-maintained package where one does the job. Write your own only for a good reason (e.g. performance, quality, trustworthiness), and say why in the PR.
 - **Typing:** checked with mypy. Fully type every function and method signature. Elsewhere, annotate where it isn't redundant or unidiomatic (e.g. not `x = 0`).
+- **Tests:** pytest, in `tests/`. Use plain `assert`s and fixtures, not `unittest`-style classes.
 - **Docstrings:** PEP 257-compliant, Google style (`Args:`, `Returns:`, `Raises:`).
 - **Keep internal documentation terse.** Don't document what the code makes obvious, or could with better naming or structure; improve the code instead. Comments explain why, not what.
 
