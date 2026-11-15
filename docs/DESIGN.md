@@ -118,6 +118,12 @@ Tooling and code conventions are in [`CODING-STANDARDS.md`](CODING-STANDARDS.md)
 
 ### 2.1 Architecture overview
 
+> **Pending decision (S-4, [#47](https://github.com/jclerman/browl/issues/47)):** this section describes an in-process
+> OWLAPI holding the whole ontology, which can't serve pages until it has parsed it (about 70 s for NCBITaxon, on every
+> restart). [S-4](../research/S-4/README.md) recommends serving from Fuseki/TDB2 instead: ready about 0.7 s after a
+> restart, Uberon uploaded and ready in 7 s, and identical Manchester output by rendering fetched triples. If that's
+> chosen, §2.1, §2.4, §2.5, §2.8, O-1 and the affected plan items are revised in one pass.
+
 ```text
            browser
               │  HTML (Jinja) + htmx
