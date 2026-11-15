@@ -1,0 +1,3 @@
+# Downloaded or generated; recreate with fetch.sh.
+data/
+.venv/
