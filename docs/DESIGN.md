@@ -223,8 +223,9 @@ server worker reports it consistently. _(Q7b, Q14a)_
 | Stage | What happens |
 | --- | --- |
 | **uploading** | The file is streamed to the data volume. The site switches to the "loading" page (U-16) and the page cache is cleared. |
-| **reasoning** (optional) | A build script runs ROBOT `reason` with ELK or HermiT. Its output, written as RDF, replaces the uploaded file as the ontology that gets served. An upload in a format the TDB2 loader can't read (`.ofn`) is converted to RDF by ROBOT instead. _(Q7a)_ |
-| **loading** | Jena's TDB2 bulk loader builds a new store from the built ontology, in a new directory on the data volume. Fuseki is then switched to it and the previous store deleted. Uberon loads in about 4 s, NCBITaxon in about 3 min ([S-4 findings](../research/S-4/README.md)). _(Q15)_ |
+| **imports** | Imported ontologies are fetched (see Imports, below). |
+| **reasoning** (optional) | A build script runs ROBOT `reason` with ELK or HermiT. Its output, written as RDF, replaces the uploaded file as the ontology that gets served. Without reasoning, an `.ofn` upload, which the TDB2 loader can't read, is converted to RDF by ROBOT. _(Q7a)_ |
+| **loading** | Jena's TDB2 bulk loader builds a new store from the built ontology, in a new directory on the data volume. Fuseki is then switched to it and the previous store deleted. Uberon loads in 4–5 s, NCBITaxon in about 3 min ([S-4 findings](../research/S-4/README.md)). _(Q15)_ |
 | **pre-caching** | A few bulk SPARQL queries fetch the whole-ontology data, and the derived SQLite database is built from them ([2.5](#25-derived-data-pre-caching)), as a new file then swapped in atomically. |
 | **ready** | The new generation number is recorded; pages are served again. |
 
@@ -244,27 +245,26 @@ uploads again. Downtime during a replace is accepted. _(Q14a)_
 second, and the app reuses the derived database when its generation number matches, skipping pre-caching. Restarting
 either container doesn't reload the ontology.
 
-**Switching Fuseki to a new store:** needed at the end of every loading stage, including the first upload, when Fuseki
-has no store yet. The TDB2 bulk loader writes a new, empty store directory and can't load into a store that Fuseki has
-open, and while a load runs Fuseki still serves the previous store, if any (the site shows the "loading" page
-meanwhile). Once the new store is built, Fuseki has to start serving it, and the old one is deleted. The app and Fuseki
-are separate containers, so the app can't simply restart Fuseki. Instead it uses **Fuseki's admin protocol**: it
-registers the new store as a new dataset over HTTP, with a dataset description that sets the TDB2 location and the
-union default graph, then removes the old dataset. This needs Fuseki's admin endpoints (`/$/datasets`), which are
-reachable only on the Compose network, not published. P-3 tries it. If Fuseki turns out to leak memory or other
-resources across switches, the fallback is a fixed store path with a Fuseki restart, which takes under a second.
+**Switching Fuseki to a new store** happens at the end of every loading stage, including the first. The TDB2 loader
+can only write a new store, not one Fuseki has open, so Fuseki keeps serving the previous store (behind the "loading"
+page) until the new one is built. The app then switches Fuseki over with **Fuseki's admin protocol** (`/$/datasets`):
+it registers the new store as a dataset named after the load's generation number, with a description that sets the
+TDB2 location and the union default graph (Imports, below), then removes the old dataset and deletes its store. The app
+and Fuseki are separate containers, so this avoids the app restarting Fuseki. Fuseki records registered datasets in its
+base directory, which is on a volume, so the current one survives restarts. The admin endpoints are reachable only on
+the Compose network. P-3 tries this. If Fuseki leaks memory or other resources across switches, the fallback is a fixed
+store path and a Fuseki restart, which takes under a second.
 
-**Imports:** browl follows `owl:imports` where it can, and warns where it can't. The TDB2 loader reads only the files
-it's given, and by default ROBOT refuses an ontology whose imports can't be fetched
-([S-1 findings](../research/S-1/README.md)). So the pipeline resolves imports itself, before reasoning:
+**Imports:** browl follows `owl:imports` where it can, and warns where it can't. The TDB2 loader doesn't follow
+imports, and by default ROBOT refuses an ontology whose imports can't be fetched
+([S-1 findings](../research/S-1/README.md)), so the pipeline resolves them itself:
 
 1. Fetch each imported ontology, recursively, into the data volume. An import that can't be fetched is dropped from
    the `owl:imports` list, and the upload page lists it as a warning.
 2. Reasoning, if any, gets the fetched files through a catalog file, so ROBOT doesn't fetch them again.
 3. The loading stage loads the ontology and each import into its own named graph, and Fuseki serves their union as the
-   default graph (`tdb2:unionDefaultGraph`). Queries see one ontology, and which graph a triple came from stays
-   available, e.g. to mark imported entities. Merging everything into one file first (ROBOT `merge`) also works but
-   loses that.
+   default graph (`tdb2:unionDefaultGraph`). Queries see one ontology, and each triple's source stays known, e.g. to
+   mark imported entities; merging into one file first (ROBOT `merge`) would lose that.
 
 P-8 confirms the details.
 
@@ -303,26 +303,19 @@ all its parents have merged it. Only the counts are stored, not the full closure
 takes 4.2 s ([S-3 findings](../research/S-3/README.md)). Python `int` bitsets are unsuitable: their size grows with the
 highest index.
 
-**RDFS entailment** _(Q7)_. browl needs only a few RDFS entailment rules, and Jena provides them, so browl doesn't
-compute them itself:
+**RDFS entailment** _(Q7)_. browl needs only a few RDFS entailment rules:
 
 | Rule | What browl does with it |
 | --- | --- |
-| `rdfs:subPropertyOf` is transitive (rdfs5), and a value of a sub-property is also a value of its super-properties (rdfs7) | **Entailed name values:** for each property in the configured name list, values of its sub-properties are also stored under it, with `direct = false`. _(Q8)_ |
-| `rdfs:subClassOf` is transitive (rdfs11) | Covered by the descendant-count closure. |
+| `rdfs:subPropertyOf` is transitive (rdfs5), and a value of a sub-property is also a value of its super-properties (rdfs7) | **Entailed name values:** for each property in the configured name list, values of its sub-properties are also stored under it, with `direct = false`. Jena computes them (below). _(Q8)_ |
+| `rdfs:subClassOf` is transitive (rdfs11) | Covered by the descendant counts, computed in Python (above). |
 | An instance of a class is an instance of its super-classes (rdfs9) | For the Individuals tab (Later, U-18), if it lists indirect members. |
 
-The sub-property closure behind entailed name values can come from Jena in either of two ways, and P-11 settles which
-before building the dictionary:
+Jena computes the sub-property closure in one of two ways; P-11 picks one before building the dictionary:
 
-- a property path in the dictionary query (`?p rdfs:subPropertyOf* ?name`), which Jena's query engine evaluates; S-4
-  measured it at little extra cost;
-- Jena's RDFS inference, as an RDFS endpoint configured in Fuseki (`ja:DatasetRDFS`) over the same store; not tried
-  yet.
-
-If the RDFS endpoint is chosen, the plain endpoint stays available too: under RDFS inference, direct subclass edges
-can't be told apart from entailed ones. The subclass closure comes from neither way: descendant counts are computed in
-Python (above).
+- a property path in the dictionary query (`?p rdfs:subPropertyOf* ?name`); S-4 measured it at little extra cost;
+- an RDFS endpoint configured in Fuseki (`ja:DatasetRDFS`) over the same store; not tried yet. The plain endpoint
+  stays too: under RDFS inference, direct subclass edges can't be told apart from entailed ones.
 
 **Subclass closure, not stored.** Queries over `rdfs:subClassOf+` take up to 0.9 s on NCBITaxon, so pages never use them:
 descendant counts are precomputed (above). If a later feature needs to list or count descendants on demand, the fallback
@@ -380,13 +373,12 @@ Tabs (U-28; see [2.9](#29-page-layout)):
 
 - **Overview** (default; U-3, U-9, U-30–U-32): two panels, stacked, inspired by Protégé's description views but more
   compact. Details below.
-- **Usage** (U-26), labeled with its count, e.g. "Usage (128)": a page of referring entities (e.g. 50 per page), each
-  with its axioms that mention this entity, rendered on demand. References are found in Fuseki (`?s ?p <entity>`) and
-  paged in the store's index order: sorting 2.5 M references took 15.5 s, index order takes milliseconds. Counts take
-  2 ms for most entities but up to 0.4 s for one referenced millions of times. Since the tab isn't shown by default,
-  its cost is only paid when someone opens it. Open questions for P-27: finding references inside class expressions,
-  which reach the entity through blank nodes, and whether to count on first view (cached) or with an up-front query
-  ([S-4 findings](../research/S-4/README.md)).
+- **Usage** (U-26), labeled with its count, e.g. "Usage (128)": referring entities a page at a time (e.g. 50), each
+  with its axioms that mention this entity, rendered on demand. References come from Fuseki (`?s ?p <entity>`), paged
+  in the store's index order, since sorting doesn't scale (15.5 s for 2.5 M references). Counting takes 2 ms for most
+  entities, up to 0.4 s for one referenced millions of times. The tab isn't the default, so its cost is paid only when
+  it's opened. P-27 first settles two questions: finding references inside class expressions, which reach the entity
+  through blank nodes, and counting on first view (cached) or up front ([S-4 findings](../research/S-4/README.md)).
 - **Individuals** (classes only; Later, U-18): the class's named individuals, paged.
 
 **Overview tab:**
@@ -582,7 +574,7 @@ go into this document.
 | P-1 | Project scaffold: `browl` package, tooling per the coding-standards doc, CI | | | done: [#2](https://github.com/jclerman/browl/pull/2), [#4](https://github.com/jclerman/browl/pull/4), [#5](https://github.com/jclerman/browl/pull/5), [#6](https://github.com/jclerman/browl/pull/6) |
 | P-28 | Coding-standards doc; settle the choices marked provisional | | | [#10](https://github.com/jclerman/browl/issues/10) |
 | P-2 | Settings module with validation (reserved-prefix rule, `AUTH_DISABLED` warning) | O-2–O-8, O-10, O-11 | P-1 | [#9](https://github.com/jclerman/browl/issues/9) |
-| P-3 | Docker Compose: `app` (Java 21, `robot.jar`, Jena's TDB2 loader) and `fuseki` services, volumes, health checks; how the app switches Fuseki to a new store; Fuseki's memory while serving | O-1, O-9 | P-1, S-4 | [#11](https://github.com/jclerman/browl/issues/11) |
+| P-3 | Docker Compose: `app` (Java 21, `robot.jar`, Jena's TDB2 loader) and `fuseki` services, volumes, health checks; switching Fuseki to a new store through its admin protocol; Fuseki's memory while serving | O-1, O-9 | P-1, S-4 | [#11](https://github.com/jclerman/browl/issues/11) |
 | P-4 | Fuseki client (async SPARQL over HTTP) and OWLAPI bridge: start the JVM via JPype, parse fetched triples as a small ontology, run Java calls on one dedicated thread | | P-2, P-3, S-1, S-4 | [#15](https://github.com/jclerman/browl/issues/15) |
 
 ### Phase 2: Loading
@@ -592,7 +584,7 @@ go into this document.
 | P-5 | Job runner and job state in SQLite; "loading" / "not available" site pages | U-16, A-5 | P-2 | [#14](https://github.com/jclerman/browl/issues/14) |
 | P-6 | Upload page and streaming upload (auth not yet enforced) | A-2, A-4 | P-5 | [#16](https://github.com/jclerman/browl/issues/16) |
 | P-7 | ROBOT build script: optional ELK/HermiT reasoning, with limits | A-3, A-6, O-8 | P-6, S-2 | [#18](https://github.com/jclerman/browl/issues/18) |
-| P-8 | Bulk-load the built ontology into a new TDB2 store and switch Fuseki to it; imports; no reload on restart | A-4 | P-4, P-7, S-4 | [#20](https://github.com/jclerman/browl/issues/20) |
+| P-8 | Fetch imports (warn on failures); bulk-load the ontology and imports into a new TDB2 store and switch Fuseki to it; no reload on restart | A-4 | P-4, P-7, S-4 | [#20](https://github.com/jclerman/browl/issues/20) |
 
 ### Phase 3: Derived data
 
