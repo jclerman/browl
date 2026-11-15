@@ -36,14 +36,14 @@ def settings_with(env: pytest.MonkeyPatch, **values: str) -> Settings:
 def test_defaults(env: pytest.MonkeyPatch) -> None:
     """Check that unset settings get their documented defaults."""
     s = load_settings()
-    assert s.base_url == "https://example.org/onto"
+    assert str(s.base_url) == "https://example.org/onto"
     assert s.reserved_prefix == "_browl"
     assert s.name_properties == ["rdfs:label"]
     assert s.language_ranking == ["en", UNTAGGED]
     assert s.extra_prefixes == {}
     assert s.page_cache_size == 100
     assert s.app_jvm_max_heap == "1g"
-    assert s.fuseki_url == "http://fuseki:3030"
+    assert str(s.fuseki_url) == "http://fuseki:3030/"
     assert s.data_dir == Path("/data")
     assert s.auth_disabled is False
 
@@ -57,15 +57,20 @@ def test_base_url_is_required(env: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.parametrize(
     ("value", "expected"),
-    [("https://example.org/", "https://example.org"), ("http://example.org:8080/a/", "http://example.org:8080/a")],
+    [
+        ("https://example.org", "https://example.org/"),
+        ("HTTPS://Example.ORG:443/onto/", "https://example.org/onto/"),
+        ("https://bücher.example/onto/Bär", "https://xn--bcher-kva.example/onto/B%C3%A4r"),
+    ],
 )
-def test_base_url_drops_trailing_slash(env: pytest.MonkeyPatch, value: str, expected: str) -> None:
-    """Check that BASE_URL is stored without a trailing slash."""
-    assert settings_with(env, BASE_URL=value).base_url == expected
+def test_base_url_is_normalized(env: pytest.MonkeyPatch, value: str, expected: str) -> None:
+    """Check that BASE_URL is normalized as a URL: lowercase scheme and host, no default port, IDN and path encoded."""
+    assert str(settings_with(env, BASE_URL=value).base_url) == expected
 
 
 @pytest.mark.parametrize(
-    "value", ["example.org", "ftp://example.org", "https://", "https://x.org/?a=1", "https://x.org/#a"]
+    "value",
+    ["example.org", "ftp://example.org", "https://", "https://ex ample.org", "https://x.org/?a=1", "https://x.org/#a"],
 )
 def test_base_url_rejects_invalid(env: pytest.MonkeyPatch, value: str) -> None:
     """Check that BASE_URL must be an absolute http(s) URL without query or fragment."""

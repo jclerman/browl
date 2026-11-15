@@ -8,9 +8,8 @@ import logging
 import re
 from pathlib import Path
 from typing import Annotated, Self
-from urllib.parse import urlsplit
 
-from pydantic import AfterValidator, Field, SecretStr, field_validator, model_validator
+from pydantic import AfterValidator, Field, HttpUrl, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -25,13 +24,10 @@ _IRI_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 _JAVA_HEAP = re.compile(r"[1-9][0-9]*[kKmMgG]?")  # -Xmx syntax
 
 
-def _http_url(value: str) -> str:
-    parts = urlsplit(value)
-    if parts.scheme not in ("http", "https") or not parts.hostname:
-        raise ValueError("must be an absolute http or https URL")
-    if parts.query or parts.fragment:
+def _no_query_or_fragment(value: HttpUrl) -> HttpUrl:
+    if value.query or value.fragment:
         raise ValueError("must not have a query string or fragment")
-    return value.rstrip("/")
+    return value
 
 
 def _java_heap(value: str) -> str:
@@ -47,7 +43,7 @@ def _unique(values: list[str]) -> list[str]:
     return values
 
 
-HttpUrl = Annotated[str, AfterValidator(_http_url)]
+ServiceUrl = Annotated[HttpUrl, AfterValidator(_no_query_or_fragment)]
 JavaHeap = Annotated[str, AfterValidator(_java_heap)]
 
 
@@ -55,8 +51,8 @@ class Settings(BaseSettings):
     """Every operator setting.
 
     Attributes:
-        base_url: Where the service is served; IRIs under it get their native paths (O-2). Stored without a trailing
-            slash.
+        base_url: Where the service is served; IRIs under it get their native paths (O-2). Normalized as a URL, so
+            compare IRIs with it in URL form (DESIGN.md §2.3).
         reserved_prefix: First path segment of the service's own pages (O-3).
         name_properties: Annotation properties for display names and search, best first; CURIEs or IRIs (O-4).
         language_ranking: Language tags, best first, lowercased; `UNTAGGED` is appended when not listed (O-5).
@@ -77,7 +73,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(frozen=True)
 
-    base_url: HttpUrl
+    base_url: ServiceUrl
     reserved_prefix: str = "_browl"
     name_properties: Annotated[list[str], AfterValidator(_unique)] = Field(default=["rdfs:label"], min_length=1)
     language_ranking: list[str] = ["en"]
@@ -86,7 +82,7 @@ class Settings(BaseSettings):
     reasoner_timeout_s: int = Field(default=3600, gt=0)
     reasoner_max_heap: JavaHeap = "8g"
     app_jvm_max_heap: JavaHeap = "1g"
-    fuseki_url: HttpUrl = "http://fuseki:3030"
+    fuseki_url: ServiceUrl = HttpUrl("http://fuseki:3030")
     robot_jar: Path = Path("/opt/robot/robot.jar")
     jena_home: Path = Path("/opt/jena")
     data_dir: Path = Path("/data")

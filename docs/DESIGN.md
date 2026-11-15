@@ -195,6 +195,11 @@ For a declared entity IRI, in order:
 3. **Fallback:** anything else (`urn:`, `tag:`, query strings, ports, IRIs whose native path would hit the reserved
    prefix). URL = `/{RESERVED_PREFIX}/iri?u={percent-encoded IRI}`. _(Q1b)_
 
+**Comparing IRIs with `BASE_URL`:** `BASE_URL` is stored as a normalized URL (scheme and host lowercased, default port
+dropped, a non-ASCII host in its ASCII "punycode" form, non-ASCII path characters percent-encoded). IRIs, which RDF
+compares as plain strings, can contain Unicode. So each IRI is mapped to its URL form first (RFC 3987 §3.1), then
+compared with `BASE_URL`: scheme and host case-insensitively, the path exactly.
+
 For a hash IRI, the rules apply to the part before `#`, and the fragment is kept on the URL:
 `http://example.org/onto#Foo` → `/example.org/onto#Foo`.
 
