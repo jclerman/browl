@@ -7,9 +7,9 @@ e.g. `LANGUAGE_RANKING='["en", "fr", "none"]'`.
 import logging
 import re
 from pathlib import Path
-from typing import Annotated, Self
+from typing import Self
 
-from pydantic import AfterValidator, Field, HttpUrl, SecretStr, field_validator, model_validator
+from pydantic import Field, HttpUrl, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -24,27 +24,11 @@ _IRI_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 _JAVA_HEAP = re.compile(r"[1-9][0-9]*[kKmMgG]?")  # -Xmx syntax
 
 
-def _no_query_or_fragment(value: HttpUrl) -> HttpUrl:
-    if value.query or value.fragment:
-        raise ValueError("must not have a query string or fragment")
-    return value
-
-
-def _java_heap(value: str) -> str:
-    if not _JAVA_HEAP.fullmatch(value):
-        raise ValueError("must be a Java heap size, such as 512m or 8g")
-    return value
-
-
 def _unique(values: list[str]) -> list[str]:
     duplicates = sorted({v for v in values if values.count(v) > 1})
     if duplicates:
         raise ValueError(f"duplicate entries: {', '.join(duplicates)}")
     return values
-
-
-ServiceUrl = Annotated[HttpUrl, AfterValidator(_no_query_or_fragment)]
-JavaHeap = Annotated[str, AfterValidator(_java_heap)]
 
 
 class Settings(BaseSettings):
@@ -73,16 +57,16 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(frozen=True)
 
-    base_url: ServiceUrl
+    base_url: HttpUrl
     reserved_prefix: str = "_browl"
-    name_properties: Annotated[list[str], AfterValidator(_unique)] = Field(default=["rdfs:label"], min_length=1)
+    name_properties: list[str] = Field(default=["rdfs:label"], min_length=1)
     language_ranking: list[str] = ["en"]
     extra_prefixes: dict[str, str] = {}
     page_cache_size: int = Field(default=100, ge=0)
     reasoner_timeout_s: int = Field(default=3600, gt=0)
-    reasoner_max_heap: JavaHeap = "8g"
-    app_jvm_max_heap: JavaHeap = "1g"
-    fuseki_url: ServiceUrl = HttpUrl("http://fuseki:3030")
+    reasoner_max_heap: str = "8g"
+    app_jvm_max_heap: str = "1g"
+    fuseki_url: HttpUrl = HttpUrl("http://fuseki:3030")
     robot_jar: Path = Path("/opt/robot/robot.jar")
     jena_home: Path = Path("/opt/jena")
     data_dir: Path = Path("/data")
@@ -90,6 +74,25 @@ class Settings(BaseSettings):
     oidc_client_secret: SecretStr | None = None
     seed_admins: list[str] = []
     auth_disabled: bool = False
+
+    @field_validator("base_url", "fuseki_url")
+    @classmethod
+    def _check_service_url(cls, value: HttpUrl) -> HttpUrl:
+        if value.query or value.fragment:
+            raise ValueError("must not have a query string or fragment")
+        return value
+
+    @field_validator("reasoner_max_heap", "app_jvm_max_heap")
+    @classmethod
+    def _check_java_heap(cls, value: str) -> str:
+        if not _JAVA_HEAP.fullmatch(value):
+            raise ValueError("must be a Java heap size, such as 512m or 8g")
+        return value
+
+    @field_validator("name_properties")
+    @classmethod
+    def _check_name_properties(cls, value: list[str]) -> list[str]:
+        return _unique(value)
 
     @field_validator("reserved_prefix")
     @classmethod
