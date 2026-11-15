@@ -353,7 +353,7 @@ Every page has the same frame (U-27, U-28, U-29):
 
 ### 2.10 Page cache
 
-An in-memory LRU of rendered HTML, keyed by `(generation, URL path)`, with a configurable size (default 100). _(Q13)_ Including the generation number in the key means a reload invalidates entries in every worker without coordination. The cache wraps a plain function that stores rendered strings. `functools.lru_cache` is not applied to `async` handlers, because it would store unrun coroutine objects rather than pages.
+An in-memory LRU of rendered HTML, keyed by `(generation, URL path, tab)`, with a configurable size (default 100). _(Q13)_ Including the generation number in the key means a reload invalidates entries in every worker without coordination. The cache wraps a plain function that stores rendered strings. `functools.lru_cache` is not applied to `async` handlers, because it would store unrun coroutine objects rather than pages.
 
 ### 2.11 Authentication and admins
 
@@ -408,72 +408,75 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 
 ## 3. Implementation Plan
 
-Work items are sized to be one issue or PR each, roughly. The **Tracking** column is for issue and PR links once the repo has a remote. **Delivers** lists the requirement IDs.
+Work items are sized to be one issue or PR each, roughly. **Delivers** lists the requirement IDs. **Tracking** links each item's GitHub issue, or the PRs that did it. Each issue states its goal, entry criteria and acceptance criteria; GitHub's "blocked by" links and sub-issues mirror **Depends on**, and milestones mirror the phases.
 
 ### Phase 0: Spikes
 
+Spikes are time-boxed investigations. Their code lives in `research/S-n/`, outside the `browl` package; their findings go into this document.
+
 | ID | Work item | Delivers | Depends on | Tracking |
 |---|---|---|---|---|
-| S-1 | OWLAPI via JPype: start the JVM with `robot.jar`, load an ontology, render axioms in Manchester syntax with link tokens, list referencing axioms; measure per-entity render time, including concurrent requests. Briefly compare py-horned-owl's load time, memory and Manchester output. | de-risks U-3, U-26, N-3 | | |
-| S-2 | ROBOT reasoning with time and heap limits: confirm a memory breach can be detected and told apart from other failures | de-risks A-6, O-8 | | |
-| S-3 | Scale test with a large ontology (e.g. NCBITaxon or ChEBI): OWLAPI load time and heap; descendant-count computation time and memory; `usage` table build time and size; derived database size | de-risks N-1–N-4 | S-1 | |
+| S-1 | OWLAPI via JPype: start the JVM with `robot.jar`, load an ontology, render axioms in Manchester syntax with link tokens, list referencing axioms; measure per-entity render time, including concurrent requests. Briefly compare py-horned-owl's load time, memory and Manchester output. | de-risks U-3, U-26, N-3 | | [#8](https://github.com/jclerman/browl/issues/8) |
+| S-2 | ROBOT reasoning with time and heap limits: confirm a memory breach can be detected and told apart from other failures | de-risks A-6, O-8 | | [#12](https://github.com/jclerman/browl/issues/12) |
+| S-3 | Scale test with a large ontology (e.g. NCBITaxon or ChEBI): OWLAPI load time and heap; descendant-count computation time and memory; `usage` table build time and size; derived database size | de-risks N-1–N-4 | S-1 | [#13](https://github.com/jclerman/browl/issues/13) |
 
 ### Phase 1: Foundation
 
 | ID | Work item | Delivers | Depends on | Tracking |
 |---|---|---|---|---|
-| P-1 | Project scaffold: `browl` package, tooling per the coding-standards doc, CI | | | |
-| P-2 | Settings module with validation (reserved-prefix rule, `AUTH_DISABLED` warning) | O-2–O-8, O-10, O-11 | P-1 | |
-| P-3 | Docker Compose: one app container with a Java runtime and `robot.jar`, volumes, health check | O-1, O-9 | P-1 | |
-| P-4 | OWLAPI bridge: start the JVM via JPype, load and release ontologies, run Java calls in a thread pool | | P-3, S-1 | |
+| P-1 | Project scaffold: `browl` package, tooling per the coding-standards doc, CI | | | done: [#2](https://github.com/jclerman/browl/pull/2), [#4](https://github.com/jclerman/browl/pull/4), [#5](https://github.com/jclerman/browl/pull/5), [#6](https://github.com/jclerman/browl/pull/6) |
+| P-28 | Coding-standards doc; settle the choices marked provisional | | | [#10](https://github.com/jclerman/browl/issues/10) |
+| P-2 | Settings module with validation (reserved-prefix rule, `AUTH_DISABLED` warning) | O-2–O-8, O-10, O-11 | P-1 | [#9](https://github.com/jclerman/browl/issues/9) |
+| P-3 | Docker Compose: one app container with a Java runtime and `robot.jar`, volumes, health check | O-1, O-9 | P-1 | [#11](https://github.com/jclerman/browl/issues/11) |
+| P-4 | OWLAPI bridge: start the JVM via JPype, load and release ontologies, run Java calls in a thread pool | | P-2, P-3, S-1 | [#15](https://github.com/jclerman/browl/issues/15) |
 
 ### Phase 2: Loading
 
 | ID | Work item | Delivers | Depends on | Tracking |
 |---|---|---|---|---|
-| P-5 | Job runner and job state in SQLite; "loading" / "not available" site pages | U-16, A-5 | P-2 | |
-| P-6 | Upload page and streaming upload (auth not yet enforced) | A-2, A-4 | P-5 | |
-| P-7 | ROBOT build script: format conversion and optional ELK/HermiT reasoning, with limits | A-3, A-6, O-8 | P-6, S-2 | |
-| P-8 | Load into the OWLAPI; reload on app restart, reusing the derived database | A-4 | P-4, P-7, S-3 | |
+| P-5 | Job runner and job state in SQLite; "loading" / "not available" site pages | U-16, A-5 | P-2 | [#14](https://github.com/jclerman/browl/issues/14) |
+| P-6 | Upload page and streaming upload (auth not yet enforced) | A-2, A-4 | P-5 | [#16](https://github.com/jclerman/browl/issues/16) |
+| P-7 | ROBOT build script: optional ELK/HermiT reasoning, with limits | A-3, A-6, O-8 | P-6, S-2 | [#18](https://github.com/jclerman/browl/issues/18) |
+| P-8 | Load into the OWLAPI; reload on app restart | A-4 | P-4, P-7, S-3 | [#20](https://github.com/jclerman/browl/issues/20) |
 
 ### Phase 3: Derived data
 
 | ID | Work item | Delivers | Depends on | Tracking |
 |---|---|---|---|---|
-| P-9 | Derived database schema; atomic swap; generation number | N-4 | P-8 | |
-| P-10 | Entities, IRI → URL mapping, hash prefixes, collision warnings | U-2, U-13, U-15, O-3 | P-9 | |
-| P-11 | RDFS entailment (sub-property closure), name values (direct and entailed), display names, CURIE prefixes; Jena oracle tests | U-6, O-4, O-5, O-11 | P-9 | |
-| P-12 | Hierarchies, equivalence groups, distinct descendant counts | U-7, U-8, U-9 | P-9, S-3 | |
+| P-9 | Derived database schema; atomic swap; generation number; reuse on restart when current | N-4 | P-8 | [#21](https://github.com/jclerman/browl/issues/21) |
+| P-10 | Entities, IRI → URL mapping, hash prefixes, collision warnings | U-2, U-13, U-15, O-3 | P-9 | [#22](https://github.com/jclerman/browl/issues/22) |
+| P-11 | RDFS entailment (sub-property closure), name values (direct and entailed), display names, CURIE prefixes; Jena oracle tests | U-6, O-4, O-5, O-11 | P-10 | [#23](https://github.com/jclerman/browl/issues/23) |
+| P-12 | Hierarchies, equivalence groups, distinct descendant counts | U-7, U-8, U-9 | P-10, S-3 | [#24](https://github.com/jclerman/browl/issues/24) |
 
 ### Phase 4: Browsing
 
 | ID | Work item | Delivers | Depends on | Tracking |
 |---|---|---|---|---|
-| P-13 | Routing: path lookup, 404, disambiguation page, hash-prefix page and script | U-2, U-13, U-14, U-15 | P-10 | |
-| P-14 | Base templates and page frame: navigation bar, page header, tab component, stylesheet and themes; links rendered from display names; IRI `<details>` | U-4, U-5, U-6, U-17, U-27, U-28, U-29 | P-11, P-13 | |
-| P-15 | Manchester rendering via the OWLAPI, with link-token substitution and keyword styling | U-3 | S-1, P-14 | |
-| P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout | U-3, U-9, U-30, U-31, U-32 | P-12, P-15 | |
-| P-17 | Ontology home page | U-1 | P-14 | |
-| P-18 | Hierarchy trees with lazy loading (htmx) and keyboard support | U-7, U-17 | P-12, P-14 | |
-| P-27 | `usage` table built during pre-caching from the OWLAPI; Usage tab on entity pages, with paging | U-26 | P-12, P-16, S-3 | |
+| P-13 | Routing: path lookup, 404, disambiguation page, hash-prefix page and script | U-2, U-13, U-14, U-15 | P-10 | [#25](https://github.com/jclerman/browl/issues/25) |
+| P-14 | Base templates and page frame: navigation bar, page header, tab component, stylesheet and themes; links rendered from display names; IRI `<details>` | U-4, U-5, U-6, U-17, U-27, U-28, U-29 | P-11, P-13 | [#27](https://github.com/jclerman/browl/issues/27) (sub-issues [#28](https://github.com/jclerman/browl/issues/28), [#33](https://github.com/jclerman/browl/issues/33), [#34](https://github.com/jclerman/browl/issues/34)) |
+| P-15 | Manchester rendering via the OWLAPI, with link-token substitution and keyword styling | U-3 | S-1, P-14 | [#36](https://github.com/jclerman/browl/issues/36) |
+| P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout | U-3, U-9, U-30, U-31, U-32 | P-12, P-15 | [#37](https://github.com/jclerman/browl/issues/37) (sub-issues [#29](https://github.com/jclerman/browl/issues/29), [#38](https://github.com/jclerman/browl/issues/38), [#39](https://github.com/jclerman/browl/issues/39)) |
+| P-17 | Ontology home page | U-1 | P-14 | [#30](https://github.com/jclerman/browl/issues/30) |
+| P-18 | Hierarchy trees with lazy loading (htmx) and keyboard support | U-7, U-17 | P-12, P-14 | [#31](https://github.com/jclerman/browl/issues/31) |
+| P-27 | `usage` table built during pre-caching from the OWLAPI; Usage tab on entity pages, with paging | U-26 | P-9, P-16, S-3 | [#41](https://github.com/jclerman/browl/issues/41) |
 
 ### Phase 5: Search, caching, auth
 
 | ID | Work item | Delivers | Depends on | Tracking |
 |---|---|---|---|---|
-| P-19 | `SearchBackend` interface and SQLite implementation; ranking | U-10, U-11, U-12, N-5 | P-11 | |
-| P-20 | Autocomplete UI (accessible combobox) with type and property filters | U-10, U-17 | P-19, P-14 | |
-| P-21 | Page cache keyed by generation | O-10, N-3 | P-16 | |
-| P-22 | Google sign-in, admin-route protection, dev no-auth mode | A-1, O-6, O-7 | P-6 | |
-| P-23 | Admin list management page and persistence | A-7 | P-22 | |
+| P-19 | `SearchBackend` interface and SQLite implementation; ranking | U-10, U-11, U-12, N-5 | P-11 | [#26](https://github.com/jclerman/browl/issues/26) |
+| P-20 | Autocomplete UI (accessible combobox) with type and property filters | U-10, U-17 | P-19, P-14 | [#32](https://github.com/jclerman/browl/issues/32) |
+| P-21 | Page cache keyed by generation | O-10, N-3 | P-16 | [#40](https://github.com/jclerman/browl/issues/40) |
+| P-22 | Google sign-in, admin-route protection, dev no-auth mode | A-1, O-6, O-7 | P-6 | [#17](https://github.com/jclerman/browl/issues/17) |
+| P-23 | Admin list management page and persistence | A-7 | P-22 | [#19](https://github.com/jclerman/browl/issues/19) |
 
 ### Phase 6: Hardening
 
 | ID | Work item | Delivers | Depends on | Tracking |
 |---|---|---|---|---|
-| P-24 | Performance check against N-1–N-3 targets at scale | N-1–N-3 | all above | |
-| P-25 | Accessibility pass (trees, combobox, no-JS pages) | U-17 | P-18, P-20 | |
-| P-26 | Update README: remove Owlready2 and Fuseki (now the OWLAPI via JPype); replace "cached once built" with the bounded cache | | | |
+| P-24 | Performance check against N-1–N-3 targets at scale | N-1–N-3 | all above | [#42](https://github.com/jclerman/browl/issues/42) |
+| P-25 | Accessibility pass (trees, combobox, no-JS pages) | U-17 | P-18, P-20 | [#35](https://github.com/jclerman/browl/issues/35) |
+| P-26 | Update README: remove Owlready2 and Fuseki (now the OWLAPI via JPype); replace "cached once built" with the bounded cache | | | done: [#7](https://github.com/jclerman/browl/pull/7) |
 
 ### Later
 
