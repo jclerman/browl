@@ -52,41 +52,48 @@ JavaHeap = Annotated[str, AfterValidator(_java_heap)]
 
 
 class Settings(BaseSettings):
-    """Every operator setting, validated."""
+    """Every operator setting, validated.
+
+    Attributes:
+        base_url: Where the service is served; IRIs under it get their native paths (O-2). Stored without a trailing
+            slash.
+        reserved_prefix: First path segment of the service's own pages (O-3).
+        name_properties: Annotation properties for display names and search, best first; CURIEs or IRIs (O-4).
+        language_ranking: Language tags, best first, lowercased; `UNTAGGED` is appended when not listed (O-5).
+        extra_prefixes: CURIE prefix → namespace, overriding the ontology's own and the built-in ones (O-11).
+        page_cache_size: Rendered pages kept in memory; 0 turns the cache off (O-10).
+        reasoner_timeout_s: Reasoner time limit in seconds; placeholder until spike S-2 (O-8).
+        reasoner_max_heap: Reasoner heap limit; placeholder until spike S-2 (O-8).
+        app_jvm_max_heap: Heap for the app's JVM, which only renders per-page fragments; to be confirmed in P-4.
+        fuseki_url: Fuseki's address.
+        robot_jar: Path to `robot.jar`; placeholder until P-3 builds the image.
+        jena_home: Jena's command-line tools; placeholder until P-3 builds the image.
+        data_dir: Mounted volume for data that survives restarts (O-9).
+        oidc_client_id: Google OAuth client ID (O-6).
+        oidc_client_secret: Google OAuth client secret (O-6).
+        seed_admins: Admin email addresses, lowercased; they can't be removed in the UI (O-6).
+        auth_disabled: Turns authentication off, for development only (O-7).
+    """
 
     model_config = SettingsConfigDict(frozen=True)
 
     base_url: HttpUrl
-    """Where the service is served; IRIs under it get their native paths (O-2). Stored without a trailing slash."""
     reserved_prefix: str = "_browl"
-    """First path segment of the service's own pages (O-3)."""
     name_properties: Annotated[list[str], AfterValidator(_unique)] = Field(default=["rdfs:label"], min_length=1)
-    """Annotation properties for display names and search, best first; CURIEs or IRIs (O-4)."""
     language_ranking: list[str] = ["en"]
-    """Language tags, best first, lowercased; `UNTAGGED` is appended when not listed (O-5)."""
     extra_prefixes: dict[str, str] = {}
-    """CURIE prefix → namespace, overriding the ontology's own and the built-in ones (O-11)."""
     page_cache_size: int = Field(default=100, ge=0)
-    """Rendered pages kept in memory; 0 turns the cache off (O-10)."""
     reasoner_timeout_s: int = Field(default=3600, gt=0)
-    """Placeholder until spike S-2 (O-8)."""
     reasoner_max_heap: JavaHeap = "8g"
-    """Placeholder until spike S-2 (O-8)."""
     app_jvm_max_heap: JavaHeap = "1g"
-    """Heap for the app's JVM, which only renders per-page fragments; to be confirmed in P-4."""
     fuseki_url: HttpUrl = "http://fuseki:3030"
     robot_jar: Path = Path("/opt/robot/robot.jar")
-    """Placeholder until P-3 builds the image."""
     jena_home: Path = Path("/opt/jena")
-    """Placeholder until P-3 builds the image."""
     data_dir: Path = Path("/data")
-    """Mounted volume for data that survives restarts (O-9)."""
     oidc_client_id: str | None = None
     oidc_client_secret: SecretStr | None = None
     seed_admins: list[str] = []
-    """Admin email addresses, lowercased; they can't be removed in the UI (O-6)."""
     auth_disabled: bool = False
-    """Turns authentication off, for development only (O-7)."""
 
     @field_validator("reserved_prefix")
     @classmethod
