@@ -244,13 +244,29 @@ uploads again. Downtime during a replace is accepted. _(Q14a)_
 second, and the app reuses the derived database when its generation number matches, skipping pre-caching. Restarting
 either container doesn't reload the ontology.
 
-**Switching Fuseki to a new store:** to be settled in P-3. One option is Fuseki's admin protocol: register each load's
-store as a new dataset, then remove the old one. The other is restarting Fuseki on the new store, which takes under a
-second but needs a way for the app to restart the Fuseki container.
+**Switching Fuseki to a new store:** needed at the end of every loading stage, including the first upload, when Fuseki
+has no store yet. The TDB2 bulk loader writes a new, empty store directory and can't load into a store that Fuseki has
+open, and while a load runs Fuseki still serves the previous store, if any (the site shows the "loading" page
+meanwhile). Once the new store is built, Fuseki has to start serving it, and the old one is deleted. The app and Fuseki
+are separate containers, so the app can't simply restart Fuseki. The options, settled in P-3:
 
-**Imports:** the TDB2 loader reads only the file it's given; it doesn't follow `owl:imports`. Whether imported
-ontologies are merged in first (e.g. ROBOT `merge`, skipping imports that can't be fetched) is decided in P-8. By
-default ROBOT refuses an ontology whose imports can't be fetched ([S-1 findings](../research/S-1/README.md)).
+- Fuseki's admin protocol: the app registers the new store as a new dataset over HTTP, then removes the old dataset.
+- A fixed store path that Fuseki serves (e.g. a symlink the app repoints), with a Fuseki restart that the app triggers
+  somehow. The restart itself takes under a second.
+
+**Imports:** browl follows `owl:imports` where it can, and warns where it can't. The TDB2 loader reads only the files
+it's given, and by default ROBOT refuses an ontology whose imports can't be fetched
+([S-1 findings](../research/S-1/README.md)). So the pipeline resolves imports itself, before reasoning:
+
+1. Fetch each imported ontology, recursively, into the data volume. An import that can't be fetched is dropped from
+   the `owl:imports` list, and the upload page lists it as a warning.
+2. Reasoning, if any, gets the fetched files through a catalog file, so ROBOT doesn't fetch them again.
+3. The loading stage loads the ontology and each import into its own named graph, and Fuseki serves their union as the
+   default graph (`tdb2:unionDefaultGraph`). Queries see one ontology, and which graph a triple came from stays
+   available, e.g. to mark imported entities. Merging everything into one file first (ROBOT `merge`) also works but
+   loses that.
+
+P-8 confirms the details.
 
 **Heap sizes:** the app's JVM only renders per-page fragments, so it needs a small heap (`APP_JVM_MAX_HEAP`). Fuseki's
 memory while serving hasn't been measured yet; TDB2 is disk-based and memory-mapped (P-3 measures it). After a heap
@@ -287,7 +303,8 @@ all its parents have merged it. Only the counts are stored, not the full closure
 takes 4.2 s ([S-3 findings](../research/S-3/README.md)). Python `int` bitsets are unsuitable: their size grows with the
 highest index.
 
-**RDFS entailment** _(Q7)_. browl needs only a few RDFS entailment rules, and Jena provides them:
+**RDFS entailment** _(Q7)_. browl needs only a few RDFS entailment rules, and Jena provides them, so browl doesn't
+compute them itself:
 
 | Rule | What browl does with it |
 | --- | --- |
@@ -295,10 +312,17 @@ highest index.
 | `rdfs:subClassOf` is transitive (rdfs11) | Covered by the descendant-count closure. |
 | An instance of a class is an instance of its super-classes (rdfs9) | For the Individuals tab (Later, U-18), if it lists indirect members. |
 
-Entailed name values come either from a property path in the dictionary query (`?p rdfs:subPropertyOf* ?name`), which
-S-4 measured at little extra cost, or from an RDFS endpoint configured in Fuseki (`ja:DatasetRDFS`) over the same
-store. P-11 settles which before building the dictionary. Either way, an endpoint without inference stays available:
-direct subclass edges can't be told apart from entailed ones under RDFS inference.
+The sub-property closure behind entailed name values can come from Jena in either of two ways, and P-11 settles which
+before building the dictionary:
+
+- a property path in the dictionary query (`?p rdfs:subPropertyOf* ?name`), which Jena's query engine evaluates; S-4
+  measured it at little extra cost;
+- Jena's RDFS inference, as an RDFS endpoint configured in Fuseki (`ja:DatasetRDFS`) over the same store; not tried
+  yet.
+
+If the RDFS endpoint is chosen, the plain endpoint stays available too: under RDFS inference, direct subclass edges
+can't be told apart from entailed ones. The subclass closure comes from neither way: descendant counts are computed in
+Python (above).
 
 **Subclass closure, not stored.** Queries over `rdfs:subClassOf+` take up to 0.9 s on NCBITaxon, so pages never use them:
 descendant counts are precomputed (above). If a later feature needs to list or count descendants on demand, the fallback
