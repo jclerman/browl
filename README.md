@@ -10,7 +10,7 @@ OWL-Browse (`browl`) hosts an OWL ontology as a browsable website. Every declare
 - A page for each entity: its annotations, and its logical axioms in Manchester syntax, with every entity mentioned shown as a link. A Usage tab lists the axioms in which other entities refer to it.
 - Collapsible hierarchy trees for classes and for each property type, with counts of immediate children and of all descendants.
 - Autocomplete search over entity names, filterable by entity type and by name property, optionally including values entailed through sub-properties.
-- An admin page for uploading the ontology (RDF/XML, Turtle or OWL Functional Syntax), optionally classified first with the [ELK](https://github.com/liveontologies/elk-reasoner/releases/tag/v0.6.0) or [HermiT](https://central.sonatype.com/artifact/net.sourceforge.owlapi/org.semanticweb.hermit/1.4.5.456) reasoner. Admins sign in with Google.
+- An admin page for uploading the ontology (RDF/XML, Turtle or OWL Functional Syntax), optionally classified first with the [ELK](https://github.com/liveontologies/elk-reasoner) or [HermiT](https://github.com/owlcs/hermit-reasoner) reasoner. Admins sign in with Google.
 
 ## Architecture
 
