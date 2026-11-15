@@ -4,5 +4,5 @@ import importlib
 
 
 def test_import_browl() -> None:
-    """The browl package imports without error."""
+    """Check that the browl package imports without error."""
     importlib.import_module("browl")
