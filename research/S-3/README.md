@@ -47,19 +47,25 @@ headroom for rendering. Smaller deployments can lower it; the upload page report
 
 ### Pre-caching cost
 
-Pulling data out of the OWLAPI into Python through JPype dominates pre-caching:
+After loading, `scale.py` builds a prototype of the derived database (§2.5) in five steps. Every step except the counts
+pulls objects out of the OWLAPI into Python through JPype, and that crossing, not the OWLAPI's own work, is where most
+of the time goes:
 
-| Step (NCBITaxon) | Time |
-| --- | --- |
-| Class list and 3.0 M named subclass edges | 54 s |
-| Descendant counts (roaring bitmaps) | 4.2 s |
-| 21 M annotation assertions scanned for names and IRI values | 146 s |
-| Derived database without `usage` (inserts and indexes) | 22 s |
-| `usage` table (8.5 M rows) | 97 s |
+| Step (NCBITaxon) | What it does | Time |
+| --- | --- | --- |
+| Classes and named subclass edges | Asks the OWLAPI for every class (3.0 M IRIs, copied into Python strings and numbered), then walks all 3.0 M `SubClassOf` axioms, keeping those with a named class on both sides and recording the pair of numbers. About six Java calls per axiom. | 54 s |
+| Descendant counts | Pure Python and pyroaring over those edges; no Java calls. | 4.2 s |
+| Annotation scan | Walks every annotation assertion (about 15 M), keeping the label and synonym values (3.56 M) and counting the values that are IRIs (5.5 M, mostly `has_rank`). Each assertion's property, value and subject cross into Python. | 146 s |
+| Core tables | SQLite only: inserts `entity`, `name_value`, `edge` and `counts`, then builds their indexes. | 22 s |
+| `usage` table | Inserts a row per subclass edge, then walks all annotation assertions a second time through JPype to add a row per value that is a known entity (8.5 M rows in all). The second walk is avoidable; done in the first scan, this step would be mostly SQLite inserts. | 97 s |
 
-About 8–18 µs per axiom crosses from Java to Python. Load plus pre-caching comes to roughly 6–9 minutes for
-NCBITaxon, which the design already accepts for uploads (§2.4); restarts skip pre-caching. The process peaked at about
-12 GB resident (JVM and Python together).
+That's roughly 8–18 µs per axiom for the steps that cross from Java to Python. Load plus pre-caching comes to roughly
+6–9 minutes for NCBITaxon, which the design already accepts for uploads (§2.4); restarts skip pre-caching. The process
+peaked at about 12 GB resident (JVM and Python together).
+
+The data these steps extract is simple: lists of classes, pairs of classes, and (subject, property, value) triples.
+Getting the same from a triple store would be one streaming SPARQL `SELECT` per step, without a call per object. S-4
+measures how much faster that is.
 
 ### Where the time goes
 
