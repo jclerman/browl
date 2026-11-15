@@ -1,0 +1,19 @@
+[project]
+name = "browl"
+version = "0.1.0"
+description = "Host an OWL ontology as a browsable website, with a page for every entity at a URL implied by its IRI."
+readme = "README.md"
+authors = [{ name = "Jeffrey C. Lerman" }]
+# Provisional: to be settled in the coding-standards doc.
+requires-python = ">=3.12"
+dynamic = ["dependencies"]
+
+[tool.poetry]
+requires-poetry = ">=2.5.1"
+
+[tool.poetry.dependencies]
+fastapi = "^0.163"
+
+[build-system]
+requires = ["poetry-core>=2.5.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
