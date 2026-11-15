@@ -77,6 +77,10 @@ ignore = ["B028", "D206", "D300", "SIM108"]
 # The en dash is used deliberately (e.g. "N-1–N-3"), so RUF001-003 shouldn't flag it.
 allowed-confusables = ["–"]
 
+[tool.ruff.lint.per-file-ignores]
+# Spike code is throwaway: no docstrings required, and it reports by printing (see docs/CODING-STANDARDS.md).
+"research/**" = ["D", "T20"]
+
 [tool.ruff.lint.pydocstyle]
 # Which docstring style D enforces (Google style, per AGENTS.md).
 convention = "google"

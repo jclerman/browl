@@ -10,6 +10,8 @@ instructions specific to coding agents. Requirements and architecture are in [`D
   `dynamic = ["dependencies"]`), with caret ranges (`^1.2`). Commit `poetry.lock`; after changing `pyproject.toml`, run
   `poetry lock` and `poetry check`.
 - **Layout:** the package is `browl/` at the repo root, not a `src/` layout. Tests are in `tests/`.
+- **Spike code** lives in `research/S-n/`. It is linted and formatted, but needs no docstrings, type checking or
+  tests, and may `print`.
 - **Make targets:** `make install`, `make lint`, `make test`, and `make ci` (lint then test, as CI runs them).
 - **Reuse before writing.** Use the standard library or a well-maintained package where one does the job. Write your
   own only for a good reason (e.g. performance, quality, trustworthiness), and say why in the PR.

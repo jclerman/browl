@@ -16,7 +16,7 @@ repos:
         entry: mypy
         language: system
         types_or: [python, pyi]
-        exclude: '^tests/'
+        exclude: '^(tests|research)/'
         require_serial: true
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
