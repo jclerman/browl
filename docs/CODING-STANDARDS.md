@@ -1,6 +1,6 @@
 # Coding standards
 
-How code is written and changed in browl. This document governs code style and project policy; `AGENTS.md` adds
+How code is written and changed in `browl`. This document governs code style and project policy; `AGENTS.md` adds
 instructions specific to coding agents. Requirements and architecture are in [`DESIGN.md`](DESIGN.md).
 
 ## Python and tooling
@@ -16,7 +16,7 @@ instructions specific to coding agents. Requirements and architecture are in [`D
 
 ## Linting and formatting
 
-pre-commit runs all of these; CI runs pre-commit on every file.
+`pre-commit` runs all of these; CI runs `pre-commit` on every file.
 
 - **ruff** for linting and formatting, line length 120. Beyond ruff's defaults it enables pycodestyle (`E`, `W`), import
   sorting (`I`), pyupgrade (`UP`), bugbear (`B`), comprehensions (`C4`), no `print` (`T20`), docstrings (`D`),
@@ -63,7 +63,7 @@ pre-commit runs all of these; CI runs pre-commit on every file.
 
 ## Front end
 
-- Jinja2 autoescaping stays on. Use `|safe` only on HTML that browl itself built and escaped.
+- Jinja2 autoescaping stays on. Use `|safe` only on HTML that `browl` itself built and escaped.
 - Plain CSS with custom properties; no CSS framework or build step.
 - JavaScript is limited to htmx and small scripts (such as the hash-IRI script), served from static files, not inline.
 
