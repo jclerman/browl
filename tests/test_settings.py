@@ -194,13 +194,26 @@ def test_load_settings_no_warning_with_auth(env: pytest.MonkeyPatch, caplog: pyt
     assert caplog.text == ""
 
 
-def test_load_settings_rejects_invalid_settings(env: pytest.MonkeyPatch) -> None:
-    """Check that load_settings raises ValidationError, listing every invalid setting."""
-    env.setenv("PAGE_CACHE_SIZE", "-1")
-    env.setenv("RESERVED_PREFIX", "browl")
+@pytest.mark.parametrize(
+    ("values", "invalid"),
+    [
+        pytest.param({"PAGE_CACHE_SIZE": "-1"}, {"page_cache_size"}, id="negative-cache-size"),
+        pytest.param({"RESERVED_PREFIX": "browl"}, {"reserved_prefix"}, id="prefix-without-underscore"),
+        pytest.param({"FUSEKI_URL": "fuseki:3030"}, {"fuseki_url"}, id="relative-fuseki-url"),
+        pytest.param(
+            {"PAGE_CACHE_SIZE": "-1", "RESERVED_PREFIX": "browl"},
+            {"page_cache_size", "reserved_prefix"},
+            id="all-errors-reported",
+        ),
+    ],
+)
+def test_load_settings_rejects_invalid_settings(
+    env: pytest.MonkeyPatch, values: dict[str, str], invalid: set[str]
+) -> None:
+    """Check that load_settings raises ValidationError naming exactly the invalid settings."""
     with pytest.raises(ValidationError) as error:
-        load_settings()
-    assert {e["loc"][0] for e in error.value.errors()} == {"page_cache_size", "reserved_prefix"}
+        settings_with(env, **values)
+    assert {e["loc"][0] for e in error.value.errors()} == invalid
 
 
 def test_secret_is_not_shown(env: pytest.MonkeyPatch) -> None:
