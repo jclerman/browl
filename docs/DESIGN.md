@@ -3,6 +3,8 @@
 browl (OWL-Browse) hosts an OWL ontology as a browsable website. Every declared entity gets its own page at a URL implied by its IRI.
 
 > **Status:** draft. References like _(Q1d)_ point to the question log in `claude/DESIGN-SESSION-STATUS.md`. They are temporary, so decisions can be traced and the two documents audited against each other. They will be removed once this document is the sole source of truth.
+>
+> Two decisions made after the question log supersede parts of it: **Fuseki is dropped** (supersedes Q7's "Fuseki handles RDFS inference"), and **the OWLAPI renders Manchester syntax** (supersedes Q6's tentative decision to write our own renderer). Both are marked _(post-log)_ below.
 
 **Contents**
 1. [Requirements](#1-requirements)
@@ -75,7 +77,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 
 | Requirement | Priority |
 |---|---|
-| **O-1** · The service runs as a small set of containers (app and Fuseki) started with one command. | v1 |
+| **O-1** · The service runs as a single container started with one command. | v1 |
 | **O-2** · `BASE_URL` (where the service is served) is set per deployment. IRIs under it get their native paths. _(Q1c)_ | v1 |
 | **O-3** · The reserved prefix for the service's own pages is configurable, defaults to `_browl`, and must start with `_`. _(Q1d)_ | v1 |
 | **O-4** · The ordered list of name annotation properties (default: `rdfs:label` first) is configurable and is used for both display names and search. _(Q18a)_ | v1 |
@@ -109,24 +111,30 @@ Tooling (Python version, package manager, linting, tests, typing) is left to the
            browser
               │  HTML (Jinja) + htmx
               ▼
-   ┌─────────────────────────┐   SPARQL (HTTP)   ┌──────────────────┐
-   │  browl app (FastAPI)    │ ────────────────▶ │ Apache Jena      │
-   │  - routing / IRI map    │                   │ Fuseki (TDB2)    │
-   │  - page rendering       │                   │ RDFS inference   │
-   │  - load pipeline job    │                   └──────────────────┘
-   │  - search shim          │
-   └──────┬──────────┬───────┘
-          │          │ subprocess
-          ▼          ▼
-   derived SQLite   ROBOT (JVM): format conversion, ELK/HermiT reasoning
-   (pre-cached data,
+   ┌───────────────────────────────────────────────┐
+   │  browl app (FastAPI, one worker process)      │
+   │  - routing / IRI map     - load pipeline job  │
+   │  - page rendering        - search shim        │
+   │                                               │
+   │  ┌─────────────────────────────────────────┐  │
+   │  │ in-process JVM (JPype, robot.jar)       │  │
+   │  │ OWLAPI: the loaded ontology in memory,  │  │
+   │  │ axiom lookups, Manchester rendering     │  │
+   │  └─────────────────────────────────────────┘  │
+   └──────┬──────────────────────┬─────────────────┘
+          │                      │ subprocess
+          ▼                      ▼
+   derived SQLite           ROBOT (separate JVM):
+   (pre-cached data,        ELK/HermiT reasoning
     search index,
     admin list, job state)
 ```
 
-- **Fuseki** holds the ontology as RDF and answers per-entity queries (annotations, axioms). Its inference is limited to RDFS. _(Q7)_
-- **Derived SQLite database** holds everything computed once at load time: entity list, display names, hierarchy and counts, hash prefixes, equivalence groups, prefixes and the search index. Page rendering reads mostly from here. _(Q5)_
-- **ROBOT** is invoked as a subprocess for format conversion and optional reasoning. _(Q7c, Q15)_
+- **OWLAPI in an in-process JVM** holds the loaded ontology in memory. It is reached from Python through JPype, using the OWLAPI classes bundled in `robot.jar`. It answers per-entity lookups (annotations, axioms, referencing axioms), renders axioms in Manchester syntax, and is the source for pre-caching. _(post-log)_
+- **Derived SQLite database** holds everything computed once at load time: entity list, display names, hierarchy and counts, RDFS entailments, hash prefixes, equivalence groups, prefixes, usage and the search index. Page rendering reads mostly from here. _(Q5)_
+- **ROBOT as a subprocess** runs the optional reasoning, in its own JVM so time and memory limits can be enforced and a runaway run killed. _(Q7c)_
+- **One server worker process,** so the ontology is held in memory once. Concurrency comes from async request handling; Java calls run in a thread pool.
+- **No triple store.** Fuseki was there for reliable RDFS entailment; the entailments browl needs are computed during pre-caching instead ([2.5](#25-derived-data-pre-caching)). _(post-log; supersedes Q7)_
 - **Owlready2 is not used.** _(Q6)_
 
 ### 2.2 Libraries and components
@@ -138,13 +146,13 @@ Tooling (Python version, package manager, linting, tests, typing) is left to the
 | Front-end behavior | htmx, served from the app's static files (no CDN) | No SPA framework and no front-end build step. _(Q20)_ |
 | Data models | Pydantic | Entities, settings, job state. |
 | Configuration | pydantic-settings | Defaults in code; environment variables override. _(Q13)_ |
-| Triple store | Apache Jena Fuseki, TDB2 dataset | |
-| Fuseki client | httpx (async), SPARQL JSON results | No RDF library needed for bulk data. |
-| Small RDF graphs | rdflib | Only for one entity's axiom structure when rendering Manchester syntax. |
+| Ontology in memory | OWLAPI, from the classes bundled in `robot.jar` | Parses Turtle, RDF/XML and `.ofn`. _(post-log)_ |
+| Python ↔ Java bridge | JPype | One JVM per process, started at app startup. _(post-log)_ |
+| Manchester rendering | OWLAPI's Manchester syntax renderer | See [2.8](#28-entity-pages). _(post-log)_ |
 | Derived store and search (v1) | SQLite (Python standard library), queried in a thread pool | FTS5 later for any-word search. _(Q8, Q11)_ |
-| Reasoning and conversion | ROBOT (Java) | ELK and HermiT. |
+| Reasoning | ROBOT (Java), as a subprocess | ELK and HermiT. |
 | Authentication | Authlib (OpenID Connect with Google), Starlette signed-cookie sessions | |
-| Deployment | Docker Compose: `app` and `fuseki` services, named volumes | The app image includes a Java runtime and the ROBOT jar. |
+| Deployment | Docker Compose: one `app` service, named volumes | The app image includes a Java runtime and `robot.jar`. |
 
 ### 2.3 IRI → URL mapping
 
@@ -179,9 +187,9 @@ One background job at a time, run in the app process. Its state (stage, start ti
 | Stage | What happens |
 |---|---|
 | **uploading** | The file is streamed to the data volume. The site switches to the "loading" page (U-16) and the page cache is cleared. |
-| **reasoning** (optional) | A build script runs ROBOT: convert the format if needed, then `reason` with ELK or HermiT. The built output replaces the uploaded file as the ontology that gets served. _(Q7a)_ |
-| **loading** | The Fuseki dataset is cleared and the built ontology is loaded into it. Formats Jena can't parse (`.ofn`) are converted with ROBOT first, even with no reasoner. _(Q15)_ |
-| **pre-caching** | The derived SQLite database is built from Fuseki ([2.5](#25-derived-data-pre-caching)), as a new file then swapped in atomically. |
+| **reasoning** (optional) | A build script runs ROBOT `reason` with ELK or HermiT. The built output replaces the uploaded file as the ontology that gets served. _(Q7a)_ |
+| **loading** | The previous ontology is released and the built ontology is loaded into a fresh OWLAPI ontology manager in the app's JVM. The OWLAPI parses all three upload formats, so no conversion step is needed. _(Q15)_ |
+| **pre-caching** | The derived SQLite database is built from the in-memory ontology ([2.5](#25-derived-data-pre-caching)), as a new file then swapped in atomically. |
 | **ready** | The new generation number is recorded; pages are served again. |
 
 **Reasoner limits** _(Q7)_:
@@ -190,7 +198,9 @@ One background job at a time, run in the app process. Its state (stage, start ti
 
 On failure the job records the stage and reason (A-6), and the site stays on a "not available" page until an admin uploads again. Downtime during a replace is accepted. _(Q14a)_
 
-**Loading method:** v1 uses the Fuseki HTTP interface (Graph Store Protocol) with a streamed body. Fuseki's offline bulk loader (`tdb2.tdbloader`) is the fallback if spike S-3 shows HTTP loading is too slow at N-1 scale.
+**App restart:** the built ontology file and the derived database stay on the data volume. On startup the app reloads the ontology into the OWLAPI (showing the "loading" page meanwhile) and reuses the derived database when its generation number matches, skipping pre-caching.
+
+**App JVM heap:** set by `APP_JVM_MAX_HEAP`. It must fit the largest ontology to be served; spike S-3 measures how much that is. If the ontology doesn't fit, the loading stage fails with a "memory limit" reason, like the reasoner.
 
 ### 2.5 Derived data (pre-caching)
 
@@ -206,13 +216,22 @@ Built once per load, stored in the derived SQLite database. Proposed tables:
 | `hash_prefix` | distinct URL paths that have hash entities under them |
 | `prefix` | CURIE prefix → namespace (ontology's own, built-ins, configured overrides) |
 | `meta` | ontology IRI, version IRI, reasoner used, load time, generation number |
-| `usage` | referenced entity → referring entity, axiom kind (one row per pair and kind; built by walking each axiom's blank-node structure for named entities; an axiom with no single subject, such as a general class axiom or `owl:AllDisjointClasses`, gets a row for every named entity it mentions) |
+| `usage` | referenced entity → referring entity, axiom kind (one row per pair and kind), built from the OWLAPI's referencing-axiom index. An axiom with no single subject, such as a general class axiom or `DisjointClasses(A, B, C)`, gets a row for every named entity it mentions. Used for the Usage tab's count and paging. |
 
-**Hierarchies.** Named direct parents, taken from Fuseki (asserted, or inferred if a reasoner ran). Roots are nodes with no named parent. For classes this includes children of `owl:Thing`.
+**Hierarchies.** Named direct parents, taken from the OWLAPI's subclass and sub-property axioms (asserted, or inferred if a reasoner ran). Roots are nodes with no named parent. For classes this includes children of `owl:Thing`.
 
 **Distinct descendant counts.** These need a transitive closure, not a sum over edges. _(Q19a)_ The plan is to compute them in a bottom-up pass in topological order, merging descendant sets. Compact integer sets (e.g. Python's `int` used as a bitset, or a roaring-bitmap library) keep this practical. Only the counts are stored, not the full closure. Memory use and run time at N-1 scale are what spike S-3 must measure. If they're too high, the fallback is a closure table built in SQLite.
 
-**Entailed name values.** For each name property in the configured list, its sub-properties (via `rdfs:subPropertyOf`, transitively) are resolved, and values of a sub-property are also stored under the super-property with `direct = false`. _(Q8)_
+**RDFS entailment** _(post-log; replaces Fuseki's role)_. browl needs only a few RDFS entailment rules, and computes them itself rather than through SPARQL:
+
+| Rule | What browl does with it |
+|---|---|
+| `rdfs:subPropertyOf` is transitive (rdfs5) | Closure over the sub-property graph, cycles allowed (mutual sub-properties are equivalent). |
+| A value of a sub-property is also a value of its super-properties (rdfs7) | **Entailed name values:** for each property in the configured name list, values of its sub-properties are also stored under it, with `direct = false`. _(Q8)_ |
+| `rdfs:subClassOf` is transitive (rdfs11) | Already covered by the descendant-count closure. |
+| An instance of a class is an instance of its super-classes (rdfs9) | For the Individuals tab (Later, U-18), if it lists indirect members. |
+
+Rules browl doesn't use (e.g. typing from `rdfs:domain` and `rdfs:range`) aren't computed. To keep this as reliable as Fuseki's RDFS inference was meant to be, tests compare browl's results with Apache Jena's RDFS inference on a set of test ontologies, with Jena used only as a test oracle. The exact Jena tool, for example its command-line RDFS option or Jena via JPype, is to be confirmed in P-11.
 
 ### 2.6 Search
 
@@ -254,16 +273,17 @@ Header, above the tabs (U-5):
 - A `<details>` element with the full IRI and CURIE.
 
 Tabs (U-28; see [2.9](#29-page-layout)):
-- **Overview** (default; U-3, U-9): immediate parents and equivalent IRIs (from the derived database), annotation values, and logical axioms in Manchester syntax (from Fuseki and the renderer).
-- **Usage** (U-26), labeled with its count from the `usage` table, e.g. "Usage (128)": a page of referring entities (e.g. 50 per page), each with its axioms that mention this entity, rendered on demand by the Manchester renderer. Since the tab isn't shown by default, its cost is only paid when someone opens it.
+- **Overview** (default; U-3, U-9): immediate parents and equivalent IRIs (from the derived database), annotation values, and logical axioms in Manchester syntax (from the OWLAPI).
+- **Usage** (U-26), labeled with its count from the `usage` table, e.g. "Usage (128)": a page of referring entities (e.g. 50 per page), each with its axioms that mention this entity, fetched from the OWLAPI's referencing-axiom index and rendered on demand. Since the tab isn't shown by default, its cost is only paid when someone opens it.
 - **Individuals** (classes only; Later, U-18): the class's named individuals, paged.
 
-**Manchester renderer** _(Q6)_: a Python module that, for one entity:
-1. Fetches the triples about it, including the blank-node structures of its class expressions.
-2. Rebuilds OWL class expressions following the W3C "OWL 2 to RDF mapping" in reverse.
-3. Renders them in Manchester syntax, with named entities rendered as links using their display names.
+**Manchester rendering** _(post-log; supersedes Q6's hand-written renderer)_: the OWLAPI's own Manchester syntax renderer, the one Protégé uses, covers all of OWL 2. Entity names become links like this:
+1. A custom OWLAPI short-form provider returns a placeholder token for each entity (e.g. a private-use character plus an index), instead of a name.
+2. The OWLAPI renders the axiom to text with those tokens.
+3. Python HTML-escapes the text, then replaces each token with a link showing the entity's display name ([2.7](#27-display-names)).
+4. Manchester keywords are wrapped for light styling ([2.9](#29-page-layout)).
 
-Scope for v1: `SubClassOf`, `EquivalentTo`, `DisjointWith`, property characteristics, domain and range, and sub-property axioms. Constructs it doesn't recognize are shown as raw Turtle rather than failing. Feasibility is spike S-1.
+The short-form provider is a Python class implementing the Java interface through JPype, so no Java code is needed. Spike S-1 confirms this works and measures render time.
 
 ### 2.9 Page layout
 
@@ -327,7 +347,8 @@ Defaults are set in code, and each can be overridden by an environment variable.
 | `EXTRA_PREFIXES` | `{}` | O-11 |
 | `PAGE_CACHE_SIZE` | `100` | O-10 |
 | `REASONER_TIMEOUT_S`, `REASONER_MAX_HEAP` | to be decided after spike S-2 | O-8 |
-| `FUSEKI_URL`, `FUSEKI_DATASET` | compose defaults | |
+| `APP_JVM_MAX_HEAP` | to be decided after spike S-3 | heap for the app's in-process JVM |
+| `ROBOT_JAR` | path in the image | used both on the app's classpath and for reasoning subprocesses |
 | `DATA_DIR` | `/data` | mounted volume; O-9 |
 | `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `SEED_ADMINS` | none | O-6 |
 | `AUTH_DISABLED` | `false` | O-7 |
@@ -349,11 +370,12 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 
 | Risk | Mitigation |
 |---|---|
-| Hand-written Manchester renderer is larger than expected | Spike S-1; v1 scope limited; raw-Turtle fallback; OWLAPI via ROBOT as a last resort (Q6). |
+| OWLAPI heap needed for the largest ontologies is too large | Spike S-3 measures it. Fallbacks: py-horned-owl (lower memory, weaker Manchester support), or the OWLAPI in a separate process. |
+| JPype quirks: thread safety of concurrent OWLAPI reads; Python–Java call overhead | Spike S-1 measures concurrent render throughput. If needed, serialize OWLAPI calls through one thread. |
 | Memory limit can't be reported reliably | Spike S-2; at worst report "reasoner failed" with ROBOT's output. |
 | Descendant counts too slow or memory-hungry at millions of classes | Spike S-3; bitset approach, SQLite closure fallback. |
-| Loading millions of entities over HTTP is too slow | Spike S-3; offline bulk loader fallback. |
-| Fuseki's RDFS inference over TDB2 is slow at scale | Little depends on it: entailment for search and counts is precomputed in SQLite. Measure in S-3. |
+| Loading and pre-caching a very large ontology takes many minutes | Accepted for uploads (Q14a), shown on the status page. Restarts skip pre-caching (2.4). S-3 measures both. |
+| browl's own RDFS entailment differs from a standard reasoner's | Oracle tests against Apache Jena's RDFS inference (2.5). |
 
 ---
 
@@ -365,9 +387,9 @@ Work items are sized to be one issue or PR each, roughly. The **Tracking** colum
 
 | ID | Work item | Delivers | Depends on | Tracking |
 |---|---|---|---|---|
-| S-1 | Manchester renderer prototype: parse and render class expressions for a few real ontologies (e.g. GO, an OBO ontology with rich axioms); measure coverage | de-risks U-3 | | |
+| S-1 | OWLAPI via JPype: start the JVM with `robot.jar`, load an ontology, render axioms in Manchester syntax with link tokens, list referencing axioms; measure per-entity render time, including concurrent requests. Briefly compare py-horned-owl's load time, memory and Manchester output. | de-risks U-3, U-26, N-3 | | |
 | S-2 | ROBOT reasoning with time and heap limits: confirm a memory breach can be detected and told apart from other failures | de-risks A-6, O-8 | | |
-| S-3 | Scale test with a large ontology (e.g. NCBITaxon or ChEBI): Fuseki load time over HTTP vs bulk loader; descendant-count computation time and memory; `usage` table build time and size; derived database size | de-risks N-1–N-4 | | |
+| S-3 | Scale test with a large ontology (e.g. NCBITaxon or ChEBI): OWLAPI load time and heap; descendant-count computation time and memory; `usage` table build time and size; derived database size | de-risks N-1–N-4 | S-1 | |
 
 ### Phase 1: Foundation
 
@@ -375,8 +397,8 @@ Work items are sized to be one issue or PR each, roughly. The **Tracking** colum
 |---|---|---|---|---|
 | P-1 | Project scaffold: `browl` package, tooling per the coding-standards doc, CI | | | |
 | P-2 | Settings module with validation (reserved-prefix rule, `AUTH_DISABLED` warning) | O-2–O-8, O-10, O-11 | P-1 | |
-| P-3 | Docker Compose: app (with Java and ROBOT) + Fuseki, volumes, health check | O-1, O-9 | P-1 | |
-| P-4 | Fuseki client (async SPARQL over HTTP) | | P-3 | |
+| P-3 | Docker Compose: one app container with a Java runtime and `robot.jar`, volumes, health check | O-1, O-9 | P-1 | |
+| P-4 | OWLAPI bridge: start the JVM via JPype, load and release ontologies, run Java calls in a thread pool | | P-3, S-1 | |
 
 ### Phase 2: Loading
 
@@ -385,7 +407,7 @@ Work items are sized to be one issue or PR each, roughly. The **Tracking** colum
 | P-5 | Job runner and job state in SQLite; "loading" / "not available" site pages | U-16, A-5 | P-2 | |
 | P-6 | Upload page and streaming upload (auth not yet enforced) | A-2, A-4 | P-5 | |
 | P-7 | ROBOT build script: format conversion and optional ELK/HermiT reasoning, with limits | A-3, A-6, O-8 | P-6, S-2 | |
-| P-8 | Load into Fuseki (clear dataset, stream) | A-4 | P-4, P-7, S-3 | |
+| P-8 | Load into the OWLAPI; reload on app restart, reusing the derived database | A-4 | P-4, P-7, S-3 | |
 
 ### Phase 3: Derived data
 
@@ -393,7 +415,7 @@ Work items are sized to be one issue or PR each, roughly. The **Tracking** colum
 |---|---|---|---|---|
 | P-9 | Derived database schema; atomic swap; generation number | N-4 | P-8 | |
 | P-10 | Entities, IRI → URL mapping, hash prefixes, collision warnings | U-2, U-13, U-15, O-3 | P-9 | |
-| P-11 | Name values (direct and entailed), display names, CURIE prefixes | U-6, O-4, O-5, O-11 | P-9 | |
+| P-11 | RDFS entailment (sub-property closure), name values (direct and entailed), display names, CURIE prefixes; Jena oracle tests | U-6, O-4, O-5, O-11 | P-9 | |
 | P-12 | Hierarchies, equivalence groups, distinct descendant counts | U-7, U-8, U-9 | P-9, S-3 | |
 
 ### Phase 4: Browsing
@@ -402,11 +424,11 @@ Work items are sized to be one issue or PR each, roughly. The **Tracking** colum
 |---|---|---|---|---|
 | P-13 | Routing: path lookup, 404, disambiguation page, hash-prefix page and script | U-2, U-13, U-14, U-15 | P-10 | |
 | P-14 | Base templates and page frame: navigation bar, page header, tab component, stylesheet and themes; links rendered from display names; IRI `<details>` | U-4, U-5, U-6, U-17, U-27, U-28, U-29 | P-11, P-13 | |
-| P-15 | Manchester renderer (from S-1) | U-3 | S-1, P-14 | |
+| P-15 | Manchester rendering via the OWLAPI, with link-token substitution and keyword styling | U-3 | S-1, P-14 | |
 | P-16 | Entity page: parents, annotations, axioms, equivalents | U-3, U-9 | P-12, P-15 | |
 | P-17 | Ontology home page | U-1 | P-14 | |
 | P-18 | Hierarchy trees with lazy loading (htmx) and keyboard support | U-7, U-17 | P-12, P-14 | |
-| P-27 | Usage index (`usage` table) built during pre-caching; Usage tab on entity pages, with paging | U-26 | P-12, P-16, S-3 | |
+| P-27 | `usage` table built during pre-caching from the OWLAPI; Usage tab on entity pages, with paging | U-26 | P-12, P-16, S-3 | |
 
 ### Phase 5: Search, caching, auth
 
@@ -424,7 +446,7 @@ Work items are sized to be one issue or PR each, roughly. The **Tracking** colum
 |---|---|---|---|---|
 | P-24 | Performance check against N-1–N-3 targets at scale | N-1–N-3 | all above | |
 | P-25 | Accessibility pass (trees, combobox, no-JS pages) | U-17 | P-18, P-20 | |
-| P-26 | Update README: remove Owlready2; replace "cached once built" with the bounded cache | | | |
+| P-26 | Update README: remove Owlready2 and Fuseki (now the OWLAPI via JPype); replace "cached once built" with the bounded cache | | | |
 
 ### Later
 
