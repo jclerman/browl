@@ -15,8 +15,13 @@ concurrency:
 
 jobs:
   lint-and-test:
-    name: Lint and test
+    name: Lint and test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The minimum supported version and the newest one the dependencies support.
+        python-version: ["3.12", "3.14"]
     steps:
       - uses: actions/checkout@v7
 
@@ -26,14 +31,27 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           cache: poetry
 
       # Reuse pre-commit's hook environments between runs.
       - uses: actions/cache@v6
         with:
           path: ~/.cache/pre-commit
-          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+          key: pre-commit-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
 
       - name: Install dependencies, lint, and test
         run: make install ci
+
+  # The check that branch protection requires: one stable name, whatever the matrix holds. It must run even when a
+  # matrix job fails (a skipped required check counts as passing), so it checks the result explicitly.
+  ci-result:
+    name: Lint and test
+    if: always()
+    needs: [lint-and-test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every matrix job to pass
+        env:
+          RESULT: ${{ needs.lint-and-test.result }}
+        run: test "$RESULT" = success

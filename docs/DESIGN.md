@@ -114,8 +114,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 
 ## 2. Technical Spec
 
-Tooling (Python version, package manager, linting, tests, typing) is left to the coding-standards document. Choices here
-marked _provisional_ are placeholders until then.
+Tooling and code conventions are in [`CODING-STANDARDS.md`](CODING-STANDARDS.md).
 
 ### 2.1 Architecture overview
 
