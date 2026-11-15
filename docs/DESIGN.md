@@ -46,10 +46,13 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **U-15** · If `http://` and `https://` forms of the same IRI are both declared, their shared URL shows a page for choosing between them. _(Q1a)_ | v1 |
 | **U-16** · While an ontology is being loaded or replaced, the site shows a "loading" page. _(Q14a)_ | v1 |
 | **U-17** · Pages work without JavaScript, except for hash IRIs, which need it. Trees and autocomplete are keyboard-accessible. _(Q20)_ | v1 |
-| **U-26** · Each entity page has a **Usage** tab, like Protégé Desktop's Usage tab, not shown by default: the axioms in which other entities refer to this entity (logical axioms and annotation assertions whose value is this entity), rendered in Manchester syntax and grouped by referring entity, with a total count and paging. Axioms not about a single entity (general class axioms, `DisjointClasses(A, B, C)`) are listed under every named entity they mention. | v1 |
+| **U-26** · Each entity page has a **Usage** tab (inspired by Protégé's), not shown by default: the axioms in which other entities refer to this entity (logical axioms and annotation assertions whose value is this entity), rendered in Manchester syntax and grouped by referring entity, with a total count and paging. Axioms not about a single entity (general class axioms, `DisjointClasses(A, B, C)`) are listed under every named entity they mention. | v1 |
 | **U-27** · A persistent navigation bar on every page links to the ontology home page, the search, and the tree page for each entity type. | v1 |
 | **U-28** · Page-specific content is organized in tabs within the page (e.g. an entity's Overview and Usage; for classes, later, Individuals). The tabs are visually distinct from the navigation bar. | v1 |
 | **U-29** · The layout makes good use of space and is as readable as possible without looking harsh. | v1 |
+| **U-30** · An entity's Overview tab shows annotations in one panel and logical axioms in another. | v1 |
+| **U-31** · Property pages show the property's domains and ranges, if any, in the logical-axioms panel. | v1 |
+| **U-32** · The panels are compact: each annotation value or axiom takes one line, wrapping only when it doesn't fit. A property with several values (e.g. 10 synonyms) is named once, with one line per value. | v1 |
 | **U-18** · Named individuals have pages, and each class page lists its individuals in an Individuals tab, with paging. _(Q17)_ | Later |
 | **U-19** · Autocomplete also matches from the start of any word. _(Q8)_ | Later |
 | **U-20** · Autocomplete tolerates typos. _(Q8)_ | Later |
@@ -58,6 +61,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **U-23** · Content negotiation: an entity URL returns RDF (e.g. Turtle) when asked for it with the HTTP `Accept` header. _(Q4)_ | Later |
 | **U-24** · Optionally hide results in less-preferred languages entirely. _(Q10)_ | Later |
 | **U-25** · Optional ranking by entity importance, only if it adds little complexity. _(Q9)_ | Later |
+| **U-33** · An annotation property with many values shows them in multiple columns where the page width allows. | Later |
 
 ### 1.3 Admin requirements
 
@@ -273,9 +277,32 @@ Header, above the tabs (U-5):
 - A `<details>` element with the full IRI and CURIE.
 
 Tabs (U-28; see [2.9](#29-page-layout)):
-- **Overview** (default; U-3, U-9): immediate parents and equivalent IRIs (from the derived database), annotation values, and logical axioms in Manchester syntax (from the OWLAPI).
+- **Overview** (default; U-3, U-9, U-30–U-32): two panels, stacked, inspired by Protégé's description views but more compact. Details below.
 - **Usage** (U-26), labeled with its count from the `usage` table, e.g. "Usage (128)": a page of referring entities (e.g. 50 per page), each with its axioms that mention this entity, fetched from the OWLAPI's referencing-axiom index and rendered on demand. Since the tab isn't shown by default, its cost is only paid when someone opens it.
 - **Individuals** (classes only; Later, U-18): the class's named individuals, paged.
+
+**Overview tab:**
+
+```
+ Annotations
+   label            Heart
+   exact synonym    cardiac muscle organ                  @en
+                    heart organ                           @en
+   definition       A hollow, muscular organ which, by contracting
+                    rhythmically, keeps up the circulation of the blood.
+
+ Logical axioms
+   SubClass Of      Organ
+                    part_of some 'circulatory system'
+   Equivalent To    …
+   Disjoint With    Lung
+```
+
+- **Annotations panel:** grouped by annotation property, with the property's display name shown once and one line per value. Language tags are shown small and muted. IRI values are links. Long values, such as definitions, wrap within the readable text width ([2.9](#29-page-layout)). Property order: the configured name properties first, in their configured order, then the others alphabetically.
+- **Logical-axioms panel:** grouped by axiom kind under familiar section names (SubClass Of, Equivalent To, …), one Manchester-syntax axiom per line. Empty groups are omitted.
+  - **Classes:** SubClass Of (named parents first, then class expressions), Equivalent To (equivalent classes from the derived database, then expressions), Disjoint With, and General class axioms that mention the class.
+  - **Properties** (U-31): Domains, Ranges, Characteristics (functional, transitive, …), SubProperty Of, Equivalent To, Inverse Of, Disjoint With, and property chains.
+- **Compact layout** (U-32): label column and value column in a two-column grid; tight line spacing within a group and a little more between groups. Multi-column values for long lists are Later (U-33).
 
 **Manchester rendering** _(post-log; supersedes Q6's hand-written renderer)_: the OWLAPI's own Manchester syntax renderer, the one Protégé uses, covers all of OWL 2. Entity names become links like this:
 1. A custom OWLAPI short-form provider returns a placeholder token for each entity (e.g. a private-use character plus an index), instead of a name.
@@ -425,7 +452,7 @@ Work items are sized to be one issue or PR each, roughly. The **Tracking** colum
 | P-13 | Routing: path lookup, 404, disambiguation page, hash-prefix page and script | U-2, U-13, U-14, U-15 | P-10 | |
 | P-14 | Base templates and page frame: navigation bar, page header, tab component, stylesheet and themes; links rendered from display names; IRI `<details>` | U-4, U-5, U-6, U-17, U-27, U-28, U-29 | P-11, P-13 | |
 | P-15 | Manchester rendering via the OWLAPI, with link-token substitution and keyword styling | U-3 | S-1, P-14 | |
-| P-16 | Entity page: parents, annotations, axioms, equivalents | U-3, U-9 | P-12, P-15 | |
+| P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout | U-3, U-9, U-30, U-31, U-32 | P-12, P-15 | |
 | P-17 | Ontology home page | U-1 | P-14 | |
 | P-18 | Hierarchy trees with lazy loading (htmx) and keyboard support | U-7, U-17 | P-12, P-14 | |
 | P-27 | `usage` table built during pre-caching from the OWLAPI; Usage tab on entity pages, with paging | U-26 | P-12, P-16, S-3 | |
