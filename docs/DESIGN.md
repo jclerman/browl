@@ -503,23 +503,24 @@ coordination. The cache wraps a plain function that stores rendered strings. `fu
 
 ### 2.12 Configuration
 
-Defaults are set in code, and each can be overridden by an environment variable. _(Q13)_
+Defaults are set in code, and each can be overridden by an environment variable of the same name, validated at startup
+(`browl/settings.py`). Lists and mappings are given as JSON, e.g. `LANGUAGE_RANKING='["en", "fr", "none"]'`. _(Q13)_
 
 | Setting | Default | Notes |
 | --- | --- | --- |
 | `BASE_URL` | none (required) | O-2 |
 | `RESERVED_PREFIX` | `_browl` | must start with `_`; O-3 |
 | `NAME_PROPERTIES` | `[rdfs:label]` | ordered; O-4 |
-| `LANGUAGE_RANKING` | `[en]` | Untagged is a reserved entry (e.g. `none`), added at the end if not listed; O-5 |
+| `LANGUAGE_RANKING` | `[en]` | Untagged is the reserved entry `none`, added at the end if not listed; O-5 |
 | `EXTRA_PREFIXES` | `{}` | O-11 |
-| `PAGE_CACHE_SIZE` | `100` | O-10 |
-| `REASONER_TIMEOUT_S`, `REASONER_MAX_HEAP` | to be decided after spike S-2 | O-8 |
+| `PAGE_CACHE_SIZE` | `100` | `0` turns the cache off; O-10 |
+| `REASONER_TIMEOUT_S`, `REASONER_MAX_HEAP` | `3600`, `8g`: placeholders until spike S-2 | O-8 |
 | `APP_JVM_MAX_HEAP` | `1g`, to be confirmed in P-4 | heap for the app's in-process JVM, which only renders per-page fragments (S-4) |
 | `FUSEKI_URL` | `http://fuseki:3030` | Fuseki's address on the Compose network |
-| `ROBOT_JAR` | path in the image | used both on the app's classpath and for reasoning subprocesses |
-| `JENA_HOME` | path in the image | Jena's command-line tools, for the TDB2 loader |
+| `ROBOT_JAR` | path in the image (placeholder `/opt/robot/robot.jar` until P-3) | used both on the app's classpath and for reasoning subprocesses |
+| `JENA_HOME` | path in the image (placeholder `/opt/jena` until P-3) | Jena's command-line tools, for the TDB2 loader |
 | `DATA_DIR` | `/data` | mounted volume; O-9 |
-| `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `SEED_ADMINS` | none | O-6 |
+| `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `SEED_ADMINS` | none | required unless `AUTH_DISABLED`; O-6 |
 | `AUTH_DISABLED` | `false` | O-7 |
 
 ### 2.13 URL space for the service's own pages
