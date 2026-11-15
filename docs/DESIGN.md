@@ -215,8 +215,8 @@ server worker reports it consistently. _(Q7b, Q14a)_
 | Stage | What happens |
 | --- | --- |
 | **uploading** | The file is streamed to the data volume. The site switches to the "loading" page (U-16) and the page cache is cleared. |
-| **reasoning** (optional) | A build script runs ROBOT `reason` with ELK or HermiT. The built output replaces the uploaded file as the ontology that gets served. _(Q7a)_ |
-| **loading** | The previous ontology is released and the built ontology is loaded into a fresh OWLAPI ontology manager in the app's JVM. The OWLAPI parses all three upload formats, so no conversion step is needed. _(Q15)_ |
+| **reasoning** (optional) | A build script runs ROBOT `reason` with ELK or HermiT. The built output, written as `.ofn`, replaces the uploaded file as the ontology that gets served. Without a reasoner, the upload is converted to `.ofn` once instead. _(Q7a)_ |
+| **loading** | The previous ontology is released and the built ontology is loaded into a fresh OWLAPI ontology manager in the app's JVM. It is always the `.ofn` built in the previous stage: for NCBITaxon, `.ofn` loads 1.6–1.8× faster than RDF/XML and needs about half the heap, which also speeds every restart ([S-3 findings](../research/S-3/README.md)). _(Q15)_ |
 | **pre-caching** | The derived SQLite database is built from the in-memory ontology ([2.5](#25-derived-data-pre-caching)), as a new file then swapped in atomically. |
 | **ready** | The new generation number is recorded; pages are served again. |
 
@@ -233,10 +233,11 @@ uploads again. Downtime during a replace is accepted. _(Q14a)_
 the ontology into the OWLAPI (showing the "loading" page meanwhile) and reuses the derived database when its generation
 number matches, skipping pre-caching.
 
-**App JVM heap:** set by `APP_JVM_MAX_HEAP`. It must fit the largest ontology to be served; spike S-3 measures how much
-that is. If the ontology doesn't fit, the loading stage fails with a "memory limit" reason, like the reasoner. After a
-heap failure the app restarts its process instead of carrying on, because the error can also kill JPype's internal
-reference-cleanup thread ([S-1 findings](../research/S-1/README.md)).
+**App JVM heap:** set by `APP_JVM_MAX_HEAP`. It must fit the largest ontology to be served: NCBITaxon (21 M axioms)
+keeps 3.7 GB of heap when loaded from `.ofn`, and loads in a 6 GB heap ([S-3 findings](../research/S-3/README.md)). If
+the ontology doesn't fit, the loading stage fails with a "memory limit" reason, like the reasoner. After a heap failure
+the app restarts its process instead of carrying on, because the error can also kill JPype's internal reference-cleanup
+thread ([S-1 findings](../research/S-1/README.md)).
 
 **Missing imports:** the ontology is loaded with the OWLAPI's `MissingImportHandlingStrategy.SILENT`, so an
 `owl:imports` target that can't be fetched doesn't stop the load. The upload page lists the imports that were skipped.
@@ -256,16 +257,17 @@ Built once per load, stored in the derived SQLite database. Proposed tables:
 | `hash_prefix` | distinct URL paths that have hash entities under them |
 | `prefix` | CURIE prefix → namespace (ontology's own, built-ins, configured overrides) |
 | `meta` | ontology IRI, version IRI, reasoner used, load time, generation number |
-| `usage` | referenced entity → referring entity, axiom kind (one row per pair and kind), built from the OWLAPI's referencing-axiom index. An axiom with no single subject, such as a general class axiom or `DisjointClasses(A, B, C)`, gets a row for every named entity it mentions. Used for the Usage tab's count and paging. S-1 found the OWLAPI's own index returns counts and a first page in about 1 ms, so P-27 decides whether this table is needed once S-3 confirms that at scale ([S-1 findings](../research/S-1/README.md)). |
+| `usage` | referenced entity → referring entity, axiom kind (one row per pair and kind), built from the OWLAPI's referencing-axiom index, plus annotation assertions whose value is an entity. An axiom with no single subject, such as a general class axiom or `DisjointClasses(A, B, C)`, gets a row for every named entity it mentions. Used for the Usage tab's count and paging. Needed: the OWLAPI can't find annotation assertions by value, and its IRI lookup takes 5–11 s on NCBITaxon. On NCBITaxon the table has 8.5 M rows, about 400 MB ([S-3 findings](../research/S-3/README.md)). |
 
 **Hierarchies.** Named direct parents, taken from the OWLAPI's subclass and sub-property axioms (asserted, or inferred
 if a reasoner ran). Roots are nodes with no named parent. For classes this includes children of `owl:Thing`.
 
 **Distinct descendant counts.** These need a transitive closure, not a sum over edges. _(Q19a)_ The plan is to compute
-them in a bottom-up pass in topological order, merging descendant sets. Compact integer sets (e.g. Python's `int` used
-as a bitset, or a roaring-bitmap library) keep this practical. Only the counts are stored, not the full closure. Memory
-use and run time at N-1 scale are what spike S-3 must measure. If they're too high, the fallback is a closure table
-built in SQLite.
+them in a bottom-up pass in topological order, merging descendant sets. Each set is a
+[roaring bitmap](https://roaringbitmap.org/) (a compressed integer set with fast unions, via `pyroaring`), freed once
+all its parents have merged it. Only the counts are stored, not the full closure. On NCBITaxon (3.0 M classes) this
+takes 4.2 s ([S-3 findings](../research/S-3/README.md)). Python `int` bitsets are unsuitable: their size grows with the
+highest index.
 
 **RDFS entailment** _(post-log; replaces Fuseki's role)_. browl needs only a few RDFS entailment rules, and computes
 them itself rather than through SPARQL:
@@ -460,7 +462,7 @@ Defaults are set in code, and each can be overridden by an environment variable.
 | `EXTRA_PREFIXES` | `{}` | O-11 |
 | `PAGE_CACHE_SIZE` | `100` | O-10 |
 | `REASONER_TIMEOUT_S`, `REASONER_MAX_HEAP` | to be decided after spike S-2 | O-8 |
-| `APP_JVM_MAX_HEAP` | to be decided after spike S-3 | heap for the app's in-process JVM |
+| `APP_JVM_MAX_HEAP` | `8g` | heap for the app's in-process JVM; NCBITaxon served from `.ofn` loads in 6 GB (S-3) |
 | `ROBOT_JAR` | path in the image | used both on the app's classpath and for reasoning subprocesses |
 | `DATA_DIR` | `/data` | mounted volume; O-9 |
 | `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `SEED_ADMINS` | none | O-6 |
@@ -483,11 +485,11 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 
 | Risk | Mitigation |
 | --- | --- |
-| OWLAPI heap needed for the largest ontologies is too large | Spike S-3 measures it. Uberon needs ~180 MB retained, ~384 MB to load ([S-1 findings](../research/S-1/README.md)). Fallback: the OWLAPI in a separate process. py-horned-owl is not one: it used about 5× the memory on Uberon, and its Manchester output is whole-ontology only, with gaps. |
+| OWLAPI heap needed for the largest ontologies is too large | Measured: NCBITaxon (21 M axioms) keeps 3.7 GB from `.ofn`, 6.8 GB from RDF/XML; Uberon ~180 MB ([S-1](../research/S-1/README.md), [S-3 findings](../research/S-3/README.md)). Fallback: the OWLAPI in a separate process. py-horned-owl is not one: it used about 5× the memory on Uberon, and its Manchester output is whole-ontology only, with gaps. |
 | JPype quirks: thread safety of concurrent OWLAPI reads; Python–Java call overhead | Resolved by S-1: concurrent reads were safe, but gave no extra throughput, so OWLAPI calls run on one thread (2.1). Call overhead is small: ~0.3 ms per page ([S-1 findings](../research/S-1/README.md)). |
 | Memory limit can't be reported reliably | Spike S-2; at worst report "reasoner failed" with ROBOT's output. |
-| Descendant counts too slow or memory-hungry at millions of classes | Spike S-3; bitset approach, SQLite closure fallback. |
-| Loading and pre-caching a very large ontology takes many minutes | Accepted for uploads (Q14a), shown on the status page. Restarts skip pre-caching (2.4). S-3 measures both. |
+| Descendant counts too slow or memory-hungry at millions of classes | Resolved by S-3: roaring bitmaps, 4.2 s for NCBITaxon ([S-3 findings](../research/S-3/README.md)). |
+| Loading and pre-caching a very large ontology takes many minutes | Accepted for uploads (Q14a), shown on the status page. Restarts skip pre-caching (2.4). NCBITaxon: about 6–9 minutes for load plus pre-caching, mostly moving data from Java to Python through JPype ([S-3 findings](../research/S-3/README.md)). |
 | browl's own RDFS entailment differs from a standard reasoner's | Oracle tests against Apache Jena's RDFS inference (2.5). |
 
 ---
@@ -508,6 +510,7 @@ go into this document.
 | S-1 | OWLAPI via JPype: start the JVM with `robot.jar`, load an ontology, render axioms in Manchester syntax with link tokens, list referencing axioms; measure per-entity render time, including concurrent requests. Briefly compare py-horned-owl's load time, memory and Manchester output. | de-risks U-3, U-26, N-3 | | [#8](https://github.com/jclerman/browl/issues/8) |
 | S-2 | ROBOT reasoning with time and heap limits: confirm a memory breach can be detected and told apart from other failures | de-risks A-6, O-8 | | [#12](https://github.com/jclerman/browl/issues/12) |
 | S-3 | Scale test with a large ontology (e.g. NCBITaxon or ChEBI): OWLAPI load time and heap; descendant-count computation time and memory; `usage` table build time and size; derived database size | de-risks N-1–N-4 | S-1 | [#13](https://github.com/jclerman/browl/issues/13) |
+| S-4 | Serving without an in-process OWLAPI: Fuseki/TDB2 queried on demand (aggregates fetched up front with single SPARQL queries), or pre-rendered SQLite. Measure bulk load, restart readiness, page-query latency, Manchester rendering. | de-risks N-1–N-4, U-16 | S-3 | [#47](https://github.com/jclerman/browl/issues/47) |
 
 ### Phase 1: Foundation
 
@@ -517,7 +520,7 @@ go into this document.
 | P-28 | Coding-standards doc; settle the choices marked provisional | | | [#10](https://github.com/jclerman/browl/issues/10) |
 | P-2 | Settings module with validation (reserved-prefix rule, `AUTH_DISABLED` warning) | O-2–O-8, O-10, O-11 | P-1 | [#9](https://github.com/jclerman/browl/issues/9) |
 | P-3 | Docker Compose: one app container with a Java runtime and `robot.jar`, volumes, health check | O-1, O-9 | P-1 | [#11](https://github.com/jclerman/browl/issues/11) |
-| P-4 | OWLAPI bridge: start the JVM via JPype, load and release ontologies, run Java calls on one dedicated thread | | P-2, P-3, S-1 | [#15](https://github.com/jclerman/browl/issues/15) |
+| P-4 | OWLAPI bridge: start the JVM via JPype, load and release ontologies, run Java calls on one dedicated thread | | P-2, P-3, S-1, S-4 | [#15](https://github.com/jclerman/browl/issues/15) |
 
 ### Phase 2: Loading
 
