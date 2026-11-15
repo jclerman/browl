@@ -248,11 +248,11 @@ either container doesn't reload the ontology.
 has no store yet. The TDB2 bulk loader writes a new, empty store directory and can't load into a store that Fuseki has
 open, and while a load runs Fuseki still serves the previous store, if any (the site shows the "loading" page
 meanwhile). Once the new store is built, Fuseki has to start serving it, and the old one is deleted. The app and Fuseki
-are separate containers, so the app can't simply restart Fuseki. The options, settled in P-3:
-
-- Fuseki's admin protocol: the app registers the new store as a new dataset over HTTP, then removes the old dataset.
-- A fixed store path that Fuseki serves (e.g. a symlink the app repoints), with a Fuseki restart that the app triggers
-  somehow. The restart itself takes under a second.
+are separate containers, so the app can't simply restart Fuseki. Instead it uses **Fuseki's admin protocol**: it
+registers the new store as a new dataset over HTTP, with a dataset description that sets the TDB2 location and the
+union default graph, then removes the old dataset. This needs Fuseki's admin endpoints (`/$/datasets`), which are
+reachable only on the Compose network, not published. P-3 tries it. If Fuseki turns out to leak memory or other
+resources across switches, the fallback is a fixed store path with a Fuseki restart, which takes under a second.
 
 **Imports:** browl follows `owl:imports` where it can, and warns where it can't. The TDB2 loader reads only the files
 it's given, and by default ROBOT refuses an ontology whose imports can't be fetched
