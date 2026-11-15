@@ -1,22 +1,33 @@
 # OWL-Browse
 
-An OWL ontology browser. Host an OWL ontology as a browsable website. Every ontology entity gets its own page, built on-demand, cached once built.
+OWL-Browse (`browl`) hosts an OWL ontology as a browsable website. Every declared entity gets its own page, at a URL implied by its IRI.
 
-## Features
- - Top/home page indicates ontology metadata
- - Displays hierarchies as collapsible trees (separate hierarchies for each OWL entity type: classes, each type of property [object, annotation, data])
-   - Hierarchies indicate counts of immediate children and all descendents
- - Autocomplete search over all entities, filterable by entity-type, and by annotations to search over (e.g. rdfs:label, or any given annotation property, searching over direct values, or all values including indirect values per RDFS entailment)
- - View-page for each entity
-   - Showing:
-     - Immediate parents
-     - Annotation-values
-     - Logical axioms in easy-to-read Manchester syntax
-   - Every entity displayed as a hyperlink, clickable to navigate to that entity's page
+**Status:** early development. The design is in [`docs/DESIGN.md`](docs/DESIGN.md); the app is not usable yet.
+
+## Features (planned for v1)
+
+- A home page with the ontology's metadata: IRI, version, annotations, imports, entity counts, and the reasoner applied.
+- A page for each entity: its annotations, and its logical axioms in Manchester syntax, with every entity mentioned shown as a link. A Usage tab lists the axioms in which other entities refer to it.
+- Collapsible hierarchy trees for classes and for each property type, with counts of immediate children and of all descendants.
+- Autocomplete search over entity names, filterable by entity type and by name property, optionally including values entailed through sub-properties.
+- An admin page for uploading the ontology (RDF/XML, Turtle or OWL Functional Syntax), optionally classified first with the [ELK](https://github.com/liveontologies/elk-reasoner) or [HermiT](https://github.com/owlcs/hermit-reasoner) reasoner. Admins sign in with Google.
 
 ## Architecture
-  - Served via Python FastAPI
-    - Ontology entities represented as Pydantic objects where reasonable
-  - Runs against Apache Jena/Fuseki, hosting the ontology in question
-  - Admin page supports selection/upload of an ontology into the service
-  - Uses Owlready2 to help with display of logical axioms in Manchester syntax
+
+- A Python web app ([FastAPI](https://github.com/fastapi/fastapi), Jinja2 templates, htmx), with no front-end build step.
+- The ontology is held in memory by the [OWLAPI](https://github.com/owlcs/owlapi), which runs in the app's process through [JPype](https://github.com/jpype-project/jpype). The OWLAPI also renders Manchester syntax.
+- Reasoning runs [ROBOT](https://github.com/ontodev/robot) as a separate process, with time and memory limits.
+- Data that needs the whole ontology (names, hierarchy counts, the search index) is computed once per load and stored in SQLite. Rendered pages are kept in a small cache.
+- Deployed as a single Docker container.
+
+## Development
+
+Requires Python 3.12+ and Poetry 2.5.1+.
+
+```sh
+make install   # install dependencies
+make ci        # lint and test, as CI does
+make help      # list all targets
+```
+
+Contributors and coding agents: see [`AGENTS.md`](AGENTS.md).
