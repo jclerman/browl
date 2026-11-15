@@ -39,9 +39,24 @@ Uploads exclude reasoning, which S-2 covers. Estimates add up measured stages fr
 What A costs: a second service, a small JVM still in the app (for rendering fragments), and pages about 30× slower than
 now (7–10 ms instead of 0.3 ms), which is still about 30× under the N-3 target.
 
-**One decision for you: O-1** says the service runs as a single container. A needs Fuseki running too. Options: run
-Fuseki as a second process in the same container (keeps O-1 as written, but the container runs two processes), or relax
-O-1 to "one `docker compose up`" with two services (cleaner; what I'd suggest).
+**O-1** says the service runs as a single container, but A needs Fuseki running too. The options were: run Fuseki as a
+second process in the same container, or relax O-1 to "one `docker compose up`" with two services. See Decisions.
+
+## Decisions
+
+- **Go with A:** Fuseki/TDB2, queried on demand, with whole-ontology aggregates in SQLite.
+- **Fuseki runs in its own container.** O-1 is relaxed to "one `docker compose up`", with two services: the app and
+  Fuseki.
+- **Follow-up research is deferred.** Each item below goes to a later spike or waits until a full prototype exists,
+  whichever fits better:
+  - What A hasn't measured yet:
+    - the entity-list query;
+    - finding references to an entity inside class expressions, through blank nodes;
+    - Fuseki's memory while serving.
+  - Counting references the first time a page is viewed instead of in an up-front query. Do the up-front query only if
+    first-view counts make pages too slow.
+  - Extracting the dictionary and edges by streaming the upload file, in parallel with the TDB2 load.
+  - Getting entailed name values from RDFS inference configured in Fuseki, instead of from property paths in queries.
 
 ## Setup
 
