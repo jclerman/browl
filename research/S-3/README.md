@@ -7,14 +7,14 @@ and the derived database? Design context: [`docs/DESIGN.md`](../../docs/DESIGN.m
 [S-1](../S-1/README.md), whose JVM and loading code it reuses.
 
 **Conclusion: N-1 scale is workable on one machine: NCBITaxon loads from `.ofn` in a 6 GB heap.** Serve the ontology
-from `.ofn`,
-which loads twice as fast and needs half the heap. Count descendants with roaring bitmaps. Keep the `usage` table: the
-OWLAPI can't find references by annotation value, and its IRI lookup is a full scan.
+from `.ofn`, which loads twice as fast and needs half the heap. Count descendants with roaring bitmaps (compressed sets
+of integers; see [Descendant counts](#descendant-counts)). Keep the `usage` table: the OWLAPI can't find references by
+annotation value, and its IRI lookup is a full scan.
 
 ## Setup
 
 - Same machine as S-1: Apple M3 Pro (12 cores), 36 GB RAM; OpenJDK 17.0.17; Python 3.12.8; ROBOT v1.9.11 (OWLAPI 4.5);
-  JPype 1.7.1; pyroaring 1.2.0.
+  JPype 1.7.1; [pyroaring](https://github.com/Ezibenroc/PyRoaringBitMap) 1.2.0 (roaring bitmaps, below).
 - **NCBITaxon** release v2026-11-09 (`ncbitaxon.owl`, RDF/XML, 2.1 GB): 21,334,880 axioms, 3,025,030 classes, a pure
   tree (no class has two parents), 3.56 M label and synonym values, 5.5 M annotation values that are IRIs (mostly
   `has_rank`).
@@ -82,7 +82,15 @@ and are left to a separate spike, [S-4](https://github.com/jclerman/browl/issues
 
 ### Descendant counts
 
-The bottom-up pass over roaring bitmaps (§2.5) handled NCBITaxon's 3.0 M classes in 4.2 s and Uberon's DAG in under
+A class's distinct descendants are a set of class numbers, and the counting pass (§2.5) builds each class's set as the
+union of its children's sets. At 3 M classes those sets must be small and fast to merge. A
+[roaring bitmap](https://roaringbitmap.org/) is a compressed set of integers built for exactly this: it splits the
+numbers into blocks of 65,536 and stores each block in whichever form is smallest (a sorted list for a few members, a
+plain bitmap for many, or ranges for long consecutive runs), and unions work block by block. It is widely used in search
+engines and databases. [pyroaring](https://github.com/Ezibenroc/PyRoaringBitMap) is its Python binding, wrapping the C
+library CRoaring.
+
+The bottom-up pass over roaring bitmaps handled NCBITaxon's 3.0 M classes in 4.2 s and Uberon's DAG in under
 0.1 s, with no memory problem: a node's set is freed as soon as all its parents have merged it, and run-length
 compression keeps tree-shaped sets small. No SQLite closure-table fallback is needed.
 

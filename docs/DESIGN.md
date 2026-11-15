@@ -264,10 +264,11 @@ Built once per load, stored in the derived SQLite database. Proposed tables:
 if a reasoner ran). Roots are nodes with no named parent. For classes this includes children of `owl:Thing`.
 
 **Distinct descendant counts.** These need a transitive closure, not a sum over edges. _(Q19a)_ The plan is to compute
-them in a bottom-up pass in topological order, merging descendant sets. Each set is a roaring bitmap (`pyroaring`),
-freed once all its parents have merged it. Only the counts are stored, not the full closure. On NCBITaxon (3.0 M
-classes) this takes 4.2 s ([S-3 findings](../research/S-3/README.md)). Python `int` bitsets are unsuitable: their size
-grows with the highest index.
+them in a bottom-up pass in topological order, merging descendant sets. Each set is a
+[roaring bitmap](https://roaringbitmap.org/) (a compressed integer set with fast unions, via `pyroaring`), freed once
+all its parents have merged it. Only the counts are stored, not the full closure. On NCBITaxon (3.0 M classes) this
+takes 4.2 s ([S-3 findings](../research/S-3/README.md)). Python `int` bitsets are unsuitable: their size grows with the
+highest index.
 
 **RDFS entailment** _(post-log; replaces Fuseki's role)_. browl needs only a few RDFS entailment rules, and computes
 them itself rather than through SPARQL:
