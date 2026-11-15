@@ -7,9 +7,13 @@ implied by its IRI.
 > temporary, so decisions can be traced and the two documents audited against each other. They will be removed once this
 > document is the sole source of truth.
 >
-> Two decisions made after the question log supersede parts of it: **Fuseki is dropped** (supersedes Q7's "Fuseki
-> handles RDFS inference"), and **the OWLAPI renders Manchester syntax** (supersedes Q6's tentative decision to write
-> our own renderer). Both are marked _(post-log)_ below.
+> Decisions made after the question log supersede parts of it. They are marked _(post-log)_ or with the spike that
+> settled them:
+>
+> - **The OWLAPI renders Manchester syntax** (supersedes Q6's tentative decision to write our own renderer).
+> - **Fuseki/TDB2 holds the ontology and is queried on demand** ([S-4](../research/S-4/README.md)). This supersedes an
+>   interim decision to drop Fuseki and hold the whole ontology in an in-process OWLAPI, which S-3 showed takes about
+>   70 s to become ready after every restart at NCBITaxon scale. Fuseki also provides the RDFS entailment of Q7.
 
 **Contents:**
 
@@ -88,7 +92,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 
 | Requirement | Priority |
 | --- | --- |
-| **O-1** · The service runs as a single container started with one command. | v1 |
+| **O-1** · The service starts with one command (`docker compose up`). It runs as two containers: the app and Fuseki. _(S-4; was a single container)_ | v1 |
 | **O-2** · `BASE_URL` (where the service is served) is set per deployment. IRIs under it get their native paths. _(Q1c)_ | v1 |
 | **O-3** · The reserved prefix for the service's own pages is configurable, defaults to `_browl`, and must start with `_`. _(Q1d)_ | v1 |
 | **O-4** · The ordered list of name annotation properties (default: `rdfs:label` first) is configurable and is used for both display names and search. _(Q18a)_ | v1 |
@@ -118,12 +122,6 @@ Tooling and code conventions are in [`CODING-STANDARDS.md`](CODING-STANDARDS.md)
 
 ### 2.1 Architecture overview
 
-> **Pending decision (S-4, [#47](https://github.com/jclerman/browl/issues/47)):** this section describes an in-process
-> OWLAPI holding the whole ontology, which can't serve pages until it has parsed it (about 70 s for NCBITaxon, on every
-> restart). [S-4](../research/S-4/README.md) recommends serving from Fuseki/TDB2 instead: ready about 0.7 s after a
-> restart, Uberon uploaded and ready in 7 s, and identical Manchester output by rendering fetched triples. If that's
-> chosen, §2.1, §2.4, §2.5, §2.8, O-1 and the affected plan items are revised in one pass.
-
 ```text
            browser
               │  HTML (Jinja) + htmx
@@ -132,35 +130,38 @@ Tooling and code conventions are in [`CODING-STANDARDS.md`](CODING-STANDARDS.md)
    │  browl app (FastAPI, one worker process)      │
    │  - routing / IRI map     - load pipeline job  │
    │  - page rendering        - search shim        │
+   │  - SPARQL client                              │
    │                                               │
    │  ┌─────────────────────────────────────────┐  │
    │  │ in-process JVM (JPype, robot.jar)       │  │
-   │  │ OWLAPI: the loaded ontology in memory,  │  │
-   │  │ axiom lookups, Manchester rendering     │  │
+   │  │ OWLAPI: Manchester rendering of the     │  │
+   │  │ triples fetched for one page            │  │
    │  └─────────────────────────────────────────┘  │
-   └──────┬──────────────────────┬─────────────────┘
-          │                      │ subprocess
-          ▼                      ▼
-   derived SQLite           ROBOT (separate JVM):
-   (pre-cached data,        ELK/HermiT reasoning
-    search index,
-    admin list, job state)
+   └──────┬───────────────┬───────────────┬────────┘
+          │ SPARQL (HTTP) │               │ subprocesses
+          ▼               ▼               ▼
+   Fuseki container   derived SQLite   ROBOT (reasoning),
+   TDB2 store: the    (aggregates,     Jena TDB2 loader
+   loaded ontology    search index,
+                      admins, job state)
 ```
 
-- **OWLAPI in an in-process JVM** holds the loaded ontology in memory. It is reached from Python through JPype, using
-  the OWLAPI classes bundled in `robot.jar`. It answers per-entity lookups (annotations, axioms, referencing axioms),
-  renders axioms in Manchester syntax, and is the source for pre-caching. _(post-log)_
-- **Derived SQLite database** holds everything computed once at load time: entity list, display names, hierarchy and
-  counts, RDFS entailments, hash prefixes, equivalence groups, prefixes, usage and the search index. Page rendering
-  reads mostly from here. _(Q5)_
+- **Fuseki with a TDB2 store** holds the loaded ontology, in its own container. The store persists on disk, so after a
+  restart Fuseki is ready in under a second, whatever the ontology's size. Entity pages query it when requested: an
+  entity's own triples, its children, its references; 2–4 ms per query on NCBITaxon
+  ([S-4 findings](../research/S-4/README.md)).
+- **Derived SQLite database** holds whatever needs the whole ontology, computed once per load from a few bulk SPARQL
+  queries: entity list, display names, hierarchy edges and counts, RDFS-entailed name values, hash prefixes, equivalence
+  groups, prefixes and the search index. _(Q5, N-4)_
+- **OWLAPI in an in-process JVM**, reached through JPype from the classes in `robot.jar`, renders Manchester syntax. For
+  each page it parses only the triples fetched for that entity, so it needs a small heap and no whole-ontology load
+  ([2.8](#28-entity-pages)). _(post-log)_
 - **ROBOT as a subprocess** runs the optional reasoning, in its own JVM so time and memory limits can be enforced and a
-  runaway run killed. _(Q7c)_
-- **One server worker process,** so the ontology is held in memory once. Concurrency comes from async request handling;
-  all OWLAPI calls run on one dedicated thread. Parallel threads gave no extra throughput, because each page alternates
-  Java and Python work, and Python's GIL serializes the Python part; one thread renders thousands of pages per second
+  runaway run killed. Jena's TDB2 loader also runs as a subprocess, building the store for each load. _(Q7c)_
+- **One server worker process.** Concurrency comes from async request handling: SPARQL calls use an async HTTP client,
+  and all OWLAPI calls run on one dedicated thread. Parallel threads gave no extra throughput, because each render
+  alternates Java and Python work, and Python's GIL serializes the Python part
   ([S-1 findings](../research/S-1/README.md)).
-- **No triple store.** Fuseki was there for reliable RDFS entailment; the entailments browl needs are computed during
-  pre-caching instead ([2.5](#25-derived-data-pre-caching)). _(post-log; supersedes Q7)_
 - **Owlready2 is not used.** _(Q6)_
 
 ### 2.2 Libraries and components
@@ -172,13 +173,14 @@ Tooling and code conventions are in [`CODING-STANDARDS.md`](CODING-STANDARDS.md)
 | Front-end behavior | htmx, served from the app's static files (no CDN) | No SPA framework and no front-end build step. _(Q20)_ |
 | Data models | Pydantic | Entities, settings, job state. |
 | Configuration | pydantic-settings | Defaults in code; environment variables override. _(Q13)_ |
-| Ontology in memory | OWLAPI, from the classes bundled in `robot.jar` | Parses Turtle, RDF/XML and `.ofn`. _(post-log)_ |
+| Ontology store | Apache Jena Fuseki with TDB2, in its own container | Queried with SPARQL over HTTP. Jena 6 needs Java 21. _(S-4)_ |
+| SPARQL client | HTTPX (async) | Plain SPARQL protocol; results read as TSV, fragments as N-Triples. |
+| Manchester rendering | OWLAPI's Manchester syntax renderer, from the classes bundled in `robot.jar` | Renders per-page fragments; see [2.8](#28-entity-pages). _(post-log)_ |
 | Python ↔ Java bridge | JPype | One JVM per process, started at app startup. _(post-log)_ |
-| Manchester rendering | OWLAPI's Manchester syntax renderer | See [2.8](#28-entity-pages). _(post-log)_ |
 | Derived store and search (v1) | SQLite (Python standard library), queried in a thread pool | FTS5 later for any-word search. _(Q8, Q11)_ |
 | Reasoning | ROBOT (Java), as a subprocess | ELK and HermiT. |
 | Authentication | Authlib (OpenID Connect with Google), Starlette signed-cookie sessions | |
-| Deployment | Docker Compose: one `app` service, named volumes | The app image includes a Java runtime and `robot.jar`. |
+| Deployment | Docker Compose: `app` and `fuseki` services, named volumes | The app image includes Java 21, `robot.jar` and Jena's command-line tools (for the TDB2 loader). _(S-4)_ |
 
 ### 2.3 IRI → URL mapping
 
@@ -221,10 +223,13 @@ server worker reports it consistently. _(Q7b, Q14a)_
 | Stage | What happens |
 | --- | --- |
 | **uploading** | The file is streamed to the data volume. The site switches to the "loading" page (U-16) and the page cache is cleared. |
-| **reasoning** (optional) | A build script runs ROBOT `reason` with ELK or HermiT. The built output, written as `.ofn`, replaces the uploaded file as the ontology that gets served. Without a reasoner, the upload is converted to `.ofn` once instead. _(Q7a)_ |
-| **loading** | The previous ontology is released and the built ontology is loaded into a fresh OWLAPI ontology manager in the app's JVM. It is always the `.ofn` built in the previous stage: for NCBITaxon, `.ofn` loads 1.6–1.8× faster than RDF/XML and needs about half the heap, which also speeds every restart ([S-3 findings](../research/S-3/README.md)). _(Q15)_ |
-| **pre-caching** | The derived SQLite database is built from the in-memory ontology ([2.5](#25-derived-data-pre-caching)), as a new file then swapped in atomically. |
+| **reasoning** (optional) | A build script runs ROBOT `reason` with ELK or HermiT. Its output, written as RDF, replaces the uploaded file as the ontology that gets served. An upload in a format the TDB2 loader can't read (`.ofn`) is converted to RDF by ROBOT instead. _(Q7a)_ |
+| **loading** | Jena's TDB2 bulk loader builds a new store from the built ontology, in a new directory on the data volume. Fuseki is then switched to it and the previous store deleted. Uberon loads in about 4 s, NCBITaxon in about 3 min ([S-4 findings](../research/S-4/README.md)). _(Q15)_ |
+| **pre-caching** | A few bulk SPARQL queries fetch the whole-ontology data, and the derived SQLite database is built from them ([2.5](#25-derived-data-pre-caching)), as a new file then swapped in atomically. |
 | **ready** | The new generation number is recorded; pages are served again. |
+
+Uberon goes from upload file to ready in 7 s without reasoning, measured end to end; NCBITaxon is estimated at about
+5 minutes ([S-4 findings](../research/S-4/README.md)).
 
 **Reasoner limits** _(Q7)_:
 
@@ -235,38 +240,45 @@ server worker reports it consistently. _(Q7b, Q14a)_
 On failure the job records the stage and reason (A-6), and the site stays on a "not available" page until an admin
 uploads again. Downtime during a replace is accepted. _(Q14a)_
 
-**App restart:** the built ontology file and the derived database stay on the data volume. On startup the app reloads
-the ontology into the OWLAPI (showing the "loading" page meanwhile) and reuses the derived database when its generation
-number matches, skipping pre-caching.
+**App restart:** the store and the derived database stay on the data volume. Fuseki reopens the store in under a
+second, and the app reuses the derived database when its generation number matches, skipping pre-caching. Restarting
+either container doesn't reload the ontology.
 
-**App JVM heap:** set by `APP_JVM_MAX_HEAP`. It must fit the largest ontology to be served: NCBITaxon (21 M axioms)
-keeps 3.7 GB of heap when loaded from `.ofn`, and loads in a 6 GB heap ([S-3 findings](../research/S-3/README.md)). If
-the ontology doesn't fit, the loading stage fails with a "memory limit" reason, like the reasoner. After a heap failure
-the app restarts its process instead of carrying on, because the error can also kill JPype's internal reference-cleanup
-thread ([S-1 findings](../research/S-1/README.md)).
+**Switching Fuseki to a new store:** to be settled in P-3. One option is Fuseki's admin protocol: register each load's
+store as a new dataset, then remove the old one. The other is restarting Fuseki on the new store, which takes under a
+second but needs a way for the app to restart the Fuseki container.
 
-**Missing imports:** the ontology is loaded with the OWLAPI's `MissingImportHandlingStrategy.SILENT`, so an
-`owl:imports` target that can't be fetched doesn't stop the load. The upload page lists the imports that were skipped.
-By default the OWLAPI and ROBOT refuse such ontologies ([S-1 findings](../research/S-1/README.md)).
+**Imports:** the TDB2 loader reads only the file it's given; it doesn't follow `owl:imports`. Whether imported
+ontologies are merged in first (e.g. ROBOT `merge`, skipping imports that can't be fetched) is decided in P-8. By
+default ROBOT refuses an ontology whose imports can't be fetched ([S-1 findings](../research/S-1/README.md)).
+
+**Heap sizes:** the app's JVM only renders per-page fragments, so it needs a small heap (`APP_JVM_MAX_HEAP`). Fuseki's
+memory while serving hasn't been measured yet; TDB2 is disk-based and memory-mapped (P-3 measures it). After a heap
+failure the app restarts its process instead of carrying on, because the error can also kill JPype's internal
+reference-cleanup thread ([S-1 findings](../research/S-1/README.md)).
 
 ### 2.5 Derived data (pre-caching)
 
-Built once per load, stored in the derived SQLite database. Proposed tables:
+Built once per load from bulk SPARQL queries, one per kind of data, and stored in the derived SQLite database. Bulk
+results stream from Fuseki at about 100 K rows per second whatever the query looks like, so pre-caching NCBITaxon takes
+about a minute ([S-4 findings](../research/S-4/README.md)). Proposed tables:
 
 | Table | Contents |
 | --- | --- |
-| `entity` | IRI, entity type, URL path, fragment, display name, CURIE |
-| `name_value` | entity, annotation property, value, normalized value, language, `direct` flag (one row per direct and per RDFS-entailed property) |
-| `edge` | parent → child per hierarchy (classes; each property type), between equivalence-group representatives |
+| `entity` | IRI, entity type, URL path, fragment, display name, CURIE. From an entity-list query (every declared entity with its type), not yet measured. |
+| `name_value` | entity, annotation property, value, normalized value, language, `direct` flag (one row per direct and per RDFS-entailed property). From the dictionary query: 41–48 s on NCBITaxon, 3.56 M rows. |
+| `edge` | parent → child per hierarchy (classes; each property type), between equivalence-group representatives. From the edges query: 18–19 s on NCBITaxon. |
 | `equiv_group` | entity → group ID (union-find over `owl:equivalentClass` between named classes) |
 | `counts` | per node: number of immediate children, number of distinct descendants |
 | `hash_prefix` | distinct URL paths that have hash entities under them |
 | `prefix` | CURIE prefix → namespace (ontology's own, built-ins, configured overrides) |
 | `meta` | ontology IRI, version IRI, reasoner used, load time, generation number |
-| `usage` | referenced entity → referring entity, axiom kind (one row per pair and kind), built from the OWLAPI's referencing-axiom index, plus annotation assertions whose value is an entity. An axiom with no single subject, such as a general class axiom or `DisjointClasses(A, B, C)`, gets a row for every named entity it mentions. Used for the Usage tab's count and paging. Needed: the OWLAPI can't find annotation assertions by value, and its IRI lookup takes 5–11 s on NCBITaxon. On NCBITaxon the table has 8.5 M rows, about 400 MB ([S-3 findings](../research/S-3/README.md)). |
 
-**Hierarchies.** Named direct parents, taken from the OWLAPI's subclass and sub-property axioms (asserted, or inferred
-if a reasoner ran). Roots are nodes with no named parent. For classes this includes children of `owl:Thing`.
+An earlier design also had a `usage` table, because the OWLAPI can't find annotation assertions by value. Fuseki can
+(`?s ?p <entity>`), so P-27 decides whether any part of it is still needed ([2.8](#28-entity-pages)).
+
+**Hierarchies.** Named direct parents: `rdfs:subClassOf` and `rdfs:subPropertyOf` triples with an IRI on both sides
+(asserted, or inferred if a reasoner ran). Roots are nodes with no named parent. For classes this includes children of `owl:Thing`.
 
 **Distinct descendant counts.** These need a transitive closure, not a sum over edges. _(Q19a)_ The plan is to compute
 them in a bottom-up pass in topological order, merging descendant sets. Each set is a
@@ -275,20 +287,23 @@ all its parents have merged it. Only the counts are stored, not the full closure
 takes 4.2 s ([S-3 findings](../research/S-3/README.md)). Python `int` bitsets are unsuitable: their size grows with the
 highest index.
 
-**RDFS entailment** _(post-log; replaces Fuseki's role)_. browl needs only a few RDFS entailment rules, and computes
-them itself rather than through SPARQL:
+**RDFS entailment** _(Q7)_. browl needs only a few RDFS entailment rules, and Jena provides them:
 
 | Rule | What browl does with it |
 | --- | --- |
-| `rdfs:subPropertyOf` is transitive (rdfs5) | Closure over the sub-property graph, cycles allowed (mutual sub-properties are equivalent). |
-| A value of a sub-property is also a value of its super-properties (rdfs7) | **Entailed name values:** for each property in the configured name list, values of its sub-properties are also stored under it, with `direct = false`. _(Q8)_ |
-| `rdfs:subClassOf` is transitive (rdfs11) | Already covered by the descendant-count closure. |
+| `rdfs:subPropertyOf` is transitive (rdfs5), and a value of a sub-property is also a value of its super-properties (rdfs7) | **Entailed name values:** for each property in the configured name list, values of its sub-properties are also stored under it, with `direct = false`. _(Q8)_ |
+| `rdfs:subClassOf` is transitive (rdfs11) | Covered by the descendant-count closure. |
 | An instance of a class is an instance of its super-classes (rdfs9) | For the Individuals tab (Later, U-18), if it lists indirect members. |
 
-Rules browl doesn't use (e.g. typing from `rdfs:domain` and `rdfs:range`) aren't computed. To keep this as reliable as
-Fuseki's RDFS inference was meant to be, tests compare browl's results with Apache Jena's RDFS inference on a set of
-test ontologies, with Jena used only as a test oracle. The exact Jena tool, for example its command-line RDFS option or
-Jena via JPype, is to be confirmed in P-11.
+Entailed name values come either from a property path in the dictionary query (`?p rdfs:subPropertyOf* ?name`), which
+S-4 measured at little extra cost, or from an RDFS endpoint configured in Fuseki (`ja:DatasetRDFS`) over the same
+store. P-11 settles which before building the dictionary. Either way, an endpoint without inference stays available:
+direct subclass edges can't be told apart from entailed ones under RDFS inference.
+
+**Subclass closure, not stored.** Queries over `rdfs:subClassOf+` take up to 0.9 s on NCBITaxon, so pages never use them:
+descendant counts are precomputed (above). If a later feature needs to list or count descendants on demand, the fallback
+is to load the subclass closure as plain triples: 7–21 ms per query, but for NCBITaxon 59 M extra triples and about 12
+more minutes of loading ([S-4 findings](../research/S-4/README.md)).
 
 ### 2.6 Search
 
@@ -341,9 +356,13 @@ Tabs (U-28; see [2.9](#29-page-layout)):
 
 - **Overview** (default; U-3, U-9, U-30–U-32): two panels, stacked, inspired by Protégé's description views but more
   compact. Details below.
-- **Usage** (U-26), labeled with its count from the `usage` table, e.g. "Usage (128)": a page of referring entities
-  (e.g. 50 per page), each with its axioms that mention this entity, fetched from the OWLAPI's referencing-axiom index
-  and rendered on demand. Since the tab isn't shown by default, its cost is only paid when someone opens it.
+- **Usage** (U-26), labeled with its count, e.g. "Usage (128)": a page of referring entities (e.g. 50 per page), each
+  with its axioms that mention this entity, rendered on demand. References are found in Fuseki (`?s ?p <entity>`) and
+  paged in the store's index order: sorting 2.5 M references took 15.5 s, index order takes milliseconds. Counts take
+  2 ms for most entities but up to 0.4 s for one referenced millions of times. Since the tab isn't shown by default,
+  its cost is only paid when someone opens it. Open questions for P-27: finding references inside class expressions,
+  which reach the entity through blank nodes, and whether to count on first view (cached) or with an up-front query
+  ([S-4 findings](../research/S-4/README.md)).
 - **Individuals** (classes only; Later, U-18): the class's named individuals, paged.
 
 **Overview tab:**
@@ -363,10 +382,10 @@ Tabs (U-28; see [2.9](#29-page-layout)):
    Disjoint With    Lung
 ```
 
-- **Annotations panel:** grouped by annotation property, with the property's display name shown once and one line per
-  value. Language tags are shown small and muted. IRI values are links. Long values, such as definitions, wrap within
-  the readable text width ([2.9](#29-page-layout)). Property order: the configured name properties first, in their
-  configured order, then the others alphabetically.
+- **Annotations panel:** from the entity's own triples, grouped by annotation property, with the property's display
+  name shown once and one line per value. Language tags are shown small and muted. IRI values are links. Long values,
+  such as definitions, wrap within the readable text width ([2.9](#29-page-layout)). Property order: the configured
+  name properties first, in their configured order, then the others alphabetically.
 - **Logical-axioms panel:** grouped by axiom kind under familiar section names (SubClass Of, Equivalent To, …), one
   Manchester-syntax axiom per line. Empty groups are omitted.
   - **Classes:** SubClass Of (named parents first, then class expressions), Equivalent To (equivalent classes from the
@@ -377,7 +396,18 @@ Tabs (U-28; see [2.9](#29-page-layout)):
   little more between groups. Multi-column values for long lists are Later (U-33).
 
 **Manchester rendering** _(post-log; supersedes Q6's hand-written renderer)_: the OWLAPI's own Manchester syntax
-renderer, the one Protégé uses, covers all of OWL 2. Entity names become links like this:
+renderer, the one Protégé uses, covers all of OWL 2. It renders from a fragment of the ontology fetched for each page
+([S-4 findings](../research/S-4/README.md)):
+
+1. Fetch the entity's triples with their blank-node closure (`DESCRIBE`), the triples where it is the object of
+   `owl:disjointWith` or `owl:equivalentClass`, and the types of every IRI they mention.
+2. The OWLAPI parses that fragment as a small ontology. For 300 of 300 random Uberon classes, the logical axioms
+   rendered from it were identical to those rendered from the full ontology. Not yet covered: n-ary
+   `owl:AllDisjointClasses` axioms and general class axioms that mention the entity, which need one more lookup (P-15).
+3. Fetching takes 4.8 ms at p50 and 6.4 ms at p95, parsing and rendering 2.0 and 3.5 ms: about 7–10 ms per page,
+   against the N-3 target of 300 ms.
+
+Entity names become links like this:
 
 1. The renderer is given the OWLAPI's `DefaultPrefixManager` with no prefixes as its short-form provider, so every
    entity is rendered as its full IRI, `<…>`.
@@ -389,7 +419,7 @@ renderer, the one Protégé uses, covers all of OWL 2. Entity names become links
 
 No Java code is needed, and no Python code runs inside the renderer. Spike S-1 also tried the earlier plan, a Python
 short-form provider returning placeholder tokens: it worked but was slower, and missed IRIs the renderer prints without
-asking the provider. A page renders in about 0.3 ms at p95 on Uberon ([S-1 findings](../research/S-1/README.md)).
+asking the provider ([S-1 findings](../research/S-1/README.md)).
 
 ### 2.9 Page layout
 
@@ -468,8 +498,10 @@ Defaults are set in code, and each can be overridden by an environment variable.
 | `EXTRA_PREFIXES` | `{}` | O-11 |
 | `PAGE_CACHE_SIZE` | `100` | O-10 |
 | `REASONER_TIMEOUT_S`, `REASONER_MAX_HEAP` | to be decided after spike S-2 | O-8 |
-| `APP_JVM_MAX_HEAP` | `8g` | heap for the app's in-process JVM; NCBITaxon served from `.ofn` loads in 6 GB (S-3) |
+| `APP_JVM_MAX_HEAP` | `1g`, to be confirmed in P-4 | heap for the app's in-process JVM, which only renders per-page fragments (S-4) |
+| `FUSEKI_URL` | `http://fuseki:3030` | Fuseki's address on the Compose network |
 | `ROBOT_JAR` | path in the image | used both on the app's classpath and for reasoning subprocesses |
+| `JENA_HOME` | path in the image | Jena's command-line tools, for the TDB2 loader |
 | `DATA_DIR` | `/data` | mounted volume; O-9 |
 | `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `SEED_ADMINS` | none | O-6 |
 | `AUTH_DISABLED` | `false` | O-7 |
@@ -485,18 +517,19 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | `iri?u=…` | Fallback entity URLs (Q1b) |
 | `static/…` | CSS, htmx, hash-IRI script |
 | `admin/…` | Upload, status, admin list, sign-in/out |
-| `health` | Liveness check for the container |
+| `health` | Liveness check for the container; also reports whether Fuseki answers |
 
 ### 2.14 Risks
 
 | Risk | Mitigation |
 | --- | --- |
-| OWLAPI heap needed for the largest ontologies is too large | Measured: NCBITaxon (21 M axioms) keeps 3.7 GB from `.ofn`, 6.8 GB from RDF/XML; Uberon ~180 MB ([S-1](../research/S-1/README.md), [S-3 findings](../research/S-3/README.md)). Fallback: the OWLAPI in a separate process. py-horned-owl is not one: it used about 5× the memory on Uberon, and its Manchester output is whole-ontology only, with gaps. |
-| JPype quirks: thread safety of concurrent OWLAPI reads; Python–Java call overhead | Resolved by S-1: concurrent reads were safe, but gave no extra throughput, so OWLAPI calls run on one thread (2.1). Call overhead is small: ~0.3 ms per page ([S-1 findings](../research/S-1/README.md)). |
+| Fuseki needs too much memory while serving the largest ontologies | Not measured yet; TDB2 is disk-based and memory-mapped. P-3 measures it with NCBITaxon. |
+| JPype quirks: thread safety of concurrent OWLAPI calls; Python–Java call overhead | Resolved by S-1: concurrent calls were safe but gave no extra throughput, so OWLAPI calls run on one thread (2.1). Call overhead is small ([S-1 findings](../research/S-1/README.md)). |
 | Memory limit can't be reported reliably | Spike S-2; at worst report "reasoner failed" with ROBOT's output. |
 | Descendant counts too slow or memory-hungry at millions of classes | Resolved by S-3: roaring bitmaps, 4.2 s for NCBITaxon ([S-3 findings](../research/S-3/README.md)). |
-| Loading and pre-caching a very large ontology takes many minutes | Accepted for uploads (Q14a), shown on the status page. Restarts skip pre-caching (2.4). NCBITaxon: about 6–9 minutes for load plus pre-caching, mostly moving data from Java to Python through JPype ([S-3 findings](../research/S-3/README.md)). |
-| browl's own RDFS entailment differs from a standard reasoner's | Oracle tests against Apache Jena's RDFS inference (2.5). |
+| Loading a very large ontology takes minutes | Accepted for uploads (Q14a), shown on the status page. Restarts don't reload (2.4). NCBITaxon: about 5 minutes, estimated; Uberon: 7 s, measured ([S-4 findings](../research/S-4/README.md)). P-24 checks whether extracting the dictionary and edges by streaming the upload file, in parallel with the TDB2 load, is worth it. |
+| Fragment rendering misses axioms a full-ontology render would show | 300 of 300 Uberon classes matched (S-4); P-15 adds n-ary disjointness and general class axioms, and tests against full-ontology rendering. |
+| Usage misses references inside class expressions | P-27 tests walking from the blank node up to the owning axiom before building the tab. |
 
 ---
 
@@ -525,8 +558,8 @@ go into this document.
 | P-1 | Project scaffold: `browl` package, tooling per the coding-standards doc, CI | | | done: [#2](https://github.com/jclerman/browl/pull/2), [#4](https://github.com/jclerman/browl/pull/4), [#5](https://github.com/jclerman/browl/pull/5), [#6](https://github.com/jclerman/browl/pull/6) |
 | P-28 | Coding-standards doc; settle the choices marked provisional | | | [#10](https://github.com/jclerman/browl/issues/10) |
 | P-2 | Settings module with validation (reserved-prefix rule, `AUTH_DISABLED` warning) | O-2–O-8, O-10, O-11 | P-1 | [#9](https://github.com/jclerman/browl/issues/9) |
-| P-3 | Docker Compose: one app container with a Java runtime and `robot.jar`, volumes, health check | O-1, O-9 | P-1 | [#11](https://github.com/jclerman/browl/issues/11) |
-| P-4 | OWLAPI bridge: start the JVM via JPype, load and release ontologies, run Java calls on one dedicated thread | | P-2, P-3, S-1, S-4 | [#15](https://github.com/jclerman/browl/issues/15) |
+| P-3 | Docker Compose: `app` (Java 21, `robot.jar`, Jena's TDB2 loader) and `fuseki` services, volumes, health checks; how the app switches Fuseki to a new store; Fuseki's memory while serving | O-1, O-9 | P-1, S-4 | [#11](https://github.com/jclerman/browl/issues/11) |
+| P-4 | Fuseki client (async SPARQL over HTTP) and OWLAPI bridge: start the JVM via JPype, parse fetched triples as a small ontology, run Java calls on one dedicated thread | | P-2, P-3, S-1, S-4 | [#15](https://github.com/jclerman/browl/issues/15) |
 
 ### Phase 2: Loading
 
@@ -535,16 +568,16 @@ go into this document.
 | P-5 | Job runner and job state in SQLite; "loading" / "not available" site pages | U-16, A-5 | P-2 | [#14](https://github.com/jclerman/browl/issues/14) |
 | P-6 | Upload page and streaming upload (auth not yet enforced) | A-2, A-4 | P-5 | [#16](https://github.com/jclerman/browl/issues/16) |
 | P-7 | ROBOT build script: optional ELK/HermiT reasoning, with limits | A-3, A-6, O-8 | P-6, S-2 | [#18](https://github.com/jclerman/browl/issues/18) |
-| P-8 | Load into the OWLAPI; reload on app restart | A-4 | P-4, P-7, S-3 | [#20](https://github.com/jclerman/browl/issues/20) |
+| P-8 | Bulk-load the built ontology into a new TDB2 store and switch Fuseki to it; imports; no reload on restart | A-4 | P-4, P-7, S-4 | [#20](https://github.com/jclerman/browl/issues/20) |
 
 ### Phase 3: Derived data
 
 | ID | Work item | Delivers | Depends on | Tracking |
 | --- | --- | --- | --- | --- |
 | P-9 | Derived database schema; atomic swap; generation number; reuse on restart when current | N-4 | P-8 | [#21](https://github.com/jclerman/browl/issues/21) |
-| P-10 | Entities, IRI → URL mapping, hash prefixes, collision warnings | U-2, U-13, U-15, O-3 | P-9 | [#22](https://github.com/jclerman/browl/issues/22) |
-| P-11 | RDFS entailment (sub-property closure), name values (direct and entailed), display names, CURIE prefixes; Jena oracle tests | U-6, O-4, O-5, O-11 | P-10 | [#23](https://github.com/jclerman/browl/issues/23) |
-| P-12 | Hierarchies, equivalence groups, distinct descendant counts | U-7, U-8, U-9 | P-10, S-3 | [#24](https://github.com/jclerman/browl/issues/24) |
+| P-10 | Entities (entity-list query), IRI → URL mapping, hash prefixes, collision warnings | U-2, U-13, U-15, O-3 | P-9 | [#22](https://github.com/jclerman/browl/issues/22) |
+| P-11 | Name values, direct and entailed through sub-properties (first decide: property path or Fuseki-configured RDFS), display names, CURIE prefixes | U-6, O-4, O-5, O-11 | P-10 | [#23](https://github.com/jclerman/browl/issues/23) |
+| P-12 | Hierarchies (edges query), equivalence groups, distinct descendant counts | U-7, U-8, U-9 | P-10, S-3 | [#24](https://github.com/jclerman/browl/issues/24) |
 
 ### Phase 4: Browsing
 
@@ -552,11 +585,11 @@ go into this document.
 | --- | --- | --- | --- | --- |
 | P-13 | Routing: path lookup, 404, disambiguation page, hash-prefix page and script | U-2, U-13, U-14, U-15 | P-10 | [#25](https://github.com/jclerman/browl/issues/25) |
 | P-14 | Base templates and page frame: navigation bar, page header, tab component, stylesheet and themes; links rendered from display names; IRI `<details>` | U-4, U-5, U-6, U-17, U-27, U-28, U-29 | P-11, P-13 | [#27](https://github.com/jclerman/browl/issues/27) (sub-issues [#28](https://github.com/jclerman/browl/issues/28), [#33](https://github.com/jclerman/browl/issues/33), [#34](https://github.com/jclerman/browl/issues/34)) |
-| P-15 | Manchester rendering via the OWLAPI, with link-token substitution and keyword styling | U-3 | S-1, P-14 | [#36](https://github.com/jclerman/browl/issues/36) |
+| P-15 | Manchester rendering via the OWLAPI from fetched fragments, including n-ary disjointness and general class axioms; link substitution and keyword styling | U-3 | S-1, S-4, P-14 | [#36](https://github.com/jclerman/browl/issues/36) |
 | P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout | U-3, U-9, U-30, U-31, U-32 | P-12, P-15 | [#37](https://github.com/jclerman/browl/issues/37) (sub-issues [#29](https://github.com/jclerman/browl/issues/29), [#38](https://github.com/jclerman/browl/issues/38), [#39](https://github.com/jclerman/browl/issues/39)) |
 | P-17 | Ontology home page | U-1 | P-14 | [#30](https://github.com/jclerman/browl/issues/30) |
 | P-18 | Hierarchy trees with lazy loading (htmx) and keyboard support | U-7, U-17 | P-12, P-14 | [#31](https://github.com/jclerman/browl/issues/31) |
-| P-27 | `usage` table built during pre-caching from the OWLAPI; Usage tab on entity pages, with paging | U-26 | P-9, P-16, S-3 | [#41](https://github.com/jclerman/browl/issues/41) |
+| P-27 | Usage tab on entity pages, from Fuseki, with paging (first decide: references inside class expressions; counts on first view or up front; any `usage` table) | U-26 | P-9, P-16, S-4 | [#41](https://github.com/jclerman/browl/issues/41) |
 
 ### Phase 5: Search, caching, auth
 
@@ -572,7 +605,7 @@ go into this document.
 
 | ID | Work item | Delivers | Depends on | Tracking |
 | --- | --- | --- | --- | --- |
-| P-24 | Performance check against N-1–N-3 targets at scale | N-1–N-3 | all above | [#42](https://github.com/jclerman/browl/issues/42) |
+| P-24 | Performance check against N-1–N-3 targets at scale; whether streaming extraction alongside the TDB2 load is worth it | N-1–N-3 | all above | [#42](https://github.com/jclerman/browl/issues/42) |
 | P-25 | Accessibility pass (trees, combobox, no-JS pages) | U-17 | P-18, P-20 | [#35](https://github.com/jclerman/browl/issues/35) |
 | P-26 | Update README: remove Owlready2 and Fuseki (now the OWLAPI via JPype); replace "cached once built" with the bounded cache | | | done: [#7](https://github.com/jclerman/browl/pull/7) |
 
