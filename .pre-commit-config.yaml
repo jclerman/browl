@@ -5,7 +5,7 @@ repos:
     hooks:
       # Linter (replaces flake8 + isort via the "I" rules); must run before the formatter.
       - id: ruff-check
-        args: [ --fix ]
+        args: [--fix]
       # Formatter (replaces black).
       - id: ruff-format
 
@@ -15,7 +15,7 @@ repos:
         name: mypy
         entry: mypy
         language: system
-        types_or: [ python, pyi ]
+        types_or: [python, pyi]
         exclude: '^tests/'
         require_serial: true
 
@@ -23,5 +23,22 @@ repos:
     rev: v6.0.0
     hooks:
       - id: pretty-format-json
-        args: [ --autofix, --no-sort-keys, --indent=2 ]
+        args: [--autofix, --no-sort-keys, --indent=2]
       - id: end-of-file-fixer
+
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        args: [--strict]
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      # Also runs ShellCheck on `run:` steps when `shellcheck` is on PATH.
+      - id: actionlint
+
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.24.1
+    hooks:
+      - id: markdownlint-cli2
