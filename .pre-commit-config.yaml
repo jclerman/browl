@@ -1,0 +1,27 @@
+repos:
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.5
+    hooks:
+      # Linter (replaces flake8 + isort via the "I" rules); must run before the formatter.
+      - id: ruff-check
+        args: [ --fix ]
+      # Formatter (replaces black).
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: mypy
+        language: system
+        types_or: [ python, pyi ]
+        exclude: '^tests/'
+        require_serial: true
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: pretty-format-json
+        args: [ --autofix, --no-sort-keys, --indent=2 ]
+      - id: end-of-file-fixer

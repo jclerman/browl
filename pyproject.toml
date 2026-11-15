@@ -18,6 +18,17 @@ priority = "primary"
 [tool.poetry.dependencies]
 fastapi = "^0.163"
 
+[tool.poetry.group.dev.dependencies]
+mypy = "^2.4.1"
+pre-commit = "^4.7.0"
+
+[tool.ruff.lint]
+# Enable these rule sets on top of ruff's defaults (E4, E7, E9, F):
+#   I  = isort (import sorting)
+#   UP = pyupgrade (modernize syntax for the target Python version)
+#   B  = flake8-bugbear (likely bugs and design problems)
+extend-select = ["I", "UP", "B"]
+
 [build-system]
 requires = ["poetry-core>=2.5.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
