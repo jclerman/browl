@@ -23,12 +23,15 @@ mypy = "^2.4.1"
 pre-commit = "^4.7.0"
 pytest = "^9.2.0"
 pytest-cov = "^7.1.0"
+pytest-sugar = "^1.1.1"
 
 [tool.pytest]
 # An xfail test that unexpectedly passes is a failure, not a silent pass.
 xfail_strict = true
 # When run with --cov, record which test covered each line; no effect otherwise.
 addopts = ["--cov-context=test"]
+# Show full assertion diffs (as with -vv) without making other output verbose.
+verbosity_assertions = 2
 
 [tool.coverage.run]
 # Measure the browl package, including modules no test imports.
