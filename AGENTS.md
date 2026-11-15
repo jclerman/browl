@@ -37,5 +37,6 @@ Key decisions, detailed in the design doc:
 
 - Never commit to `main`. Make each change on its own branch and merge it through a pull request.
 - Before merging, bring the branch up to date with `main` by rebasing onto it, not by merging `main` in. Push the rebased branch with `git push --force-with-lease`.
+- PRs are squash-merged, so the PR title becomes the commit message on `main`. Write it as a good commit subject.
 - Refer to design-doc IDs in PRs and commit messages where they apply: requirements (`U-3`, `A-6`), work items (`P-15`) and spikes (`S-1`).
 - When a change alters a design decision, update `docs/DESIGN.md` in the same PR.
