@@ -1,0 +1,5 @@
+config:
+  MD013:
+    line_length: 120
+    # Table rows can't be wrapped in Markdown.
+    tables: false
