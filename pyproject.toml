@@ -11,6 +11,10 @@ dynamic = ["dependencies"]
 [tool.poetry]
 requires-poetry = ">=2.5.1"
 
+[[tool.poetry.source]]
+name = "PyPI"
+priority = "primary"
+
 [tool.poetry.dependencies]
 fastapi = "^0.163"
 
