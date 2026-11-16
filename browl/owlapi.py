@@ -6,12 +6,14 @@ bridge modules, which give the functions that wrap them Python types.
 """
 
 import asyncio
+import functools
 import logging
 import os
 import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +37,36 @@ _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="java", initial
 
 class FragmentError(Exception):
     """The OWLAPI couldn't parse a fragment."""
+
+
+@dataclass(frozen=True, slots=True)
+class _Java:
+    """The Java classes the bridge uses, and the immutable Java objects every parse shares."""
+
+    ByteArrayInputStream: Any
+    NTriplesDocumentFormat: Any
+    OWLManager: Any
+    OWLOntologyCreationException: Any
+    StreamDocumentSource: Any
+    fragment_iri: Any
+    loader_configuration: Any
+
+
+@functools.cache
+def _java() -> _Java:
+    """Look the classes up once, on first use; the JVM must be running."""
+    configuration = jpype.JClass("org.semanticweb.owlapi.model.OWLOntologyLoaderConfiguration")()
+    missing_imports = jpype.JClass("org.semanticweb.owlapi.model.MissingImportHandlingStrategy")
+    return _Java(
+        ByteArrayInputStream=jpype.JClass("java.io.ByteArrayInputStream"),
+        NTriplesDocumentFormat=jpype.JClass("org.semanticweb.owlapi.formats.NTriplesDocumentFormat"),
+        OWLManager=jpype.JClass("org.semanticweb.owlapi.apibinding.OWLManager"),
+        OWLOntologyCreationException=jpype.JClass("org.semanticweb.owlapi.model.OWLOntologyCreationException"),
+        StreamDocumentSource=jpype.JClass("org.semanticweb.owlapi.io.StreamDocumentSource"),
+        fragment_iri=jpype.JClass("org.semanticweb.owlapi.model.IRI").create(FRAGMENT_IRI),
+        # Loader configurations are immutable: each setter returns a new one.
+        loader_configuration=configuration.setMissingImportHandlingStrategy(missing_imports.SILENT),
+    )
 
 
 @jpype.JImplements("org.semanticweb.owlapi.model.OWLOntologyFactory", deferred=True)
@@ -73,9 +105,7 @@ class _OnlyDocumentFactory:
     def loadOWLOntology(self, manager: Any, source: Any, handler: Any, configuration: Any) -> Any:  # noqa: N802
         """Load the one document source, refusing any other (document sources don't override `equals`)."""
         if not source.equals(self._source):
-            raise jpype.JClass("org.semanticweb.owlapi.model.OWLOntologyCreationException")(
-                f"browl doesn't load {source.getDocumentIRI()}"
-            )
+            raise _java().OWLOntologyCreationException(f"browl doesn't load {source.getDocumentIRI()}")
         return self._factory.loadOWLOntology(manager, source, handler, configuration)
 
     @jpype.JOverride
@@ -147,22 +177,17 @@ def ntriples_ontology(ntriples: bytes) -> Iterator[Any]:
         FragmentError: The OWLAPI couldn't parse the N-Triples.
     """
     check_java_thread()
-    missing_imports = jpype.JClass("org.semanticweb.owlapi.model.MissingImportHandlingStrategy")
-    configuration = jpype.JClass("org.semanticweb.owlapi.model.OWLOntologyLoaderConfiguration")()
-    configuration = configuration.setMissingImportHandlingStrategy(missing_imports.SILENT)
-    source = jpype.JClass("org.semanticweb.owlapi.io.StreamDocumentSource")(
-        jpype.JClass("java.io.ByteArrayInputStream")(ntriples),
-        jpype.JClass("org.semanticweb.owlapi.model.IRI").create(FRAGMENT_IRI),
-        jpype.JClass("org.semanticweb.owlapi.formats.NTriplesDocumentFormat")(),
-        "application/n-triples",
+    java = _java()
+    source = java.StreamDocumentSource(
+        java.ByteArrayInputStream(ntriples), java.fragment_iri, java.NTriplesDocumentFormat(), "application/n-triples"
     )
-    manager = jpype.JClass("org.semanticweb.owlapi.apibinding.OWLManager").createOWLOntologyManager()
+    manager = java.OWLManager.createOWLOntologyManager()
     factories = manager.getOntologyFactories()
     [factory] = factories  # OWLManager's one factory, which loads documents from any source, including IRIs
     factories.set(_OnlyDocumentFactory(factory, source))
     try:
-        ontology = manager.loadOntologyFromOntologyDocument(source, configuration)
-    except jpype.JClass("org.semanticweb.owlapi.model.OWLOntologyCreationException") as error:
+        ontology = manager.loadOntologyFromOntologyDocument(source, java.loader_configuration)
+    except java.OWLOntologyCreationException as error:
         raise FragmentError(f"the OWLAPI couldn't parse the fragment: {error}") from error
     try:
         yield ontology
