@@ -363,10 +363,15 @@ ranking. _(Q18, Q18a)_ For each entity, the display name is the first value foun
 
 It is computed during pre-caching, so link text costs nothing at render time.
 
-**Language matching:** RDF compares language tags case-insensitively, and `LANGUAGE_RANKING` is stored lowercased
-(P-2). So a literal's tag is lowercased before it's looked up in the ranking (`@en-GB` matches `en-gb`), and a literal
-with no tag matches the `none` entry. The same applies wherever tags are compared, e.g. search ranking
-([2.6](#26-search)).
+**Language matching** (wherever tags are compared, including search ranking, [2.6](#26-search)):
+
+- **Case:** RDF compares language tags case-insensitively, and `LANGUAGE_RANKING` is stored lowercased (P-2). So a
+  literal's tag is lowercased before it's looked up (`@en-GB` matches `en-gb`).
+- **Fallback** (RFC 4647 "lookup"): a tag with no entry of its own drops subtags from the end until one matches, so
+  `@en-GB` ranks with `en` unless `en-gb` is listed; `@zh-Hant-TW` tries `zh-hant`, then `zh`.
+- **Unmatched tags** rank after every listed language: just before `none` when it's last (the default), last when
+  `none` is placed earlier.
+- **Untagged** literals match the `none` entry.
 
 **CURIE prefixes:** the prefixes declared in the ontology file, plus a built-in set (`rdf`, `rdfs`, `owl`, `xsd`,
 `skos`, `obo`, `dc`, `dcterms`, …), with configured mappings overriding both (O-11). An IRI with no matching prefix has
