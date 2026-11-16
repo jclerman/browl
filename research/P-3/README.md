@@ -7,7 +7,8 @@ they were measured.
 
 ## Setup
 
-- Docker Desktop 29.9 on an Apple M3 Pro (12 cores, 36 GB RAM); the Docker VM had 12 CPUs and 7.65 GB.
+- Docker Desktop 4.99.0 (Docker Engine 29.9.3) on an Apple M3 Pro (12 cores, 36 GB RAM); the Docker VM had 12 CPUs
+  and 7.65 GB.
 - The P-3 images: Fuseki 6.2.0 and Jena 6.2.0 on Debian trixie's OpenJDK 21.0.13.
 - NCBITaxon 2026-11-09 (S-3's file, 24,029,133 triples), and Uberon 2026-11-05 (S-1's file) as an import.
 - Stores built in the app container with `tdb2.xloader` (2 GB heap, gzipped N-Triples or N-Quads input).
