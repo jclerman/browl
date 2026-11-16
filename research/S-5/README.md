@@ -29,8 +29,8 @@ pages, so **browl's figures are lower bounds**: they leave out what isn't built 
 
 ## Setup
 
-- Docker Desktop 29.9 on an Apple M3 Pro (12 cores, 36 GB RAM); the Docker VM had 12 CPUs and 7.65 GiB. Each stack
-  ran on its own, with nothing else running in the VM.
+- Docker Desktop 4.99.0 (Docker Engine 29.9.3) on an Apple M3 Pro (12 cores, 36 GB RAM); the Docker VM had 12 CPUs
+  and 7.65 GiB. Each stack ran on its own, with nothing else running in the VM.
 - **OLS4**, commit `94cf11a` (2026-11). The `:dev` images of the backend, dataload and frontend, and `pgvector`, are
   published for arm64 and ran natively:
 
