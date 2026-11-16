@@ -622,6 +622,8 @@ go into this document.
 | S-2 | ROBOT reasoning with time and heap limits: confirm a memory breach can be detected and told apart from other failures | de-risks A-6, O-8 | | [#12](https://github.com/jclerman/browl/issues/12) |
 | S-3 | Scale test with a large ontology (e.g. NCBITaxon or ChEBI): OWLAPI load time and heap; descendant-count computation time and memory; `usage` table build time and size; derived database size | de-risks N-1–N-4 | S-1 | [#13](https://github.com/jclerman/browl/issues/13) |
 | S-4 | Serving without an in-process OWLAPI: Fuseki/TDB2 queried on demand (aggregates fetched up front with single SPARQL queries), or pre-rendered SQLite. Measure bulk load, restart readiness, page-query latency, Manchester rendering. | de-risks N-1–N-4, U-16 | S-3 | [#47](https://github.com/jclerman/browl/issues/47) |
+| S-5 | Compare browl with OLS4 on Uberon and NCBITaxon: load time, store size, memory, page speed, and how each shows an entity's usage and relation trees. S-5a: best effort now, browl's figures as lower bounds; S-5b: like for like once browl renders pages. | informs positioning and the Later requirements U-34–U-40 | P-3 | [#54](https://github.com/jclerman/browl/issues/54) (S-5a [#55](https://github.com/jclerman/browl/issues/55), S-5b [#56](https://github.com/jclerman/browl/issues/56)) |
+| S-6 | Keep Fuseki's container memory limited: measure container memory and page throughput against the direct-buffer limit, other JVM settings, heap size and a Compose memory limit; recommend Fuseki's JVM options and a container memory figure | de-risks O-1, N-1–N-4 | P-3 | [#59](https://github.com/jclerman/browl/issues/59) |
 
 ### Phase 1: Foundation
 
