@@ -8,6 +8,7 @@ import httpx2
 from fastapi import APIRouter, FastAPI, Request
 from pydantic import BaseModel
 
+import browl
 from browl.settings import Settings, load_settings
 
 FUSEKI_TIMEOUT_S = 2.0
@@ -59,7 +60,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             app.state.fuseki = client
             yield
 
-    app = FastAPI(title="browl", lifespan=lifespan)
+    app = FastAPI(title="browl", version=browl.__version__, lifespan=lifespan)
     app.state.settings = settings
     app.include_router(router, prefix=f"/{settings.reserved_prefix}")
     return app

@@ -3,7 +3,7 @@ name = "browl"
 version = "0.1.0"
 description = "Host an OWL ontology as a browsable website, with a page for every entity at a URL implied by its IRI."
 readme = "README.md"
-authors = [{ name = "Jeffrey C. Lerman" }]
+authors = [{ name = "Jeffrey C. Lerman", email = "Jeffrey.Lerman@gmail.com" }]
 requires-python = ">=3.12"
 dynamic = ["dependencies"]
 

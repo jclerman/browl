@@ -1,11 +1,14 @@
 """Tests for the FastAPI application and its health route."""
 
+import tomllib
 from collections.abc import Iterator
+from pathlib import Path
 
 import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
+import browl
 from browl.app import create_app
 from browl.settings import Settings
 
@@ -77,3 +80,9 @@ def test_create_app_loads_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BASE_URL", "http://example.org/")
     monkeypatch.setenv("AUTH_DISABLED", "true")
     assert create_app().state.settings.base_url == make_settings().base_url
+
+
+def test_api_docs_show_version(client: TestClient) -> None:
+    """Check that the OpenAPI schema, which the Swagger page shows, has browl's version from pyproject.toml."""
+    pyproject = tomllib.loads((Path(__file__).parent.parent / "pyproject.toml").read_text())
+    assert client.get("/openapi.json").json()["info"]["version"] == browl.__version__ == pyproject["project"]["version"]
