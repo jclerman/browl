@@ -118,6 +118,7 @@ def test_reserved_prefix_rejects_invalid(env: pytest.MonkeyPatch, value: str) ->
     [
         ('["en", "fr"]', ["en", "fr", UNTAGGED]),
         ('["EN-gb"]', ["en-gb", UNTAGGED]),
+        ('["zh-Hant-TW", "iw"]', ["zh-hant-tw", "iw", UNTAGGED]),
         ('["none", "en"]', [UNTAGGED, "en"]),
         ("[]", [UNTAGGED]),
     ],
@@ -127,7 +128,10 @@ def test_language_ranking(env: pytest.MonkeyPatch, value: str, expected: list[st
     assert settings_with(env, LANGUAGE_RANKING=value).language_ranking == expected
 
 
-@pytest.mark.parametrize("value", ['["en", "EN"]', '["en_US"]', '["toolonglanguage"]', '"en"'])
+@pytest.mark.parametrize(
+    "value",
+    ['["en", "EN"]', '["en_US"]', '["toolonglanguage"]', '["xx"]', '["en-yy"]', '["en-latm"]', '["en-gb-foo"]', '"en"'],
+)
 def test_language_ranking_rejects_invalid(env: pytest.MonkeyPatch, value: str) -> None:
     """Check that invalid or duplicate language tags are rejected."""
     with pytest.raises(ValidationError, match="LANGUAGE_RANKING"):

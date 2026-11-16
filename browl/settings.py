@@ -4,6 +4,7 @@ import logging
 import re
 from pathlib import Path
 
+import langcodes
 from pydantic import AliasGenerator, Field, HttpUrl, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -13,7 +14,6 @@ UNTAGGED = "none"
 """Reserved `LANGUAGE_RANKING` entry for values without a language tag."""
 
 _RESERVED_PREFIX = re.compile(r"_[A-Za-z0-9._~-]+")  # one path segment of URL-safe characters
-_LANGUAGE_TAG = re.compile(r"[a-z]{1,8}(-[a-z0-9]{1,8})*")
 _PREFIX_NAME = re.compile(r"([A-Za-z_][A-Za-z0-9._-]*)?")  # empty is the default prefix
 _IRI_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 _JAVA_HEAP = re.compile(r"[1-9][0-9]*[kKmMgG]")  # -Xmx syntax, with a unit: a bare number would be bytes
@@ -132,8 +132,11 @@ class Settings(BaseSettings):
     @classmethod
     def check_language_ranking(cls, value: list[str]) -> list[str]:
         """Lowercase and check the language tags, appending `UNTAGGED` when it isn't listed (O-5)."""
+        # Tags must be registered BCP 47 tags. They're lowercased (RDF compares tags case-insensitively) but not
+        # standardized: `iw` stays `iw`, not `he`, so it still matches literals tagged `iw`. langcodes accepts `_`
+        # as a separator; BCP 47 and RDF don't.
         ranking = [tag.lower() for tag in value]
-        invalid = [tag for tag in ranking if tag != UNTAGGED and not _LANGUAGE_TAG.fullmatch(tag)]
+        invalid = [tag for tag in ranking if tag != UNTAGGED and ("_" in tag or not langcodes.tag_is_valid(tag))]
         if invalid:
             raise ValueError(f"invalid language tags: {', '.join(invalid)}")
         if UNTAGGED not in ranking:
