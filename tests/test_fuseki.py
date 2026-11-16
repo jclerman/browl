@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 import httpx2
 import pytest
 
+from browl import fuseki
 from browl.fuseki import NTRIPLES, TSV, FusekiClient, SelectResult, SparqlError, SparqlTimeoutError
 from browl.rdf import IRI, RDF_LANG_STRING, Literal
 
@@ -16,12 +17,6 @@ A = "<http://example.org/a>"
 P = "<http://example.org/p>"
 TRIPLE = f'{A} {P} "x" .'
 TIMEOUT_TEXT = "## Query cancelled due to timeout during execution ##"
-
-
-@pytest.fixture
-def anyio_backend() -> str:
-    """Run the async tests on asyncio, as the app does."""
-    return "asyncio"
 
 
 Handler = Callable[[httpx2.Request], Awaitable[httpx2.Response]]
@@ -93,6 +88,26 @@ async def test_select_chunks_split_lines_and_characters() -> None:
     assert result.rows == [(Literal("café \u2028"),)]
 
 
+async def test_long_line_in_many_chunks() -> None:
+    """Check that a line sent in many chunks, with CRLF split across two, is put back together."""
+    value = "é" * 100_000
+    body = f'?s\r\n"{value}"\r\n'.encode()
+    chunks = [body[start : min(start + 1000, len(body) - 1)] for start in range(0, len(body) - 1, 1000)]
+    chunks.append(body[-1:])  # the LF of the last CRLF
+    assert await answer(chunks).select("ds", "SELECT") == SelectResult(("s",), [(Literal(value),)])
+
+
+@pytest.mark.parametrize("chunk_size", [10, 10_000], ids=["many-chunks", "one-chunk"])
+async def test_line_too_long(chunk_size: int, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a line longer than the limit fails, whether it arrives in pieces or whole."""
+    monkeypatch.setattr(fuseki, "MAX_LINE_CHARS", 1000)
+    body = f'?s\n"{"x" * 1999}"\n'.encode()
+    chunks = [body[start : start + chunk_size] for start in range(0, len(body), chunk_size)]
+    with pytest.raises(SparqlError, match="line longer than 1000 characters"):
+        await answer(chunks).select("ds", "SELECT")
+    assert await answer(f'?s\n"{"x" * 998}"\n').select("ds", "SELECT")  # exactly at the limit
+
+
 async def test_select_stream() -> None:
     """Check that a streamed SELECT result gives its variables, then its rows as they arrive."""
     async with answer([b"?s\n", f"{A}\n".encode(), f"{A}\n".encode()]).select_stream("ds", "SELECT") as stream:
@@ -104,6 +119,20 @@ async def test_construct() -> None:
     """Check that a DESCRIBE or CONSTRUCT result comes back as checked N-Triples."""
     body = f"{TRIPLE}\n{TRIPLE}"
     assert await answer(body, NTRIPLES).construct("ds", "DESCRIBE") == f"{TRIPLE}\n{TRIPLE}\n".encode()
+
+
+async def test_construct_size_limit() -> None:
+    """Check that a DESCRIBE or CONSTRUCT result larger than the limit fails, and one just within it doesn't."""
+    body = f"{TRIPLE}\n{TRIPLE}\n"
+    size = len(body.encode())
+    assert await answer(body, NTRIPLES).construct("ds", "DESCRIBE", max_bytes=size) == body.encode()
+    with pytest.raises(SparqlError, match=f"larger than {size - 1} bytes"):
+        await answer(body, NTRIPLES).construct("ds", "DESCRIBE", max_bytes=size - 1)
+
+
+async def test_construct_empty() -> None:
+    """Check that an empty DESCRIBE or CONSTRUCT result is empty N-Triples."""
+    assert await answer("", NTRIPLES).construct("ds", "DESCRIBE") == b""
 
 
 async def test_construct_stream() -> None:
@@ -152,16 +181,33 @@ async def test_construct_truncated(body: str) -> None:
         await answer(body, NTRIPLES).construct("ds", "DESCRIBE")
 
 
-@pytest.mark.parametrize("method", ["select", "construct"])
-async def test_body_ends_early(method: str) -> None:
+QUERY_KINDS = pytest.mark.parametrize(
+    ("method", "content_type", "body"),
+    [("select", TSV, f"?s\n{A}\n"), ("construct", NTRIPLES, f"{TRIPLE}\n")],
+    ids=["select", "construct"],
+)
+"""Each buffered query method, with the content type and a valid body of its results."""
+
+
+@QUERY_KINDS
+async def test_body_ends_early(method: str, content_type: str, body: str) -> None:
     """Check that the HTTP client's error for a body that ends early (Fuseki exiting mid-response) isn't discarded."""
-    content_type = TSV if method == "select" else NTRIPLES
-    body = f"?s\n{A}\n" if method == "select" else f"{TRIPLE}\n"
     error = httpx2.RemoteProtocolError("peer closed connection without sending complete message body")
     client = answer(body, content_type, error=error)
     with pytest.raises(SparqlError, match="the result broke off") as raised:
         await getattr(client, method)("ds", "QUERY")
     assert raised.value.__cause__ is error
+
+
+@pytest.mark.parametrize("dataset", ["../$/compact/ds#", "$/datasets", "ds/sparql?x=", "", "ds\n"])
+async def test_dataset_name_checked(dataset: str) -> None:
+    """Check that a dataset name other than letters, digits, '_' and '-' is refused before anything is sent."""
+
+    async def handler(request: httpx2.Request) -> httpx2.Response:
+        raise AssertionError(f"sent {request.url}")
+
+    with pytest.raises(ValueError, match="not a dataset name"):
+        await stub(handler).select(dataset, "SELECT")
 
 
 async def test_not_utf8() -> None:
@@ -234,19 +280,17 @@ async def test_read_timeout_while_streaming() -> None:
         await answer("?s\n", error=httpx2.ReadTimeout("timed out")).select("ds", "SELECT")
 
 
-@pytest.mark.parametrize("method", ["select", "construct"])
-async def test_whole_query_time_limit(method: str) -> None:
+@QUERY_KINDS
+async def test_whole_query_time_limit(method: str, content_type: str, body: str) -> None:
     """Check that the time limit covers the whole query, including a body that trickles in."""
 
     async def trickle() -> AsyncIterator[bytes]:
-        yield b"?s\n" if method == "select" else f"{TRIPLE}\n".encode()
+        yield body.encode()
         await asyncio.sleep(1)
         yield b""
 
     async def handler(request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(
-            200, headers={"Content-Type": TSV if method == "select" else NTRIPLES}, content=trickle()
-        )
+        return httpx2.Response(200, headers={"Content-Type": content_type}, content=trickle())
 
     with pytest.raises(SparqlTimeoutError, match=r"longer than 0\.05 s"):
         await getattr(stub(handler), method)("ds", "QUERY", timeout_s=0.05)

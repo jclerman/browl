@@ -8,9 +8,11 @@ tests build and start from `docker/fuseki` with Docker. Locally, tests whose nee
 `fuseki_url` fixture.
 """
 
+import http.server
 import os
 import shutil
 import subprocess
+import threading
 import time
 import uuid
 from collections.abc import Iterator
@@ -29,6 +31,35 @@ FUSEKI_IMAGE = "browl-fuseki-test"
 FUSEKI_START_TIMEOUT_S = 60
 ROBOT_JAR_CACHE = ROOT / ".cache" / "robot.jar"  # where `make robot-jar` puts it
 MACOS_JAVA_HOME = "/usr/libexec/java_home"
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    """Run the async tests on asyncio, as the app does."""
+    return "asyncio"
+
+
+@pytest.fixture
+def http_server() -> Iterator[tuple[str, list[str]]]:
+    """Yield the base URL of a local HTTP server, and the list of paths it's asked for; it answers each with 404."""
+    requests: list[str] = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            requests.append(self.path)
+            self.send_error(404)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", requests
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def robot_jar() -> Path:

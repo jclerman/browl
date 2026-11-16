@@ -1,5 +1,6 @@
 """Tests for the OWLAPI bridge: the JVM, the Java thread, and parsing fragments."""
 
+import os
 import threading
 from pathlib import Path
 
@@ -22,12 +23,6 @@ _:r {RDF_TYPE} <{OWL}Restriction> .
 _:r <{OWL}onProperty> <http://example.org/p> .
 _:r <{OWL}someValuesFrom> <http://example.org/B> .
 """.encode()
-
-
-@pytest.fixture
-def anyio_backend() -> str:
-    """Run the async tests on asyncio, as the app does."""
-    return "asyncio"
 
 
 def axioms(ntriples: bytes) -> list[str]:
@@ -61,16 +56,62 @@ async def test_fragment_released() -> None:
     assert not first.equals(second)
 
 
-async def test_imports_not_fetched() -> None:
-    """Check that an import is kept as an axiom but not fetched, even when its IRI would resolve."""
-    ontology = f"<http://example.org/o> {RDF_TYPE} <{OWL}Ontology> .\n"
-    imports = f"<http://example.org/o> <{OWL}imports> <http://purl.obolibrary.org/obo/bfo.owl> .\n"
+IMPORTS = f"<{OWL}imports>"
+
+
+@pytest.mark.parametrize(
+    ("triple", "imported"),
+    [
+        ("<http://example.org/o> {imports} <{server}/plain.owl> .", "{server}/plain.owl"),
+        ("<http://example.org/o> {imports} <{server}/\\u0065scaped.owl> .", "{server}/escaped.owl"),
+        (
+            "<http://example.org/o> <http://www.w3.org/2002/07/owl\\u0023imports> <{server}/predicate.owl> .",
+            "{server}/predicate.owl",
+        ),
+        ("_:o {imports} <{server}/blank.owl> .", "{server}/blank.owl"),
+        ("<http://example.org/o> {imports} <{file}> .", "{file}"),
+    ],
+    ids=["plain", "escaped-iri", "escaped-predicate", "blank-node-subject", "file"],
+)
+async def test_imports_not_fetched(
+    triple: str, imported: str, http_server: tuple[str, list[str]], tmp_path: Path
+) -> None:
+    """Check that an import is kept as a declaration but never fetched, however its triple is written.
+
+    The imported IRIs point at a local HTTP server, which records any request, and at a file holding an ontology, which
+    would be imported if it were read.
+    """
+    server, requests = http_server
+    file = tmp_path / "imported.nt"
+    file.write_text(f"<http://example.org/imported> {RDF_TYPE} <{OWL}Ontology> .\n")
+    values = {"imports": IMPORTS, "server": server, "file": file.as_uri()}
+    ntriples = f"<http://example.org/o> {RDF_TYPE} <{OWL}Ontology> .\n{triple.format(**values)}\n".encode()
 
     def parse() -> tuple[list[str], int]:
-        with owlapi.ntriples_ontology((ontology + imports).encode() + FRAGMENT) as fragment:
-            return [str(declaration) for declaration in fragment.getImportsDeclarations()], fragment.getImports().size()
+        with owlapi.ntriples_ontology(ntriples + FRAGMENT) as fragment:
+            return [str(declaration.getIRI()) for declaration in fragment.getImportsDeclarations()], (
+                fragment.getImportsClosure().size()
+            )
 
-    assert await owlapi.run_java(parse) == (["Import(<http://purl.obolibrary.org/obo/bfo.owl>)"], 0)
+    assert await owlapi.run_java(parse) == ([imported.format(**values)], 1)
+    assert requests == []
+
+
+async def test_fragment_manager_loads_nothing_else(http_server: tuple[str, list[str]]) -> None:
+    """Check that a fragment's manager refuses to load any other document, but can still create ontologies."""
+    server, requests = http_server
+
+    def use_manager() -> tuple[str, int]:
+        with owlapi.ntriples_ontology(FRAGMENT) as fragment:
+            manager = fragment.getOWLOntologyManager()
+            iri = jpype.JClass("org.semanticweb.owlapi.model.IRI")
+            with pytest.raises(jpype.JException) as refused:
+                manager.loadOntologyFromOntologyDocument(iri.create(f"{server}/other.owl"))
+            created = manager.createOntology(iri.create("http://example.org/created"))
+            return str(refused.value.getMessage()), created.getAxiomCount()
+
+    assert await owlapi.run_java(use_manager) == (f"browl doesn't load {server}/other.owl", 0)
+    assert requests == []
 
 
 @pytest.mark.parametrize(
@@ -96,7 +137,7 @@ async def test_java_thread() -> None:
 def test_jvm_settings() -> None:
     """Check that the JVM has robot.jar on its class path, and leaves SIGINT and SIGTERM to Python (-Xrs)."""
     class_path = str(jpype.JClass("java.lang.System").getProperty("java.class.path"))
-    assert str(robot_jar().resolve()) in class_path.split(":")
+    assert str(robot_jar().resolve()) in class_path.split(os.pathsep)
     arguments = jpype.JClass("java.lang.management.ManagementFactory").getRuntimeMXBean().getInputArguments()
     assert {"-Xrs", "-XX:+ExitOnOutOfMemoryError"} <= {str(argument) for argument in arguments}
 

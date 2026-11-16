@@ -32,9 +32,14 @@ lowered (512 MB would do); 1 GB stays the default, since the JVM only takes heap
   installs no handlers for them) and JPype's `interrupt=False`, both go to Python, and Uvicorn logs "Shutting down" and
   "Application shutdown complete".
 - **The OWLAPI fetches imports.** A fragment with an `owl:imports` triple made the OWLAPI fetch the import from its IRI
-  (Uberon: 14 s, then out of heap at 256 MB), even with the manager's IRI mappers cleared. The bridge now adds each
-  import named in the fragment to the loader configuration's ignored imports: the import declaration is kept, and
-  nothing is fetched.
+  (Uberon: 14 s, then out of heap at 256 MB), even with the manager's IRI mappers cleared. Adding each import found by
+  a pattern match to the loader configuration's ignored imports wasn't enough: an IRI or the `owl:imports` predicate
+  written with `\u` escapes slipped past the pattern, and was fetched. So the bridge gives each fragment's manager one
+  ontology factory, which loads only the fragment's own document source and refuses every other load; the import
+  declaration is kept, the refused import is a missing import, which the loader configuration ignores, and nothing is
+  fetched. (Refusing in the factory's `canLoad` instead fails the whole fragment: the manager then raises an error
+  that the missing-import strategy doesn't cover. JPype's proxy also can't call the interface's default `setLock`, so
+  the factory implements it.)
 - **N-Triples comments.** The OWLAPI's N-Triples parser, like the format, skips lines starting with `#`, and the text
   Fuseki appends to a result that fails partway can start with `#` (`## Query cancelled due to timeout during
   execution ##`, S-6). So the Fuseki client accepts only triple lines in N-Triples results; Jena writes no comments or

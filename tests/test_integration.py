@@ -1,5 +1,6 @@
 """Integration tests: queries to a real Fuseki holding `tests/data/family.ttl`, and fragments parsed by the OWLAPI."""
 
+from collections import Counter
 from collections.abc import AsyncIterator
 
 import httpx2
@@ -16,12 +17,6 @@ PREFIXES = f"""PREFIX : <{FAMILY}>
 PREFIX owl: <http://www.w3.org/2002/07/owl#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 """
-
-
-@pytest.fixture
-def anyio_backend() -> str:
-    """Run the async tests on asyncio, as the app does."""
-    return "asyncio"
 
 
 @pytest.fixture
@@ -60,7 +55,7 @@ async def test_select_stream(sparql: FusekiClient, family_dataset: str) -> None:
     query = "SELECT ?s ?p ?o WHERE { ?s ?p ?o }"
     async with sparql.select_stream(family_dataset, query) as stream:
         streamed = [row async for row in stream]
-    assert sorted(map(str, streamed)) == sorted(map(str, (await sparql.select(family_dataset, query)).rows))
+    assert Counter(streamed) == Counter((await sparql.select(family_dataset, query)).rows)
     assert len(streamed) > 30
 
 
@@ -77,15 +72,23 @@ async def test_fragment(sparql: FusekiClient, family_dataset: str) -> None:
     assert f"ObjectSomeValuesFrom(<{FAMILY}hasChild> <{FAMILY}Person>)" in axiom
 
 
-async def test_fragment_with_imports(sparql: FusekiClient, family_dataset: str) -> None:
-    """Check that the ontology's own fragment, with an import that can't be fetched, parses without fetching it."""
+async def test_fragment_with_imports(
+    sparql: FusekiClient, family_dataset: str, http_server: tuple[str, list[str]]
+) -> None:
+    """Check that the ontology's own fragment parses, keeping its import, without fetching it.
+
+    The import's IRI is pointed at a local HTTP server, which records any request.
+    """
+    server, requests = http_server
     ntriples = await sparql.construct(family_dataset, "DESCRIBE <http://example.org/family>")
+    ntriples = ntriples.replace(b"<http://example.org/not-fetched.owl>", f"<{server}/family-import.owl>".encode())
 
     def imports() -> list[str]:
         with owlapi.ntriples_ontology(ntriples) as fragment:
             return [str(declaration.getIRI()) for declaration in fragment.getImportsDeclarations()]
 
-    assert await owlapi.run_java(imports) == ["http://example.org/not-fetched.owl"]
+    assert await owlapi.run_java(imports) == [f"{server}/family-import.owl"]
+    assert requests == []
 
 
 async def test_construct_stream(sparql: FusekiClient, family_dataset: str) -> None:
