@@ -164,7 +164,11 @@ Tooling and code conventions are in [`CODING-STANDARDS.md`](CODING-STANDARDS.md)
   groups, prefixes and the search index. _(Q5, N-4)_
 - **OWLAPI in an in-process JVM**, reached through JPype from the classes in `robot.jar`, renders Manchester syntax. For
   each page it parses only the triples fetched for that entity, so it needs a small heap and no whole-ontology load
-  ([2.8](#28-entity-pages)). _(post-log)_
+  ([2.8](#28-entity-pages)). _(post-log)_ The JVM starts at app startup on the main thread: started from another
+  thread, JPype's shutdown hangs at exit. It starts with `-Xrs`, which leaves SIGINT and SIGTERM to Python, so Uvicorn
+  shuts down gracefully instead of the JVM ending the process at once (P-4). A fragment's imports are kept as
+  declarations but never loaded: each fragment's OWLAPI manager has one ontology factory, which refuses to load any
+  document but the fragment, so no import's IRI is ever opened, however the triple is written (P-4).
 - **ROBOT as a subprocess** runs the optional reasoning, in its own JVM so time and memory limits can be enforced and a
   runaway run killed. Jena's TDB2 loader also runs as a subprocess, building the store for each load. _(Q7c)_
 - **One server worker process.** Concurrency comes from async request handling: SPARQL calls use an async HTTP client,
@@ -304,7 +308,12 @@ would put every triple in a named graph and hide the default graph.
 
 **Heap sizes:** the app's JVM only renders per-page fragments, so it needs a small heap (`APP_JVM_MAX_HEAP`). After a
 heap failure the app restarts its process instead of carrying on, because the error can also kill JPype's internal
-reference-cleanup thread ([S-1 findings](../research/S-1/README.md)).
+reference-cleanup thread ([S-1 findings](../research/S-1/README.md)): the JVM runs with `-XX:+ExitOnOutOfMemoryError`,
+which ends the process (exit code 3), and Compose restarts the container. The default of 1 GB was confirmed in P-4
+([P-4 findings](../research/P-4/README.md)): through browl's bridge, all of Uberon as N-Triples (1.2 M triples, 391 k
+axioms) parsed at 384 MB but not 256 MB, and a page's fragment is at most a few thousand triples. A heap failure
+would recur on every retry of the same page, so the Fuseki client refuses a fragment larger than 64 MiB before the
+OWLAPI sees it (`CONSTRUCT_MAX_BYTES`), and any result with a line longer than 16 Mi characters.
 
 Fuseki's heap defaults to 1 GB (`FUSEKI_HEAP` in `.env`, read by `docker-compose.yml`). Measured in P-3 on NCBITaxon,
 with the bulk pre-caching queries ([2.5](#25-derived-data-pre-caching)) and then page queries from 1 and 16 clients:
@@ -521,6 +530,10 @@ No Java code is needed, and no Python code runs inside the renderer. Spike S-1 a
 short-form provider returning placeholder tokens: it worked but was slower, and missed IRIs the renderer prints without
 asking the provider ([S-1 findings](../research/S-1/README.md)).
 
+**Base directions** (RDF 1.2's `"…"@ar--rtl`): Fuseki stores and returns them, and browl's Fuseki client reads them as
+`rdf:dirLangString` literals. The OWLAPI 4.5 predates RDF 1.2: its N-Triples parser accepts them but reads `ar--rtl`
+as the whole language tag, so the Manchester rendering shows such a literal as written (P-4).
+
 ### 2.9 Page layout
 
 Every page has the same frame (U-27, U-28, U-29):
@@ -600,7 +613,7 @@ validated at startup (`browl/settings.py`). Lists and mappings are given as JSON
 | `EXTRA_PREFIXES` | `{}` | O-11 |
 | `PAGE_CACHE_SIZE` | `100` | `0` turns the cache off; O-10 |
 | `REASONER_TIMEOUT_S`, `REASONER_MAX_HEAP` | `3600`, `8g`: placeholders until spike S-2 | O-8 |
-| `APP_JVM_MAX_HEAP` | `1g`, to be confirmed in P-4 | heap for the app's in-process JVM, which only renders per-page fragments (S-4) |
+| `APP_JVM_MAX_HEAP` | `1g`, confirmed in P-4 (2.4) | heap for the app's in-process JVM, which only renders per-page fragments (S-4) |
 | `FUSEKI_URL` | `http://fuseki:3030` | Fuseki's address on the Compose network |
 | `ROBOT_JAR` | `/opt/robot/robot.jar`, where the app image installs it | used both on the app's classpath and for reasoning subprocesses |
 | `JENA_HOME` | `/opt/jena`, where the app image installs it | Jena's command-line tools, for the TDB2 loader |
@@ -626,9 +639,9 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | Risk | Mitigation |
 | --- | --- |
 | Fuseki needs too much memory while serving the largest ontologies | Measured by P-3 and S-6: NCBITaxon needs about 500 MiB of heap; the default is 1 GB, and the container needs the heap plus about 0.5 GiB once Fuseki's output buffers are pooled through a `jetty.xml` (2.4). |
-| A Fuseki response that fails partway returns a truncated result with HTTP 200 | Seen in P-3 and S-6: once Fuseki has sent the status, it appends the error as plain text and ends the response normally. It sends it as soon as a SPARQL JSON or TSV result is cut short (the writer flushes what it has), and once any other response outgrows the 2 MB output buffer (2.4). So browl treats any status other than 2xx as a failed query, and never discards the HTTP client's error for a body that ends early (Fuseki exiting or restarting mid-response drops the connection before the last chunk). It parses every Fuseki response strictly, as SPARQL JSON results or N-Triples, and parses each TSV cell as an RDF term, so the appended error text can't pass as a one-column row; a parse error is a failed query, never a short result. P-8 checks that each bulk result is complete (e.g. a final count or sentinel), which also catches a result that breaks off cleanly at a row boundary, or an error with no text appended. |
+| A Fuseki response that fails partway returns a truncated result with HTTP 200 | Seen in P-3 and S-6: once Fuseki has sent the status, it appends the error as plain text and ends the response normally. It sends it as soon as a SPARQL JSON or TSV result is cut short (the writer flushes what it has), and once any other response outgrows the 2 MB output buffer (2.4). So browl treats any status other than 2xx as a failed query, and never discards the HTTP client's error for a body that ends early (Fuseki exiting or restarting mid-response drops the connection before the last chunk). It parses every Fuseki response strictly, as SPARQL JSON results or N-Triples, and parses each TSV cell as an RDF term, so the appended error text can't pass as a one-column row. N-Triples results may hold only triples, since Jena writes no comments or blank lines and the appended text can start with `#`, which N-Triples reads as a comment (P-4); a parse error is a failed query, never a short result. P-8 checks that each bulk result is complete (e.g. a final count or sentinel), which also catches a result that breaks off cleanly at a row boundary, or an error with no text appended. |
 | Fuseki pauses for full garbage collections under page load | Resolved by S-6: the `System.gc()` calls P-3 saw came from Fuseki 6.2.0 allocating an unpooled 5 MB direct output buffer per response (Jena GH-4084). Fuseki's `jetty.xml` pools a 2 MB buffer instead, which removed them; pages went from 302 to 528 a second at 1 client, and from 573 to 769 at 16 (2.4). |
-| JPype quirks: thread safety of concurrent OWLAPI calls; Python–Java call overhead | Resolved by S-1: concurrent calls were safe but gave no extra throughput, so OWLAPI calls run on one thread (2.1). Call overhead is small ([S-1 findings](../research/S-1/README.md)). |
+| JPype quirks: thread safety of concurrent OWLAPI calls; Python–Java call overhead | Resolved by S-1: concurrent calls were safe but gave no extra throughput, so OWLAPI calls run on one thread (2.1). Call overhead is small ([S-1 findings](../research/S-1/README.md)). P-4 found three more, each handled: the JVM must start on the main thread, its signal handlers bypassed Uvicorn's graceful shutdown (`-Xrs`), and the OWLAPI fetched a fragment's `owl:imports` from their IRIs, web or `file:`, so the bridge refuses every document load but the fragment's own (2.1). |
 | Memory limit can't be reported reliably | Spike S-2; at worst report "reasoner failed" with ROBOT's output. |
 | Descendant counts too slow or memory-hungry at millions of classes | Resolved by S-3: roaring bitmaps, 4.2 s for NCBITaxon ([S-3 findings](../research/S-3/README.md)). |
 | Loading a very large ontology takes minutes | Accepted for uploads (Q14a), shown on the status page. Restarts don't reload (2.4). NCBITaxon: about 5 minutes, estimated; Uberon: 7 s, measured ([S-4 findings](../research/S-4/README.md)). P-24 checks whether extracting the dictionary and edges by streaming the upload file, in parallel with the TDB2 load, is worth it. |
@@ -639,81 +652,82 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 
 ## 3. Implementation Plan
 
-Work items are sized to be one issue or PR each, roughly. **Delivers** lists the requirement IDs. **Tracking** links
-each item's GitHub issue, or the PRs that did it. Each issue states its goal, entry criteria and acceptance criteria;
-GitHub's "blocked by" links and sub-issues mirror **Depends on**, and milestones mirror the phases.
+Work items are sized to be one issue or PR each, roughly. **Delivers** lists the requirement IDs. **Status** is To do,
+In progress or Done. **Tracking** links each item's GitHub issue, or the PRs that did it. Each issue states its goal,
+entry criteria and acceptance criteria; GitHub's "blocked by" links and sub-issues mirror **Depends on**, and
+milestones mirror the phases.
 
 ### Phase 0: Spikes
 
 Spikes are time-boxed investigations. Their code lives in `research/S-n/`, outside the `browl` package; their findings
 go into this document.
 
-| ID | Work item | Delivers | Depends on | Tracking |
-| --- | --- | --- | --- | --- |
-| S-1 | OWLAPI via JPype: start the JVM with `robot.jar`, load an ontology, render axioms in Manchester syntax with link tokens, list referencing axioms; measure per-entity render time, including concurrent requests. Briefly compare py-horned-owl's load time, memory and Manchester output. | de-risks U-3, U-26, N-3 | | [#8](https://github.com/jclerman/browl/issues/8) |
-| S-2 | ROBOT reasoning with time and heap limits: confirm a memory breach can be detected and told apart from other failures | de-risks A-6, O-8 | | [#12](https://github.com/jclerman/browl/issues/12) |
-| S-3 | Scale test with a large ontology (e.g. NCBITaxon or ChEBI): OWLAPI load time and heap; descendant-count computation time and memory; `usage` table build time and size; derived database size | de-risks N-1–N-4 | S-1 | [#13](https://github.com/jclerman/browl/issues/13) |
-| S-4 | Serving without an in-process OWLAPI: Fuseki/TDB2 queried on demand (aggregates fetched up front with single SPARQL queries), or pre-rendered SQLite. Measure bulk load, restart readiness, page-query latency, Manchester rendering. | de-risks N-1–N-4, U-16 | S-3 | [#47](https://github.com/jclerman/browl/issues/47) |
-| S-5 | Compare browl with OLS4 on Uberon and NCBITaxon: load time, store size, memory, page speed, and how each shows an entity's usage and relation trees. S-5a: best effort now, browl's figures as lower bounds; S-5b: like for like once browl renders pages. | informs positioning and the Later requirements U-34–U-40 | P-3 | [#54](https://github.com/jclerman/browl/issues/54) (S-5a [#55](https://github.com/jclerman/browl/issues/55), S-5b [#56](https://github.com/jclerman/browl/issues/56)) |
-| S-6 | Keep Fuseki's container memory limited: measure container memory and page throughput against the direct-buffer limit, other JVM settings, heap size and a Compose memory limit; recommend Fuseki's JVM options and a container memory figure | de-risks O-1, N-1–N-4 | P-3 | [#59](https://github.com/jclerman/browl/issues/59) |
+| ID | Work item | Delivers | Depends on | Status | Tracking |
+| --- | --- | --- | --- | --- | --- |
+| S-1 | OWLAPI via JPype: start the JVM with `robot.jar`, load an ontology, render axioms in Manchester syntax with link tokens, list referencing axioms; measure per-entity render time, including concurrent requests. Briefly compare py-horned-owl's load time, memory and Manchester output. | de-risks U-3, U-26, N-3 | | Done | [#8](https://github.com/jclerman/browl/issues/8) |
+| S-2 | ROBOT reasoning with time and heap limits: confirm a memory breach can be detected and told apart from other failures | de-risks A-6, O-8 | | To do | [#12](https://github.com/jclerman/browl/issues/12) |
+| S-3 | Scale test with a large ontology (e.g. NCBITaxon or ChEBI): OWLAPI load time and heap; descendant-count computation time and memory; `usage` table build time and size; derived database size | de-risks N-1–N-4 | S-1 | Done | [#13](https://github.com/jclerman/browl/issues/13) |
+| S-4 | Serving without an in-process OWLAPI: Fuseki/TDB2 queried on demand (aggregates fetched up front with single SPARQL queries), or pre-rendered SQLite. Measure bulk load, restart readiness, page-query latency, Manchester rendering. | de-risks N-1–N-4, U-16 | S-3 | Done | [#47](https://github.com/jclerman/browl/issues/47) |
+| S-5 | Compare browl with OLS4 on Uberon and NCBITaxon: load time, store size, memory, page speed, and how each shows an entity's usage and relation trees. S-5a: best effort now, browl's figures as lower bounds; S-5b: like for like once browl renders pages. | informs positioning and the Later requirements U-34–U-40 | P-3 | In progress (S-5a done) | [#54](https://github.com/jclerman/browl/issues/54) (S-5a [#55](https://github.com/jclerman/browl/issues/55), S-5b [#56](https://github.com/jclerman/browl/issues/56)) |
+| S-6 | Keep Fuseki's container memory limited: measure container memory and page throughput against the direct-buffer limit, other JVM settings, heap size and a Compose memory limit; recommend Fuseki's JVM options and a container memory figure | de-risks O-1, N-1–N-4 | P-3 | Done | [#59](https://github.com/jclerman/browl/issues/59) |
 
 ### Phase 1: Foundation
 
-| ID | Work item | Delivers | Depends on | Tracking |
-| --- | --- | --- | --- | --- |
-| P-1 | Project scaffold: `browl` package, tooling per the coding-standards doc, CI | | | done: [#2](https://github.com/jclerman/browl/pull/2), [#4](https://github.com/jclerman/browl/pull/4), [#5](https://github.com/jclerman/browl/pull/5), [#6](https://github.com/jclerman/browl/pull/6) |
-| P-28 | Coding-standards doc; settle the choices marked provisional | | | [#10](https://github.com/jclerman/browl/issues/10) |
-| P-2 | Settings module with validation (reserved-prefix rule, `AUTH_DISABLED` warning) | O-2–O-8, O-10, O-11 | P-1 | done: [#51](https://github.com/jclerman/browl/pull/51) |
-| P-3 | Docker Compose: `app` (Java 21, `robot.jar`, Jena's TDB2 loader) and `fuseki` services, volumes, health checks; switching Fuseki to a new store through its admin protocol; Fuseki's memory while serving | O-1, O-9 | P-1, S-4 | [#11](https://github.com/jclerman/browl/issues/11) |
-| P-4 | Fuseki client (async SPARQL over HTTP) and OWLAPI bridge: start the JVM via JPype, parse fetched triples as a small ontology, run Java calls on one dedicated thread | | P-2, P-3, S-1, S-4 | [#15](https://github.com/jclerman/browl/issues/15) |
+| ID | Work item | Delivers | Depends on | Status | Tracking |
+| --- | --- | --- | --- | --- | --- |
+| P-1 | Project scaffold: `browl` package, tooling per the coding-standards doc, CI | | | Done | [#2](https://github.com/jclerman/browl/pull/2), [#4](https://github.com/jclerman/browl/pull/4), [#5](https://github.com/jclerman/browl/pull/5), [#6](https://github.com/jclerman/browl/pull/6) |
+| P-28 | Coding-standards doc; settle the choices marked provisional | | | Done | [#10](https://github.com/jclerman/browl/issues/10) |
+| P-2 | Settings module with validation (reserved-prefix rule, `AUTH_DISABLED` warning) | O-2–O-8, O-10, O-11 | P-1 | Done | [#51](https://github.com/jclerman/browl/pull/51) |
+| P-3 | Docker Compose: `app` (Java 21, `robot.jar`, Jena's TDB2 loader) and `fuseki` services, volumes, health checks; switching Fuseki to a new store through its admin protocol; Fuseki's memory while serving | O-1, O-9 | P-1, S-4 | Done | [#11](https://github.com/jclerman/browl/issues/11) |
+| P-4 | Fuseki client (async SPARQL over HTTP) and OWLAPI bridge: start the JVM via JPype, parse fetched triples as a small ontology, run Java calls on one dedicated thread | | P-2, P-3, S-1, S-4 | Done | [#15](https://github.com/jclerman/browl/issues/15) |
 
 ### Phase 2: Loading
 
-| ID | Work item | Delivers | Depends on | Tracking |
-| --- | --- | --- | --- | --- |
-| P-5 | Job runner and job state in SQLite; "loading" / "not available" site pages | U-16, A-5 | P-2 | [#14](https://github.com/jclerman/browl/issues/14) |
-| P-6 | Upload page and streaming upload (auth not yet enforced) | A-2, A-4 | P-5 | [#16](https://github.com/jclerman/browl/issues/16) |
-| P-7 | ROBOT build script: optional ELK/HermiT reasoning, with limits | A-3, A-6, O-8 | P-6, S-2 | [#18](https://github.com/jclerman/browl/issues/18) |
-| P-8 | Fetch imports (warn on failures); bulk-load the ontology and imports into a new TDB2 store and switch Fuseki to it; no reload on restart | A-4 | P-4, P-7, S-4 | [#20](https://github.com/jclerman/browl/issues/20) |
+| ID | Work item | Delivers | Depends on | Status | Tracking |
+| --- | --- | --- | --- | --- | --- |
+| P-5 | Job runner and job state in SQLite; "loading" / "not available" site pages | U-16, A-5 | P-2 | To do | [#14](https://github.com/jclerman/browl/issues/14) |
+| P-6 | Upload page and streaming upload (auth not yet enforced) | A-2, A-4 | P-5 | To do | [#16](https://github.com/jclerman/browl/issues/16) |
+| P-7 | ROBOT build script: optional ELK/HermiT reasoning, with limits | A-3, A-6, O-8 | P-6, S-2 | To do | [#18](https://github.com/jclerman/browl/issues/18) |
+| P-8 | Fetch imports (warn on failures); bulk-load the ontology and imports into a new TDB2 store and switch Fuseki to it; no reload on restart | A-4 | P-4, P-7, S-4 | To do | [#20](https://github.com/jclerman/browl/issues/20) |
 
 ### Phase 3: Derived data
 
-| ID | Work item | Delivers | Depends on | Tracking |
-| --- | --- | --- | --- | --- |
-| P-9 | Derived database schema; atomic swap; generation number; reuse on restart when current | N-4 | P-8 | [#21](https://github.com/jclerman/browl/issues/21) |
-| P-10 | Entities (entity-list query), IRI → URL mapping, hash prefixes, collision warnings | U-2, U-13, U-15, O-3 | P-9 | [#22](https://github.com/jclerman/browl/issues/22) |
-| P-11 | Name values, direct and entailed through sub-properties (first decide: property path or Fuseki-configured RDFS), display names, CURIE prefixes | U-6, O-4, O-5, O-11 | P-10 | [#23](https://github.com/jclerman/browl/issues/23) |
-| P-12 | Hierarchies (edges query), equivalence groups, distinct descendant counts | U-7, U-8, U-9 | P-10, S-3 | [#24](https://github.com/jclerman/browl/issues/24) |
+| ID | Work item | Delivers | Depends on | Status | Tracking |
+| --- | --- | --- | --- | --- | --- |
+| P-9 | Derived database schema; atomic swap; generation number; reuse on restart when current | N-4 | P-8 | To do | [#21](https://github.com/jclerman/browl/issues/21) |
+| P-10 | Entities (entity-list query), IRI → URL mapping, hash prefixes, collision warnings | U-2, U-13, U-15, O-3 | P-9 | To do | [#22](https://github.com/jclerman/browl/issues/22) |
+| P-11 | Name values, direct and entailed through sub-properties (first decide: property path or Fuseki-configured RDFS), display names, CURIE prefixes | U-6, O-4, O-5, O-11 | P-10 | To do | [#23](https://github.com/jclerman/browl/issues/23) |
+| P-12 | Hierarchies (edges query), equivalence groups, distinct descendant counts | U-7, U-8, U-9 | P-10, S-3 | To do | [#24](https://github.com/jclerman/browl/issues/24) |
 
 ### Phase 4: Browsing
 
-| ID | Work item | Delivers | Depends on | Tracking |
-| --- | --- | --- | --- | --- |
-| P-13 | Routing: path lookup, 404, disambiguation page, hash-prefix page and script | U-2, U-13, U-14, U-15 | P-10 | [#25](https://github.com/jclerman/browl/issues/25) |
-| P-14 | Base templates and page frame: navigation bar, page header, tab component, stylesheet and themes; links rendered from display names; IRI `<details>` | U-4, U-5, U-6, U-17, U-27, U-28, U-29 | P-11, P-13 | [#27](https://github.com/jclerman/browl/issues/27) (sub-issues [#28](https://github.com/jclerman/browl/issues/28), [#33](https://github.com/jclerman/browl/issues/33), [#34](https://github.com/jclerman/browl/issues/34)) |
-| P-15 | Manchester rendering via the OWLAPI from fetched fragments, including n-ary disjointness and general class axioms; link substitution and keyword styling | U-3 | S-1, S-4, P-14 | [#36](https://github.com/jclerman/browl/issues/36) |
-| P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout | U-3, U-9, U-30, U-31, U-32 | P-12, P-15 | [#37](https://github.com/jclerman/browl/issues/37) (sub-issues [#29](https://github.com/jclerman/browl/issues/29), [#38](https://github.com/jclerman/browl/issues/38), [#39](https://github.com/jclerman/browl/issues/39)) |
-| P-17 | Ontology home page | U-1 | P-14 | [#30](https://github.com/jclerman/browl/issues/30) |
-| P-18 | Hierarchy trees with lazy loading (htmx) and keyboard support | U-7, U-17 | P-12, P-14 | [#31](https://github.com/jclerman/browl/issues/31) |
-| P-27 | Usage tab on entity pages, from Fuseki, with paging (first decide: references inside class expressions; counts on first view or up front; any `usage` table) | U-26 | P-9, P-16, S-4 | [#41](https://github.com/jclerman/browl/issues/41) |
+| ID | Work item | Delivers | Depends on | Status | Tracking |
+| --- | --- | --- | --- | --- | --- |
+| P-13 | Routing: path lookup, 404, disambiguation page, hash-prefix page and script | U-2, U-13, U-14, U-15 | P-10 | To do | [#25](https://github.com/jclerman/browl/issues/25) |
+| P-14 | Base templates and page frame: navigation bar, page header, tab component, stylesheet and themes; links rendered from display names; IRI `<details>` | U-4, U-5, U-6, U-17, U-27, U-28, U-29 | P-11, P-13 | To do | [#27](https://github.com/jclerman/browl/issues/27) (sub-issues [#28](https://github.com/jclerman/browl/issues/28), [#33](https://github.com/jclerman/browl/issues/33), [#34](https://github.com/jclerman/browl/issues/34)) |
+| P-15 | Manchester rendering via the OWLAPI from fetched fragments, including n-ary disjointness and general class axioms; link substitution and keyword styling | U-3 | S-1, S-4, P-14 | To do | [#36](https://github.com/jclerman/browl/issues/36) |
+| P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout | U-3, U-9, U-30, U-31, U-32 | P-12, P-15 | To do | [#37](https://github.com/jclerman/browl/issues/37) (sub-issues [#29](https://github.com/jclerman/browl/issues/29), [#38](https://github.com/jclerman/browl/issues/38), [#39](https://github.com/jclerman/browl/issues/39)) |
+| P-17 | Ontology home page | U-1 | P-14 | To do | [#30](https://github.com/jclerman/browl/issues/30) |
+| P-18 | Hierarchy trees with lazy loading (htmx) and keyboard support | U-7, U-17 | P-12, P-14 | To do | [#31](https://github.com/jclerman/browl/issues/31) |
+| P-27 | Usage tab on entity pages, from Fuseki, with paging (first decide: references inside class expressions; counts on first view or up front; any `usage` table) | U-26 | P-9, P-16, S-4 | To do | [#41](https://github.com/jclerman/browl/issues/41) |
 
 ### Phase 5: Search, caching, auth
 
-| ID | Work item | Delivers | Depends on | Tracking |
-| --- | --- | --- | --- | --- |
-| P-19 | `SearchBackend` interface and SQLite implementation; ranking | U-10, U-11, U-12, N-5 | P-11 | [#26](https://github.com/jclerman/browl/issues/26) |
-| P-20 | Autocomplete UI (accessible combobox) with type and property filters | U-10, U-17 | P-19, P-14 | [#32](https://github.com/jclerman/browl/issues/32) |
-| P-21 | Page cache keyed by generation | O-10, N-3 | P-16 | [#40](https://github.com/jclerman/browl/issues/40) |
-| P-22 | Google sign-in, admin-route protection, dev no-auth mode | A-1, O-6, O-7 | P-6 | [#17](https://github.com/jclerman/browl/issues/17) |
-| P-23 | Admin list management page and persistence | A-7 | P-22 | [#19](https://github.com/jclerman/browl/issues/19) |
+| ID | Work item | Delivers | Depends on | Status | Tracking |
+| --- | --- | --- | --- | --- | --- |
+| P-19 | `SearchBackend` interface and SQLite implementation; ranking | U-10, U-11, U-12, N-5 | P-11 | To do | [#26](https://github.com/jclerman/browl/issues/26) |
+| P-20 | Autocomplete UI (accessible combobox) with type and property filters | U-10, U-17 | P-19, P-14 | To do | [#32](https://github.com/jclerman/browl/issues/32) |
+| P-21 | Page cache keyed by generation | O-10, N-3 | P-16 | To do | [#40](https://github.com/jclerman/browl/issues/40) |
+| P-22 | Google sign-in, admin-route protection, dev no-auth mode | A-1, O-6, O-7 | P-6 | To do | [#17](https://github.com/jclerman/browl/issues/17) |
+| P-23 | Admin list management page and persistence | A-7 | P-22 | To do | [#19](https://github.com/jclerman/browl/issues/19) |
 
 ### Phase 6: Hardening
 
-| ID | Work item | Delivers | Depends on | Tracking |
-| --- | --- | --- | --- | --- |
-| P-24 | Performance check against N-1–N-3 targets at scale; whether streaming extraction alongside the TDB2 load is worth it | N-1–N-3 | all above | [#42](https://github.com/jclerman/browl/issues/42) |
-| P-25 | Accessibility pass (trees, combobox, no-JS pages) | U-17 | P-18, P-20 | [#35](https://github.com/jclerman/browl/issues/35) |
-| P-26 | Update README: remove Owlready2 and Fuseki (now the OWLAPI via JPype); replace "cached once built" with the bounded cache | | | done: [#7](https://github.com/jclerman/browl/pull/7) |
+| ID | Work item | Delivers | Depends on | Status | Tracking |
+| --- | --- | --- | --- | --- | --- |
+| P-24 | Performance check against N-1–N-3 targets at scale; whether streaming extraction alongside the TDB2 load is worth it | N-1–N-3 | all above | To do | [#42](https://github.com/jclerman/browl/issues/42) |
+| P-25 | Accessibility pass (trees, combobox, no-JS pages) | U-17 | P-18, P-20 | To do | [#35](https://github.com/jclerman/browl/issues/35) |
+| P-26 | Update README: remove Owlready2 and Fuseki (now the OWLAPI via JPype); replace "cached once built" with the bounded cache | | | Done | [#7](https://github.com/jclerman/browl/pull/7) |
 
 ### Later
 

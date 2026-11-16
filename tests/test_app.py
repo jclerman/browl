@@ -8,11 +8,13 @@ from typing import Any
 
 import httpx2
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import browl
 import browl.app
 from browl.app import create_app
+from browl.fuseki import FusekiClient
 from browl.settings import Settings
 
 UNREACHABLE = "http://127.0.0.1:1"  # nothing listens on port 1, so connections are refused at once
@@ -21,6 +23,11 @@ UNREACHABLE = "http://127.0.0.1:1"  # nothing listens on port 1, so connections 
 def make_settings(**overrides: object) -> Settings:
     """Return settings for tests: authentication off, and any overrides."""
     return Settings.model_validate({"BASE_URL": "http://example.org/", "AUTH_DISABLED": True} | overrides)
+
+
+def make_app(fuseki_transport: httpx2.AsyncBaseTransport | None = None, **overrides: object) -> FastAPI:
+    """Return an app that doesn't start the JVM, with `make_settings(**overrides)` and the Fuseki transport given."""
+    return create_app(make_settings(**overrides), fuseki_transport=fuseki_transport, start_jvm=False)
 
 
 Answer = httpx2.Response | Exception | Callable[[httpx2.Request], Awaitable[httpx2.Response]]
@@ -43,8 +50,7 @@ def check_health(answer: Answer, path: str = "/_browl/health", **overrides: obje
             return answer
         return await answer(request)
 
-    app = create_app(make_settings(**overrides), fuseki_transport=httpx2.MockTransport(handler))
-    with TestClient(app) as client:
+    with TestClient(make_app(httpx2.MockTransport(handler), **overrides)) as client:
         response = client.get(path)
     assert response.status_code == 200
     return response.json(), requests
@@ -53,7 +59,7 @@ def check_health(answer: Answer, path: str = "/_browl/health", **overrides: obje
 @pytest.fixture
 def client() -> Iterator[TestClient]:
     """Yield a test client for an app with default settings, its lifespan running."""
-    with TestClient(create_app(make_settings())) as test_client:
+    with TestClient(make_app()) as test_client:
         yield test_client
 
 
@@ -103,7 +109,7 @@ def test_health_fuseki_slow(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_health_fuseki_unreachable() -> None:
     """Check that the app's default transport reports a refused connection as down."""
-    with TestClient(create_app(make_settings(FUSEKI_URL=UNREACHABLE))) as client:
+    with TestClient(make_app(FUSEKI_URL=UNREACHABLE)) as client:
         assert client.get("/_browl/health").json() == {"status": "ok", "fuseki": "down"}
 
 
@@ -111,7 +117,7 @@ def test_reserved_prefix() -> None:
     """Check that the service's own routes live under RESERVED_PREFIX."""
     body, _ = check_health(httpx2.Response(200), path="/_site/health", RESERVED_PREFIX="_site")
     assert body["fuseki"] == "up"
-    with TestClient(create_app(make_settings(RESERVED_PREFIX="_site"))) as client:
+    with TestClient(make_app(RESERVED_PREFIX="_site")) as client:
         assert client.get("/_browl/health").status_code == 404
 
 
@@ -128,3 +134,31 @@ def test_api_docs_show_title_and_version(client: TestClient) -> None:
     info = client.get("/openapi.json").json()["info"]
     assert info["title"] == "OWL Ontology Browser"
     assert info["version"] == browl.__version__ == pyproject["project"]["version"]
+
+
+def test_startup_starts_jvm(monkeypatch: pytest.MonkeyPatch, robot_jar: Path) -> None:
+    """Check that startup starts the JVM with ROBOT_JAR and APP_JVM_MAX_HEAP, and makes the SPARQL client."""
+    calls = []
+    monkeypatch.setattr(browl.app.owlapi, "start_jvm", lambda *args: calls.append(args))
+    app = create_app(make_settings(ROBOT_JAR=str(robot_jar), APP_JVM_MAX_HEAP="768m"))
+    with TestClient(app):
+        assert isinstance(app.state.sparql, FusekiClient)
+        assert isinstance(app.state.fuseki_http, httpx2.AsyncClient)
+    assert calls == [(robot_jar, "768m")]
+
+
+@pytest.mark.jvm
+@pytest.mark.usefixtures("jvm")
+def test_startup_with_running_jvm(robot_jar: Path) -> None:
+    """Check that the app starts when the JVM is already running, as in tests, whose client runs off the main thread."""
+    with TestClient(create_app(make_settings(ROBOT_JAR=str(robot_jar)))) as client:
+        assert client.get("/_browl/health").status_code == 200
+
+
+def test_startup_fails_without_robot_jar(tmp_path: Path) -> None:
+    """Check that the app doesn't start when ROBOT_JAR doesn't exist."""
+    with (
+        pytest.raises(FileNotFoundError, match="ROBOT_JAR"),
+        TestClient(create_app(make_settings(ROBOT_JAR=str(tmp_path / "robot.jar")))),
+    ):
+        pass

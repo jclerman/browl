@@ -10,6 +10,8 @@ from fastapi import APIRouter, FastAPI, Request
 from pydantic import BaseModel
 
 import browl
+from browl import owlapi
+from browl.fuseki import FusekiClient
 from browl.settings import Settings, load_settings
 
 FUSEKI_TIMEOUT_S = 2.0
@@ -38,7 +40,7 @@ async def health(request: Request) -> Health:
     A Fuseki outage doesn't fail the check: the app stays up to serve its "not available" page (U-16), and Fuseki's
     container has its own health check.
     """
-    client: httpx2.AsyncClient = request.app.state.fuseki
+    client: httpx2.AsyncClient = request.app.state.fuseki_http
     try:
         # httpx2's own timeout limits each phase (connect, write, read) separately, not the whole call.
         async with asyncio.timeout(FUSEKI_TIMEOUT_S):
@@ -48,12 +50,20 @@ async def health(request: Request) -> Health:
     return Health(fuseki="up" if response.is_success else "down")
 
 
-def create_app(settings: Settings | None = None, fuseki_transport: httpx2.AsyncBaseTransport | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    fuseki_transport: httpx2.AsyncBaseTransport | None = None,
+    start_jvm: bool = True,
+) -> FastAPI:
     """Build the application, loading the settings from the environment unless given.
+
+    On startup the app starts the JVM (DESIGN.md §2.1) and opens its HTTP client for Fuseki. Uvicorn runs the startup
+    on the main thread, where the JVM must start; a test client doesn't, so tests start it first.
 
     Args:
         settings: The settings; loaded from the environment if not given.
         fuseki_transport: The transport for the Fuseki client, which tests replace; httpx2's default if not given.
+        start_jvm: Whether to start the JVM; tests that don't need it turn it off.
 
     Raises:
         pydantic.ValidationError: A setting is missing or invalid.
@@ -63,8 +73,11 @@ def create_app(settings: Settings | None = None, fuseki_transport: httpx2.AsyncB
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if start_jvm:
+            owlapi.start_jvm(settings.robot_jar, settings.app_jvm_max_heap)
         async with httpx2.AsyncClient(base_url=str(settings.fuseki_url), transport=fuseki_transport) as client:
-            app.state.fuseki = client
+            app.state.fuseki_http = client
+            app.state.sparql = FusekiClient(client)
             yield
 
     app = FastAPI(title=browl.DESCRIPTIVE_TITLE, version=browl.__version__, lifespan=lifespan)

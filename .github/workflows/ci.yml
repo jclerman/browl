@@ -40,6 +40,28 @@ jobs:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
 
+      # Java for the tests marked jvm; `make test` downloads robot.jar for them, and those marked fuseki build and start
+      # browl's Fuseki image. GitHub sets CI, so tests whose needs are missing fail instead of being skipped
+      # (tests/conftest.py).
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # The robot.jar that `make test` downloads, keyed by the Dockerfile that pins it.
+      - name: Cache robot.jar
+        id: robot-jar
+        uses: actions/cache@v6
+        with:
+          path: .cache/robot.jar
+          key: robot-jar-${{ hashFiles('Dockerfile') }}
+
+      # Checkout gives the Dockerfile the current time, so a restored jar looks older than it, and make would download
+      # it again. The key matched the Dockerfile, so the jar is current.
+      - name: Mark the restored robot.jar as current
+        if: steps.robot-jar.outputs.cache-hit == 'true'
+        run: touch .cache/robot.jar
+
       - name: Install dependencies, lint, and test
         run: make install ci
 

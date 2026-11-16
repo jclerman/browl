@@ -4,6 +4,9 @@
 # Temporary files: any directory named tmp, at any depth
 tmp/
 
+# Downloads for local runs, such as robot.jar for the tests (make robot-jar)
+/.cache/
+
 # Python
 __pycache__/
 *.py[cod]
