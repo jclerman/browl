@@ -45,9 +45,9 @@ instructions specific to coding agents. Requirements and architecture are in [`D
   P-24, not the test suite.
 - Mark tests that need a JVM and `robot.jar` with `@pytest.mark.jvm` and have them use the `jvm` fixture, which starts
   the JVM. Mark tests that need Fuseki with `@pytest.mark.fuseki` and have them use the `fuseki_url` fixture: a Fuseki
-  at `BROWL_TEST_FUSEKI_URL`, or one the tests start from `docker/fuseki` with Docker. Locally, these tests are skipped
-  when their needs are missing (set `ROBOT_JAR`, and `JAVA_HOME` to Java 21); in CI they fail instead, so CI runs every
-  test.
+  at `BROWL_TEST_FUSEKI_URL`, or one the tests start from `docker/fuseki` with Docker. `make test` downloads the pinned
+  `robot.jar` once (`make robot-jar`), and on macOS the tests find Java 21 when `JAVA_HOME` is unset. Locally, these
+  tests are skipped when their needs are missing; in CI they fail instead, so CI runs every test.
 - **Coverage:** CI fails below 90% line coverage of the `browl` package.
 
 ## Documentation

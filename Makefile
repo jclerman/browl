@@ -13,9 +13,24 @@ install:  ## Install dependencies into the Poetry venv, matching poetry.lock
 lint:  ## Run all pre-commit hooks on all files
 	poetry run pre-commit run --all-files
 
+# robot.jar for the tests marked jvm, which tests/conftest.py uses unless ROBOT_JAR is set: the release and checksum the
+# app image pins, read from the Dockerfile. A file target, so it's downloaded only when it isn't already there; the
+# download goes to a .part file first, so a failed one leaves nothing behind that looks complete.
+ROBOT_JAR_CACHE := .cache/robot.jar
+
 .PHONY: test
-test:  ## Run tests with coverage
+test: $(ROBOT_JAR_CACHE)  ## Run tests with coverage
 	poetry run pytest --cov
+
+.PHONY: robot-jar
+robot-jar: $(ROBOT_JAR_CACHE)  ## Download the pinned robot.jar for the tests, unless already present
+
+$(ROBOT_JAR_CACHE):
+	mkdir -p $(@D)
+	curl -fsSL -o $@.part \
+		"https://github.com/ontodev/robot/releases/download/$$(sed -n 's/^ARG ROBOT_VERSION=//p' Dockerfile)/robot.jar"
+	echo "$$(sed -n 's/^ARG ROBOT_SHA256=//p' Dockerfile)  $@.part" | shasum -a 256 -c -
+	mv $@.part $@
 
 .PHONY: ci
 ci: lint test  ## Run the CI checks locally (lint, then test)

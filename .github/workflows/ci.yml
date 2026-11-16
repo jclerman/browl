@@ -40,22 +40,13 @@ jobs:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
 
-      # Java and robot.jar for the tests marked jvm; those marked fuseki build and start browl's Fuseki image. GitHub
-      # sets CI, so tests whose needs are missing fail instead of being skipped (tests/conftest.py).
+      # Java for the tests marked jvm; `make test` downloads robot.jar for them, and those marked fuseki build and start
+      # browl's Fuseki image. GitHub sets CI, so tests whose needs are missing fail instead of being skipped
+      # (tests/conftest.py).
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
-
-      # The release and checksum the app image pins, read from the Dockerfile.
-      - name: Download robot.jar
-        run: |
-          version=$(sed -n 's/^ARG ROBOT_VERSION=//p' Dockerfile)
-          sha256=$(sed -n 's/^ARG ROBOT_SHA256=//p' Dockerfile)
-          curl -fsSL -o "$RUNNER_TEMP/robot.jar" \
-            "https://github.com/ontodev/robot/releases/download/${version}/robot.jar"
-          echo "${sha256}  $RUNNER_TEMP/robot.jar" | sha256sum -c -
-          echo "ROBOT_JAR=$RUNNER_TEMP/robot.jar" >> "$GITHUB_ENV"
 
       - name: Install dependencies, lint, and test
         run: make install ci

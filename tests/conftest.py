@@ -1,7 +1,8 @@
 """Shared fixtures, and the skip rules for tests that need a JVM or Fuseki.
 
-`jvm` tests need Java and `robot.jar` (`ROBOT_JAR`, or the settings' default path); JPype finds Java through
-`JAVA_HOME`, so point it at Java 21. `fuseki` tests need a Fuseki: the one at `BROWL_TEST_FUSEKI_URL`, or one the
+`jvm` tests need Java and `robot.jar`: `ROBOT_JAR`, else the one `make robot-jar` downloads, else the settings'
+default path. JPype finds Java through `JAVA_HOME`, so point it at Java 21; on macOS, when it's unset, the tests set it
+to Java 21 if that's installed. `fuseki` tests need a Fuseki: the one at `BROWL_TEST_FUSEKI_URL`, or one the
 tests build and start from `docker/fuseki` with Docker. Locally, tests whose needs are missing are skipped; in CI
 (`CI` set) they fail instead, so CI runs every test. Mark such tests `jvm` or `fuseki`, and have them use the `jvm` or
 `fuseki_url` fixture.
@@ -26,12 +27,29 @@ ROOT = Path(__file__).parent.parent
 DATA = Path(__file__).parent / "data"
 FUSEKI_IMAGE = "browl-fuseki-test"
 FUSEKI_START_TIMEOUT_S = 60
+ROBOT_JAR_CACHE = ROOT / ".cache" / "robot.jar"  # where `make robot-jar` puts it
+MACOS_JAVA_HOME = "/usr/libexec/java_home"
 
 
 def robot_jar() -> Path:
-    """Return the `robot.jar` the tests use: `ROBOT_JAR`, or the settings' default."""
-    default = Settings.model_fields["robot_jar"].default
-    return Path(os.environ.get("ROBOT_JAR", default))
+    """Return the `robot.jar` the tests use: `ROBOT_JAR`, else `make robot-jar`'s, else the settings' default."""
+    if path := os.environ.get("ROBOT_JAR"):
+        return Path(path)
+    if ROBOT_JAR_CACHE.is_file():
+        return ROBOT_JAR_CACHE
+    return Path(Settings.model_fields["robot_jar"].default)
+
+
+def default_java_home() -> None:
+    """On macOS, set `JAVA_HOME` to Java 21 when it's unset and Java 21 is installed; JPype reads it at JVM start.
+
+    Without it, JPype can pick an older Java on a Mac with several.
+    """
+    if os.environ.get("JAVA_HOME") or not Path(MACOS_JAVA_HOME).is_file():
+        return
+    found = subprocess.run([MACOS_JAVA_HOME, "-v", "21"], check=False, capture_output=True, text=True)
+    if found.returncode == 0 and found.stdout.strip():
+        os.environ["JAVA_HOME"] = found.stdout.strip()
 
 
 def missing_jvm() -> str | None:
@@ -39,7 +57,8 @@ def missing_jvm() -> str | None:
     if jpype.isJVMStarted():
         return None
     if not robot_jar().is_file():
-        return f"no robot.jar at {robot_jar()} (set ROBOT_JAR)"
+        return f"no robot.jar at {robot_jar()} (run `make robot-jar`, or set ROBOT_JAR)"
+    default_java_home()
     try:
         jvm_path = jpype.getDefaultJVMPath()
     except jpype.JVMNotFoundException as error:
