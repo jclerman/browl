@@ -195,17 +195,17 @@ Entities only browl lists, by how they refer to the class:
 
 ## Raised for browl's plan
 
-Not yet posted to GitHub; proposed here for review:
-
 1. **Fuseki's container memory isn't its heap.** `docker-compose.yml` says a 1 GB heap "serves NCBITaxon with about
-   2x headroom", which is true of the heap, but under load Fuseki's container reaches about 2.6 GiB (§3). Hosting
-   guidance (§2.14, or the README for operators) should give the container's figure, and the direct-buffer limit
-   could be set below the heap size. P-3 found 64 MB too low; something like 256–512 MB is untested.
-2. **Usage tab (U-26) volume from `DisjointClasses`.** In ontologies with large disjoint sets, they swamp the tab
-   (pizza: 85% of referrers). Showing them collapsed, or last, may matter more than U-34's priority suggests.
-3. **Positioning (#54):** the differences above can go into browl's README. browl loads ontologies that OLS4 can't
-   load in a small VM (NCBITaxon), and serves pages faster. Its Usage tab shows what OLS4's "Related from" leaves
-   out. Its relation trees follow equivalence definitions in releases that aren't relaxed.
+   2x headroom", which is true of the heap, but under load Fuseki's container reaches about 2.6 GiB (§3). Filed as
+   S-6 ([#59](https://github.com/jclerman/browl/issues/59)).
+2. **`DisjointClasses` in the Usage tab (U-26).** U-26 lists a `DisjointClasses` axiom under every named class it
+   mentions, so each class's Usage tab repeats the disjointness its Details tab already shows under Disjoint With.
+   In pizza, whose 23 named pizzas are pairwise disjoint, each named pizza's Usage tab holds 22 entries, all of
+   them `DisjointClasses`. That fits on one page (U-26 pages 50 at a time), so it isn't a navigation problem, but
+   the tab and its count show nothing the Details tab doesn't. Open: whether U-26 should leave these out.
+3. **For S-5's conclusions (#54):** browl loads ontologies that OLS4 can't load in a small VM
+   (NCBITaxon), and serves pages faster. Its Usage tab shows what OLS4's "Related from" leaves out. Its relation
+   trees follow equivalence definitions in releases that aren't relaxed.
 
 ## Reproducing
 
