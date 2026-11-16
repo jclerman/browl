@@ -16,6 +16,9 @@ priority = "primary"
 
 [tool.poetry.dependencies]
 fastapi = "^0.163"
+pydantic-settings = "^2.16.3"
+pydantic = "^2.14.3"
+langcodes = "^3.5.1"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^2.4.1"
@@ -68,7 +71,8 @@ line-length = 120
 #   RUF = ruff's own rules
 #   SIM = flake8-simplify (simpler equivalents)
 #   N   = pep8-naming
-extend-select = ["E", "W", "I", "UP", "B", "C4", "T20", "D", "RUF", "SIM", "N"]
+#   D401 = docstring summary in the imperative mood (off under the google convention below)
+extend-select = ["E", "W", "I", "UP", "B", "C4", "T20", "D", "RUF", "SIM", "N", "D401"]
 # Rules to skip:
 #   B028 = warnings.warn() without an explicit stacklevel
 #   D206, D300 = conflict with ruff-format, which already handles them

@@ -195,6 +195,11 @@ For a declared entity IRI, in order:
 3. **Fallback:** anything else (`urn:`, `tag:`, query strings, ports, IRIs whose native path would hit the reserved
    prefix). URL = `/{RESERVED_PREFIX}/iri?u={percent-encoded IRI}`. _(Q1b)_
 
+**Comparing IRIs with `BASE_URL`:** `BASE_URL` is stored as a normalized URL (scheme and host lowercased, default port
+dropped, a non-ASCII host in its ASCII "punycode" form, non-ASCII path characters percent-encoded). IRIs, which RDF
+compares as plain strings, can contain Unicode. So each IRI is mapped to its URL form first (RFC 3987 §3.1), then
+compared with `BASE_URL`: scheme and host case-insensitively, the path exactly.
+
 For a hash IRI, the rules apply to the part before `#`, and the fragment is kept on the URL:
 `http://example.org/onto#Foo` → `/example.org/onto#Foo`.
 
@@ -358,6 +363,16 @@ ranking. _(Q18, Q18a)_ For each entity, the display name is the first value foun
 
 It is computed during pre-caching, so link text costs nothing at render time.
 
+**Language matching** (wherever tags are compared, including search ranking, [2.6](#26-search)):
+
+- **Case:** RDF compares language tags case-insensitively, and `LANGUAGE_RANKING` is stored lowercased (P-2). So a
+  literal's tag is lowercased before it's looked up (`@en-GB` matches `en-gb`).
+- **Fallback** (RFC 4647 "lookup"): a tag with no entry of its own drops subtags from the end until one matches, so
+  `@en-GB` ranks with `en` unless `en-gb` is listed; `@zh-Hant-TW` tries `zh-hant`, then `zh`.
+- **Unmatched tags** rank after every listed language: just before `none` when it's last (the default), last when
+  `none` is placed earlier.
+- **Untagged** literals match the `none` entry.
+
 **CURIE prefixes:** the prefixes declared in the ontology file, plus a built-in set (`rdf`, `rdfs`, `owl`, `xsd`,
 `skos`, `obo`, `dc`, `dcterms`, …), with configured mappings overriding both (O-11). An IRI with no matching prefix has
 no CURIE. _(Q18b)_
@@ -503,23 +518,25 @@ coordination. The cache wraps a plain function that stores rendered strings. `fu
 
 ### 2.12 Configuration
 
-Defaults are set in code, and each can be overridden by an environment variable. _(Q13)_
+Defaults are set in code, and each can be overridden by an environment variable named as below (uppercase only),
+validated at startup (`browl/settings.py`). Lists and mappings are given as JSON, e.g.
+`LANGUAGE_RANKING='["en", "fr", "none"]'`. _(Q13)_
 
 | Setting | Default | Notes |
 | --- | --- | --- |
 | `BASE_URL` | none (required) | O-2 |
 | `RESERVED_PREFIX` | `_browl` | must start with `_`; O-3 |
 | `NAME_PROPERTIES` | `[rdfs:label]` | ordered; O-4 |
-| `LANGUAGE_RANKING` | `[en]` | Untagged is a reserved entry (e.g. `none`), added at the end if not listed; O-5 |
+| `LANGUAGE_RANKING` | `[en]` | Untagged is the reserved entry `none`, added at the end if not listed; O-5 |
 | `EXTRA_PREFIXES` | `{}` | O-11 |
-| `PAGE_CACHE_SIZE` | `100` | O-10 |
-| `REASONER_TIMEOUT_S`, `REASONER_MAX_HEAP` | to be decided after spike S-2 | O-8 |
+| `PAGE_CACHE_SIZE` | `100` | `0` turns the cache off; O-10 |
+| `REASONER_TIMEOUT_S`, `REASONER_MAX_HEAP` | `3600`, `8g`: placeholders until spike S-2 | O-8 |
 | `APP_JVM_MAX_HEAP` | `1g`, to be confirmed in P-4 | heap for the app's in-process JVM, which only renders per-page fragments (S-4) |
 | `FUSEKI_URL` | `http://fuseki:3030` | Fuseki's address on the Compose network |
-| `ROBOT_JAR` | path in the image | used both on the app's classpath and for reasoning subprocesses |
-| `JENA_HOME` | path in the image | Jena's command-line tools, for the TDB2 loader |
+| `ROBOT_JAR` | path in the image (placeholder `/opt/robot/robot.jar` until P-3) | used both on the app's classpath and for reasoning subprocesses |
+| `JENA_HOME` | path in the image (placeholder `/opt/jena` until P-3) | Jena's command-line tools, for the TDB2 loader |
 | `DATA_DIR` | `/data` | mounted volume; O-9 |
-| `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `SEED_ADMINS` | none | O-6 |
+| `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `SEED_ADMINS` | none | required unless `AUTH_DISABLED`; O-6 |
 | `AUTH_DISABLED` | `false` | O-7 |
 
 ### 2.13 URL space for the service's own pages

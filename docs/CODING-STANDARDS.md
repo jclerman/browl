@@ -49,7 +49,9 @@ instructions specific to coding agents. Requirements and architecture are in [`D
 
 ## Documentation
 
-- **Docstrings:** PEP 257-compliant, Google style (`Args:`, `Returns:`, `Raises:`).
+- **Docstrings:** PEP 257-compliant, Google style (`Args:`, `Returns:`, `Raises:`). A function's summary line is
+  imperative ("Return…", "Check that…"); ruff's D401 catches some violations.
+  Document a class's attributes in an `Attributes:` section of its docstring, not in docstrings after each attribute.
 - **Keep internal documentation terse.** Don't document what the code makes obvious, or could with better naming or
   structure; improve the code instead. Comments explain why, not what.
 - When a change alters a design decision, update `docs/DESIGN.md` in the same PR.

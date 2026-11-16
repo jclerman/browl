@@ -358,6 +358,23 @@ files = [
 ]
 
 [[package]]
+name = "langcodes"
+version = "3.5.1"
+description = "Tools for labeling human languages with IETF language tags"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "langcodes-3.5.1-py3-none-any.whl", hash = "sha256:b6a9c25c603804e2d169165091d0cdb23934610524a21d226e4f463e8e958a72"},
+    {file = "langcodes-3.5.1.tar.gz", hash = "sha256:40bff315e01b01d11c2ae3928dd4f5cbd74dd38f9bd912c12b9a3606c143f731"},
+]
+
+[package.extras]
+build = ["build", "twine"]
+data = ["language-data (>=1.2)"]
+test = ["pytest", "pytest-cov"]
+
+[[package]]
 name = "librt"
 version = "0.16.0"
 description = "Mypyc runtime library"
@@ -875,6 +892,31 @@ files = [
 typing-extensions = ">=4.16.0"
 
 [[package]]
+name = "pydantic-settings"
+version = "2.16.3"
+description = "Settings management using Pydantic"
+optional = false
+python-versions = ">=3.11"
+groups = ["main"]
+files = [
+    {file = "pydantic_settings-2.16.3-py3-none-any.whl", hash = "sha256:d1db16a2d34006323a1b42c0640898da58adfbad7ec30baaa9e2b18aafc08999"},
+    {file = "pydantic_settings-2.16.3.tar.gz", hash = "sha256:10e36f616623ebb586c05ca3d3cd22927146869db413d4f14c20c514442a1337"},
+]
+
+[package.dependencies]
+pydantic = ">=2.7.0"
+python-dotenv = ">=1.2.2"
+typing-extensions = ">=4.0.0"
+typing-inspection = ">=0.4.0"
+
+[package.extras]
+aws-secrets-manager = ["boto3 (>=1.35.0)"]
+aws-systems-manager = ["boto3 (>=1.35.0)"]
+azure-key-vault = ["azure-identity (>=1.16.0)", "azure-keyvault-secrets (>=4.8.0)"]
+gcp-secret-manager = ["google-cloud-secret-manager (>=2.23.1)"]
+yaml = ["pyyaml (>=6.0.1)"]
+
+[[package]]
 name = "pygments"
 version = "2.21.0"
 description = "Pygments is a syntax highlighting package written in Python."
@@ -964,6 +1006,21 @@ files = [
 
 [package.dependencies]
 filelock = ">=3.16.1"
+
+[[package]]
+name = "python-dotenv"
+version = "1.2.4"
+description = "Read key-value pairs from a .env file and set them as environment variables"
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+files = [
+    {file = "python_dotenv-1.2.4-py3-none-any.whl", hash = "sha256:42269a8a5b3fd54ffa6f3d84b18abed50064717576b4ecf03dc4a55d8aa04fdc"},
+    {file = "python_dotenv-1.2.4.tar.gz", hash = "sha256:f0d53e69935a851c0dcc78f3ab7aaccd8cabef0b92382b576b824212902873c0"},
+]
+
+[package.extras]
+cli = ["click (>=5.0)"]
 
 [[package]]
 name = "pyyaml"
@@ -1131,4 +1188,4 @@ python-discovery = ">=1.6.1"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12"
-content-hash = "3c0b6ae3e40f6e522bbdbd28872c019eb732e5b1cc0953f2de28972758b6e97c"
+content-hash = "6b747d33e943a7c38dea77b1554ce731ffe17e08ef768e5fca8536e9610e7489"
