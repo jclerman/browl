@@ -49,14 +49,29 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: docker/setup-buildx-action@v4
+
+      # Built with Bake from docker-compose.yml so the layers are cached in GitHub's cache, one scope per image. The
+      # tags are Compose's own image names, so `docker compose up` uses these images instead of building them again.
       - name: Build the app and Fuseki images
-        run: docker compose build
+        uses: docker/bake-action@v7
+        with:
+          source: .
+          files: docker-compose.yml
+          load: true
+          set: |
+            app.tags=browl-app
+            fuseki.tags=browl-fuseki
+            app.cache-from=type=gha,scope=app
+            app.cache-to=type=gha,scope=app,mode=max
+            fuseki.cache-from=type=gha,scope=fuseki
+            fuseki.cache-to=type=gha,scope=fuseki,mode=max
 
       # .env.example's settings: a local BASE_URL, authentication off.
       - name: Start both services and wait until they're healthy
         run: |
           cp .env.example .env
-          docker compose up -d --wait --wait-timeout 120
+          docker compose up -d --no-build --wait --wait-timeout 120
 
       # The app's own health check passes even when Fuseki is down, so check that it reaches Fuseki.
       - name: Check that the app reaches Fuseki
