@@ -43,15 +43,92 @@ jobs:
       - name: Install dependencies, lint, and test
         run: make install ci
 
-  # The check that branch protection requires: one stable name, whatever the matrix holds. It must run even when a
-  # matrix job fails (a skipped required check counts as passing), so it checks the result explicitly.
+  images:
+    name: Build and start the Docker images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      # Built with Bake from docker-compose.yml so the layers are cached in GitHub's cache, one scope per image. The
+      # tags are Compose's own image names, so `docker compose up` uses these images instead of building them again.
+      - name: Build the app and Fuseki images
+        uses: docker/bake-action@v7
+        with:
+          source: .
+          files: docker-compose.yml
+          load: true
+          set: |
+            app.tags=browl-app
+            fuseki.tags=browl-fuseki
+            app.cache-from=type=gha,scope=app
+            app.cache-to=type=gha,scope=app,mode=max
+            fuseki.cache-from=type=gha,scope=fuseki
+            fuseki.cache-to=type=gha,scope=fuseki,mode=max
+
+      # .env.example's settings: a local BASE_URL, authentication off.
+      - name: Start both services and wait until they're healthy
+        run: |
+          cp .env.example .env
+          docker compose up -d --no-build --wait --wait-timeout 120
+
+      # The app's own health check passes even when Fuseki is down, so check that it reaches Fuseki.
+      - name: Check that the app reaches Fuseki
+        run: curl -fsS http://localhost:8000/_browl/health | jq -e '.fuseki == "up"'
+
+      - name: Check Java and the tools in the images
+        run: |
+          docker compose exec -T app sh -c \
+            'test -d "$JAVA_HOME" && java -version && test -f "$ROBOT_JAR" && "$JENA_HOME/bin/tdb2.tdbloader" --version'
+          docker compose exec -T fuseki java -version
+
+      # Fuseki's admin protocol is open to anything that reaches it, so its port must stay inside the Compose network.
+      - name: Check that Fuseki isn't reachable from the host
+        run: |
+          test -z "$(docker port "$(docker compose ps -q fuseki)")"
+          ! curl -fsS --max-time 5 'http://localhost:3030/$/ping'
+
+      # O-9: Fuseki records registered datasets in its volume, so they survive a restart. Registered from the app's
+      # container, as the app will register its stores (DESIGN.md §2.4).
+      - name: Check that a registered dataset survives a Fuseki restart
+        run: |
+          docker compose exec -T app \
+            curl -fsS -X POST --data 'dbName=ci-check&dbType=tdb2' 'http://fuseki:3030/$/datasets'
+          docker compose restart fuseki
+          docker compose up -d --no-build --wait --wait-timeout 120
+          docker compose exec -T app curl -fsS 'http://fuseki:3030/$/datasets/ci-check'
+
+      # U-16: with Fuseki down the app stays up, to serve its "not available" page; its health route still answers 200.
+      - name: Check that the app stays healthy, reporting Fuseki down, when Fuseki stops
+        run: |
+          docker compose stop fuseki
+          curl -fsS http://localhost:8000/_browl/health | jq -e '.fuseki == "down"'
+          docker compose exec -T app curl -fsS http://localhost:8000/_browl/health
+
+      - name: Show the services' logs
+        if: failure()
+        run: docker compose logs
+
+      - name: Stop the services
+        if: always()
+        run: docker compose down -v
+
+  # The check that branch protection requires: one stable name, whatever the jobs above are. It must run even when a
+  # job fails (a skipped required check counts as passing), so it checks the results explicitly.
   ci-result:
     name: Lint and test
     if: always()
-    needs: [lint-and-test]
+    needs: [lint-and-test, images]
     runs-on: ubuntu-latest
     steps:
-      - name: Require every matrix job to pass
+      - name: Require every job to pass
         env:
-          RESULT: ${{ needs.lint-and-test.result }}
-        run: test "$RESULT" = success
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          failed=$(jq -r 'to_entries[] | select(.value.result != "success") | "\(.key): \(.value.result)"' <<< "$NEEDS")
+          if [ -n "$failed" ]; then
+            echo "Jobs that didn't succeed:"
+            echo "$failed"
+            exit 1
+          fi

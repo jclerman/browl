@@ -1,0 +1,7 @@
+# Compose override for the measurements: Fuseki's heap from FUSEKI_HEAP, extra JVM options from FUSEKI_TEST_OPTS (e.g.
+# -XX:MaxDirectMemorySize=64m, or -Dtdb:unionDefaultGraph=true for an all-named-graph store), and a GC log on the
+# Fuseki volume.
+services:
+  fuseki:
+    environment:
+      JDK_JAVA_OPTIONS: -Xmx${FUSEKI_HEAP:-1g} ${FUSEKI_TEST_OPTS:-} -Xlog:gc:file=/fuseki/gc.log:uptime

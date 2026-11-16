@@ -174,7 +174,7 @@ Tooling and code conventions are in [`CODING-STANDARDS.md`](CODING-STANDARDS.md)
 | Data models | Pydantic | Entities, settings, job state. |
 | Configuration | pydantic-settings | Defaults in code; environment variables override. _(Q13)_ |
 | Ontology store | Apache Jena Fuseki with TDB2, in its own container | Queried with SPARQL over HTTP. Jena 6 needs Java 21. _(S-4)_ |
-| SPARQL client | HTTPX (async) | Plain SPARQL protocol; results read as TSV, fragments as N-Triples. |
+| SPARQL client | HTTPX2 (async) | Pydantic's maintained continuation of HTTPX, which Starlette's test client also prefers. Plain SPARQL protocol; results read as TSV, fragments as N-Triples. |
 | Manchester rendering | OWLAPI's Manchester syntax renderer, from the classes bundled in `robot.jar` | Renders per-page fragments; see [2.8](#28-entity-pages). _(post-log)_ |
 | Python ↔ Java bridge | JPype | One JVM per process, started at app startup. _(post-log)_ |
 | Derived store and search (v1) | SQLite (Python standard library), queried in a thread pool | FTS5 later for any-word search. _(Q8, Q11)_ |
@@ -252,12 +252,20 @@ either container doesn't reload the ontology.
 
 **Switching Fuseki to a new store** happens at the end of every loading stage, including the first. The TDB2 loader
 can only write a new store, not one Fuseki has open, so Fuseki keeps serving the previous store (behind the "loading"
-page) until the new one is built. The app then switches Fuseki over with **Fuseki's admin protocol** (`/$/datasets`):
-it registers the new store as a dataset named after the load's generation number, with a description that sets the
-TDB2 location and the union default graph (Imports, below), then removes the old dataset and deletes its store. The app
-and Fuseki are separate containers, so this avoids the app restarting Fuseki. Fuseki records registered datasets in its
-base directory, which is on a volume, so the current one survives restarts. The admin endpoints are reachable only on
-the Compose network. P-3 tries this. If Fuseki leaks memory or other resources across switches, the fallback is a fixed
+page) until the new one is built. The app then switches Fuseki over with **Fuseki's admin protocol** (`/$/datasets`).
+The app and Fuseki are separate containers, so this avoids the app restarting Fuseki. Tried in P-3 with Fuseki 6.2.0:
+
+- Fuseki 6 refuses a dataset description sent to the admin protocol, so a dataset is registered by name only
+  (`dbName=gen-N`, `dbType=tdb2`), and Fuseki's template puts its store at `{FUSEKI_BASE}/databases/gen-N`. The loader
+  therefore builds each new store at that path, on the Fuseki volume that the app also mounts; registering the name
+  opens it.
+- Removing the old dataset (`DELETE /$/datasets/gen-N`) also deletes its store.
+- Fuseki records registered datasets in its base directory, on the same volume, so the current one survives restarts.
+- The admin endpoints are open to any client that reaches Fuseki (its default allows only localhost, and the app is
+  another container), so Fuseki's port is not published outside the Compose network.
+
+Fuseki didn't leak across 60 switches of a small store, each followed by queries: its container's memory levelled off
+at 220–236 MiB after the first 10, with 55 open files and 38 threads at the end. Had it leaked, the fallback was a fixed
 store path and a Fuseki restart, which takes under a second.
 
 **Imports:** browl follows `owl:imports` where it can, and warns where it can't. The TDB2 loader doesn't follow
@@ -267,16 +275,37 @@ imports, and by default ROBOT refuses an ontology whose imports can't be fetched
 1. Fetch each imported ontology, recursively, into the data volume. An import that can't be fetched is dropped from
    the `owl:imports` list, and the upload page lists it as a warning.
 2. Reasoning, if any, gets the fetched files through a catalog file, so ROBOT doesn't fetch them again.
-3. The loading stage loads the ontology and each import into its own named graph, and Fuseki serves their union as the
-   default graph (`tdb2:unionDefaultGraph`). Queries see one ontology, and each triple's source stays known, e.g. to
-   mark imported entities; merging into one file first (ROBOT `merge`) would lose that.
+3. The loading stage loads the ontology into the store's default graph, and each import into its own named graph. Each
+   triple's source stays known, e.g. to mark imported entities; merging into one file first (ROBOT `merge`) would lose
+   that.
+4. When the ontology has imports, queries that should see them name a dataset that merges every graph:
+   `FROM <urn:x-arq:DefaultGraph> FROM <urn:x-arq:UnionGraph>`. The merge is a set, so a triple that the ontology and
+   an import both state counts once. Without imports, queries have no `FROM` clause.
 
 P-8 confirms the details.
 
-**Heap sizes:** the app's JVM only renders per-page fragments, so it needs a small heap (`APP_JVM_MAX_HEAP`). Fuseki's
-memory while serving hasn't been measured yet; TDB2 is disk-based and memory-mapped (P-3 measures it). After a heap
-failure the app restarts its process instead of carrying on, because the error can also kill JPype's internal
+**Why the ontology goes in the default graph** (measured in P-3, NCBITaxon loaded with `tdb2.xloader` in the app
+container, Fuseki with a 2 GB heap): TDB2 indexes named graphs separately, so a named graph costs about 2.2× in store
+size and load time (5.2 GB and 358 s, against 2.4 GB and 165 s in the default graph); page queries ran at the same speed
+on both. Keeping only the imports in named graphs means an ontology without imports pays nothing. Adding Uberon as an
+import (11 s; the store grew to 3.2 GB), the `FROM` merge cost about 1 ms per page at one client (median 4.0 against
+2.8 ms) and nothing measurable at 16 (682 against 641 pages a second). An explicit `{ … } UNION { GRAPH ?g { … } }`
+was no faster, and returns a triple once per graph that states it. Fuseki's alternative, `tdb2:unionDefaultGraph`,
+would put every triple in a named graph and hide the default graph.
+
+**Heap sizes:** the app's JVM only renders per-page fragments, so it needs a small heap (`APP_JVM_MAX_HEAP`). After a
+heap failure the app restarts its process instead of carrying on, because the error can also kill JPype's internal
 reference-cleanup thread ([S-1 findings](../research/S-1/README.md)).
+
+Fuseki's heap defaults to 1 GB (`FUSEKI_HEAP` in `.env`, read by `docker-compose.yml`). Measured in P-3 on NCBITaxon,
+with the bulk pre-caching queries ([2.5](#25-derived-data-pre-caching)) and then page queries from 1 and 16 clients:
+the heap held 430–490 MiB after garbage collection at its peak, during the bulk name-dictionary query, so 1 GB leaves
+about 2× headroom. 512 MB was too tight (constant collection; median page time at 16 clients rose from about 22 to
+92 ms), and at 256 MB the dictionary query ran out of memory. Page throughput didn't differ measurably between 1, 2 and
+4 GB; runs varied more with how much of the store the OS had cached. TDB2's store is memory-mapped, so memory not given
+to the heap caches the store. Raise the heap for ontologies larger than NCBITaxon or with large imports, whose bulk
+queries go through the `FROM` merge (not measured). On `OutOfMemoryError` Fuseki exits and Compose restarts it; without
+that, it hung after one and answered nothing.
 
 ### 2.5 Derived data (pre-caching)
 
@@ -533,8 +562,8 @@ validated at startup (`browl/settings.py`). Lists and mappings are given as JSON
 | `REASONER_TIMEOUT_S`, `REASONER_MAX_HEAP` | `3600`, `8g`: placeholders until spike S-2 | O-8 |
 | `APP_JVM_MAX_HEAP` | `1g`, to be confirmed in P-4 | heap for the app's in-process JVM, which only renders per-page fragments (S-4) |
 | `FUSEKI_URL` | `http://fuseki:3030` | Fuseki's address on the Compose network |
-| `ROBOT_JAR` | path in the image (placeholder `/opt/robot/robot.jar` until P-3) | used both on the app's classpath and for reasoning subprocesses |
-| `JENA_HOME` | path in the image (placeholder `/opt/jena` until P-3) | Jena's command-line tools, for the TDB2 loader |
+| `ROBOT_JAR` | `/opt/robot/robot.jar`, where the app image installs it | used both on the app's classpath and for reasoning subprocesses |
+| `JENA_HOME` | `/opt/jena`, where the app image installs it | Jena's command-line tools, for the TDB2 loader |
 | `DATA_DIR` | `/data` | mounted volume; O-9 |
 | `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `SEED_ADMINS` | none | required unless `AUTH_DISABLED`; O-6 |
 | `AUTH_DISABLED` | `false` | O-7 |
@@ -556,7 +585,9 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 
 | Risk | Mitigation |
 | --- | --- |
-| Fuseki needs too much memory while serving the largest ontologies | Not measured yet; TDB2 is disk-based and memory-mapped. P-3 measures it with NCBITaxon. |
+| Fuseki needs too much memory while serving the largest ontologies | Measured by P-3: NCBITaxon needs about 500 MiB of heap; the default is 1 GB (2.4). |
+| A bulk query that fails partway returns a truncated result with HTTP 200 | Seen in P-3: Fuseki streams results, so when it ran out of memory partway through the name dictionary, the status had already been sent. P-8 checks that each bulk result is complete (e.g. a final count, or the TSV ends cleanly) before building the derived database. |
+| Fuseki pauses for full garbage collections under page load | Seen in P-3: hundreds of `System.gc()` calls, each pausing 70–275 ms, made by the JDK when Fuseki's direct (I/O) buffers reach their limit, which defaults to the heap size. Raising that limit made throughput worse. P-24 finds what allocates the buffers if page latency needs it. |
 | JPype quirks: thread safety of concurrent OWLAPI calls; Python–Java call overhead | Resolved by S-1: concurrent calls were safe but gave no extra throughput, so OWLAPI calls run on one thread (2.1). Call overhead is small ([S-1 findings](../research/S-1/README.md)). |
 | Memory limit can't be reported reliably | Spike S-2; at worst report "reasoner failed" with ROBOT's output. |
 | Descendant counts too slow or memory-hungry at millions of classes | Resolved by S-3: roaring bitmaps, 4.2 s for NCBITaxon ([S-3 findings](../research/S-3/README.md)). |
@@ -590,7 +621,7 @@ go into this document.
 | --- | --- | --- | --- | --- |
 | P-1 | Project scaffold: `browl` package, tooling per the coding-standards doc, CI | | | done: [#2](https://github.com/jclerman/browl/pull/2), [#4](https://github.com/jclerman/browl/pull/4), [#5](https://github.com/jclerman/browl/pull/5), [#6](https://github.com/jclerman/browl/pull/6) |
 | P-28 | Coding-standards doc; settle the choices marked provisional | | | [#10](https://github.com/jclerman/browl/issues/10) |
-| P-2 | Settings module with validation (reserved-prefix rule, `AUTH_DISABLED` warning) | O-2–O-8, O-10, O-11 | P-1 | [#9](https://github.com/jclerman/browl/issues/9) |
+| P-2 | Settings module with validation (reserved-prefix rule, `AUTH_DISABLED` warning) | O-2–O-8, O-10, O-11 | P-1 | done: [#51](https://github.com/jclerman/browl/pull/51) |
 | P-3 | Docker Compose: `app` (Java 21, `robot.jar`, Jena's TDB2 loader) and `fuseki` services, volumes, health checks; switching Fuseki to a new store through its admin protocol; Fuseki's memory while serving | O-1, O-9 | P-1, S-4 | [#11](https://github.com/jclerman/browl/issues/11) |
 | P-4 | Fuseki client (async SPARQL over HTTP) and OWLAPI bridge: start the JVM via JPype, parse fetched triples as a small ontology, run Java calls on one dedicated thread | | P-2, P-3, S-1, S-4 | [#15](https://github.com/jclerman/browl/issues/15) |
 

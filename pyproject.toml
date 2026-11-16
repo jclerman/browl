@@ -3,7 +3,7 @@ name = "browl"
 version = "0.1.0"
 description = "Host an OWL ontology as a browsable website, with a page for every entity at a URL implied by its IRI."
 readme = "README.md"
-authors = [{ name = "Jeffrey C. Lerman" }]
+authors = [{ name = "Jeffrey C. Lerman", email = "Jeffrey.Lerman@gmail.com" }]
 requires-python = ">=3.12"
 dynamic = ["dependencies"]
 
@@ -19,6 +19,8 @@ fastapi = "^0.163"
 pydantic-settings = "^2.16.3"
 pydantic = "^2.14.3"
 langcodes = "^3.5.1"
+uvicorn = "^0.54.0"
+httpx2 = "^2.16.0"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^2.4.1"
