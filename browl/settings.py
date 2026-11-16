@@ -16,7 +16,7 @@ _RESERVED_PREFIX = re.compile(r"_[A-Za-z0-9._~-]+")  # one path segment of URL-s
 _LANGUAGE_TAG = re.compile(r"[a-z]{1,8}(-[a-z0-9]{1,8})*")
 _PREFIX_NAME = re.compile(r"([A-Za-z_][A-Za-z0-9._-]*)?")  # empty is the default prefix
 _IRI_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
-_JAVA_HEAP = re.compile(r"[1-9][0-9]*[kKmMgG]?")  # -Xmx syntax
+_JAVA_HEAP = re.compile(r"[1-9][0-9]*[kKmMgG]")  # -Xmx syntax, with a unit: a bare number would be bytes
 
 
 def confirm_unique(values: list[str]) -> list[str]:
@@ -109,7 +109,7 @@ class Settings(BaseSettings):
     @field_validator("reasoner_max_heap", "app_jvm_max_heap")
     @classmethod
     def check_java_heap(cls, value: str) -> str:
-        """Require a Java heap size in `-Xmx` syntax, such as 512m or 8g."""
+        """Require a Java heap size in `-Xmx` syntax with a unit, such as 512m or 8g."""
         if not _JAVA_HEAP.fullmatch(value):
             raise ValueError("must be a Java heap size, such as 512m or 8g")
         return value

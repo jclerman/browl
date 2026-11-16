@@ -163,7 +163,13 @@ def test_extra_prefixes_rejects_invalid(env: pytest.MonkeyPatch, value: str) -> 
 
 @pytest.mark.parametrize(
     ("name", "value"),
-    [("PAGE_CACHE_SIZE", "-1"), ("REASONER_TIMEOUT_S", "0"), ("APP_JVM_MAX_HEAP", "1 g"), ("REASONER_MAX_HEAP", "0g")],
+    [
+        ("PAGE_CACHE_SIZE", "-1"),
+        ("REASONER_TIMEOUT_S", "0"),
+        ("APP_JVM_MAX_HEAP", "1 g"),
+        ("REASONER_MAX_HEAP", "0g"),
+        ("APP_JVM_MAX_HEAP", "1024"),
+    ],
 )
 def test_limits_reject_invalid(env: pytest.MonkeyPatch, name: str, value: str) -> None:
     """Check that negative sizes, a zero timeout and malformed heap sizes are rejected."""
