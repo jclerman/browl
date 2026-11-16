@@ -20,7 +20,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends curl openjdk-21-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 # The same UID as the app, which writes the stores Fuseki opens and deletes.
-RUN useradd --uid 10001 --user-group --no-create-home fuseki \
+RUN useradd --uid 10001 --user-group --create-home fuseki \
     && mkdir -p /fuseki /opt/fuseki/no-ui \
     && chown fuseki:fuseki /fuseki
 COPY --from=downloads /fuseki-server.jar /opt/fuseki/

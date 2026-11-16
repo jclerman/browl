@@ -39,9 +39,10 @@ FROM ${PYTHON_IMAGE}
 # Jena's bulk loader for large ontologies (tdb2.xloader) needs jq.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl jq openjdk-21-jre-headless \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s "$(dirname "$(dirname "$(readlink -f "$(command -v java)")")")" /usr/lib/jvm/java-21
 # One UID for the app and Fuseki: the app's loader writes the TDB2 stores that Fuseki then opens and deletes.
-RUN useradd --uid 10001 --user-group --no-create-home browl \
+RUN useradd --uid 10001 --user-group --create-home browl \
     && mkdir /data /fuseki \
     && chown browl:browl /data /fuseki
 
@@ -49,10 +50,9 @@ COPY --from=downloads /robot.jar /opt/robot/robot.jar
 COPY --from=downloads /jena /opt/jena
 COPY --from=python-build /app/.venv /app/.venv
 
-# Debian names the JVM's directory after the architecture (amd64, arm64), as Docker's TARGETARCH does.
-ARG TARGETARCH
+# JAVA_HOME is the link made above, since Debian names the JVM's directory after its own architecture names.
 # ROBOT_JAR and JENA_HOME match the settings' defaults; set here as well so the image says where its tools are.
-ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-${TARGETARCH} \
+ENV JAVA_HOME=/usr/lib/jvm/java-21 \
     PATH=/app/.venv/bin:${PATH} \
     PYTHONUNBUFFERED=1 \
     ROBOT_JAR=/opt/robot/robot.jar \
