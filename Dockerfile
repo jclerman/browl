@@ -29,7 +29,7 @@ RUN pip install --no-cache-dir poetry==2.5.1
 WORKDIR /app
 COPY pyproject.toml poetry.lock ./
 RUN poetry install --only main --no-root
-COPY README.md ./
+COPY README.md LICENSE ./
 COPY browl ./browl
 RUN poetry build --format wheel \
     && .venv/bin/pip install --no-cache-dir --no-deps dist/*.whl

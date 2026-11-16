@@ -42,3 +42,7 @@ make help      # list all targets
 ```
 
 Contributors and coding agents: see [`AGENTS.md`](AGENTS.md).
+
+## License
+
+browl is licensed under the [Apache License 2.0](LICENSE).
