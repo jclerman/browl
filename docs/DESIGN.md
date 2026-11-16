@@ -236,7 +236,12 @@ A path can be both an ordinary entity and a hash prefix; then the entity page is
 ### 2.4 Load pipeline
 
 One background job at a time, run in the app process. Its state (stage, start time, error) is stored in SQLite, so every
-server worker reports it consistently. _(Q7b, Q14a)_
+server worker reports it consistently. _(Q7b, Q14a)_ It's kept in `DATA_DIR/state.sqlite3`, a persistent database
+separate from the derived one, which records its schema version and migrates forward from it; the `admin` table
+([2.11](#211-authentication-and-admins)) goes there too. Each job gets the next generation number, and the database
+also records the generation of the last job that reached ready. No job survives a restart: at startup, a job recorded
+as running is marked failed ("interrupted by restart"). The upload handler starts the job and streams the file within
+the uploading stage; the remaining stages then run in the background (P-5).
 
 | Stage | What happens |
 | --- | --- |

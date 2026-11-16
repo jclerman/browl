@@ -40,6 +40,13 @@ def anyio_backend() -> str:
 
 
 @pytest.fixture
+def data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Return an empty directory, set as `DATA_DIR` in the environment."""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    return tmp_path
+
+
+@pytest.fixture
 def http_server() -> Iterator[tuple[str, list[str]]]:
     """Yield the base URL of a local HTTP server, and the list of paths it's asked for; it answers each with 404."""
     requests: list[str] = []
