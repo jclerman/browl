@@ -17,12 +17,8 @@ XSD_STRING = f"{XSD}string"
 RDF_LANG_STRING = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString"
 
 
-class RDFSyntaxError(ValueError):
-    """Text isn't valid SPARQL TSV or N-Triples, or a value isn't a valid RDF term."""
-
-
-# Patterns from the Turtle and N-Triples grammars (https://www.w3.org/TR/turtle/#sec-grammar-grammar), for terms'
-# syntax in TSV and N-Triples. The term classes below also check their values with `_IRI_CHAR` and `_BLANK_NODE_LABEL`.
+# Patterns from the Turtle and N-Triples grammars (https://www.w3.org/TR/turtle/#sec-grammar-grammar). The pieces
+# first; then the term classes' checks of values, and the parsers' checks of terms' syntax in TSV and N-Triples.
 _IRI_CHAR = r"[^\x00-\x20<>\"{}|^`\\]"
 _BLANK_NODE_LABEL = r"[\w](?:[\w.\-\u00b7\u0300-\u036f\u203f\u2040]*[\w\-\u00b7\u0300-\u036f\u203f\u2040])?"
 _LANGUAGE_TAG = r"[a-zA-Z]+(?:-[a-zA-Z0-9]+)*"
@@ -32,6 +28,32 @@ _BLANK_NODE = rf"_:({_BLANK_NODE_LABEL})"
 _STRING = rf"\"((?:[^\"\\\n\r]|\\[tbnrf\"'\\]|{_UCHAR})*)\""
 _LANGUAGE = rf"@({_LANGUAGE_TAG})"
 _LITERAL = rf"{_STRING}(?:{_LANGUAGE}|\^\^{_IRI})?"
+
+_IRI_VALUE = re.compile(rf"[A-Za-z][A-Za-z0-9+.\-]*:{_IRI_CHAR}*")
+_BLANK_NODE_VALUE = re.compile(_BLANK_NODE_LABEL)
+_LOWERCASE_LANGUAGE_TAG = re.compile(r"[a-z]+(?:-[a-z0-9]+)*")
+
+_IRI_TERM = re.compile(_IRI)
+_BLANK_NODE_TERM = re.compile(_BLANK_NODE)
+_LITERAL_TERM = re.compile(_LITERAL)
+# Turtle's abbreviated literals, which SPARQL TSV may use.
+_ABBREVIATED = {
+    f"{XSD}integer": re.compile(r"[+-]?[0-9]+"),
+    f"{XSD}decimal": re.compile(r"[+-]?[0-9]*\.[0-9]+"),
+    f"{XSD}double": re.compile(r"[+-]?(?:[0-9]+\.[0-9]*|\.[0-9]+|[0-9]+)[eE][+-]?[0-9]+"),
+    f"{XSD}boolean": re.compile(r"true|false"),
+}
+_NT_SUBJECT = rf"(?:{_IRI}|{_BLANK_NODE})"
+_NT_OBJECT = rf"(?:{_IRI}|{_BLANK_NODE}|{_LITERAL})"
+_NT_TRIPLE = re.compile(rf"[ \t]*{_NT_SUBJECT}[ \t]*{_IRI}[ \t]*{_NT_OBJECT}[ \t]*\.[ \t]*")
+
+_ESCAPE = re.compile(rf"\\[tbnrf\"'\\]|{_UCHAR}")
+_ESCAPED_CHARS = {"t": "\t", "b": "\b", "n": "\n", "r": "\r", "f": "\f", '"': '"', "'": "'", "\\": "\\"}
+_VARIABLE = re.compile(r"\?([A-Za-z0-9_\u00b7\u00c0-\uffff]+)")
+
+
+class RDFSyntaxError(ValueError):
+    """Text isn't valid SPARQL TSV or N-Triples, or a value isn't a valid RDF term."""
 
 
 class _CheckedStr(str):
@@ -60,17 +82,14 @@ class IRI(_CheckedStr):
     """An absolute IRI: a scheme, then characters that IRIs allow (no spaces, '<', '>', '"', …)."""
 
     __slots__ = ()
-    _pattern = re.compile(rf"[A-Za-z][A-Za-z0-9+.\-]*:{_IRI_CHAR}*")
+    _pattern = _IRI_VALUE
 
 
 class BlankNode(_CheckedStr):
     """A blank node, by its label in one result; labels mean nothing across results."""
 
     __slots__ = ()
-    _pattern = re.compile(_BLANK_NODE_LABEL)
-
-
-_LOWERCASE_LANGUAGE_TAG = re.compile(r"[a-z]+(?:-[a-z0-9]+)*")
+    _pattern = _BLANK_NODE_VALUE
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,24 +121,6 @@ class Literal:
 
 
 Term = IRI | BlankNode | Literal
-
-_IRI_TERM = re.compile(_IRI)
-_BLANK_NODE_TERM = re.compile(_BLANK_NODE)
-_LITERAL_TERM = re.compile(_LITERAL)
-# Turtle's abbreviated literals, which SPARQL TSV may use.
-_ABBREVIATED = {
-    f"{XSD}integer": re.compile(r"[+-]?[0-9]+"),
-    f"{XSD}decimal": re.compile(r"[+-]?[0-9]*\.[0-9]+"),
-    f"{XSD}double": re.compile(r"[+-]?(?:[0-9]+\.[0-9]*|\.[0-9]+|[0-9]+)[eE][+-]?[0-9]+"),
-    f"{XSD}boolean": re.compile(r"true|false"),
-}
-_NT_SUBJECT = rf"(?:{_IRI}|{_BLANK_NODE})"
-_NT_OBJECT = rf"(?:{_IRI}|{_BLANK_NODE}|{_LITERAL})"
-_NT_TRIPLE = re.compile(rf"[ \t]*{_NT_SUBJECT}[ \t]*{_IRI}[ \t]*{_NT_OBJECT}[ \t]*\.[ \t]*")
-
-_ESCAPE = re.compile(rf"\\[tbnrf\"'\\]|{_UCHAR}")
-_ESCAPED_CHARS = {"t": "\t", "b": "\b", "n": "\n", "r": "\r", "f": "\f", '"': '"', "'": "'", "\\": "\\"}
-_VARIABLE = re.compile(r"\?([A-Za-z0-9_\u00b7\u00c0-\uffff]+)")
 
 
 def _unescape(text: str) -> str:
