@@ -27,13 +27,15 @@ _IRI_CHAR = r"[^\x00-\x20<>\"{}|^`\\]"
 _BLANK_NODE_LABEL = r"[\w](?:[\w.\-\u00b7\u0300-\u036f\u203f\u2040]*[\w\-\u00b7\u0300-\u036f\u203f\u2040])?"
 _LANGUAGE_TAG = r"[a-zA-Z]+(?:-[a-zA-Z0-9]+)*"
 _UCHAR = r"\\u[0-9A-Fa-f]{4}|\\U[0-9A-Fa-f]{8}"
-_IRI = rf"<((?:{_IRI_CHAR}|{_UCHAR})*)>"
+# Runs of plain characters are matched possessively (`++`, `*+`): they never need to give characters back, and a long
+# IRI or string is then matched in runs instead of a character at a time, with no backtracking when it fails.
+_IRI = rf"<((?:{_IRI_CHAR}++|{_UCHAR})*+)>"
 _BLANK_NODE = rf"_:({_BLANK_NODE_LABEL})"
-_STRING = rf"\"((?:[^\"\\\n\r]|\\[tbnrf\"'\\]|{_UCHAR})*)\""
+_STRING = rf"\"((?:[^\"\\\n\r]++|\\[tbnrf\"'\\]|{_UCHAR})*+)\""
 _LANGUAGE = rf"@({_LANGUAGE_TAG})(?:--(ltr|rtl))?"  # RDF 1.2 adds a base direction
 _LITERAL = rf"{_STRING}(?:{_LANGUAGE}|\^\^{_IRI})?"
 
-_IRI_VALUE = re.compile(rf"[A-Za-z][A-Za-z0-9+.\-]*:{_IRI_CHAR}*")
+_IRI_VALUE = re.compile(rf"[A-Za-z][A-Za-z0-9+.\-]*+:{_IRI_CHAR}*+")
 _BLANK_NODE_VALUE = re.compile(_BLANK_NODE_LABEL)
 _LOWERCASE_LANGUAGE_TAG = re.compile(r"[a-z]+(?:-[a-z0-9]+)*")
 
@@ -53,6 +55,8 @@ _NT_TRIPLE = re.compile(rf"[ \t]*{_NT_SUBJECT}[ \t]*{_IRI}[ \t]*{_NT_OBJECT}[ \t
 
 _ESCAPE = re.compile(r"\\(?:([tbnrf\"'\\])|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8}))")
 _ESCAPED_CHARS = {"t": "\t", "b": "\b", "n": "\n", "r": "\r", "f": "\f", '"': '"', "'": "'", "\\": "\\"}
+_KNOWN_DATATYPES = frozenset({XSD_STRING, RDF_LANG_STRING, RDF_DIR_LANG_STRING, *_ABBREVIATED})
+"""Datatypes known to be IRIs, which a literal needn't check again."""
 _VARIABLE = re.compile(r"\?([A-Za-z0-9_\u00b7\u00c0-\uffff]+)")
 
 
@@ -123,7 +127,8 @@ class Literal:
             RDFSyntaxError: The datatype isn't an IRI, the language tag isn't a lowercase tag, the direction isn't
                 one of `DIRECTIONS`, or the tag and direction don't match the datatype.
         """
-        IRI(self.datatype)
+        if self.datatype not in _KNOWN_DATATYPES:
+            IRI(self.datatype)
         if self.language is not None and not _LOWERCASE_LANGUAGE_TAG.fullmatch(self.language):
             raise RDFSyntaxError(f"not a lowercase language tag: {self.language[:200]!r}")
         if self.direction is not None and self.direction not in DIRECTIONS:
