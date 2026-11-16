@@ -4,4 +4,4 @@
 services:
   fuseki:
     environment:
-      JAVA_OPTIONS: -Xmx${FUSEKI_HEAP:-1g} ${FUSEKI_TEST_OPTS:-} -Xlog:gc:file=/fuseki/gc.log:uptime
+      JDK_JAVA_OPTIONS: -Xmx${FUSEKI_HEAP:-1g} ${FUSEKI_TEST_OPTS:-} -Xlog:gc:file=/fuseki/gc.log:uptime

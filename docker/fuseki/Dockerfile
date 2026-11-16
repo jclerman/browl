@@ -27,11 +27,13 @@ COPY --from=downloads /fuseki-server.jar /opt/fuseki/
 COPY shiro.ini /opt/fuseki/
 
 # FUSEKI_BASE holds the registered datasets' configuration and, under databases/, their TDB2 stores.
-# JAVA_OPTIONS sets the heap; docker-compose.yml overrides it.
-ENV FUSEKI_BASE=/fuseki JAVA_OPTIONS=-Xmx1g
+# The java launcher reads JDK_JAVA_OPTIONS itself; it sets the heap here, and docker-compose.yml overrides it.
+ENV FUSEKI_BASE=/fuseki JDK_JAVA_OPTIONS=-Xmx1g
 USER fuseki
 EXPOSE 3030
 # FusekiServerCmd is the only server command with the admin protocol, which comes with the UI; an empty static-content
 # directory (--base) leaves the UI out. On running out of heap, Fuseki exits so the container restarts, instead of
 # carrying on unable to answer queries.
-CMD ["sh", "-c", "exec java $JAVA_OPTIONS -XX:+ExitOnOutOfMemoryError -cp /opt/fuseki/fuseki-server.jar org.apache.jena.fuseki.main.cmds.FusekiServerCmd --port=3030 --base=/opt/fuseki/no-ui --shiro=/opt/fuseki/shiro.ini"]
+CMD ["java", "-XX:+ExitOnOutOfMemoryError", "-cp", "/opt/fuseki/fuseki-server.jar", \
+     "org.apache.jena.fuseki.main.cmds.FusekiServerCmd", \
+     "--port=3030", "--base=/opt/fuseki/no-ui", "--shiro=/opt/fuseki/shiro.ini"]
