@@ -293,7 +293,9 @@ import (11 s; the store grew to 3.2 GB), the `FROM` merge cost about 1 ms per pa
 was no faster, and returns a triple once per graph that states it. Fuseki's alternative, `tdb2:unionDefaultGraph`,
 would put every triple in a named graph and hide the default graph.
 
-**Heap sizes:** the app's JVM only renders per-page fragments, so it needs a small heap (`APP_JVM_MAX_HEAP`).
+**Heap sizes:** the app's JVM only renders per-page fragments, so it needs a small heap (`APP_JVM_MAX_HEAP`). After a
+heap failure the app restarts its process instead of carrying on, because the error can also kill JPype's internal
+reference-cleanup thread ([S-1 findings](../research/S-1/README.md)).
 
 Fuseki's heap defaults to 1 GB (`FUSEKI_HEAP` in `.env`, read by `docker-compose.yml`). Measured in P-3 on NCBITaxon,
 with the bulk pre-caching queries ([2.5](#25-derived-data-pre-caching)) and then page queries from 1 and 16 clients:
@@ -304,9 +306,6 @@ about 2× headroom. 512 MB was too tight (constant collection; median page time 
 to the heap caches the store. Raise the heap for ontologies larger than NCBITaxon or with large imports, whose bulk
 queries go through the `FROM` merge (not measured). On `OutOfMemoryError` Fuseki exits and Compose restarts it; without
 that, it hung after one and answered nothing.
-
-After an app heap failure the app restarts its process instead of carrying on, because the error can also kill JPype's internal
-reference-cleanup thread ([S-1 findings](../research/S-1/README.md)).
 
 ### 2.5 Derived data (pre-caching)
 
