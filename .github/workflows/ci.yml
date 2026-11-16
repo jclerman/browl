@@ -101,5 +101,11 @@ jobs:
     steps:
       - name: Require every job to pass
         env:
-          RESULTS: ${{ join(needs.*.result, ' ') }}
-        run: test "$RESULTS" = "success success"
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          failed=$(jq -r 'to_entries[] | select(.value.result != "success") | "\(.key): \(.value.result)"' <<< "$NEEDS")
+          if [ -n "$failed" ]; then
+            echo "Jobs that didn't succeed:"
+            echo "$failed"
+            exit 1
+          fi
