@@ -24,10 +24,16 @@ _JAVA_HEAP = re.compile(r"[1-9][0-9]*[kKmMgG]?")  # -Xmx syntax
 
 
 def _unique(values: list[str]) -> list[str]:
-    duplicates = sorted({v for v in values if values.count(v) > 1})
-    if duplicates:
-        raise ValueError(f"duplicate entries: {', '.join(duplicates)}")
-    return values
+    val_set = set(values)
+    if len(val_set) == len(values):
+        return values
+    duplicates: dict[str, None] = {}  # a dict, not a set: reports each duplicate once, in order of appearance
+    for v in values:
+        if v in val_set:
+            val_set.remove(v)
+        else:
+            duplicates[v] = None
+    raise ValueError(f"duplicate entries: {', '.join(duplicates)}")
 
 
 class Settings(BaseSettings):
