@@ -1,14 +1,10 @@
-"""Operator settings (DESIGN.md §2.12): defaults in code, overridden by environment variables.
-
-Each setting is read from the environment variable of the same name, uppercased. Lists and mappings are given as JSON,
-e.g. `LANGUAGE_RANKING='["en", "fr", "none"]'`.
-"""
+"""Operator settings (DESIGN.md §2.12): defaults in code, overridden by environment variables."""
 
 import logging
 import re
 from pathlib import Path
 
-from pydantic import Field, HttpUrl, SecretStr, ValidationInfo, field_validator
+from pydantic import AliasGenerator, Field, HttpUrl, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -51,6 +47,13 @@ def confirm_unique(values: list[str]) -> list[str]:
 class Settings(BaseSettings):
     """Every operator setting.
 
+    `Settings()` (via pydantic-settings' `BaseSettings`) reads each setting from the environment variable named after
+    it in uppercase, e.g. `base_url` from `BASE_URL`; lowercase or mixed-case names are ignored. Unset settings get
+    their defaults. Each value arrives as a string and is converted to the field's type: lists and mappings are parsed
+    as JSON (e.g. `LANGUAGE_RANKING='["en", "fr", "none"]'`), booleans accept `true`/`false` and `1`/`0`. The
+    validators below then run; validation errors name the environment variable. The environment is read on each
+    instantiation, not at import.
+
     Attributes:
         base_url: Where the service is served; IRIs under it get their native paths (O-2). Normalized as a URL, so
             compare IRIs with it in URL form (DESIGN.md §2.3).
@@ -72,7 +75,10 @@ class Settings(BaseSettings):
         auth_disabled: Turns authentication off, for development only (O-7).
     """
 
-    model_config = SettingsConfigDict(frozen=True)
+    # Match environment variables by their uppercase names only, so `base_url` can't also be set as `Base_Url`.
+    model_config = SettingsConfigDict(
+        frozen=True, case_sensitive=True, alias_generator=AliasGenerator(validation_alias=str.upper)
+    )
 
     base_url: HttpUrl
     reserved_prefix: str = "_browl"

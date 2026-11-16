@@ -508,8 +508,9 @@ coordination. The cache wraps a plain function that stores rendered strings. `fu
 
 ### 2.12 Configuration
 
-Defaults are set in code, and each can be overridden by an environment variable of the same name, validated at startup
-(`browl/settings.py`). Lists and mappings are given as JSON, e.g. `LANGUAGE_RANKING='["en", "fr", "none"]'`. _(Q13)_
+Defaults are set in code, and each can be overridden by an environment variable named as below (uppercase only),
+validated at startup (`browl/settings.py`). Lists and mappings are given as JSON, e.g.
+`LANGUAGE_RANKING='["en", "fr", "none"]'`. _(Q13)_
 
 | Setting | Default | Notes |
 | --- | --- | --- |
