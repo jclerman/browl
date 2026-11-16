@@ -47,7 +47,7 @@ _NT_SUBJECT = rf"(?:{_IRI}|{_BLANK_NODE})"
 _NT_OBJECT = rf"(?:{_IRI}|{_BLANK_NODE}|{_LITERAL})"
 _NT_TRIPLE = re.compile(rf"[ \t]*{_NT_SUBJECT}[ \t]*{_IRI}[ \t]*{_NT_OBJECT}[ \t]*\.[ \t]*")
 
-_ESCAPE = re.compile(rf"\\[tbnrf\"'\\]|{_UCHAR}")
+_ESCAPE = re.compile(r"\\(?:([tbnrf\"'\\])|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8}))")
 _ESCAPED_CHARS = {"t": "\t", "b": "\b", "n": "\n", "r": "\r", "f": "\f", '"': '"', "'": "'", "\\": "\\"}
 _VARIABLE = re.compile(r"\?([A-Za-z0-9_\u00b7\u00c0-\uffff]+)")
 
@@ -128,15 +128,23 @@ def _unescape(text: str) -> str:
         return text
 
     def replace(match: re.Match[str]) -> str:
-        escape = match.group()
-        if escape[1] in "uU":
-            try:
-                return chr(int.from_bytes(bytes.fromhex(escape[2:])))
-            except (ValueError, OverflowError) as error:  # beyond U+10FFFF
-                raise RDFSyntaxError(f"invalid escape {escape}") from error
-        return _ESCAPED_CHARS[escape[1]]
+        escaped, short_hex, long_hex = match.groups()
+        if escaped is not None:
+            return _ESCAPED_CHARS[escaped]
+        code_point = int(short_hex or long_hex, 16)
+        # Beyond U+10FFFF, or a UTF-16 surrogate, which isn't a character on its own.
+        if code_point > 0x10FFFF or 0xD800 <= code_point <= 0xDFFF:
+            raise RDFSyntaxError(f"invalid escape {match.group()}")
+        return chr(code_point)
 
     return _ESCAPE.sub(replace, text)
+
+
+def _literal(value: str, language: str | None, datatype: str | None) -> Literal:
+    """Make a literal from the escaped parts of its Turtle or N-Triples syntax."""
+    if language is not None:
+        return Literal(_unescape(value), RDF_LANG_STRING, language.lower())
+    return Literal(_unescape(value), XSD_STRING if datatype is None else _unescape(datatype))
 
 
 def parse_tsv_term(text: str) -> Term | None:
@@ -156,10 +164,7 @@ def parse_tsv_term(text: str) -> Term | None:
                 return BlankNode(match.group(1))
         case '"':
             if match := _LITERAL_TERM.fullmatch(text):
-                value, language, datatype = match.groups()
-                if language is not None:
-                    return Literal(_unescape(value), RDF_LANG_STRING, language.lower())
-                return Literal(_unescape(value), XSD_STRING if datatype is None else _unescape(datatype))
+                return _literal(*match.groups())
         case _:
             for datatype, pattern in _ABBREVIATED.items():
                 if pattern.fullmatch(text):
@@ -197,13 +202,20 @@ def parse_tsv_row(line: str, width: int) -> tuple[Term | None, ...]:
 
 
 def check_ntriples_triple(line: str) -> None:
-    """Check that a line is one N-Triples triple.
+    """Check that a line is one N-Triples triple, whose terms' values are valid as the term classes check them.
 
     Jena writes N-Triples one triple per line, without comments or blank lines, so anything else is rejected: notably
     the text Fuseki appends to a result that fails partway, which can start with '#' (S-6).
 
     Raises:
-        RDFSyntaxError: The line isn't a triple.
+        RDFSyntaxError: The line isn't a triple, or a term's value isn't valid (e.g. a relative IRI).
     """
-    if _NT_TRIPLE.fullmatch(line) is None:
+    match = _NT_TRIPLE.fullmatch(line)
+    if match is None:
         raise RDFSyntaxError(f"not an N-Triples triple: {line[:200]!r}")
+    subject, _, predicate, object_iri, _, value, language, datatype = match.groups()
+    for iri in (subject, predicate, object_iri):
+        if iri is not None:
+            IRI(_unescape(iri))
+    if value is not None:
+        _literal(value, language, datatype)

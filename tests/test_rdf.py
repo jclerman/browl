@@ -66,6 +66,12 @@ def test_literal_default_datatype() -> None:
         '"unterminated',
         '"bad escape \\q"',
         '"too big \\UFFFFFFFF"',
+        '"too big \\U00110000"',
+        '"lone surrogate \\uD800"',
+        '"lone surrogate \\uDFFF"',
+        '"surrogate pair \\uD83D\\uDE00"',
+        '"long-form surrogate \\U0000DC00"',
+        "<http://example.org/\\uD800>",
         '"x"@',
         '"x"^^xsd:int',
         "1.",
@@ -143,10 +149,20 @@ def test_check_ntriples_triple(line: str) -> None:
         "<http://example.org/a> _:p <http://example.org/b> .",
         "<http://example.org/a> <http://example.org/p> <http://example.org/b> . extra",
         "<http://example.org/a> <http://example.org/p> <http://exa",
+        "<a> <http://example.org/p> <http://example.org/b> .",
+        "<http://example.org/a> <p> <http://example.org/b> .",
+        "<http://example.org/a> <http://example.org/p> <b> .",
+        "<http://example.org/a\\u0020b> <http://example.org/p> <http://example.org/b> .",
+        '<http://example.org/a> <http://example.org/p> "x"^^<int> .',
+        '<http://example.org/a> <http://example.org/p> "x"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> .',
+        '<http://example.org/a> <http://example.org/p> "\\uD800" .',
     ],
 )
 def test_check_ntriples_triple_rejects(line: str) -> None:
-    """Check that lines other than one triple, such as truncated ones, error text and comments, are rejected."""
+    """Check that lines other than one triple, such as truncated ones, error text and comments, are rejected.
+
+    Terms' values are checked as in TSV results: IRIs absolute, a langString tagged, escapes valid.
+    """
     with pytest.raises(RDFSyntaxError):
         check_ntriples_triple(line)
 
