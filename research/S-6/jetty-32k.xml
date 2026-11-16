@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<!DOCTYPE Configure PUBLIC "-//Jetty//Configure//EN" "https://jetty.org/configure_10_0.dtd">
+<!-- S-6's first fix, measured as "jetty.xml, 32 KB buffer" (README): Fuseki's server setup with Jetty's default 32 KB
+     output buffer, unpooled. docker/fuseki/jetty.xml replaced it with a pooled 2 MB buffer. -->
+<Configure id="Server" class="org.eclipse.jetty.server.Server">
+  <Get name="ThreadPool">
+    <Set name="minThreads">2</Set>
+    <Set name="maxThreads">20</Set>
+  </Get>
+  <!-- Fuseki's workaround for Jetty GH-10474: plain-text error responses. -->
+  <Set name="errorHandler"><New class="org.apache.jena.fuseki.main.sys.FusekiErrorHandler"/></Set>
+  <Call name="addConnector">
+    <Arg>
+      <New class="org.eclipse.jetty.server.ServerConnector">
+        <Arg name="server"><Ref refid="Server"/></Arg>
+        <Arg name="factories">
+          <Array type="org.eclipse.jetty.server.ConnectionFactory">
+            <Item>
+              <New class="org.eclipse.jetty.server.HttpConnectionFactory">
+                <Arg name="config">
+                  <!-- Fuseki's JettyLib.httpConfiguration(), less setOutputBufferSize(5 MB). -->
+                  <New class="org.eclipse.jetty.server.HttpConfiguration">
+                    <Set name="requestHeaderSize">524288</Set>
+                    <Set name="responseHeaderSize">16384</Set>
+                    <Set name="sendServerVersion">false</Set>
+                  </New>
+                </Arg>
+              </New>
+            </Item>
+          </Array>
+        </Arg>
+        <Set name="port">3030</Set>
+      </New>
+    </Arg>
+  </Call>
+</Configure>

@@ -32,9 +32,10 @@ services:
     # No published ports: the admin protocol is open to anything that reaches Fuseki (docker/fuseki/shiro.ini).
     environment:
       # The heap: 1g holds NCBITaxon's bulk queries with about 2x headroom; raise it for larger ontologies or large
-      # imports. Direct (I/O) buffers are capped, as Fuseki needs almost none with docker/fuseki/jetty.xml. The
-      # container needs about the heap plus 0.5 GiB: 1.5 GiB at the default (DESIGN.md §2.4, S-6).
-      JDK_JAVA_OPTIONS: -Xmx${FUSEKI_HEAP:-1g} -XX:MaxDirectMemorySize=64m
+      # imports. Direct (I/O) buffers are capped above what docker/fuseki/jetty.xml's buffer pool can hold (64 MB) and
+      # 20 requests' 2 MB buffers. The container needs about the heap plus 0.5 GiB: 1.5 GiB at the default (DESIGN.md
+      # §2.4, S-6).
+      JDK_JAVA_OPTIONS: -Xmx${FUSEKI_HEAP:-1g} -XX:MaxDirectMemorySize=128m
     volumes:
       - fuseki:/fuseki
     healthcheck:

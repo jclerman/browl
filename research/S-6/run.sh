@@ -3,7 +3,7 @@
 # measure idle, page load from 1 and 16 clients (60 s each) and S-4's bulk queries, sampling the container's memory
 # every second or so (docker stats, and the cgroup's memory.stat) and taking JVM native memory tracking (NMT) summaries.
 # Usage (from the repo root, the dataset loaded and registered, the browl-s6-jcmd image built; see README):
-#   [HEAP=1g] [OPTS='-XX:...'] [ENVS='MALLOC_ARENA_MAX=2'] [MEM_LIMIT=1536m] [JETTY=1] \
+#   [HEAP=1g] [OPTS='-XX:...'] [ENVS='MALLOC_ARENA_MAX=2'] [MEM_LIMIT=1536m] [JETTY=1|<file>] \
 #     research/S-6/run.sh <label> <dataset> <iris>
 # Writes research/S-6/data/<label>.{yml,mem.tsv,run.jsonl,gc.log,log} and <label>.nmt-<phase>.txt.
 set -u
@@ -23,11 +23,14 @@ out=$DATA/$label
   echo "      JDK_JAVA_OPTIONS: -Xmx${HEAP:-1g} ${OPTS:-} -XX:NativeMemoryTracking=summary -Xlog:gc:file=/tmp/gc.log:uptime"
   for kv in ${ENVS:-}; do echo "      ${kv%%=*}: \"${kv#*=}\""; done
   [ -z "${MEM_LIMIT:-}" ] || echo "    mem_limit: $MEM_LIMIT"
-  # JETTY=1: the image's own command, with docker/fuseki/jetty.xml. Otherwise Fuseki's own server setup, as before S-6.
+  # JETTY=1: the image's own command, with docker/fuseki/jetty.xml; JETTY=<file>: the same with that file instead.
+  # Otherwise Fuseki's own server setup, as before S-6.
   if [ -z "${JETTY:-}" ]; then
     echo "    command: [java, -XX:+ExitOnOutOfMemoryError, -cp, /opt/fuseki/fuseki-server.jar," \
       "org.apache.jena.fuseki.main.cmds.FusekiServerCmd, --port=3030, --base=/opt/fuseki/no-ui," \
       "--shiro=/opt/fuseki/shiro.ini]"
+  elif [ "$JETTY" != 1 ]; then
+    echo "    volumes: [\"$PWD/$JETTY:/opt/fuseki/jetty.xml:ro\"]"
   fi
 } > "$out.yml"
 DC="docker compose -f docker-compose.yml -f $out.yml"

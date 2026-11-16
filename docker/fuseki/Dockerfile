@@ -33,8 +33,8 @@ USER fuseki
 EXPOSE 3030
 # FusekiServerCmd is the only server command with the admin protocol, which comes with the UI; an empty static-content
 # directory (--base) leaves the UI out. On running out of heap, Fuseki exits so the container restarts, instead of
-# carrying on unable to answer queries. jetty.xml sets the port, and a smaller output buffer than Fuseki 6.2.0's, which
-# churns direct memory (apache/jena GH-4084, fixed after 6.2.0; S-6). Drop it once Jena has the fix.
+# carrying on unable to answer queries. jetty.xml sets the port, and a pooled output buffer instead of Fuseki 6.2.0's,
+# which churns direct memory (apache/jena GH-4084, fixed after 6.2.0; S-6). Drop it once Jena has the fix.
 CMD ["java", "-XX:+ExitOnOutOfMemoryError", "-cp", "/opt/fuseki/fuseki-server.jar", \
      "org.apache.jena.fuseki.main.cmds.FusekiServerCmd", \
      "--jetty=/opt/fuseki/jetty.xml", "--base=/opt/fuseki/no-ui", "--shiro=/opt/fuseki/shiro.ini"]

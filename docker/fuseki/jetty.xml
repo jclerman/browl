@@ -1,11 +1,11 @@
 <?xml version="1.0"?>
 <!DOCTYPE Configure PUBLIC "-//Jetty//Configure//EN" "https://jetty.org/configure_10_0.dtd">
-<!-- Fuseki's HTTP server, as Fuseki 6.2.0 sets it up without a jetty.xml, except for the output buffer: Jetty's default
-     (32 KB) instead of Fuseki's 5 MB. Jetty's buffer pool doesn't keep buffers that large, so with Fuseki's setting each
-     response allocates a new 5 MB direct buffer, freed only by garbage collection: hundreds of System.gc() calls a
-     minute under load, and a container up to 3.9 GiB with a 1 GB heap (S-6, DESIGN.md §2.4). Jena's fix (apache/jena
-     GH-4084: PR #4088 pools the buffers, commit e923f0043 shrinks them to 2 MB) came after 6.2.0. Drop this file once
-     browl moves to a Jena release with it, and remeasure then.
+<!-- Fuseki's HTTP server, as Fuseki 6.2.0 sets it up without a jetty.xml, except for the output buffer. Fuseki's is 5 MB,
+     which Jetty's default buffer pool doesn't keep, so each response allocates a new 5 MB direct buffer, freed only by
+     garbage collection: hundreds of System.gc() calls a minute under load, and a container up to 3.9 GiB with a 1 GB
+     heap (S-6, DESIGN.md §2.4). Here the buffer is 2 MB, from a pool on the connector that keeps buffers that large, as
+     in Jena's fix (apache/jena GH-4084: PR #4088 pools the buffers, commit e923f0043 shrinks them to 2 MB), which came
+     after 6.2.0. Drop this file once browl moves to a Jena release with it, and remeasure then.
      With a jetty.xml, Fuseki skips its own thread pool and error handler, so both are set here as Fuseki sets them. -->
 <Configure id="Server" class="org.eclipse.jetty.server.Server">
   <Get name="ThreadPool">
@@ -16,17 +16,37 @@
   <Set name="errorHandler"><New class="org.apache.jena.fuseki.main.sys.FusekiErrorHandler"/></Set>
   <Call name="addConnector">
     <Arg>
+      <!-- ServerConnector(server, executor, scheduler, bufferPool, acceptors, selectors, factories...): the server's
+           executor and scheduler (null), and Jetty's default numbers of acceptors and selectors (-1). -->
       <New class="org.eclipse.jetty.server.ServerConnector">
-        <Arg name="server"><Ref refid="Server"/></Arg>
-        <Arg name="factories">
+        <Arg><Ref refid="Server"/></Arg>
+        <Arg/>
+        <Arg/>
+        <Arg>
+          <!-- Responses take their output buffer from the connector's pool. This one keeps buffers up to the 2 MB output
+               buffer, and at most 64 MB of direct memory in all: ArrayByteBufferPool(minCapacity, factor, maxCapacity,
+               maxBucketSize, maxHeapMemory, maxDirectMemory), with Jetty's defaults for the rest (-1 and 0). -->
+          <New class="org.eclipse.jetty.io.ArrayByteBufferPool">
+            <Arg type="int">0</Arg>
+            <Arg type="int">-1</Arg>
+            <Arg type="int">2097152</Arg>
+            <Arg type="int">-1</Arg>
+            <Arg type="long">0</Arg>
+            <Arg type="long">67108864</Arg>
+          </New>
+        </Arg>
+        <Arg type="int">-1</Arg>
+        <Arg type="int">-1</Arg>
+        <Arg>
           <Array type="org.eclipse.jetty.server.ConnectionFactory">
             <Item>
               <New class="org.eclipse.jetty.server.HttpConnectionFactory">
-                <Arg name="config">
-                  <!-- Fuseki's JettyLib.httpConfiguration(), less setOutputBufferSize(5 MB). -->
+                <Arg>
+                  <!-- Fuseki's JettyLib.httpConfiguration(), with a 2 MB output buffer instead of 5 MB. -->
                   <New class="org.eclipse.jetty.server.HttpConfiguration">
                     <Set name="requestHeaderSize">524288</Set>
                     <Set name="responseHeaderSize">16384</Set>
+                    <Set name="outputBufferSize">2097152</Set>
                     <Set name="sendServerVersion">false</Set>
                   </New>
                 </Arg>
