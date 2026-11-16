@@ -80,6 +80,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **U-38** · Relation trees: besides the subclass tree, a tree for each configured object property (O-12), e.g. `part_of`. A class's parents in it are the classes `D` in its `SubClassOf(P some D)` axioms, including those implied by its equivalence definitions. Counts follow U-8. | Later |
 | **U-39** · Where a reasoner ran, inferred parents and axioms are marked as inferred, on entity pages, in the Usage tab and in the trees. | Later |
 | **U-40** · An inferred parent or axiom has a "Why?" link that shows its explanation: the asserted axioms that entail it, in Manchester syntax. | Later |
+| **U-41** · Each class page can list similar classes, ranked by similarity computed from the ontology's structure (graph embeddings of its axioms and hierarchies), at least as an option alongside any similarity from label text. | Later |
 
 ### 1.3 Admin requirements
 
@@ -685,7 +686,7 @@ go into this document.
 
 ### Later
 
-Requirements marked **Later** (U-18–U-25, U-33–U-40, A-8, A-9, O-12) are not yet broken into work items.
+Requirements marked **Later** (U-18–U-25, U-33–U-41, A-8, A-9, O-12) are not yet broken into work items.
 
 **Novel features** _(post-log)_. EBI's [OLS4](https://github.com/EBISPOT/ols4) already offers much of v1 for many
 ontologies at once. It shows hierarchies along configured properties, but it does no reasoning, and its "Related from"
@@ -698,6 +699,8 @@ the load pipeline, and serving one ontology at a time. In rough priority order:
 3. SPARQL endpoint and download (U-36, U-37).
 4. Relation trees (U-38, O-12). Unlike OLS4's, their edges also come from equivalence definitions (below).
 5. Inferred axioms and their explanations (U-39, U-40).
+6. Similar classes by ontology structure (U-41). OLS4 offers similarity from text embeddings of labels and synonyms
+   (S-5); U-41 uses the ontology's graph instead.
 
 **Relation-tree edges from equivalence definitions** (for U-38). `EquivalentClasses(C, A and (P some D))` gives `C` the
 parent `D` in the tree for `P`. Tentatively, the edges query (P-12) finds these itself: it walks the `owl:intersectionOf`
