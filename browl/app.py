@@ -48,8 +48,12 @@ async def health(request: Request) -> Health:
     return Health(fuseki="up" if response.is_success else "down")
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, fuseki_transport: httpx2.AsyncBaseTransport | None = None) -> FastAPI:
     """Build the application, loading the settings from the environment unless given.
+
+    Args:
+        settings: The settings; loaded from the environment if not given.
+        fuseki_transport: The transport for the Fuseki client, which tests replace; httpx2's default if not given.
 
     Raises:
         pydantic.ValidationError: A setting is missing or invalid.
@@ -59,7 +63,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        async with httpx2.AsyncClient(base_url=str(settings.fuseki_url)) as client:
+        async with httpx2.AsyncClient(base_url=str(settings.fuseki_url), transport=fuseki_transport) as client:
             app.state.fuseki = client
             yield
 
