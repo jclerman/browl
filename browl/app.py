@@ -60,7 +60,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             app.state.fuseki = client
             yield
 
-    app = FastAPI(title="browl", version=browl.__version__, lifespan=lifespan)
+    app = FastAPI(title=browl.DESCRIPTIVE_TITLE, version=browl.__version__, lifespan=lifespan)
     app.state.settings = settings
     app.include_router(router, prefix=f"/{settings.reserved_prefix}")
     return app

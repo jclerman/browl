@@ -2,6 +2,8 @@
 
 from importlib import metadata
 
+DESCRIPTIVE_TITLE = "OWL Ontology Browser"
+
 _DISTRIBUTION_METADATA = metadata.metadata("browl")
 
 __author__ = _DISTRIBUTION_METADATA["Author"]

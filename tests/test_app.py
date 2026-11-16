@@ -82,7 +82,9 @@ def test_create_app_loads_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     assert create_app().state.settings.base_url == make_settings().base_url
 
 
-def test_api_docs_show_version(client: TestClient) -> None:
-    """Check that the OpenAPI schema, which the Swagger page shows, has browl's version from pyproject.toml."""
+def test_api_docs_show_title_and_version(client: TestClient) -> None:
+    """Check that the OpenAPI schema, which the Swagger page shows, has browl's title and its pyproject.toml version."""
     pyproject = tomllib.loads((Path(__file__).parent.parent / "pyproject.toml").read_text())
-    assert client.get("/openapi.json").json()["info"]["version"] == browl.__version__ == pyproject["project"]["version"]
+    info = client.get("/openapi.json").json()["info"]
+    assert info["title"] == "OWL Ontology Browser"
+    assert info["version"] == browl.__version__ == pyproject["project"]["version"]
