@@ -316,6 +316,37 @@ to the heap caches the store. Raise the heap for ontologies larger than NCBITaxo
 queries go through the `FROM` merge (not measured). On `OutOfMemoryError` Fuseki exits and Compose restarts it; without
 that, it hung after one and answered nothing.
 
+**Fuseki's container memory** is the heap plus about 0.5 GiB: plan 1.5 GiB for it at the default heap
+([S-6 findings](../research/S-6/README.md)). Fuseki 6.2.0 sets Jetty's HTTP output buffer to 5 MB, which Jetty's
+buffer pool doesn't keep, so every response allocated a new 5 MB direct buffer that only garbage collection freed
+(Jena's [GH-4084](https://github.com/apache/jena/issues/4084), fixed after 6.2.0). Under page load the JDK called
+`System.gc()` about once per 1 GB of buffers, glibc kept much of the freed memory, and the container grew to 2.6 GiB
+of anonymous memory (3.9 GiB in `docker stats`, with the store's cached pages). Capping the direct buffers alone cost
+up to three quarters of the page throughput. So the Fuseki image starts it with a `jetty.xml` (`docker/fuseki/jetty.xml`)
+that does what Jena's fix does: a 2 MB output buffer, from a buffer pool on the connector that keeps buffers that large
+(at most 64 MB of them). Otherwise it sets up the server as Fuseki does (port, header sizes, thread pool of 2–20, error
+handler). Jetty's default 32 KB buffer, unpooled, measured about the same, but a larger buffer keeps a real error status
+for more of the responses that fail partway ([2.14](#214-risks)). Direct buffers are capped at 128 MB
+(`-XX:MaxDirectMemorySize=128m`), above the pool's 64 MB plus 20 requests' buffers in use; NMT measured 14–21 MiB.
+Should the cap be reached, the request fails with `OutOfMemoryError: Cannot reserve … direct buffer memory`, which
+`-XX:+ExitOnOutOfMemoryError` doesn't catch (Java code throws it, not the JVM), so Fuseki keeps running: S-6 saw this
+with a 64 MB cap and Fuseki's own buffers. On NCBITaxon,
+Fuseki's anonymous memory then stays under 450 MiB under 16-client load and peaks at about 1 GiB during the bulk
+queries (the heap at 650–790 MiB committed, plus about 140 MiB of JVM overhead and pooled buffers). Pages are faster
+than with Fuseki's own setup: 528 and 769 a second at 1 and 16 clients, against 302 and 573. Drop the `jetty.xml` once
+browl moves to a Jena release with the fix, and remeasure.
+
+`docker stats` counts the store's pages the kernel has cached for Fuseki, which it gives back when anything else needs
+the memory. Without a limit that cache fills spare memory (about 1.6 GiB in `docker stats` under 16-client load on
+NCBITaxon), so judge Fuseki's needs by the cgroup's anonymous memory, not by `docker stats`. A memory limit doesn't
+lower what Fuseki needs; it contains a runaway Fuseki (a heap set too large, a leak), which is then killed and
+restarted instead of squeezing the app or the host. So the limit is optional: `FUSEKI_MEM_LIMIT` in `.env`, read by
+`docker-compose.yml`, with none by default, since a fixed one wouldn't follow `FUSEKI_HEAP`. Set it to the heap plus
+0.5 GiB, and raise it with the heap. At 1.5 GiB, and even at 1 GiB, nothing was killed under 16-client load and the
+bulk queries; the kernel evicted the store's cached pages instead, and the bulk queries slowed from 40 s to 45–50 s.
+Below 1,792 MiB the JVM picks SerialGC instead of G1, which made no difference here. A 768 MB heap passed the bulk
+queries but saved nothing.
+
 ### 2.5 Derived data (pre-caching)
 
 Built once per load from bulk SPARQL queries, one per kind of data, and stored in the derived SQLite database. Bulk
@@ -594,9 +625,9 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 
 | Risk | Mitigation |
 | --- | --- |
-| Fuseki needs too much memory while serving the largest ontologies | Measured by P-3: NCBITaxon needs about 500 MiB of heap; the default is 1 GB (2.4). |
-| A bulk query that fails partway returns a truncated result with HTTP 200 | Seen in P-3: Fuseki streams results, so when it ran out of memory partway through the name dictionary, the status had already been sent. P-8 checks that each bulk result is complete (e.g. a final count, or the TSV ends cleanly) before building the derived database. |
-| Fuseki pauses for full garbage collections under page load | Seen in P-3: hundreds of `System.gc()` calls, each pausing 70–275 ms, made by the JDK when Fuseki's direct (I/O) buffers reach their limit, which defaults to the heap size. Raising that limit made throughput worse. P-24 finds what allocates the buffers if page latency needs it. |
+| Fuseki needs too much memory while serving the largest ontologies | Measured by P-3 and S-6: NCBITaxon needs about 500 MiB of heap; the default is 1 GB, and the container needs the heap plus about 0.5 GiB once Fuseki's output buffers are pooled through a `jetty.xml` (2.4). |
+| A Fuseki response that fails partway returns a truncated result with HTTP 200 | Seen in P-3 and S-6: once Fuseki has sent the status, it appends the error as plain text and ends the response normally. It sends it as soon as a SPARQL JSON or TSV result is cut short (the writer flushes what it has), and once any other response outgrows the 2 MB output buffer (2.4). So browl treats any status other than 2xx as a failed query, and never discards the HTTP client's error for a body that ends early (Fuseki exiting or restarting mid-response drops the connection before the last chunk). It parses every Fuseki response strictly, as SPARQL JSON results or N-Triples, and parses each TSV cell as an RDF term, so the appended error text can't pass as a one-column row; a parse error is a failed query, never a short result. P-8 checks that each bulk result is complete (e.g. a final count or sentinel), which also catches a result that breaks off cleanly at a row boundary, or an error with no text appended. |
+| Fuseki pauses for full garbage collections under page load | Resolved by S-6: the `System.gc()` calls P-3 saw came from Fuseki 6.2.0 allocating an unpooled 5 MB direct output buffer per response (Jena GH-4084). Fuseki's `jetty.xml` pools a 2 MB buffer instead, which removed them; pages went from 302 to 528 a second at 1 client, and from 573 to 769 at 16 (2.4). |
 | JPype quirks: thread safety of concurrent OWLAPI calls; Python–Java call overhead | Resolved by S-1: concurrent calls were safe but gave no extra throughput, so OWLAPI calls run on one thread (2.1). Call overhead is small ([S-1 findings](../research/S-1/README.md)). |
 | Memory limit can't be reported reliably | Spike S-2; at worst report "reasoner failed" with ROBOT's output. |
 | Descendant counts too slow or memory-hungry at millions of classes | Resolved by S-3: roaring bitmaps, 4.2 s for NCBITaxon ([S-3 findings](../research/S-3/README.md)). |

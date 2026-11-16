@@ -24,7 +24,7 @@ RUN useradd --uid 10001 --user-group --create-home fuseki \
     && mkdir -p /fuseki /opt/fuseki/no-ui \
     && chown fuseki:fuseki /fuseki
 COPY --from=downloads /fuseki-server.jar /opt/fuseki/
-COPY shiro.ini /opt/fuseki/
+COPY shiro.ini jetty.xml /opt/fuseki/
 
 # FUSEKI_BASE holds the registered datasets' configuration and, under databases/, their TDB2 stores.
 # The heap is set by docker-compose.yml, through JDK_JAVA_OPTIONS (which the java launcher reads itself).
@@ -33,7 +33,8 @@ USER fuseki
 EXPOSE 3030
 # FusekiServerCmd is the only server command with the admin protocol, which comes with the UI; an empty static-content
 # directory (--base) leaves the UI out. On running out of heap, Fuseki exits so the container restarts, instead of
-# carrying on unable to answer queries.
+# carrying on unable to answer queries. jetty.xml sets the port, and a pooled output buffer instead of Fuseki 6.2.0's,
+# which churns direct memory (apache/jena GH-4084, fixed after 6.2.0; S-6). Drop it once Jena has the fix.
 CMD ["java", "-XX:+ExitOnOutOfMemoryError", "-cp", "/opt/fuseki/fuseki-server.jar", \
      "org.apache.jena.fuseki.main.cmds.FusekiServerCmd", \
-     "--port=3030", "--base=/opt/fuseki/no-ui", "--shiro=/opt/fuseki/shiro.ini"]
+     "--jetty=/opt/fuseki/jetty.xml", "--base=/opt/fuseki/no-ui", "--shiro=/opt/fuseki/shiro.ini"]

@@ -1,0 +1,9 @@
+# jcmd for Fuseki's JVM, which runs on a JRE without it. Same JDK as browl-fuseki (Debian trixie's OpenJDK 21) and the
+# same UID, so it can attach from a container sharing Fuseki's PID namespace (run.sh).
+ARG DEBIAN_IMAGE=debian:trixie-20261104-slim
+FROM ${DEBIAN_IMAGE}
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openjdk-21-jdk-headless \
+    && rm -rf /var/lib/apt/lists/*
+RUN useradd --uid 10001 --user-group fuseki
+USER fuseki
