@@ -695,8 +695,8 @@ pipeline, and one ontology at a time. In rough priority order:
 2. Axiom annotations (U-35).
 3. SPARQL endpoint and download (U-36, U-37).
 4. Relation trees (U-38, O-12). Unlike OLS4's, their edges also come from equivalence definitions: in the build
-   step, with or without a reasoner, ROBOT `relax` turns `EquivalentClasses(C, A and (P some D))` into
-   `SubClassOf(C, P some D)`.
+   step, with or without a reasoner, ROBOT `relax` adds `SubClassOf(C, P some D)` alongside
+   `EquivalentClasses(C, A and (P some D))`, which it keeps.
 5. Inferred axioms and their explanations (U-39, U-40).
 
 **Asserted and inferred kept apart** (for U-39, U-40). Today the reasoned output replaces the uploaded ontology
