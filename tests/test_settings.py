@@ -1,6 +1,7 @@
 """Tests for the settings module."""
 
 import logging
+import re
 from pathlib import Path
 
 import pytest
@@ -90,27 +91,10 @@ def test_base_url_is_normalized(settings_env: pytest.MonkeyPatch, value: str, ex
     assert str(settings_with(settings_env, BASE_URL=value).base_url) == expected
 
 
-@pytest.mark.parametrize(
-    "value",
-    ["example.org", "ftp://example.org", "https://", "https://ex ample.org", "https://x.org/?a=1", "https://x.org/#a"],
-)
-def test_base_url_rejects_invalid(settings_env: pytest.MonkeyPatch, value: str) -> None:
-    """Check that BASE_URL must be an absolute http(s) URL without query or fragment."""
-    with pytest.raises(ValidationError, match="BASE_URL"):
-        settings_with(settings_env, BASE_URL=value)
-
-
 @pytest.mark.parametrize("value", ["_x", "_browl", "_a.b~c-d_e"])
 def test_reserved_prefix_accepts_valid(settings_env: pytest.MonkeyPatch, value: str) -> None:
     """Check that a RESERVED_PREFIX of one URL-safe segment starting with '_' is accepted."""
     assert settings_with(settings_env, RESERVED_PREFIX=value).reserved_prefix == value
-
-
-@pytest.mark.parametrize("value", ["browl", "_", "_a/b", "/_browl", "_a b", "_a%20"])
-def test_reserved_prefix_rejects_invalid(settings_env: pytest.MonkeyPatch, value: str) -> None:
-    """Check that any other RESERVED_PREFIX is rejected (O-3)."""
-    with pytest.raises(ValidationError, match="RESERVED_PREFIX"):
-        settings_with(settings_env, RESERVED_PREFIX=value)
 
 
 @pytest.mark.parametrize(
@@ -128,28 +112,11 @@ def test_language_ranking(settings_env: pytest.MonkeyPatch, value: str, expected
     assert settings_with(settings_env, LANGUAGE_RANKING=value).language_ranking == expected
 
 
-@pytest.mark.parametrize(
-    "value",
-    ['["en", "EN"]', '["en_US"]', '["toolonglanguage"]', '["xx"]', '["en-yy"]', '["en-latm"]', '["en-gb-foo"]', '"en"'],
-)
-def test_language_ranking_rejects_invalid(settings_env: pytest.MonkeyPatch, value: str) -> None:
-    """Check that invalid or duplicate language tags are rejected."""
-    with pytest.raises(ValidationError, match="LANGUAGE_RANKING"):
-        settings_with(settings_env, LANGUAGE_RANKING=value)
-
-
 def test_name_properties_from_json(settings_env: pytest.MonkeyPatch) -> None:
     """Check that NAME_PROPERTIES is read from JSON, in order (O-4)."""
     value = '["skos:prefLabel", "http://www.w3.org/2000/01/rdf-schema#label"]'
     expected = ["skos:prefLabel", "http://www.w3.org/2000/01/rdf-schema#label"]
     assert settings_with(settings_env, NAME_PROPERTIES=value).name_properties == expected
-
-
-@pytest.mark.parametrize("value", ["[]", '["rdfs:label", "rdfs:label"]'])
-def test_name_properties_rejects_invalid(settings_env: pytest.MonkeyPatch, value: str) -> None:
-    """Check that NAME_PROPERTIES can't be empty or repeat a property."""
-    with pytest.raises(ValidationError, match="NAME_PROPERTIES"):
-        settings_with(settings_env, NAME_PROPERTIES=value)
 
 
 def test_extra_prefixes_from_json(settings_env: pytest.MonkeyPatch) -> None:
@@ -159,29 +126,6 @@ def test_extra_prefixes_from_json(settings_env: pytest.MonkeyPatch) -> None:
         "ex": "http://example.org/",
         "": "urn:x:",
     }
-
-
-@pytest.mark.parametrize("value", ['{"1x": "http://example.org/"}', '{"ex": "example.org/"}'])
-def test_extra_prefixes_rejects_invalid(settings_env: pytest.MonkeyPatch, value: str) -> None:
-    """Check that invalid prefix names and relative namespaces are rejected."""
-    with pytest.raises(ValidationError, match="EXTRA_PREFIXES"):
-        settings_with(settings_env, EXTRA_PREFIXES=value)
-
-
-@pytest.mark.parametrize(
-    ("name", "value"),
-    [
-        ("PAGE_CACHE_SIZE", "-1"),
-        ("REASONER_TIMEOUT_S", "0"),
-        ("APP_JVM_MAX_HEAP", "1 g"),
-        ("REASONER_MAX_HEAP", "0g"),
-        ("APP_JVM_MAX_HEAP", "1024"),
-    ],
-)
-def test_limits_reject_invalid(settings_env: pytest.MonkeyPatch, name: str, value: str) -> None:
-    """Check that negative sizes, a zero timeout and malformed heap sizes are rejected."""
-    with pytest.raises(ValidationError, match=name):
-        settings_with(settings_env, **{name: value})
 
 
 @pytest.mark.parametrize("missing", list(AUTH))
@@ -203,13 +147,6 @@ def test_errors_never_show_the_client_secret(settings_env: pytest.MonkeyPatch) -
 def test_seed_admins_lowercased(settings_env: pytest.MonkeyPatch) -> None:
     """Check that seed admin addresses are lowercased."""
     assert load_settings().seed_admins == ["admin@example.org"]
-
-
-@pytest.mark.parametrize("value", ['["admin"]', '["a@b@c"]', '["a@b.org", "A@b.org"]'])
-def test_seed_admins_rejects_invalid(settings_env: pytest.MonkeyPatch, value: str) -> None:
-    """Check that malformed or duplicate seed admin addresses are rejected."""
-    with pytest.raises(ValidationError, match="SEED_ADMINS"):
-        settings_with(settings_env, SEED_ADMINS=value)
 
 
 def test_load_settings_warns_when_auth_disabled(
@@ -245,26 +182,76 @@ def test_uppercase_env_name_wins_over_other_casings(settings_env: pytest.MonkeyP
     assert load_settings().page_cache_size == 8
 
 
+INVALID_TAG = "invalid language tags"
+DUPLICATES = "duplicate entries"
+HEAP_SIZE = "must be a Java heap size"
+PREFIX_RULE = "must start with '_' and be one path segment"
+NOT_EMAIL = "not email addresses"
+
+
 @pytest.mark.parametrize(
-    ("values", "invalid"),
+    ("name", "value", "message"),
     [
-        pytest.param({"PAGE_CACHE_SIZE": "-1"}, {"PAGE_CACHE_SIZE"}, id="negative-cache-size"),
-        pytest.param({"RESERVED_PREFIX": "browl"}, {"RESERVED_PREFIX"}, id="prefix-without-underscore"),
-        pytest.param({"FUSEKI_URL": "fuseki:3030"}, {"FUSEKI_URL"}, id="relative-fuseki-url"),
+        pytest.param("BASE_URL", "example.org", "relative URL without a base", id="base-url-relative"),
+        pytest.param("BASE_URL", "ftp://example.org", "scheme should be 'http' or 'https'", id="base-url-ftp"),
+        pytest.param("BASE_URL", "https://", "empty host", id="base-url-no-host"),
+        pytest.param("BASE_URL", "https://ex ample.org", "invalid international domain name", id="base-url-bad-host"),
+        pytest.param("BASE_URL", "https://x.org/?a=1", "must not have a query string or fragment", id="base-url-query"),
         pytest.param(
-            {"PAGE_CACHE_SIZE": "-1", "RESERVED_PREFIX": "browl"},
-            {"PAGE_CACHE_SIZE", "RESERVED_PREFIX"},
-            id="all-errors-reported",
+            "BASE_URL", "https://x.org/#a", "must not have a query string or fragment", id="base-url-fragment"
         ),
+        pytest.param("FUSEKI_URL", "fuseki:3030", "scheme should be 'http' or 'https'", id="fuseki-url-no-scheme"),
+        pytest.param("RESERVED_PREFIX", "browl", PREFIX_RULE, id="prefix-no-underscore"),
+        pytest.param("RESERVED_PREFIX", "_", PREFIX_RULE, id="prefix-underscore-only"),
+        pytest.param("RESERVED_PREFIX", "_a/b", PREFIX_RULE, id="prefix-two-segments"),
+        pytest.param("RESERVED_PREFIX", "/_browl", PREFIX_RULE, id="prefix-leading-slash"),
+        pytest.param("RESERVED_PREFIX", "_a b", PREFIX_RULE, id="prefix-space"),
+        pytest.param("RESERVED_PREFIX", "_a%20", PREFIX_RULE, id="prefix-percent"),
+        pytest.param("LANGUAGE_RANKING", '["en", "EN"]', f"{DUPLICATES}: en$", id="lang-duplicate-by-case"),
+        pytest.param("LANGUAGE_RANKING", '["en_US"]', f"{INVALID_TAG}: en_us$", id="lang-underscore"),
+        pytest.param("LANGUAGE_RANKING", '["toolonglanguage"]', f"{INVALID_TAG}: toolonglanguage$", id="lang-too-long"),
+        pytest.param("LANGUAGE_RANKING", '["xx"]', f"{INVALID_TAG}: xx$", id="lang-unregistered-language"),
+        pytest.param("LANGUAGE_RANKING", '["en-yy"]', f"{INVALID_TAG}: en-yy$", id="lang-unregistered-region"),
+        pytest.param("LANGUAGE_RANKING", '["en-latm"]', f"{INVALID_TAG}: en-latm$", id="lang-unregistered-script"),
+        pytest.param("LANGUAGE_RANKING", '["en-gb-foo"]', f"{INVALID_TAG}: en-gb-foo$", id="lang-unregistered-variant"),
+        pytest.param("LANGUAGE_RANKING", '"en"', "should be a valid list", id="lang-not-a-list"),
+        pytest.param("NAME_PROPERTIES", "[]", "at least 1 item", id="names-empty"),
+        pytest.param(
+            "NAME_PROPERTIES", '["rdfs:label", "rdfs:label"]', f"{DUPLICATES}: rdfs:label$", id="names-duplicate"
+        ),
+        pytest.param(
+            "EXTRA_PREFIXES", '{"1x": "http://example.org/"}', "invalid prefix name '1x'", id="prefixes-bad-name"
+        ),
+        pytest.param(
+            "EXTRA_PREFIXES",
+            '{"ex": "example.org/"}',
+            "namespace for 'ex' must be an absolute IRI",
+            id="prefixes-relative",
+        ),
+        pytest.param("PAGE_CACHE_SIZE", "-1", "greater than or equal to 0", id="cache-size-negative"),
+        pytest.param("REASONER_TIMEOUT_S", "0", "greater than 0", id="timeout-zero"),
+        pytest.param("APP_JVM_MAX_HEAP", "1 g", HEAP_SIZE, id="heap-space"),
+        pytest.param("APP_JVM_MAX_HEAP", "1024", HEAP_SIZE, id="heap-no-unit"),
+        pytest.param("REASONER_MAX_HEAP", "0g", HEAP_SIZE, id="heap-zero"),
+        pytest.param("SEED_ADMINS", '["admin"]', f"{NOT_EMAIL}: admin$", id="admins-no-at"),
+        pytest.param("SEED_ADMINS", '["a@b@c"]', f"{NOT_EMAIL}: a@b@c$", id="admins-two-ats"),
+        pytest.param("SEED_ADMINS", '["a@b.org", "A@b.org"]', f"{DUPLICATES}: a@b.org$", id="admins-duplicate-by-case"),
     ],
 )
-def test_load_settings_rejects_invalid_settings(
-    settings_env: pytest.MonkeyPatch, values: dict[str, str], invalid: set[str]
-) -> None:
-    """Check that load_settings raises ValidationError naming exactly the invalid settings."""
+def test_invalid_setting_is_rejected(settings_env: pytest.MonkeyPatch, name: str, value: str, message: str) -> None:
+    """Check that an invalid value raises one ValidationError, naming the variable, whose message matches `message`."""
     with pytest.raises(ValidationError) as error:
-        settings_with(settings_env, **values)
-    assert {e["loc"][0] for e in error.value.errors()} == invalid
+        settings_with(settings_env, **{name: value})
+    [reported] = error.value.errors()
+    assert reported["loc"] == (name,)
+    assert re.search(message, reported["msg"]), reported["msg"]
+
+
+def test_every_invalid_setting_is_reported(settings_env: pytest.MonkeyPatch) -> None:
+    """Check that load_settings reports all invalid settings at once, not just the first."""
+    with pytest.raises(ValidationError) as error:
+        settings_with(settings_env, PAGE_CACHE_SIZE="-1", RESERVED_PREFIX="browl")
+    assert {e["loc"][0] for e in error.value.errors()} == {"PAGE_CACHE_SIZE", "RESERVED_PREFIX"}
 
 
 def test_secret_is_not_shown(settings_env: pytest.MonkeyPatch) -> None:
