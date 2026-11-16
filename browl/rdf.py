@@ -7,27 +7,75 @@ as RDF terms or N-Triples.
 
 import re
 from dataclasses import dataclass
+from typing import Any, ClassVar, Self
+
+from pydantic import GetCoreSchemaHandler
+from pydantic_core import CoreSchema, core_schema
 
 XSD = "http://www.w3.org/2001/XMLSchema#"
 XSD_STRING = f"{XSD}string"
 RDF_LANG_STRING = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString"
 
 
-class IRI(str):
-    """An IRI."""
+class RDFSyntaxError(ValueError):
+    """Text isn't valid SPARQL TSV or N-Triples, or a value isn't a valid RDF term."""
+
+
+# Patterns from the Turtle and N-Triples grammars (https://www.w3.org/TR/turtle/#sec-grammar-grammar), for terms'
+# syntax in TSV and N-Triples. The term classes below also check their values with `_IRI_CHAR` and `_BLANK_NODE_LABEL`.
+_IRI_CHAR = r"[^\x00-\x20<>\"{}|^`\\]"
+_BLANK_NODE_LABEL = r"[\w](?:[\w.\-\u00b7\u0300-\u036f\u203f\u2040]*[\w\-\u00b7\u0300-\u036f\u203f\u2040])?"
+_LANGUAGE_TAG = r"[a-zA-Z]+(?:-[a-zA-Z0-9]+)*"
+_UCHAR = r"\\u[0-9A-Fa-f]{4}|\\U[0-9A-Fa-f]{8}"
+_IRI = rf"<((?:{_IRI_CHAR}|{_UCHAR})*)>"
+_BLANK_NODE = rf"_:({_BLANK_NODE_LABEL})"
+_STRING = rf"\"((?:[^\"\\\n\r]|\\[tbnrf\"'\\]|{_UCHAR})*)\""
+_LANGUAGE = rf"@({_LANGUAGE_TAG})"
+_LITERAL = rf"{_STRING}(?:{_LANGUAGE}|\^\^{_IRI})?"
+
+
+class _CheckedStr(str):
+    """A string that must match a pattern, checked whenever one is made, including by pydantic."""
 
     __slots__ = ()
+    _pattern: ClassVar[re.Pattern[str]]
+
+    def __new__(cls, value: str) -> Self:
+        """Check the value.
+
+        Raises:
+            RDFSyntaxError: The value doesn't match the pattern.
+        """
+        if not cls._pattern.fullmatch(value):
+            raise RDFSyntaxError(f"not a valid {cls.__name__}: {value[:200]!r}")
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        """Validate as a string, then make one of these from it, so pydantic models' fields get the same check."""
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
-class BlankNode(str):
+class IRI(_CheckedStr):
+    """An absolute IRI: a scheme, then characters that IRIs allow (no spaces, '<', '>', '"', …)."""
+
+    __slots__ = ()
+    _pattern = re.compile(rf"[A-Za-z][A-Za-z0-9+.\-]*:{_IRI_CHAR}*")
+
+
+class BlankNode(_CheckedStr):
     """A blank node, by its label in one result; labels mean nothing across results."""
 
     __slots__ = ()
+    _pattern = re.compile(_BLANK_NODE_LABEL)
+
+
+_LOWERCASE_LANGUAGE_TAG = re.compile(r"[a-z]+(?:-[a-z0-9]+)*")
 
 
 @dataclass(frozen=True, slots=True)
 class Literal:
-    """An RDF literal.
+    """An RDF literal, checked when made: its datatype is an IRI, and it has a language tag just when it's a langString.
 
     Attributes:
         value: The lexical form.
@@ -39,21 +87,21 @@ class Literal:
     datatype: str = XSD_STRING
     language: str | None = None
 
+    def __post_init__(self) -> None:
+        """Check the datatype and language tag.
+
+        Raises:
+            RDFSyntaxError: The datatype isn't an IRI, the language tag isn't a lowercase tag, or only one of a tag
+                and the langString datatype is given.
+        """
+        IRI(self.datatype)
+        if self.language is not None and not _LOWERCASE_LANGUAGE_TAG.fullmatch(self.language):
+            raise RDFSyntaxError(f"not a lowercase language tag: {self.language[:200]!r}")
+        if (self.language is not None) != (self.datatype == RDF_LANG_STRING):
+            raise RDFSyntaxError("a literal has a language tag if and only if its datatype is rdf:langString")
+
 
 Term = IRI | BlankNode | Literal
-
-
-class RDFSyntaxError(ValueError):
-    """Text isn't a valid RDF term or N-Triples line."""
-
-
-# Patterns from the Turtle and N-Triples grammars (https://www.w3.org/TR/turtle/#sec-grammar-grammar).
-_UCHAR = r"\\u[0-9A-Fa-f]{4}|\\U[0-9A-Fa-f]{8}"
-_IRI = rf"<((?:[^\x00-\x20<>\"{{}}|^`\\]|{_UCHAR})*)>"
-_BLANK_NODE = r"_:([\w](?:[\w.\-\u00b7\u0300-\u036f\u203f\u2040]*[\w\-\u00b7\u0300-\u036f\u203f\u2040])?)"
-_STRING = rf"\"((?:[^\"\\\n\r]|\\[tbnrf\"'\\]|{_UCHAR})*)\""
-_LANGUAGE = r"@([a-zA-Z]+(?:-[a-zA-Z0-9]+)*)"
-_LITERAL = rf"{_STRING}(?:{_LANGUAGE}|\^\^{_IRI})?"
 
 _IRI_TERM = re.compile(_IRI)
 _BLANK_NODE_TERM = re.compile(_BLANK_NODE)

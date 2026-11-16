@@ -1,6 +1,10 @@
-"""Tests for strict parsing of SPARQL TSV results and N-Triples."""
+"""Tests for RDF terms' checks, and strict parsing of SPARQL TSV results and N-Triples."""
+
+import copy
+import pickle
 
 import pytest
+from pydantic import BaseModel, ValidationError
 
 from browl.rdf import (
     IRI,
@@ -21,7 +25,7 @@ from browl.rdf import (
     ("cell", "term"),
     [
         ("<http://example.org/a>", IRI("http://example.org/a")),
-        (r"<http://example.org/é>", IRI("http://example.org/é")),
+        ("<http://example.org/\\u00e9>", IRI("http://example.org/é")),
         ("_:b0", BlankNode("b0")),
         ("_:node1.x-y", BlankNode("node1.x-y")),
         ('"plain"', Literal("plain")),
@@ -29,7 +33,7 @@ from browl.rdf import (
         ('"chat"@FR', Literal("chat", RDF_LANG_STRING, "fr")),
         ('"hi"@en-GB', Literal("hi", RDF_LANG_STRING, "en-gb")),
         ('"5"^^<http://www.w3.org/2001/XMLSchema#int>', Literal("5", f"{XSD}int")),
-        (r'"a\tb\nc\"d\\eé\U0001F600"', Literal('a\tb\nc"d\\eé😀')),
+        ('"a\\tb\\nc\\"d\\\\e\\u00e9\\U0001F600"', Literal('a\tb\nc"d\\eé😀')),
         ('"raw é and \u2028 stay"', Literal("raw é and \u2028 stay")),
         ("42", Literal("42", f"{XSD}integer")),
         ("-7", Literal("-7", f"{XSD}integer")),
@@ -145,3 +149,78 @@ def test_check_ntriples_triple_rejects(line: str) -> None:
     """Check that lines other than one triple, such as truncated ones, error text and comments, are rejected."""
     with pytest.raises(RDFSyntaxError):
         check_ntriples_triple(line)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["", "example.org/a", "http://example.org/a b", "http://example.org/<a>", 'http://example.org/"a"', "1http://a"],
+)
+def test_iri_rejects(value: str) -> None:
+    """Check that an IRI must be absolute, with only characters IRIs allow."""
+    with pytest.raises(RDFSyntaxError, match="not a valid IRI"):
+        IRI(value)
+
+
+@pytest.mark.parametrize("value", ["", "b 0", "-b0", "b0.", "_:b0"])
+def test_blank_node_rejects(value: str) -> None:
+    """Check that a blank node label must be a valid label (without the '_:')."""
+    with pytest.raises(RDFSyntaxError, match="not a valid BlankNode"):
+        BlankNode(value)
+
+
+@pytest.mark.parametrize(
+    ("datatype", "language", "message"),
+    [
+        ("not an IRI", None, "not a valid IRI"),
+        (RDF_LANG_STRING, "EN", "not a lowercase language tag"),
+        (RDF_LANG_STRING, "en_GB", "not a lowercase language tag"),
+        (RDF_LANG_STRING, None, "if and only if"),
+        (XSD_STRING, "en", "if and only if"),
+    ],
+)
+def test_literal_rejects(datatype: str, language: str | None, message: str) -> None:
+    """Check that a literal's datatype is an IRI, and that it has a lowercase tag just when it's a langString."""
+    with pytest.raises(RDFSyntaxError, match=message):
+        Literal("x", datatype, language)
+
+
+@pytest.mark.parametrize("cell", ["<http://example.org/a\\u0020b>", '"x"^^<http://example.org/\\u003c>'])
+def test_parse_tsv_term_checks_unescaped_values(cell: str) -> None:
+    """Check that a term whose syntax is valid but whose unescaped value isn't, such as an IRI with a space, fails."""
+    with pytest.raises(RDFSyntaxError, match="not a valid IRI"):
+        parse_tsv_term(cell)
+
+
+class Holder(BaseModel):
+    """A pydantic model with term fields."""
+
+    iri: IRI
+    blank_node: BlankNode
+    literal: Literal
+
+
+def test_pydantic_fields() -> None:
+    """Check that pydantic models' term fields make the term types, with the same checks."""
+    holder = Holder.model_validate(
+        {
+            "iri": "http://example.org/a",
+            "blank_node": "b0",
+            "literal": {"value": "x", "language": "en", "datatype": RDF_LANG_STRING},
+        }
+    )
+    assert type(holder.iri) is IRI
+    assert type(holder.blank_node) is BlankNode
+    assert holder.literal == Literal("x", RDF_LANG_STRING, "en")
+    with pytest.raises(ValidationError, match="not a valid IRI"):
+        Holder.model_validate({"iri": "not an IRI", "blank_node": "b0", "literal": {"value": "x"}})
+    with pytest.raises(ValidationError, match="if and only if"):
+        Holder.model_validate(
+            {"iri": "http://example.org/a", "blank_node": "b0", "literal": {"value": "x", "language": "en"}}
+        )
+
+
+def test_terms_copy_and_pickle() -> None:
+    """Check that terms keep their type when copied or pickled."""
+    for term in (IRI("http://example.org/a"), BlankNode("b0"), Literal("x")):
+        assert copy.copy(term) == term
+        assert type(pickle.loads(pickle.dumps(term))) is type(term)
