@@ -530,6 +530,10 @@ No Java code is needed, and no Python code runs inside the renderer. Spike S-1 a
 short-form provider returning placeholder tokens: it worked but was slower, and missed IRIs the renderer prints without
 asking the provider ([S-1 findings](../research/S-1/README.md)).
 
+**Base directions** (RDF 1.2's `"…"@ar--rtl`): Fuseki stores and returns them, and browl's Fuseki client reads them as
+`rdf:dirLangString` literals. The OWLAPI 4.5 predates RDF 1.2: its N-Triples parser accepts them but reads `ar--rtl`
+as the whole language tag, so the Manchester rendering shows such a literal as written (P-4).
+
 ### 2.9 Page layout
 
 Every page has the same frame (U-27, U-28, U-29):

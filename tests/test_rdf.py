@@ -8,6 +8,7 @@ from pydantic import BaseModel, ValidationError
 
 from browl.rdf import (
     IRI,
+    RDF_DIR_LANG_STRING,
     RDF_LANG_STRING,
     XSD,
     XSD_STRING,
@@ -32,6 +33,8 @@ from browl.rdf import (
         ('""', Literal("")),
         ('"chat"@FR', Literal("chat", RDF_LANG_STRING, "fr")),
         ('"hi"@en-GB', Literal("hi", RDF_LANG_STRING, "en-gb")),
+        ('"hi"@en--ltr', Literal("hi", RDF_DIR_LANG_STRING, "en", "ltr")),
+        ('"hi"@AR-EG--rtl', Literal("hi", RDF_DIR_LANG_STRING, "ar-eg", "rtl")),
         ('"5"^^<http://www.w3.org/2001/XMLSchema#int>', Literal("5", f"{XSD}int")),
         ('"a\\tb\\nc\\"d\\\\e\\u00e9\\U0001F600"', Literal('a\tb\nc"d\\eé😀')),
         ('"raw é and \u2028 stay"', Literal("raw é and \u2028 stay")),
@@ -73,6 +76,13 @@ def test_literal_default_datatype() -> None:
         '"long-form surrogate \\U0000DC00"',
         "<http://example.org/\\uD800>",
         '"x"@',
+        '"x"@en--',
+        '"x"@en--up',
+        '"x"@en--LTR',
+        '"x"@en---ltr',
+        '"x"@--ltr',
+        '"x"@en--ltr^^<http://www.w3.org/2001/XMLSchema#string>',
+        "<<( <http://example.org/a> <http://example.org/p> <http://example.org/b> )>>",
         '"x"^^xsd:int',
         "1.",
         "TRUE",
@@ -127,6 +137,7 @@ def test_parse_tsv_row_rejects(line: str, width: int) -> None:
     [
         "<http://example.org/a> <http://example.org/p> <http://example.org/b> .",
         '_:b0 <http://example.org/p> "x"@en .',
+        '_:b0 <http://example.org/p> "x"@en-GB--rtl .',
         '<http://example.org/a> <http://example.org/p> "1"^^<http://www.w3.org/2001/XMLSchema#int> .',
         '<http://example.org/a>\t<http://example.org/p>\t"raw é \u2028"\t.\t',
     ],
@@ -156,6 +167,8 @@ def test_check_ntriples_triple(line: str) -> None:
         '<http://example.org/a> <http://example.org/p> "x"^^<int> .',
         '<http://example.org/a> <http://example.org/p> "x"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> .',
         '<http://example.org/a> <http://example.org/p> "\\uD800" .',
+        '<http://example.org/a> <http://example.org/p> "x"@en--up .',
+        "<http://example.org/a> <http://example.org/p> <<( <http://example.org/a> <http://example.org/p> _:b )>> .",
     ],
 )
 def test_check_ntriples_triple_rejects(line: str) -> None:
@@ -185,19 +198,23 @@ def test_blank_node_rejects(value: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("datatype", "language", "message"),
+    ("datatype", "language", "direction", "message"),
     [
-        ("not an IRI", None, "not a valid IRI"),
-        (RDF_LANG_STRING, "EN", "not a lowercase language tag"),
-        (RDF_LANG_STRING, "en_GB", "not a lowercase language tag"),
-        (RDF_LANG_STRING, None, "if and only if"),
-        (XSD_STRING, "en", "if and only if"),
+        ("not an IRI", None, None, "not a valid IRI"),
+        (RDF_LANG_STRING, "EN", None, "not a lowercase language tag"),
+        (RDF_LANG_STRING, "en_GB", None, "not a lowercase language tag"),
+        (RDF_LANG_STRING, None, None, "language tag if and only if"),
+        (XSD_STRING, "en", None, "language tag if and only if"),
+        (RDF_DIR_LANG_STRING, None, "ltr", "language tag if and only if"),
+        (RDF_DIR_LANG_STRING, "en", None, "base direction if and only if"),
+        (RDF_LANG_STRING, "en", "ltr", "base direction if and only if"),
+        (RDF_DIR_LANG_STRING, "en", "LTR", "not a base direction"),
     ],
 )
-def test_literal_rejects(datatype: str, language: str | None, message: str) -> None:
-    """Check that a literal's datatype is an IRI, and that it has a lowercase tag just when it's a langString."""
+def test_literal_rejects(datatype: str, language: str | None, direction: str | None, message: str) -> None:
+    """Check a literal's datatype, its lowercase tag (just for (dir)langStrings) and its direction (dirLangStrings)."""
     with pytest.raises(RDFSyntaxError, match=message):
-        Literal("x", datatype, language)
+        Literal("x", datatype, language, direction)
 
 
 @pytest.mark.parametrize("cell", ["<http://example.org/a\\u0020b>", '"x"^^<http://example.org/\\u003c>'])

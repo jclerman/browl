@@ -8,7 +8,7 @@ import pytest
 
 from browl import owlapi
 from browl.fuseki import FusekiClient, SparqlError
-from browl.rdf import IRI, RDF_LANG_STRING, XSD, BlankNode, Literal
+from browl.rdf import IRI, RDF_DIR_LANG_STRING, RDF_LANG_STRING, XSD, BlankNode, Literal
 
 pytestmark = [pytest.mark.jvm, pytest.mark.fuseki, pytest.mark.usefixtures("jvm"), pytest.mark.anyio]
 
@@ -34,6 +34,7 @@ async def test_select_terms(sparql: FusekiClient, family_dataset: str) -> None:
         (IRI(f"{FAMILY}rank"), Literal("1", f"{XSD}integer")),
         (IRI("http://www.w3.org/2000/01/rdf-schema#label"), Literal("person", RDF_LANG_STRING, "en")),
         (IRI("http://www.w3.org/2000/01/rdf-schema#label"), Literal("personne", RDF_LANG_STRING, "fr")),
+        (IRI("http://www.w3.org/2000/01/rdf-schema#label"), Literal("شخص", RDF_DIR_LANG_STRING, "ar", "rtl")),
         (
             IRI("http://www.w3.org/2000/01/rdf-schema#comment"),
             Literal('Tab\there, newline\nhere, "quotes", a backslash \\, é, and a line separator\u2028here.'),
@@ -70,6 +71,18 @@ async def test_fragment(sparql: FusekiClient, family_dataset: str) -> None:
     [axiom] = await owlapi.run_java(logical_axioms)
     assert axiom.startswith("EquivalentClasses(")
     assert f"ObjectSomeValuesFrom(<{FAMILY}hasChild> <{FAMILY}Person>)" in axiom
+
+
+async def test_fragment_with_base_direction(sparql: FusekiClient, family_dataset: str) -> None:
+    """Check that a fragment with an RDF 1.2 base direction parses: the OWLAPI reads the direction as part of a tag."""
+    ntriples = await sparql.construct(family_dataset, f"DESCRIBE <{FAMILY}Person>")
+    assert '"شخص"@ar--rtl'.encode() in ntriples
+
+    def axioms() -> list[str]:
+        with owlapi.ntriples_ontology(ntriples) as fragment:
+            return [str(axiom) for axiom in fragment.getAxioms()]
+
+    assert f'AnnotationAssertion(rdfs:label <{FAMILY}Person> "شخص"@ar--rtl)' in await owlapi.run_java(axioms)
 
 
 async def test_fragment_with_imports(

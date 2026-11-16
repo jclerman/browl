@@ -1,4 +1,5 @@
-# A small ontology for the tests: class and property axioms, blank nodes, and literals that need escaping.
+# A small ontology for the tests: class and property axioms, blank nodes, literals that need escaping, and an RDF 1.2
+# base direction.
 @prefix : <http://example.org/family#> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
@@ -13,7 +14,7 @@
     rdfs:label "has child"@en .
 
 :Person a owl:Class ;
-    rdfs:label "person"@en , "personne"@FR ;
+    rdfs:label "person"@en , "personne"@FR , "شخص"@ar--rtl ;
     rdfs:comment "Tab\there, newline\nhere, \"quotes\", a backslash \\, é, and a line separator\u2028here." ;
     :rank 1 .
 

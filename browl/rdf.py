@@ -14,7 +14,11 @@ from pydantic_core import CoreSchema, core_schema
 
 XSD = "http://www.w3.org/2001/XMLSchema#"
 XSD_STRING = f"{XSD}string"
-RDF_LANG_STRING = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString"
+RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+RDF_LANG_STRING = f"{RDF}langString"
+RDF_DIR_LANG_STRING = f"{RDF}dirLangString"
+DIRECTIONS = frozenset({"ltr", "rtl"})
+"""RDF 1.2's base directions for language-tagged strings."""
 
 
 # Patterns from the Turtle and N-Triples grammars (https://www.w3.org/TR/turtle/#sec-grammar-grammar). The pieces
@@ -26,7 +30,7 @@ _UCHAR = r"\\u[0-9A-Fa-f]{4}|\\U[0-9A-Fa-f]{8}"
 _IRI = rf"<((?:{_IRI_CHAR}|{_UCHAR})*)>"
 _BLANK_NODE = rf"_:({_BLANK_NODE_LABEL})"
 _STRING = rf"\"((?:[^\"\\\n\r]|\\[tbnrf\"'\\]|{_UCHAR})*)\""
-_LANGUAGE = rf"@({_LANGUAGE_TAG})"
+_LANGUAGE = rf"@({_LANGUAGE_TAG})(?:--(ltr|rtl))?"  # RDF 1.2 adds a base direction
 _LITERAL = rf"{_STRING}(?:{_LANGUAGE}|\^\^{_IRI})?"
 
 _IRI_VALUE = re.compile(rf"[A-Za-z][A-Za-z0-9+.\-]*:{_IRI_CHAR}*")
@@ -94,30 +98,42 @@ class BlankNode(_CheckedStr):
 
 @dataclass(frozen=True, slots=True)
 class Literal:
-    """An RDF literal, checked when made: its datatype is an IRI, and it has a language tag just when it's a langString.
+    """An RDF literal, checked when made as RDF 1.2 defines it.
+
+    Its datatype is an IRI; it has a language tag just when it's a langString or a dirLangString, and a base direction
+    just when it's a dirLangString.
 
     Attributes:
         value: The lexical form.
-        datatype: The datatype IRI; `RDF_LANG_STRING` for a language-tagged string.
+        datatype: The datatype IRI; `RDF_LANG_STRING` for a language-tagged string, `RDF_DIR_LANG_STRING` for one with
+            a base direction.
         language: The language tag, lowercased, for a language-tagged string; otherwise None.
+        direction: The base direction, "ltr" or "rtl", for a dirLangString; otherwise None.
     """
 
     value: str
     datatype: str = XSD_STRING
     language: str | None = None
+    direction: str | None = None
 
     def __post_init__(self) -> None:
-        """Check the datatype and language tag.
+        """Check the datatype, language tag and base direction.
 
         Raises:
-            RDFSyntaxError: The datatype isn't an IRI, the language tag isn't a lowercase tag, or only one of a tag
-                and the langString datatype is given.
+            RDFSyntaxError: The datatype isn't an IRI, the language tag isn't a lowercase tag, the direction isn't
+                one of `DIRECTIONS`, or the tag and direction don't match the datatype.
         """
         IRI(self.datatype)
         if self.language is not None and not _LOWERCASE_LANGUAGE_TAG.fullmatch(self.language):
             raise RDFSyntaxError(f"not a lowercase language tag: {self.language[:200]!r}")
-        if (self.language is not None) != (self.datatype == RDF_LANG_STRING):
-            raise RDFSyntaxError("a literal has a language tag if and only if its datatype is rdf:langString")
+        if self.direction is not None and self.direction not in DIRECTIONS:
+            raise RDFSyntaxError(f"not a base direction: {self.direction[:200]!r}")
+        if (self.language is not None) != (self.datatype in (RDF_LANG_STRING, RDF_DIR_LANG_STRING)):
+            raise RDFSyntaxError(
+                "a literal has a language tag if and only if its datatype is rdf:langString or rdf:dirLangString"
+            )
+        if (self.direction is not None) != (self.datatype == RDF_DIR_LANG_STRING):
+            raise RDFSyntaxError("a literal has a base direction if and only if its datatype is rdf:dirLangString")
 
 
 Term = IRI | BlankNode | Literal
@@ -140,10 +156,11 @@ def _unescape(text: str) -> str:
     return _ESCAPE.sub(replace, text)
 
 
-def _literal(value: str, language: str | None, datatype: str | None) -> Literal:
+def _literal(value: str, language: str | None, direction: str | None, datatype: str | None) -> Literal:
     """Make a literal from the escaped parts of its Turtle or N-Triples syntax."""
-    if language is not None:
-        return Literal(_unescape(value), RDF_LANG_STRING, language.lower())
+    if language is not None:  # with or without a direction
+        string_type = RDF_LANG_STRING if direction is None else RDF_DIR_LANG_STRING
+        return Literal(_unescape(value), string_type, language.lower(), direction)
     return Literal(_unescape(value), XSD_STRING if datatype is None else _unescape(datatype))
 
 
@@ -213,9 +230,9 @@ def check_ntriples_triple(line: str) -> None:
     match = _NT_TRIPLE.fullmatch(line)
     if match is None:
         raise RDFSyntaxError(f"not an N-Triples triple: {line[:200]!r}")
-    subject, _, predicate, object_iri, _, value, language, datatype = match.groups()
+    subject, _, predicate, object_iri, _, value, language, direction, datatype = match.groups()
     for iri in (subject, predicate, object_iri):
         if iri is not None:
             IRI(_unescape(iri))
     if value is not None:
-        _literal(value, language, datatype)
+        _literal(value, language, direction, datatype)
