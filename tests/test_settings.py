@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
+from pydantic import HttpUrl, ValidationError
 
 from browl.settings import UNTAGGED, Settings, confirm_unique, load_settings
 
@@ -14,6 +14,32 @@ AUTH = {
     "OIDC_CLIENT_SECRET": "client-secret",
     "SEED_ADMINS": '["Admin@Example.org"]',
 }
+
+INVALID_TAG = "invalid language tags"
+DUPLICATES = "duplicate entries"
+HEAP_SIZE = "must be a Java heap size"
+PREFIX_RULE = "must start with '_' and be one path segment"
+NOT_EMAIL = "not email addresses"
+
+DEFAULTS = [
+    ("reserved_prefix", "_browl"),
+    ("name_properties", ["rdfs:label"]),
+    ("language_ranking", ["en", UNTAGGED]),
+    ("extra_prefixes", {}),
+    ("page_cache_size", 100),
+    ("reasoner_timeout_s", 3600),
+    ("reasoner_max_heap", "8g"),
+    ("app_jvm_max_heap", "1g"),
+    ("fuseki_url", HttpUrl("http://fuseki:3030")),
+    ("robot_jar", Path("/opt/robot/robot.jar")),
+    ("jena_home", Path("/opt/jena")),
+    ("data_dir", Path("/data")),
+    ("oidc_client_id", None),
+    ("oidc_client_secret", None),
+    ("seed_admins", []),
+    ("auth_disabled", False),
+]
+"""Every setting with a default (all but BASE_URL), and the default."""
 
 
 @pytest.mark.parametrize(
@@ -56,19 +82,19 @@ def settings_with(settings_env: pytest.MonkeyPatch, **values: str) -> Settings:
     return load_settings()
 
 
-def test_defaults(settings_env: pytest.MonkeyPatch) -> None:
-    """Check that unset settings get their documented defaults."""
-    s = load_settings()
-    assert str(s.base_url) == "https://example.org/onto"
-    assert s.reserved_prefix == "_browl"
-    assert s.name_properties == ["rdfs:label"]
-    assert s.language_ranking == ["en", UNTAGGED]
-    assert s.extra_prefixes == {}
-    assert s.page_cache_size == 100
-    assert s.app_jvm_max_heap == "1g"
-    assert str(s.fuseki_url) == "http://fuseki:3030/"
-    assert s.data_dir == Path("/data")
-    assert s.auth_disabled is False
+def test_every_default_is_tested() -> None:
+    """Check that DEFAULTS lists every setting except the required BASE_URL."""
+    assert {name for name, _ in DEFAULTS} == set(Settings.model_fields) - {"base_url"}
+
+
+@pytest.mark.parametrize(("attribute", "default"), DEFAULTS)
+def test_default(settings_env: pytest.MonkeyPatch, attribute: str, default: object) -> None:
+    """Check that an unset setting gets its documented default."""
+    if attribute.upper() in AUTH:  # the fixture sets these; they're optional only with authentication off
+        for name in AUTH:
+            settings_env.delenv(name)
+        settings_env.setenv("AUTH_DISABLED", "true")
+    assert getattr(load_settings(), attribute) == default
 
 
 def test_base_url_is_required(settings_env: pytest.MonkeyPatch) -> None:
@@ -79,53 +105,30 @@ def test_base_url_is_required(settings_env: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.parametrize(
-    ("value", "expected"),
+    ("name", "value", "expected"),
     [
-        ("https://example.org", "https://example.org/"),
-        ("HTTPS://Example.ORG:443/onto/", "https://example.org/onto/"),
-        ("https://bücher.example/onto/Bär", "https://xn--bcher-kva.example/onto/B%C3%A4r"),
+        ("BASE_URL", "https://example.org", HttpUrl("https://example.org/")),
+        ("BASE_URL", "HTTPS://Example.ORG:443/onto/", HttpUrl("https://example.org/onto/")),
+        ("BASE_URL", "https://bücher.example/onto/Bär", HttpUrl("https://xn--bcher-kva.example/onto/B%C3%A4r")),
+        ("RESERVED_PREFIX", "_x", "_x"),
+        ("RESERVED_PREFIX", "_a.b~c-d_e", "_a.b~c-d_e"),
+        ("LANGUAGE_RANKING", '["en", "fr"]', ["en", "fr", UNTAGGED]),
+        ("LANGUAGE_RANKING", '["EN-gb"]', ["en-gb", UNTAGGED]),
+        ("LANGUAGE_RANKING", '["zh-Hant-TW", "iw"]', ["zh-hant-tw", "iw", UNTAGGED]),
+        ("LANGUAGE_RANKING", '["none", "en"]', [UNTAGGED, "en"]),
+        ("LANGUAGE_RANKING", "[]", [UNTAGGED]),
+        (
+            "NAME_PROPERTIES",
+            '["skos:prefLabel", "http://www.w3.org/2000/01/rdf-schema#label"]',
+            ["skos:prefLabel", "http://www.w3.org/2000/01/rdf-schema#label"],
+        ),
+        ("EXTRA_PREFIXES", '{"ex": "http://example.org/", "": "urn:x:"}', {"ex": "http://example.org/", "": "urn:x:"}),
+        ("SEED_ADMINS", '["Admin@Example.org"]', ["admin@example.org"]),
     ],
 )
-def test_base_url_is_normalized(settings_env: pytest.MonkeyPatch, value: str, expected: str) -> None:
-    """Check that BASE_URL is normalized as a URL: lowercase scheme and host, no default port, IDN and path encoded."""
-    assert str(settings_with(settings_env, BASE_URL=value).base_url) == expected
-
-
-@pytest.mark.parametrize("value", ["_x", "_browl", "_a.b~c-d_e"])
-def test_reserved_prefix_accepts_valid(settings_env: pytest.MonkeyPatch, value: str) -> None:
-    """Check that a RESERVED_PREFIX of one URL-safe segment starting with '_' is accepted."""
-    assert settings_with(settings_env, RESERVED_PREFIX=value).reserved_prefix == value
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        ('["en", "fr"]', ["en", "fr", UNTAGGED]),
-        ('["EN-gb"]', ["en-gb", UNTAGGED]),
-        ('["zh-Hant-TW", "iw"]', ["zh-hant-tw", "iw", UNTAGGED]),
-        ('["none", "en"]', [UNTAGGED, "en"]),
-        ("[]", [UNTAGGED]),
-    ],
-)
-def test_language_ranking(settings_env: pytest.MonkeyPatch, value: str, expected: list[str]) -> None:
-    """Check that tags are lowercased, and the untagged entry is appended unless placed explicitly (O-5)."""
-    assert settings_with(settings_env, LANGUAGE_RANKING=value).language_ranking == expected
-
-
-def test_name_properties_from_json(settings_env: pytest.MonkeyPatch) -> None:
-    """Check that NAME_PROPERTIES is read from JSON, in order (O-4)."""
-    value = '["skos:prefLabel", "http://www.w3.org/2000/01/rdf-schema#label"]'
-    expected = ["skos:prefLabel", "http://www.w3.org/2000/01/rdf-schema#label"]
-    assert settings_with(settings_env, NAME_PROPERTIES=value).name_properties == expected
-
-
-def test_extra_prefixes_from_json(settings_env: pytest.MonkeyPatch) -> None:
-    """Check that EXTRA_PREFIXES is read from JSON, including the empty prefix (O-11)."""
-    value = '{"ex": "http://example.org/", "": "urn:x:"}'
-    assert settings_with(settings_env, EXTRA_PREFIXES=value).extra_prefixes == {
-        "ex": "http://example.org/",
-        "": "urn:x:",
-    }
+def test_valid_setting_is_stored(settings_env: pytest.MonkeyPatch, name: str, value: str, expected: object) -> None:
+    """Check that a valid value is accepted and stored as `expected`: normalized, lowercased or parsed from JSON."""
+    assert getattr(settings_with(settings_env, **{name: value}), name.lower()) == expected
 
 
 @pytest.mark.parametrize("missing", list(AUTH))
@@ -142,11 +145,6 @@ def test_errors_never_show_the_client_secret(settings_env: pytest.MonkeyPatch) -
     with pytest.raises(ValidationError) as error:
         load_settings()
     assert "client-secret" not in str(error.value)
-
-
-def test_seed_admins_lowercased(settings_env: pytest.MonkeyPatch) -> None:
-    """Check that seed admin addresses are lowercased."""
-    assert load_settings().seed_admins == ["admin@example.org"]
 
 
 def test_load_settings_warns_when_auth_disabled(
@@ -168,25 +166,19 @@ def test_load_settings_no_warning_with_auth(settings_env: pytest.MonkeyPatch, ca
     assert caplog.text == ""
 
 
-@pytest.mark.parametrize("name", ["page_cache_size", "Page_Cache_Size"])
-def test_only_uppercase_env_names_are_read(settings_env: pytest.MonkeyPatch, name: str) -> None:
-    """Check that an environment variable whose name isn't all uppercase is ignored."""
-    settings_env.setenv(name, "7")
-    assert load_settings().page_cache_size == 100
-
-
-def test_uppercase_env_name_wins_over_other_casings(settings_env: pytest.MonkeyPatch) -> None:
-    """Check that the uppercase variable is used even when a lowercase one is also set."""
-    settings_env.setenv("page_cache_size", "7")
-    settings_env.setenv("PAGE_CACHE_SIZE", "8")
-    assert load_settings().page_cache_size == 8
-
-
-INVALID_TAG = "invalid language tags"
-DUPLICATES = "duplicate entries"
-HEAP_SIZE = "must be a Java heap size"
-PREFIX_RULE = "must start with '_' and be one path segment"
-NOT_EMAIL = "not email addresses"
+@pytest.mark.parametrize(
+    ("variables", "expected"),
+    [
+        ({"page_cache_size": "7"}, 100),
+        ({"Page_Cache_Size": "7"}, 100),
+        ({"page_cache_size": "7", "PAGE_CACHE_SIZE": "8"}, 8),
+    ],
+)
+def test_only_uppercase_env_names_are_read(
+    settings_env: pytest.MonkeyPatch, variables: dict[str, str], expected: int
+) -> None:
+    """Check that only the all-uppercase variable is read; other casings are ignored."""
+    assert settings_with(settings_env, **variables).page_cache_size == expected
 
 
 @pytest.mark.parametrize(
