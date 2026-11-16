@@ -710,9 +710,13 @@ The code ([`RelaxOperation.java`](https://github.com/ontodev/robot/blob/master/r
 checked 2026-11-16) tests for `OWLObjectCardinalityRestriction`, which covers `min`, `exact` and `max`.
 
 **Asserted and inferred kept apart** (for U-39, U-40). Today the reasoned output replaces the uploaded ontology
-([2.4](#24-load-pipeline)), so what was asserted is lost. Loading the asserted axioms and the inferred ones into
-separate named graphs would keep both, while the union default graph keeps every other query unchanged. Explanations
-are computed on demand (ROBOT `explain` or the OWLAPI explanation API) and cached. Settle this before the load pipeline
+([2.4](#24-load-pipeline)), so what was asserted is lost. Following §2.4's store layout (ontology in the default
+graph, imports in named graphs, queries merging every graph with `FROM`), the asserted ontology would stay in the
+default graph and only the inferred axioms would go in a named graph of their own. Queries already merge every graph,
+so they see both unchanged. An axiom is inferred if its triples are in that graph and not in the default graph.
+Inferences are usually far fewer than asserted axioms, so the extra load time and store size that a named graph costs
+(about 2.2× on NCBITaxon, P-3) fall only on them. Explanations are computed on demand (ROBOT `explain` or the OWLAPI
+explanation API) and cached. Settle this before the load pipeline
 (P-7, P-8) is built, so it doesn't have to be reworked.
 
 Out of scope for now: a quality report on upload (ROBOT `report`, which assumes OBO conventions that not every
