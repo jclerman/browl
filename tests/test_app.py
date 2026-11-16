@@ -124,7 +124,8 @@ def test_reserved_prefix() -> None:
     body, _ = check_health(httpx2.Response(200), path="/_site/health", RESERVED_PREFIX="_site")
     assert body["fuseki"] == "up"
     with TestClient(make_app(RESERVED_PREFIX="_site")) as client:
-        assert client.get("/_browl/health").status_code == 404
+        # An ordinary path now, so with no ontology loaded it gets the "not available" page.
+        assert client.get("/_browl/health").status_code == 503
 
 
 def test_create_app_loads_settings(monkeypatch: pytest.MonkeyPatch) -> None:

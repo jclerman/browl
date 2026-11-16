@@ -1,0 +1,33 @@
+{# The load job's status (A-5, A-6). While a job runs, it polls its route and replaces itself; once the job ends, the
+   replacement has no trigger, so polling stops. #}
+<section id="job-status" class="job-status" aria-live="polite"
+  {%- if job.running %} hx-get="{{ url_for('job_status') }}" hx-trigger="every {{ poll_s }}s" hx-swap="outerHTML"{% endif %}>
+  {% if job.stage is none %}
+  <p>No ontology has been loaded yet.</p>
+  {% else %}
+  <p>
+    {% if job.running %}Load {{ job.generation }} is running,
+    {% elif job.failed_stage is not none %}Load {{ job.generation }} failed,
+    {% else %}Load {{ job.generation }} is ready,
+    {% endif %}
+    started <time datetime="{{ job.started_at.isoformat() }}">{{ job.started_at.strftime("%Y-%m-%d %H:%M:%S UTC") }}</time>.
+  </p>
+  <ol class="stages">
+    {% set current = stages.index(job.stage) %}
+    {% for stage in stages %}
+    {% if loop.index0 < current %}
+    <li class="done">{{ stage }}</li>
+    {% elif loop.index0 > current %}
+    <li class="pending">{{ stage }}</li>
+    {% elif job.failed_stage is not none %}
+    <li class="failed" aria-current="step">{{ stage }} (failed)</li>
+    {% else %}
+    <li class="{{ 'current' if job.running else 'done' }}" aria-current="step">{{ stage }}</li>
+    {% endif %}
+    {% endfor %}
+  </ol>
+  {% if job.failed_stage is not none %}
+  <p class="failure">Failed in stage <strong>{{ job.failed_stage }}</strong>: {{ job.reason }}</p>
+  {% endif %}
+  {% endif %}
+</section>

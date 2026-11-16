@@ -1,0 +1,72 @@
+"""Templates, static files, and the gate that serves the "loading" and "not available" pages (U-16).
+
+The gate is a plain ASGI middleware, not a route dependency, so it also covers paths no route matches, and it leaves
+request bodies alone, so admin uploads stream through it untouched.
+"""
+
+from pathlib import Path
+
+import jinja2
+from starlette.requests import Request
+from starlette.templating import Jinja2Templates
+from starlette.types import ASGIApp, Receive, Scope, Send
+
+PACKAGE_DIR = Path(__file__).parent
+STATIC_DIR = PACKAGE_DIR / "static"
+
+RETRY_AFTER_S = 10
+"""How soon a client should retry while a load runs: the loading page's `Retry-After` and its refresh interval."""
+
+templates = Jinja2Templates(
+    env=jinja2.Environment(
+        loader=jinja2.FileSystemLoader(PACKAGE_DIR / "templates"),
+        autoescape=True,
+        undefined=jinja2.StrictUndefined,
+    )
+)
+
+
+class SiteGate:
+    """Serve the "loading" or "not available" page in place of every page but the exempt ones (U-16).
+
+    Both are 503 Service Unavailable, so crawlers and caches treat them as temporary and keep the URL. The loading page
+    adds `Retry-After`, since the load will end; the "not available" page doesn't, since only an admin's upload ends
+    it. Neither says why the site is unavailable: the failure reason is for admins, on the status route.
+
+    Args:
+        app: The application it wraps.
+        exempt: Path prefixes always passed through, each a whole path or a path followed by `/`.
+    """
+
+    def __init__(self, app: ASGIApp, exempt: list[str]) -> None:
+        """Wrap the app."""
+        self.app = app
+        self.exempt = exempt
+
+    def is_exempt(self, path: str) -> bool:
+        """Return whether a path, relative to the app's root, is passed through whatever the job state."""
+        return any(path == prefix or path.startswith(f"{prefix}/") for prefix in self.exempt)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Serve the request, or the page for the site's state."""
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path: str = scope["path"]
+        root_path: str = scope.get("root_path", "")
+        if root_path and path.startswith(root_path):
+            path = path[len(root_path) :]
+        request = Request(scope)
+        site = request.app.state.jobs.state.site
+        if site == "available" or self.is_exempt(path):
+            await self.app(scope, receive, send)
+            return
+        headers = {"Cache-Control": "no-store"}
+        if site == "loading":
+            headers["Retry-After"] = str(RETRY_AFTER_S)
+            response = templates.TemplateResponse(
+                request, "loading.html", {"refresh_s": RETRY_AFTER_S}, status_code=503, headers=headers
+            )
+        else:
+            response = templates.TemplateResponse(request, "not_available.html", status_code=503, headers=headers)
+        await response(scope, receive, send)

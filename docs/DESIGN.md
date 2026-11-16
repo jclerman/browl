@@ -151,8 +151,9 @@ Tooling and code conventions are in [`CODING-STANDARDS.md`](CODING-STANDARDS.md)
           ▼               ▼               ▼
    Fuseki container   derived SQLite   ROBOT (reasoning),
    TDB2 store: the    (aggregates,     Jena TDB2 loader
-   loaded ontology    search index,
-                      admins, job state)
+   loaded ontology    search index)
+                      persistent SQLite
+                      (admins, job state)
 ```
 
 - **Fuseki with a TDB2 store** holds the loaded ontology, in its own container. The store persists on disk, so after a
@@ -637,7 +638,15 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | `iri?u=…` | Fallback entity URLs (Q1b) |
 | `static/…` | CSS, htmx, hash-IRI script |
 | `admin/…` | Upload, status, admin list, sign-in/out |
+| `admin/status` | The load job's stage, start time, and failed stage and reason (A-5, A-6): an HTML fragment for htmx requests (`HX-Request`), which polls itself while a job runs, else a page (P-5) |
 | `health` | Liveness check for the container; also reports whether Fuseki answers |
+
+While a load job runs, every other URL (the ontology's pages, the other routes above, and paths nothing serves) gets
+the "loading" page; when no ontology is loaded, or the last load failed, it gets the "not available" page (U-16).
+`health`, `static/…` and `admin/…` are exempt, as are FastAPI's API docs. Both pages are 503 Service Unavailable with
+`Cache-Control: no-store`, so crawlers and caches treat the outage as temporary and keep the URLs. The loading page
+adds `Retry-After` and refreshes itself at the same interval (10 s), with a `<meta>` refresh rather than a script.
+Neither page says why the site is unavailable; the failure reason is shown only on the admin status (P-5).
 
 ### 2.14 Risks
 

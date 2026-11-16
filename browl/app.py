@@ -7,12 +7,14 @@ from typing import Literal
 
 import httpx2
 from fastapi import APIRouter, FastAPI, Request
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import browl
-from browl import owlapi
+from browl import admin, owlapi
 from browl.fuseki import FusekiClient
 from browl.jobs import JobRunner
+from browl.pages import STATIC_DIR, SiteGate
 from browl.settings import Settings, load_settings
 
 FUSEKI_TIMEOUT_S = 2.0
@@ -60,7 +62,8 @@ def create_app(
 
     On startup the app starts the JVM (DESIGN.md §2.1), opens its HTTP client for Fuseki, and opens the load job
     runner (`app.state.jobs`) on its database in `DATA_DIR`. Uvicorn runs the startup on the main thread, where the JVM
-    must start; a test client doesn't, so tests start it first. On shutdown a running load job is cancelled.
+    must start; a test client doesn't, so tests start it first. On shutdown a running load job is cancelled. Every page
+    but the health, static and admin routes, and FastAPI's API docs, is gated on the job state (`SiteGate`).
 
     Args:
         settings: The settings; loaded from the environment if not given.
@@ -88,5 +91,11 @@ def create_app(
 
     app = FastAPI(title=browl.DESCRIPTIVE_TITLE, version=browl.__version__, lifespan=lifespan)
     app.state.settings = settings
-    app.include_router(router, prefix=f"/{settings.reserved_prefix}")
+    reserved = f"/{settings.reserved_prefix}"
+    app.include_router(router, prefix=reserved)
+    app.include_router(admin.router, prefix=reserved)
+    app.mount(f"{reserved}/static", StaticFiles(directory=STATIC_DIR), name="static")
+    docs = [app.openapi_url, app.docs_url, app.redoc_url]
+    exempt = [f"{reserved}/health", f"{reserved}/static", f"{reserved}/admin", *(url for url in docs if url)]
+    app.add_middleware(SiteGate, exempt=exempt)
     return app
