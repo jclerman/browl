@@ -316,6 +316,26 @@ to the heap caches the store. Raise the heap for ontologies larger than NCBITaxo
 queries go through the `FROM` merge (not measured). On `OutOfMemoryError` Fuseki exits and Compose restarts it; without
 that, it hung after one and answered nothing.
 
+**Fuseki's container memory** is the heap plus about 0.5 GiB: plan 1.5 GiB for it at the default heap
+([S-6 findings](../research/S-6/README.md)). Fuseki 6.2.0 sets Jetty's HTTP output buffer to 5 MB, which Jetty's
+buffer pool doesn't keep, so every response allocated a new 5 MB direct buffer that only garbage collection freed
+(Jena's [GH-4084](https://github.com/apache/jena/issues/4084), fixed after 6.2.0). Under page load the JDK called
+`System.gc()` about once per 1 GB of buffers, glibc kept much of the freed memory, and the container grew to 2.6 GiB
+of anonymous memory (3.9 GiB in `docker stats`, with the store's cached pages). Capping the direct buffers alone cost
+up to three quarters of the page throughput. So the Fuseki image starts it with a `jetty.xml` (`docker/fuseki/jetty.xml`)
+that keeps Jetty's default 32 KB output buffer and otherwise sets up the server as Fuseki does (port, header sizes,
+thread pool of 2–20, error handler), and caps direct buffers at 64 MB as a backstop
+(`-XX:MaxDirectMemorySize=64m`). On NCBITaxon, Fuseki's anonymous memory then stays under 400 MiB under 16-client load
+and peaks at about 1 GiB during the bulk queries (the heap at 670–790 MiB committed, plus about 120 MiB of JVM
+overhead), and pages are a third faster (550 and 800 a second at 1 and 16 clients). Drop the `jetty.xml` once browl
+moves to a Jena release with the fix, and remeasure.
+
+`docker-compose.yml` sets no memory limit, since a fixed one wouldn't follow `FUSEKI_HEAP`. An operator who wants one
+can set the container to the heap plus 0.5 GiB: at 1.5 GiB, and even at 1 GiB, nothing was killed under 16-client load
+and the bulk queries; the kernel reclaimed the store's page cache instead, and the bulk queries slowed from 40 s to
+47 and 50 s. Below 1,792 MiB the JVM picks SerialGC instead of G1, which made no difference here. A 768 MB heap passed
+the bulk queries but saved nothing.
+
 ### 2.5 Derived data (pre-caching)
 
 Built once per load from bulk SPARQL queries, one per kind of data, and stored in the derived SQLite database. Bulk
@@ -594,9 +614,9 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 
 | Risk | Mitigation |
 | --- | --- |
-| Fuseki needs too much memory while serving the largest ontologies | Measured by P-3: NCBITaxon needs about 500 MiB of heap; the default is 1 GB (2.4). |
+| Fuseki needs too much memory while serving the largest ontologies | Measured by P-3 and S-6: NCBITaxon needs about 500 MiB of heap; the default is 1 GB, and the container needs the heap plus about 0.5 GiB once Fuseki's 5 MB output buffers are replaced through a `jetty.xml` (2.4). |
 | A bulk query that fails partway returns a truncated result with HTTP 200 | Seen in P-3: Fuseki streams results, so when it ran out of memory partway through the name dictionary, the status had already been sent. P-8 checks that each bulk result is complete (e.g. a final count, or the TSV ends cleanly) before building the derived database. |
-| Fuseki pauses for full garbage collections under page load | Seen in P-3: hundreds of `System.gc()` calls, each pausing 70–275 ms, made by the JDK when Fuseki's direct (I/O) buffers reach their limit, which defaults to the heap size. Raising that limit made throughput worse. P-24 finds what allocates the buffers if page latency needs it. |
+| Fuseki pauses for full garbage collections under page load | Resolved by S-6: the `System.gc()` calls P-3 saw came from Fuseki 6.2.0 allocating a 5 MB direct output buffer per response (Jena GH-4084). Fuseki's `jetty.xml` keeps Jetty's 32 KB buffer, which removed them and made pages a third faster (2.4). |
 | JPype quirks: thread safety of concurrent OWLAPI calls; Python–Java call overhead | Resolved by S-1: concurrent calls were safe but gave no extra throughput, so OWLAPI calls run on one thread (2.1). Call overhead is small ([S-1 findings](../research/S-1/README.md)). |
 | Memory limit can't be reported reliably | Spike S-2; at worst report "reasoner failed" with ROBOT's output. |
 | Descendant counts too slow or memory-hungry at millions of classes | Resolved by S-3: roaring bitmaps, 4.2 s for NCBITaxon ([S-3 findings](../research/S-3/README.md)). |
