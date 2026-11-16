@@ -21,13 +21,18 @@ RUN curl -fsSL -o /jena.tar.gz \
     && tar -xzf /jena.tar.gz -C /jena --strip-components=1 \
     && rm -rf /jena/javadoc /jena/src-examples
 
-# The locked runtime dependencies, in a virtualenv copied into the final image.
-FROM ${PYTHON_IMAGE} AS python-deps
+# A virtualenv with the locked runtime dependencies, then browl installed from its wheel; the final image gets only the
+# virtualenv. The dependencies are installed first, so their layer is reused when only browl's code changes.
+FROM ${PYTHON_IMAGE} AS python-build
 ENV POETRY_NO_INTERACTION=1 POETRY_VIRTUALENVS_IN_PROJECT=true
 RUN pip install --no-cache-dir poetry==2.5.1
 WORKDIR /app
 COPY pyproject.toml poetry.lock ./
 RUN poetry install --only main --no-root
+COPY README.md ./
+COPY browl ./browl
+RUN poetry build --format wheel \
+    && .venv/bin/pip install --no-cache-dir --no-deps dist/*.whl
 
 FROM ${PYTHON_IMAGE}
 # Java 21 (Jena 6 needs it) from Debian, which backports its security fixes; curl is for the container health check;
@@ -42,8 +47,7 @@ RUN useradd --uid 10001 --user-group --no-create-home browl \
 
 COPY --from=downloads /robot.jar /opt/robot/robot.jar
 COPY --from=downloads /jena /opt/jena
-COPY --from=python-deps /app/.venv /app/.venv
-COPY browl /app/browl
+COPY --from=python-build /app/.venv /app/.venv
 
 # Debian names the JVM's directory after the architecture (amd64, arm64), as Docker's TARGETARCH does.
 ARG TARGETARCH
