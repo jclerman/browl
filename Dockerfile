@@ -1,9 +1,6 @@
 # The browl app: Python, Java 21 for the in-process OWLAPI (JPype), ROBOT, and Jena's TDB2 loader (DESIGN.md §2.1).
 
-ARG PYTHON_IMAGE=python:3.12-slim-trixie
-
-# Java 21: Jena 6 needs it. Its JRE is copied into the Python image below.
-FROM eclipse-temurin:21-jre AS java
+ARG PYTHON_IMAGE=python:3.12.16-slim-trixie
 
 # Pinned downloads, checked against checksums recorded here when the pins were chosen.
 FROM ${PYTHON_IMAGE} AS downloads
@@ -16,8 +13,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL -o /robot.jar "https://github.com/ontodev/robot/releases/download/${ROBOT_VERSION}/robot.jar" \
     && echo "${ROBOT_SHA256}  /robot.jar" | sha256sum -c -
-# archive.apache.org keeps every release; the dlcdn mirrors keep only the latest.
-RUN curl -fsSL -o /jena.tar.gz "https://archive.apache.org/dist/jena/binaries/apache-jena-${JENA_VERSION}.tar.gz" \
+# Maven Central: every release, served from a CDN.
+RUN curl -fsSL -o /jena.tar.gz \
+        "https://repo1.maven.org/maven2/org/apache/jena/apache-jena/${JENA_VERSION}/apache-jena-${JENA_VERSION}.tar.gz" \
     && echo "${JENA_SHA512}  /jena.tar.gz" | sha512sum -c - \
     && mkdir /jena \
     && tar -xzf /jena.tar.gz -C /jena --strip-components=1 \
@@ -32,24 +30,25 @@ COPY pyproject.toml poetry.lock ./
 RUN poetry install --only main --no-root
 
 FROM ${PYTHON_IMAGE}
-# curl is for the container health check.
+# Java 21 (Jena 6 needs it) from Debian, which backports its security fixes; curl is for the container health check.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl openjdk-21-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 # One UID for the app and Fuseki: the app's loader writes the TDB2 stores that Fuseki then opens and deletes.
 RUN useradd --uid 10001 --user-group --no-create-home browl \
     && mkdir /data /fuseki \
     && chown browl:browl /data /fuseki
 
-ENV JAVA_HOME=/opt/java/openjdk
-COPY --from=java ${JAVA_HOME} ${JAVA_HOME}
 COPY --from=downloads /robot.jar /opt/robot/robot.jar
 COPY --from=downloads /jena /opt/jena
 COPY --from=python-deps /app/.venv /app/.venv
 COPY browl /app/browl
 
+# Debian names the JVM's directory after the architecture (amd64, arm64), as Docker's TARGETARCH does.
+ARG TARGETARCH
 # ROBOT_JAR and JENA_HOME match the settings' defaults; set here as well so the image says where its tools are.
-ENV PATH=/app/.venv/bin:${JAVA_HOME}/bin:${PATH} \
+ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-${TARGETARCH} \
+    PATH=/app/.venv/bin:${PATH} \
     PYTHONUNBUFFERED=1 \
     ROBOT_JAR=/opt/robot/robot.jar \
     JENA_HOME=/opt/jena
