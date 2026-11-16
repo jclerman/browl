@@ -679,7 +679,7 @@ go into this document.
 | P-28 | Coding-standards doc; settle the choices marked provisional | | | Done | [#10](https://github.com/jclerman/browl/issues/10) |
 | P-2 | Settings module with validation (reserved-prefix rule, `AUTH_DISABLED` warning) | O-2–O-8, O-10, O-11 | P-1 | Done | [#51](https://github.com/jclerman/browl/pull/51) |
 | P-3 | Docker Compose: `app` (Java 21, `robot.jar`, Jena's TDB2 loader) and `fuseki` services, volumes, health checks; switching Fuseki to a new store through its admin protocol; Fuseki's memory while serving | O-1, O-9 | P-1, S-4 | Done | [#11](https://github.com/jclerman/browl/issues/11) |
-| P-4 | Fuseki client (async SPARQL over HTTP) and OWLAPI bridge: start the JVM via JPype, parse fetched triples as a small ontology, run Java calls on one dedicated thread | | P-2, P-3, S-1, S-4 | In progress | [#15](https://github.com/jclerman/browl/issues/15) |
+| P-4 | Fuseki client (async SPARQL over HTTP) and OWLAPI bridge: start the JVM via JPype, parse fetched triples as a small ontology, run Java calls on one dedicated thread | | P-2, P-3, S-1, S-4 | Done | [#15](https://github.com/jclerman/browl/issues/15) |
 
 ### Phase 2: Loading
 
