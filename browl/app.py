@@ -1,5 +1,6 @@
 """The FastAPI application. Run it with one worker: `uvicorn browl.app:create_app --factory --workers 1`."""
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Literal
@@ -12,7 +13,7 @@ import browl
 from browl.settings import Settings, load_settings
 
 FUSEKI_TIMEOUT_S = 2.0
-"""Time limit for the health check's call to Fuseki, well under the container health check's own."""
+"""Time limit for the health check's whole call to Fuseki, well under the container health check's own."""
 
 
 class Health(BaseModel):
@@ -39,8 +40,10 @@ async def health(request: Request) -> Health:
     """
     client: httpx2.AsyncClient = request.app.state.fuseki
     try:
-        response = await client.get("/$/ping", timeout=FUSEKI_TIMEOUT_S)
-    except httpx2.HTTPError:
+        # httpx2's own timeout limits each phase (connect, write, read) separately, not the whole call.
+        async with asyncio.timeout(FUSEKI_TIMEOUT_S):
+            response = await client.get("/$/ping")
+    except (httpx2.HTTPError, TimeoutError):
         return Health(fuseki="down")
     return Health(fuseki="up" if response.is_success else "down")
 

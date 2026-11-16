@@ -1,5 +1,6 @@
 """Tests for the FastAPI application and its health route."""
 
+import asyncio
 import tomllib
 from collections.abc import Iterator
 from pathlib import Path
@@ -9,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import browl
+import browl.app
 from browl.app import create_app
 from browl.settings import Settings
 
@@ -59,6 +61,20 @@ def test_health_fuseki_down(client: TestClient, answer: httpx2.Response | Except
     response = client.get("/_browl/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "fuseki": "down"}
+
+
+def test_health_fuseki_slow(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that the time limit covers the whole call to Fuseki, not each phase: a slow answer reports it down."""
+
+    async def slow(request: httpx2.Request) -> httpx2.Response:
+        await asyncio.sleep(1)
+        return httpx2.Response(200)
+
+    monkeypatch.setattr(browl.app, "FUSEKI_TIMEOUT_S", 0.05)
+    client.app.state.fuseki = httpx2.AsyncClient(  # type: ignore[attr-defined]
+        base_url="http://fuseki:3030", transport=httpx2.MockTransport(slow)
+    )
+    assert client.get("/_browl/health").json() == {"status": "ok", "fuseki": "down"}
 
 
 def test_health_fuseki_unreachable() -> None:
