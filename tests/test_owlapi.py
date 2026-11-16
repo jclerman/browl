@@ -8,7 +8,6 @@ import jpype
 import pytest
 
 from browl import owlapi
-from tests.conftest import robot_jar
 
 pytestmark = [pytest.mark.jvm, pytest.mark.usefixtures("jvm"), pytest.mark.anyio]
 
@@ -134,17 +133,17 @@ async def test_java_thread() -> None:
         axioms(FRAGMENT)
 
 
-def test_jvm_settings() -> None:
+def test_jvm_settings(robot_jar: Path) -> None:
     """Check that the JVM has robot.jar on its class path, and leaves SIGINT and SIGTERM to Python (-Xrs)."""
     class_path = str(jpype.JClass("java.lang.System").getProperty("java.class.path"))
-    assert str(robot_jar().resolve()) in class_path.split(os.pathsep)
+    assert str(robot_jar.resolve()) in class_path.split(os.pathsep)
     arguments = jpype.JClass("java.lang.management.ManagementFactory").getRuntimeMXBean().getInputArguments()
     assert {"-Xrs", "-XX:+ExitOnOutOfMemoryError"} <= {str(argument) for argument in arguments}
 
 
-def test_start_jvm_again() -> None:
+def test_start_jvm_again(robot_jar: Path) -> None:
     """Check that starting the running JVM again with the same robot.jar is allowed, and with another is refused."""
-    owlapi.start_jvm(robot_jar(), "1g")
+    owlapi.start_jvm(robot_jar, "1g")
     with pytest.raises(RuntimeError, match="without"):
         owlapi.start_jvm(Path(__file__), "1g")
 
@@ -155,14 +154,14 @@ def test_start_jvm_no_robot_jar(tmp_path: Path) -> None:
         owlapi.start_jvm(tmp_path / "robot.jar", "1g")
 
 
-def test_start_jvm_off_main_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_start_jvm_off_main_thread(monkeypatch: pytest.MonkeyPatch, robot_jar: Path) -> None:
     """Check that the JVM isn't started off the main thread, where JPype's shutdown would hang at exit."""
     monkeypatch.setattr(jpype, "isJVMStarted", lambda: False)
     errors: list[Exception] = []
 
     def start() -> None:
         try:
-            owlapi.start_jvm(robot_jar(), "1g")
+            owlapi.start_jvm(robot_jar, "1g")
         except RuntimeError as error:
             errors.append(error)
 

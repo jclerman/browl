@@ -62,7 +62,7 @@ def http_server() -> Iterator[tuple[str, list[str]]]:
         server.server_close()
 
 
-def robot_jar() -> Path:
+def find_robot_jar() -> Path:
     """Return the `robot.jar` the tests use: `ROBOT_JAR`, else `make robot-jar`'s, else the settings' default."""
     if path := os.environ.get("ROBOT_JAR"):
         return Path(path)
@@ -87,8 +87,8 @@ def missing_jvm() -> str | None:
     """Return why the JVM can't start, or None if it can."""
     if jpype.isJVMStarted():
         return None
-    if not robot_jar().is_file():
-        return f"no robot.jar at {robot_jar()} (run `make robot-jar`, or set ROBOT_JAR)"
+    if not find_robot_jar().is_file():
+        return f"no robot.jar at {find_robot_jar()} (run `make robot-jar`, or set ROBOT_JAR)"
     default_java_home()
     try:
         jvm_path = jpype.getDefaultJVMPath()
@@ -105,12 +105,18 @@ def skip_or_fail(reason: str) -> None:
 
 
 @pytest.fixture(scope="session")
+def robot_jar() -> Path:
+    """Return the `robot.jar` the tests use (see `find_robot_jar`)."""
+    return find_robot_jar()
+
+
+@pytest.fixture(scope="session")
 def jvm() -> None:
     """Start the JVM, on the main thread as it must be, or skip the test if it can't start."""
     reason = missing_jvm()
     if reason:
         skip_or_fail(reason)
-    owlapi.start_jvm(robot_jar(), "1g")
+    owlapi.start_jvm(find_robot_jar(), "1g")
 
 
 def _docker(*args: str) -> str:

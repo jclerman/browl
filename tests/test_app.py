@@ -16,7 +16,6 @@ import browl.app
 from browl.app import create_app
 from browl.fuseki import FusekiClient
 from browl.settings import Settings
-from tests.conftest import robot_jar
 
 UNREACHABLE = "http://127.0.0.1:1"  # nothing listens on port 1, so connections are refused at once
 
@@ -137,22 +136,22 @@ def test_api_docs_show_title_and_version(client: TestClient) -> None:
     assert info["version"] == browl.__version__ == pyproject["project"]["version"]
 
 
-def test_startup_starts_jvm(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_startup_starts_jvm(monkeypatch: pytest.MonkeyPatch, robot_jar: Path) -> None:
     """Check that startup starts the JVM with ROBOT_JAR and APP_JVM_MAX_HEAP, and makes the SPARQL client."""
     calls = []
     monkeypatch.setattr(browl.app.owlapi, "start_jvm", lambda *args: calls.append(args))
-    app = create_app(make_settings(ROBOT_JAR=str(robot_jar()), APP_JVM_MAX_HEAP="768m"))
+    app = create_app(make_settings(ROBOT_JAR=str(robot_jar), APP_JVM_MAX_HEAP="768m"))
     with TestClient(app):
         assert isinstance(app.state.sparql, FusekiClient)
         assert isinstance(app.state.fuseki_http, httpx2.AsyncClient)
-    assert calls == [(robot_jar(), "768m")]
+    assert calls == [(robot_jar, "768m")]
 
 
 @pytest.mark.jvm
 @pytest.mark.usefixtures("jvm")
-def test_startup_with_running_jvm() -> None:
+def test_startup_with_running_jvm(robot_jar: Path) -> None:
     """Check that the app starts when the JVM is already running, as in tests, whose client runs off the main thread."""
-    with TestClient(create_app(make_settings(ROBOT_JAR=str(robot_jar())))) as client:
+    with TestClient(create_app(make_settings(ROBOT_JAR=str(robot_jar)))) as client:
         assert client.get("/_browl/health").status_code == 200
 
 
