@@ -1,6 +1,13 @@
 # browl's two services (DESIGN.md §2.1, O-1). Settings (§2.12) come from .env; see .env.example.
 name: browl
 
+# Both services' health checks run on the same schedule.
+x-healthcheck-timing: &healthcheck-timing
+  interval: 30s
+  timeout: 5s
+  start_period: 30s
+  start_interval: 2s
+
 services:
   app:
     build: .
@@ -17,10 +24,7 @@ services:
       - fuseki
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8000/$${RESERVED_PREFIX:-_browl}/health"]
-      interval: 30s
-      timeout: 5s
-      start_period: 30s
-      start_interval: 2s
+      <<: *healthcheck-timing
     restart: unless-stopped
 
   fuseki:
@@ -28,15 +32,12 @@ services:
     # No published ports: the admin protocol is open to anything that reaches Fuseki (docker/fuseki/shiro.ini).
     environment:
       # 1g serves NCBITaxon with about 2x headroom (DESIGN.md §2.4); raise it for larger ontologies or large imports.
-      JAVA_OPTIONS: -Xmx${FUSEKI_HEAP:-1g}
+      JDK_JAVA_OPTIONS: -Xmx${FUSEKI_HEAP:-1g}
     volumes:
       - fuseki:/fuseki
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:3030/$$/ping"]
-      interval: 30s
-      timeout: 5s
-      start_period: 30s
-      start_interval: 2s
+      <<: *healthcheck-timing
     restart: unless-stopped
 
 volumes:
