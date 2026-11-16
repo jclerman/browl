@@ -44,13 +44,37 @@ jobs:
         run: make install ci
 
   images:
-    name: Build the Docker images
+    name: Build and start the Docker images
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
       - name: Build the app and Fuseki images
         run: docker compose build
+
+      # .env.example's settings: a local BASE_URL, authentication off.
+      - name: Start both services and wait until they're healthy
+        run: |
+          cp .env.example .env
+          docker compose up -d --wait --wait-timeout 120
+
+      # The app's own health check passes even when Fuseki is down, so check that it reaches Fuseki.
+      - name: Check that the app reaches Fuseki
+        run: curl -fsS http://localhost:8000/_browl/health | jq -e '.fuseki == "up"'
+
+      - name: Check Java and the tools in the images
+        run: |
+          docker compose exec -T app sh -c \
+            'test -d "$JAVA_HOME" && java -version && test -f "$ROBOT_JAR" && "$JENA_HOME/bin/tdb2.tdbloader" --version'
+          docker compose exec -T fuseki java -version
+
+      - name: Show the services' logs
+        if: failure()
+        run: docker compose logs
+
+      - name: Stop the services
+        if: always()
+        run: docker compose down -v
 
   # The check that branch protection requires: one stable name, whatever the jobs above are. It must run even when a
   # job fails (a skipped required check counts as passing), so it checks the results explicitly.
