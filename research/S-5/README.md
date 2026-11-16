@@ -202,7 +202,8 @@ Entities only browl lists, by how they refer to the class:
    mentions, so each class's Usage tab repeats the disjointness its Details tab already shows under Disjoint With.
    In pizza, whose 23 named pizzas are pairwise disjoint, each named pizza's Usage tab holds 22 entries, all of
    them `DisjointClasses`. That fits on one page (U-26 pages 50 at a time), so it isn't a navigation problem, but
-   the tab and its count show nothing the Details tab doesn't. Open: whether U-26 should leave these out.
+   the tab and its count show nothing the Details tab doesn't. Decided: U-26 stays as it is, a complete list of
+   the axioms that refer to the entity, and U-34's filter by axiom type handles the repetition.
 3. **For S-5's conclusions (#54):** browl loads ontologies that OLS4 can't load in a small VM
    (NCBITaxon), and serves pages faster. Its Usage tab shows what OLS4's "Related from" leaves out. Its relation
    trees follow equivalence definitions in releases that aren't relaxed.
