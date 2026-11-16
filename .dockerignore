@@ -1,8 +1,9 @@
-# The app image needs only what building browl's wheel needs: the dependency lists, the package, and the README that
-# pyproject.toml names.
+# The app image needs only what building browl's wheel needs: the dependency lists, the package, and the README and
+# LICENSE that pyproject.toml names.
 *
 !pyproject.toml
 !poetry.lock
 !README.md
+!LICENSE
 !browl/
 **/__pycache__/
