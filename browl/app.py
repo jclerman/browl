@@ -63,7 +63,7 @@ def create_app(
     On startup the app starts the JVM (DESIGN.md §2.1), opens its HTTP client for Fuseki, and opens the load job
     runner (`app.state.jobs`) on its database in `DATA_DIR`. Uvicorn runs the startup on the main thread, where the JVM
     must start; a test client doesn't, so tests start it first. On shutdown a running load job is cancelled. Every page
-    but the health, static and admin routes, and FastAPI's API docs, is gated on the job state (`SiteGate`).
+    but the health, static and admin routes (which include FastAPI's API docs) is gated on the job state (`SiteGate`).
 
     Args:
         settings: The settings; loaded from the environment if not given.
@@ -89,13 +89,21 @@ def create_app(
             finally:
                 await app.state.jobs.close()
 
-    app = FastAPI(title=browl.DESCRIPTIVE_TITLE, version=browl.__version__, lifespan=lifespan)
-    app.state.settings = settings
     reserved = f"/{settings.reserved_prefix}"
+    # The API docs live under admin/, not FastAPI's default root paths, which would shadow ontology entities.
+    app = FastAPI(
+        title=browl.DESCRIPTIVE_TITLE,
+        version=browl.__version__,
+        lifespan=lifespan,
+        openapi_url=f"{reserved}/admin/openapi.json",
+        docs_url=f"{reserved}/admin/docs",
+        redoc_url=f"{reserved}/admin/redoc",
+        swagger_ui_oauth2_redirect_url=f"{reserved}/admin/docs/oauth2-redirect",
+    )
+    app.state.settings = settings
     app.include_router(router, prefix=reserved)
     app.include_router(admin.router, prefix=reserved)
     app.mount(f"{reserved}/static", StaticFiles(directory=STATIC_DIR), name="static")
-    docs = [app.openapi_url, app.docs_url, app.redoc_url]
-    exempt = [f"{reserved}/health", f"{reserved}/static", f"{reserved}/admin", *(url for url in docs if url)]
+    exempt = [f"{reserved}/health", f"{reserved}/static", f"{reserved}/admin"]
     app.add_middleware(SiteGate, exempt=exempt)
     return app

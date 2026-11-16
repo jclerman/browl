@@ -138,9 +138,31 @@ def test_create_app_loads_settings(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_api_docs_show_title_and_version(client: TestClient) -> None:
     """Check that the OpenAPI schema, which the Swagger page shows, has browl's title and its pyproject.toml version."""
     pyproject = tomllib.loads((Path(__file__).parent.parent / "pyproject.toml").read_text())
-    info = client.get("/openapi.json").json()["info"]
+    info = client.get("/_browl/admin/openapi.json").json()["info"]
     assert info["title"] == "OWL Ontology Browser"
     assert info["version"] == browl.__version__ == pyproject["project"]["version"]
+
+
+@pytest.mark.parametrize("prefix", ["_browl", "_site"])
+def test_api_docs_are_under_admin(prefix: str) -> None:
+    """Check that the API docs are served under the reserved prefix's admin/, and not at FastAPI's default paths."""
+    with TestClient(make_app(RESERVED_PREFIX=prefix)) as client:
+        schema = client.get(f"/{prefix}/admin/openapi.json")
+        assert schema.status_code == 200
+        assert schema.json()["info"]["title"] == "OWL Ontology Browser"
+        for page, marker in [("docs", "swagger-ui"), ("redoc", "redoc")]:
+            response = client.get(f"/{prefix}/admin/{page}")
+            assert response.status_code == 200
+            assert marker in response.text
+            assert f"/{prefix}/admin/openapi.json" in response.text
+        assert client.get(f"/{prefix}/admin/docs/oauth2-redirect").status_code == 200
+        paths = {getattr(route, "path", None) for route in client.app.routes}  # type: ignore[attr-defined]
+        for default in ["/openapi.json", "/docs", "/redoc", "/docs/oauth2-redirect"]:
+            assert default not in paths
+            response = client.get(default)
+            assert response.status_code != 200
+            assert "swagger-ui" not in response.text
+            assert '"openapi"' not in response.text
 
 
 def test_startup_starts_jvm(monkeypatch: pytest.MonkeyPatch, robot_jar: Path) -> None:

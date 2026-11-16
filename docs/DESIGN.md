@@ -639,13 +639,14 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | `static/…` | CSS, htmx, hash-IRI script |
 | `admin/…` | Upload, status, admin list, sign-in/out |
 | `admin/status` | The load job's stage, start time, and failed stage and reason (A-5, A-6): an HTML fragment for htmx requests (`HX-Request`), which polls itself while a job runs, else a page (P-5) |
+| `admin/docs`, `admin/redoc`, `admin/openapi.json` | FastAPI's API docs, moved from its default root paths, where they would shadow ontology entities (P-5) |
 | `health` | Liveness check for the container; also reports whether Fuseki answers |
 
 While a load job runs, every other URL (the ontology's pages, the other routes above, and paths nothing serves) gets
 the "loading" page; when no ontology is loaded, or the last load failed, it gets the "not available" page (U-16).
-`health`, `static/…` and `admin/…` are exempt, as are FastAPI's API docs. Both pages are 503 Service Unavailable with
-`Cache-Control: no-store`, so crawlers and caches treat the outage as temporary and keep the URLs. The loading page
-adds `Retry-After` and refreshes itself at the same interval (10 s), with a `<meta>` refresh rather than a script.
+`health`, `static/…` and `admin/…` are exempt. Both pages are 503 Service Unavailable with `Cache-Control: no-store`,
+so crawlers and caches treat the outage as temporary and keep the URLs. The loading page adds `Retry-After` and
+refreshes itself at the same interval (10 s), with a `<meta>` refresh rather than a script.
 Neither page says why the site is unavailable; the failure reason is shown only on the admin status (P-5).
 
 ### 2.14 Risks

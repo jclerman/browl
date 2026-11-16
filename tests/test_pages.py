@@ -21,7 +21,13 @@ SECRET_REASON = "<script>alert('reason')</script>"
 GATED = ["/", "/example.org/onto", "/no/such/page", "/_browl/search", "/_browl/tree/classes", "/_browl/healthz"]
 """Paths gated on the job state: entity paths, the service's own non-admin routes, and paths no route matches."""
 
-EXEMPT = ["/_browl/health", "/_browl/static/browl.css", "/_browl/admin/status", "/openapi.json", "/docs"]
+EXEMPT = [
+    "/_browl/health",
+    "/_browl/static/browl.css",
+    "/_browl/admin/status",
+    "/_browl/admin/openapi.json",
+    "/_browl/admin/docs",
+]
 
 STATUS = "/_browl/admin/status"
 HTMX = {"HX-Request": "true"}
@@ -129,7 +135,7 @@ def test_available(client: TestClient, app: FastAPI) -> None:
 @pytest.mark.parametrize("path", EXEMPT)
 @pytest.mark.parametrize("site", ["loading", "not available"])
 def test_exempt(client: TestClient, app: FastAPI, path: str, site: str) -> None:
-    """Check that the health, static and admin routes, and the API docs, are served whatever the job state."""
+    """Check that the health, static and admin routes, which include the API docs, are served whatever the job state."""
     if site == "loading":
         start_job(client, app)
     assert app.state.jobs.state.site == site
