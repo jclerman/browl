@@ -266,8 +266,9 @@ The app and Fuseki are separate containers, so this avoids the app restarting Fu
 - The admin endpoints are open to any client that reaches Fuseki (its default allows only localhost, and the app is
   another container), so Fuseki's port is not published outside the Compose network.
 
-If Fuseki leaks memory or other resources across switches, the fallback is a fixed store path and a Fuseki restart,
-which takes under a second.
+Fuseki didn't leak across 60 switches of a small store, each followed by queries: its container's memory levelled off
+at 220–236 MiB after the first 10, with 55 open files and 38 threads at the end. Had it leaked, the fallback was a fixed
+store path and a Fuseki restart, which takes under a second.
 
 **Imports:** browl follows `owl:imports` where it can, and warns where it can't. The TDB2 loader doesn't follow
 imports, and by default ROBOT refuses an ontology whose imports can't be fetched
