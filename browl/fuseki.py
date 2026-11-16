@@ -69,10 +69,10 @@ class SelectStream:
         variables: The result's variables, without '?', in column order.
     """
 
-    def __init__(self, variables: tuple[str, ...], lines: AsyncIterator[str]) -> None:
-        """Wrap the lines after the header line."""
+    def __init__(self, variables: tuple[str, ...], batches: AsyncIterator[list[str]]) -> None:
+        """Wrap the batches of lines after the header line."""
         self.variables = variables
-        self._lines = lines
+        self._batches = batches
 
     async def __aiter__(self) -> AsyncIterator[tuple[Term | None, ...]]:
         """Yield each row, parsed.
@@ -80,11 +80,14 @@ class SelectStream:
         Raises:
             SparqlError: The rest of the result fails or doesn't parse.
         """
-        async for line in self._lines:
-            try:
-                yield parse_tsv_row(line, len(self.variables))
-            except RDFSyntaxError as error:
-                raise SparqlError(f"malformed SELECT result: {error}") from error
+        width = len(self.variables)
+        async for batch in self._batches:
+            for line in batch:
+                try:
+                    row = parse_tsv_row(line, width)
+                except RDFSyntaxError as error:
+                    raise SparqlError(f"malformed SELECT result: {error}") from error
+                yield row
 
 
 class FusekiClient:
@@ -135,16 +138,16 @@ class FusekiClient:
             SparqlError: The query failed, or its result is malformed (also while iterating).
             SparqlTimeoutError: Fuseki sent no data for `STREAM_READ_TIMEOUT_S` (also while iterating).
         """
-        async with self._query(dataset, query, TSV) as lines:
-            try:
-                header = await anext(lines)
-            except StopAsyncIteration:
-                raise SparqlError("empty SELECT result: no header line") from None
+        async with self._query(dataset, query, TSV) as batches:
+            first = await anext(batches, None)
+            if first is None:
+                raise SparqlError("empty SELECT result: no header line")
+            header, *rows = first
             try:
                 variables = parse_tsv_header(header)
             except RDFSyntaxError as error:
                 raise SparqlError(f"malformed SELECT result: {error}") from error
-            yield SelectStream(variables, lines)
+            yield SelectStream(variables, _prepend(rows, batches))
 
     @asynccontextmanager
     async def construct_stream(self, dataset: str, query: str) -> AsyncIterator[AsyncIterator[str]]:
@@ -157,20 +160,21 @@ class FusekiClient:
             SparqlTimeoutError: Fuseki sent no data for `STREAM_READ_TIMEOUT_S` (also while iterating).
         """
 
-        async def checked(lines: AsyncIterator[str]) -> AsyncIterator[str]:
-            async for line in lines:
-                try:
-                    check_ntriples_triple(line)
-                except RDFSyntaxError as error:
-                    raise SparqlError(f"malformed N-Triples result: {error}") from error
-                yield line
+        async def checked(batches: AsyncIterator[list[str]]) -> AsyncIterator[str]:
+            async for batch in batches:
+                for line in batch:
+                    try:
+                        check_ntriples_triple(line)
+                    except RDFSyntaxError as error:
+                        raise SparqlError(f"malformed N-Triples result: {error}") from error
+                    yield line
 
-        async with self._query(dataset, query, NTRIPLES) as lines:
-            yield checked(lines)
+        async with self._query(dataset, query, NTRIPLES) as batches:
+            yield checked(batches)
 
     @asynccontextmanager
-    async def _query(self, dataset: str, query: str, accept: str) -> AsyncIterator[AsyncIterator[str]]:
-        """Send a query and yield the response's lines, once its status and content type are checked.
+    async def _query(self, dataset: str, query: str, accept: str) -> AsyncIterator[AsyncIterator[list[str]]]:
+        """Send a query and yield the response's lines in batches, once its status and content type are checked.
 
         Raises:
             ValueError: The dataset's name isn't letters, digits, '_' and '-'.
@@ -192,7 +196,7 @@ class FusekiClient:
             content_type = response.headers.get("Content-Type", "").partition(";")[0].strip().lower()
             if content_type != accept:
                 raise SparqlError(f"Fuseki sent {content_type or 'no content type'}, not {accept}")
-            yield _lines(response)
+            yield _batches(response)
         finally:
             await response.aclose()
 
@@ -207,11 +211,12 @@ async def _time_limit(timeout_s: float) -> AsyncIterator[None]:
         raise SparqlTimeoutError(f"query took longer than {timeout_s} s") from error
 
 
-async def _lines(response: httpx2.Response) -> AsyncIterator[str]:
-    """Yield the body's lines as they arrive, decoded as UTF-8, without their line ends.
+async def _batches(response: httpx2.Response) -> AsyncIterator[list[str]]:
+    """Yield the body's lines as they arrive, decoded as UTF-8, without their line ends: each chunk's complete lines.
 
-    Lines end only at LF (or CRLF): unlike `aiter_lines`, no other character counts as a line end, so a
-    literal with a raw U+2028 stays on its line.
+    Lines end only at LF (or CRLF): unlike `aiter_lines`, no other character counts as a line end, so a literal with a
+    raw U+2028 stays on its line. Yielding a chunk's lines together, never an empty list, halves the async generator
+    steps per line, which bulk results of millions of lines notice.
 
     Raises:
         SparqlError: The body ends early, the connection breaks, the body isn't UTF-8, or a line is longer than
@@ -229,10 +234,10 @@ async def _lines(response: httpx2.Response) -> AsyncIterator[str]:
                 lines[0] = "".join(unfinished)
                 unfinished = []
                 unfinished_chars = 0
-            for line in lines:
-                if len(line) > MAX_LINE_CHARS:
+            if lines:
+                if max(map(len, lines)) > MAX_LINE_CHARS:
                     raise _line_too_long()
-                yield line.removesuffix("\r")
+                yield [line.removesuffix("\r") for line in lines]
             unfinished.append(rest)
             unfinished_chars += len(rest)
             if unfinished_chars > MAX_LINE_CHARS:
@@ -245,7 +250,14 @@ async def _lines(response: httpx2.Response) -> AsyncIterator[str]:
     except UnicodeDecodeError as error:
         raise SparqlError(f"the result isn't UTF-8: {error}") from error
     if last := "".join(unfinished):
-        yield last.removesuffix("\r")
+        yield [last.removesuffix("\r")]
+
+
+async def _prepend(batch: list[str], batches: AsyncIterator[list[str]]) -> AsyncIterator[list[str]]:
+    """Yield a batch, then the rest."""
+    yield batch
+    async for rest in batches:
+        yield rest
 
 
 def _line_too_long() -> SparqlError:
