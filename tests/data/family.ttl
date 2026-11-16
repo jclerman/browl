@@ -1,0 +1,37 @@
+# A small ontology for the tests: class and property axioms, blank nodes, and literals that need escaping.
+@prefix : <http://example.org/family#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<http://example.org/family> a owl:Ontology ;
+    owl:imports <http://example.org/not-fetched.owl> .
+
+:hasChild a owl:ObjectProperty ;
+    rdfs:domain :Person ;
+    rdfs:range :Person ;
+    rdfs:label "has child"@en .
+
+:Person a owl:Class ;
+    rdfs:label "person"@en , "personne"@FR ;
+    rdfs:comment "Tab\there, newline\nhere, \"quotes\", a backslash \\, é, and a line separator\u2028here." ;
+    :rank 1 .
+
+:rank a owl:AnnotationProperty .
+
+:Parent a owl:Class ;
+    rdfs:label "parent"@en ;
+    owl:equivalentClass [
+        a owl:Class ;
+        owl:intersectionOf ( :Person [ a owl:Restriction ; owl:onProperty :hasChild ; owl:someValuesFrom :Person ] )
+    ] .
+
+:Mother a owl:Class ;
+    rdfs:subClassOf :Parent , :Female .
+
+:Female a owl:Class ;
+    rdfs:subClassOf :Person ;
+    owl:disjointWith :Male .
+
+:Male a owl:Class ;
+    rdfs:subClassOf :Person .

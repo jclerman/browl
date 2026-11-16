@@ -23,6 +23,7 @@ pydantic = "^2.14.3"
 langcodes = "^3.5.1"
 uvicorn = "^0.54.0"
 httpx2 = "^2.16.0"
+jpype1 = "^1.7.1"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^2.4.1"
@@ -36,7 +37,10 @@ pytest-sugar = "^1.1.1"
 xfail_strict = true
 # When run with --cov, record which test covered each line; no effect otherwise.
 addopts = ["--cov-context=test", "--strict-markers"]
-markers = ["jvm: needs a JVM and robot.jar; skipped when Java is not available"]
+markers = [
+    "jvm: needs a JVM and robot.jar; skipped when Java is not available (fails in CI)",
+    "fuseki: needs Fuseki, from BROWL_TEST_FUSEKI_URL or started with Docker; skipped when neither is available (fails in CI)",
+]
 # Show full assertion diffs (as with -vv) without making other output verbose.
 verbosity_assertions = 2
 
@@ -57,6 +61,11 @@ show_contexts = true
 
 [tool.mypy]
 disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+# JPype has no type annotations; Java objects reached through it are Any (docs/CODING-STANDARDS.md).
+module = ["jpype", "jpype.*"]
+ignore_missing_imports = true
 
 [tool.ruff]
 # Max line length for the formatter, the import sorter, and E501.

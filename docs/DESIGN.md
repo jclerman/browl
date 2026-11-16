@@ -164,7 +164,9 @@ Tooling and code conventions are in [`CODING-STANDARDS.md`](CODING-STANDARDS.md)
   groups, prefixes and the search index. _(Q5, N-4)_
 - **OWLAPI in an in-process JVM**, reached through JPype from the classes in `robot.jar`, renders Manchester syntax. For
   each page it parses only the triples fetched for that entity, so it needs a small heap and no whole-ontology load
-  ([2.8](#28-entity-pages)). _(post-log)_
+  ([2.8](#28-entity-pages)). _(post-log)_ The JVM starts at app startup on the main thread: started from another
+  thread, JPype's shutdown hangs at exit. It starts with `-Xrs`, which leaves SIGINT and SIGTERM to Python, so Uvicorn
+  shuts down gracefully instead of the JVM ending the process at once (P-4).
 - **ROBOT as a subprocess** runs the optional reasoning, in its own JVM so time and memory limits can be enforced and a
   runaway run killed. Jena's TDB2 loader also runs as a subprocess, building the store for each load. _(Q7c)_
 - **One server worker process.** Concurrency comes from async request handling: SPARQL calls use an async HTTP client,
@@ -304,7 +306,10 @@ would put every triple in a named graph and hide the default graph.
 
 **Heap sizes:** the app's JVM only renders per-page fragments, so it needs a small heap (`APP_JVM_MAX_HEAP`). After a
 heap failure the app restarts its process instead of carrying on, because the error can also kill JPype's internal
-reference-cleanup thread ([S-1 findings](../research/S-1/README.md)).
+reference-cleanup thread ([S-1 findings](../research/S-1/README.md)): the JVM runs with `-XX:+ExitOnOutOfMemoryError`,
+which ends the process (exit code 3), and Compose restarts the container. The default of 1 GB was confirmed in P-4
+([P-4 findings](../research/P-4/README.md)): through browl's bridge, all of Uberon as N-Triples (1.2 M triples, 391 k
+axioms) parsed at 384 MB but not 256 MB, and a page's fragment is at most a few thousand triples.
 
 Fuseki's heap defaults to 1 GB (`FUSEKI_HEAP` in `.env`, read by `docker-compose.yml`). Measured in P-3 on NCBITaxon,
 with the bulk pre-caching queries ([2.5](#25-derived-data-pre-caching)) and then page queries from 1 and 16 clients:
@@ -600,7 +605,7 @@ validated at startup (`browl/settings.py`). Lists and mappings are given as JSON
 | `EXTRA_PREFIXES` | `{}` | O-11 |
 | `PAGE_CACHE_SIZE` | `100` | `0` turns the cache off; O-10 |
 | `REASONER_TIMEOUT_S`, `REASONER_MAX_HEAP` | `3600`, `8g`: placeholders until spike S-2 | O-8 |
-| `APP_JVM_MAX_HEAP` | `1g`, to be confirmed in P-4 | heap for the app's in-process JVM, which only renders per-page fragments (S-4) |
+| `APP_JVM_MAX_HEAP` | `1g`, confirmed in P-4 (2.4) | heap for the app's in-process JVM, which only renders per-page fragments (S-4) |
 | `FUSEKI_URL` | `http://fuseki:3030` | Fuseki's address on the Compose network |
 | `ROBOT_JAR` | `/opt/robot/robot.jar`, where the app image installs it | used both on the app's classpath and for reasoning subprocesses |
 | `JENA_HOME` | `/opt/jena`, where the app image installs it | Jena's command-line tools, for the TDB2 loader |
@@ -626,9 +631,9 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | Risk | Mitigation |
 | --- | --- |
 | Fuseki needs too much memory while serving the largest ontologies | Measured by P-3 and S-6: NCBITaxon needs about 500 MiB of heap; the default is 1 GB, and the container needs the heap plus about 0.5 GiB once Fuseki's output buffers are pooled through a `jetty.xml` (2.4). |
-| A Fuseki response that fails partway returns a truncated result with HTTP 200 | Seen in P-3 and S-6: once Fuseki has sent the status, it appends the error as plain text and ends the response normally. It sends it as soon as a SPARQL JSON or TSV result is cut short (the writer flushes what it has), and once any other response outgrows the 2 MB output buffer (2.4). So browl treats any status other than 2xx as a failed query, and never discards the HTTP client's error for a body that ends early (Fuseki exiting or restarting mid-response drops the connection before the last chunk). It parses every Fuseki response strictly, as SPARQL JSON results or N-Triples, and parses each TSV cell as an RDF term, so the appended error text can't pass as a one-column row; a parse error is a failed query, never a short result. P-8 checks that each bulk result is complete (e.g. a final count or sentinel), which also catches a result that breaks off cleanly at a row boundary, or an error with no text appended. |
+| A Fuseki response that fails partway returns a truncated result with HTTP 200 | Seen in P-3 and S-6: once Fuseki has sent the status, it appends the error as plain text and ends the response normally. It sends it as soon as a SPARQL JSON or TSV result is cut short (the writer flushes what it has), and once any other response outgrows the 2 MB output buffer (2.4). So browl treats any status other than 2xx as a failed query, and never discards the HTTP client's error for a body that ends early (Fuseki exiting or restarting mid-response drops the connection before the last chunk). It parses every Fuseki response strictly, as SPARQL JSON results or N-Triples, and parses each TSV cell as an RDF term, so the appended error text can't pass as a one-column row. N-Triples results may hold only triples, since Jena writes no comments or blank lines and the appended text can start with `#`, which N-Triples reads as a comment (P-4); a parse error is a failed query, never a short result. P-8 checks that each bulk result is complete (e.g. a final count or sentinel), which also catches a result that breaks off cleanly at a row boundary, or an error with no text appended. |
 | Fuseki pauses for full garbage collections under page load | Resolved by S-6: the `System.gc()` calls P-3 saw came from Fuseki 6.2.0 allocating an unpooled 5 MB direct output buffer per response (Jena GH-4084). Fuseki's `jetty.xml` pools a 2 MB buffer instead, which removed them; pages went from 302 to 528 a second at 1 client, and from 573 to 769 at 16 (2.4). |
-| JPype quirks: thread safety of concurrent OWLAPI calls; Python–Java call overhead | Resolved by S-1: concurrent calls were safe but gave no extra throughput, so OWLAPI calls run on one thread (2.1). Call overhead is small ([S-1 findings](../research/S-1/README.md)). |
+| JPype quirks: thread safety of concurrent OWLAPI calls; Python–Java call overhead | Resolved by S-1: concurrent calls were safe but gave no extra throughput, so OWLAPI calls run on one thread (2.1). Call overhead is small ([S-1 findings](../research/S-1/README.md)). P-4 found three more, each handled: the JVM must start on the main thread, its signal handlers bypassed Uvicorn's graceful shutdown (`-Xrs`), and the OWLAPI fetched a fragment's `owl:imports` from the web unless each import is ignored (2.1). |
 | Memory limit can't be reported reliably | Spike S-2; at worst report "reasoner failed" with ROBOT's output. |
 | Descendant counts too slow or memory-hungry at millions of classes | Resolved by S-3: roaring bitmaps, 4.2 s for NCBITaxon ([S-3 findings](../research/S-3/README.md)). |
 | Loading a very large ontology takes minutes | Accepted for uploads (Q14a), shown on the status page. Restarts don't reload (2.4). NCBITaxon: about 5 minutes, estimated; Uberon: 7 s, measured ([S-4 findings](../research/S-4/README.md)). P-24 checks whether extracting the dictionary and edges by streaming the upload file, in parallel with the TDB2 load, is worth it. |

@@ -43,8 +43,11 @@ instructions specific to coding agents. Requirements and architecture are in [`D
 - pytest, in `tests/`. Use plain `assert`s and fixtures, not `unittest`-style classes.
 - Test data, such as small ontologies, goes in `tests/data/`. Keep it small; large-scale checks belong to the spikes and
   P-24, not the test suite.
-- Mark tests that need a JVM and `robot.jar` with `@pytest.mark.jvm`. CI runs every test; locally, `jvm` tests are
-  skipped when Java isn't available. (The skip logic and Java in CI arrive with P-4, the first such test.)
+- Mark tests that need a JVM and `robot.jar` with `@pytest.mark.jvm` and have them use the `jvm` fixture, which starts
+  the JVM. Mark tests that need Fuseki with `@pytest.mark.fuseki` and have them use the `fuseki_url` fixture: a Fuseki
+  at `BROWL_TEST_FUSEKI_URL`, or one the tests start from `docker/fuseki` with Docker. Locally, these tests are skipped
+  when their needs are missing (set `ROBOT_JAR`, and `JAVA_HOME` to Java 21); in CI they fail instead, so CI runs every
+  test.
 - **Coverage:** CI fails below 90% line coverage of the `browl` package.
 
 ## Documentation
