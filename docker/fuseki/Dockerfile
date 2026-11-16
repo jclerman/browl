@@ -32,6 +32,6 @@ ENV FUSEKI_BASE=/fuseki JAVA_OPTIONS=-Xmx4g
 USER fuseki
 EXPOSE 3030
 # FusekiServerCmd is the only server command with the admin protocol, which comes with the UI; an empty static-content
-# directory (--base) leaves the UI out. tdb:unionDefaultGraph makes every dataset's default graph the union of its
-# named graphs (one per ontology and import), which the admin protocol's dataset template can't set.
-CMD ["sh", "-c", "exec java $JAVA_OPTIONS -Dtdb:unionDefaultGraph=true -cp /opt/fuseki/fuseki-server.jar org.apache.jena.fuseki.main.cmds.FusekiServerCmd --port=3030 --base=/opt/fuseki/no-ui --shiro=/opt/fuseki/shiro.ini"]
+# directory (--base) leaves the UI out. On running out of heap, Fuseki exits so the container restarts, instead of
+# carrying on unable to answer queries.
+CMD ["sh", "-c", "exec java $JAVA_OPTIONS -XX:+ExitOnOutOfMemoryError -cp /opt/fuseki/fuseki-server.jar org.apache.jena.fuseki.main.cmds.FusekiServerCmd --port=3030 --base=/opt/fuseki/no-ui --shiro=/opt/fuseki/shiro.ini"]

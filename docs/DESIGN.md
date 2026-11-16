@@ -259,8 +259,6 @@ The app and Fuseki are separate containers, so this avoids the app restarting Fu
   (`dbName=gen-N`, `dbType=tdb2`), and Fuseki's template puts its store at `{FUSEKI_BASE}/databases/gen-N`. The loader
   therefore builds each new store at that path, on the Fuseki volume that the app also mounts; registering the name
   opens it.
-- The template can't set the union default graph (Imports, below), so Fuseki runs with `-Dtdb:unionDefaultGraph=true`,
-  which sets it for every dataset.
 - Removing the old dataset (`DELETE /$/datasets/gen-N`) also deletes its store.
 - Fuseki records registered datasets in its base directory, on the same volume, so the current one survives restarts.
 - The admin endpoints are open to any client that reaches Fuseki (its default allows only localhost, and the app is
@@ -277,11 +275,23 @@ imports, and by default ROBOT refuses an ontology whose imports can't be fetched
 1. Fetch each imported ontology, recursively, into the data volume. An import that can't be fetched is dropped from
    the `owl:imports` list, and the upload page lists it as a warning.
 2. Reasoning, if any, gets the fetched files through a catalog file, so ROBOT doesn't fetch them again.
-3. The loading stage loads the ontology and each import into its own named graph, and Fuseki serves their union as the
-   default graph (`tdb:unionDefaultGraph`, set for all of Fuseki). Queries see one ontology, and each triple's source
-   stays known, e.g. to mark imported entities; merging into one file first (ROBOT `merge`) would lose that.
+3. The loading stage loads the ontology into the store's default graph, and each import into its own named graph. Each
+   triple's source stays known, e.g. to mark imported entities; merging into one file first (ROBOT `merge`) would lose
+   that.
+4. When the ontology has imports, queries that should see them name a dataset that merges every graph:
+   `FROM <urn:x-arq:DefaultGraph> FROM <urn:x-arq:UnionGraph>`. The merge is a set, so a triple that the ontology and
+   an import both state counts once. Without imports, queries have no `FROM` clause.
 
 P-8 confirms the details.
+
+**Why the ontology goes in the default graph** (measured in P-3, NCBITaxon loaded with `tdb2.xloader` in the app
+container, Fuseki with a 2 GB heap): TDB2 indexes named graphs separately, so a named graph costs about 2.2× in store
+size and load time (5.2 GB and 358 s, against 2.4 GB and 165 s in the default graph); page queries ran at the same speed
+on both. Keeping only the imports in named graphs means an ontology without imports pays nothing. Adding Uberon as an
+import (11 s; the store grew to 3.2 GB), the `FROM` merge cost about 1 ms per page at one client (median 4.0 against
+2.8 ms) and nothing measurable at 16 (682 against 641 pages a second). An explicit `{ … } UNION { GRAPH ?g { … } }`
+was no faster, and returns a triple once per graph that states it. Fuseki's alternative, `tdb:unionDefaultGraph`,
+would put every triple in a named graph and hide the default graph.
 
 **Heap sizes:** the app's JVM only renders per-page fragments, so it needs a small heap (`APP_JVM_MAX_HEAP`). Fuseki's
 memory while serving hasn't been measured yet; TDB2 is disk-based and memory-mapped (P-3 measures it). After a heap
