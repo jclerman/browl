@@ -6,13 +6,34 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from browl.settings import UNTAGGED, Settings, load_settings
+from browl.settings import UNTAGGED, Settings, confirm_unique, load_settings
 
 AUTH = {
     "OIDC_CLIENT_ID": "client-id",
     "OIDC_CLIENT_SECRET": "client-secret",
     "SEED_ADMINS": '["Admin@Example.org"]',
 }
+
+
+@pytest.mark.parametrize(
+    ("values", "duplicates"),
+    [
+        pytest.param([], None, id="empty"),
+        pytest.param(["a"], None, id="one"),
+        pytest.param(["a", "b", "c"], None, id="all-unique"),
+        pytest.param(["a", "A"], None, id="case-sensitive"),
+        pytest.param(["a", "a"], "a", id="one-duplicate"),
+        pytest.param(["a", "b", "a", "a", "c", "b"], "a, b", id="each-reported-once-in-order"),
+        pytest.param(["a", "b", "b", "a"], "b, a", id="order-of-second-occurrence"),
+    ],
+)
+def test_confirm_unique(values: list[str], duplicates: str | None) -> None:
+    """Check that confirm_unique returns a list without duplicates and otherwise names each duplicate once."""
+    if duplicates is None:
+        assert confirm_unique(values) is values
+    else:
+        with pytest.raises(ValueError, match=f"^duplicate entries: {duplicates}$"):
+            confirm_unique(values)
 
 
 @pytest.fixture

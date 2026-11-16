@@ -23,11 +23,23 @@ _IRI_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 _JAVA_HEAP = re.compile(r"[1-9][0-9]*[kKmMgG]?")  # -Xmx syntax
 
 
-def _unique(values: list[str]) -> list[str]:
+def confirm_unique(values: list[str]) -> list[str]:
+    """Confirm that all values in a list are unique.
+
+    Args:
+        values: List of values to check.
+
+    Returns:
+        List of unique values, if they are all unique.
+
+    Raises:
+        ValueError: If any values are not unique; reports the unique set of values that were not unique,
+            in the order in which their second occurrence appeared.
+    """
     val_set = set(values)
     if len(val_set) == len(values):
         return values
-    duplicates: dict[str, None] = {}  # a dict, not a set: reports each duplicate once, in order of appearance
+    duplicates: dict[str, None] = {}  # a dict, not a set: each duplicate once, in order
     for v in values:
         if v in val_set:
             val_set.remove(v)
@@ -100,7 +112,7 @@ class Settings(BaseSettings):
     @classmethod
     def check_name_properties(cls, value: list[str]) -> list[str]:
         """Reject duplicate name properties."""
-        return _unique(value)
+        return confirm_unique(value)
 
     @field_validator("reserved_prefix")
     @classmethod
@@ -120,7 +132,7 @@ class Settings(BaseSettings):
             raise ValueError(f"invalid language tags: {', '.join(invalid)}")
         if UNTAGGED not in ranking:
             ranking.append(UNTAGGED)
-        return _unique(ranking)
+        return confirm_unique(ranking)
 
     @field_validator("extra_prefixes")
     @classmethod
@@ -140,7 +152,7 @@ class Settings(BaseSettings):
         invalid = [address for address in value if not re.fullmatch(r"[^@\s]+@[^@\s]+", address)]
         if invalid:
             raise ValueError(f"not email addresses: {', '.join(invalid)}")
-        return _unique([address.lower() for address in value])
+        return confirm_unique([address.lower() for address in value])
 
     @field_validator("auth_disabled")
     @classmethod
