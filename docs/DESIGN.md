@@ -685,11 +685,11 @@ go into this document.
 
 Requirements marked **Later** (U-18–U-25, U-33–U-40, A-8, A-9, O-12) are not yet broken into work items.
 
-**Features that set browl apart** _(post-log)_. EBI's [OLS4](https://github.com/EBISPOT/ols4) already covers much of
-v1 for many ontologies at once. It shows hierarchies along configured properties, but it does no reasoning, and its
-"Related from" section lists only the entities whose `SubClassOf(P some C)` restrictions mention an entity, not the
-axioms. These Later requirements build on what browl has and OLS4 lacks: the OWLAPI, a reasoner in the load
-pipeline, and one ontology at a time. In rough priority order:
+**Novel features** _(post-log)_. EBI's [OLS4](https://github.com/EBISPOT/ols4) already offers much of v1 for many
+ontologies at once. It shows hierarchies along configured properties, but it does no reasoning, and its "Related from"
+section lists only the entities whose `SubClassOf(P some C)` restrictions mention an entity, not the axioms. These
+Later requirements add features not yet offered by existing ontology browsers, building on the OWLAPI, a reasoner in
+the load pipeline, and serving one ontology at a time. In rough priority order:
 
 1. Usage tab filters (U-34).
 2. Axiom annotations (U-35).
