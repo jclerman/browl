@@ -73,6 +73,13 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **U-24** · Optionally hide results in less-preferred languages entirely. _(Q10)_ | Later |
 | **U-25** · Optional ranking by entity importance, only if it adds little complexity. _(Q9)_ | Later |
 | **U-33** · An annotation property with many values shows them in multiple columns where the page width allows. | Later |
+| **U-34** · The Usage tab (U-26) can be filtered by axiom type (SubClass Of, Equivalent To, domain or range, annotation value, …) and by property. | Later |
+| **U-35** · Axiom annotations (e.g. cross-references on a synonym or definition) are shown under the annotation value or axiom they annotate. | Later |
+| **U-36** · A read-only SPARQL endpoint over the served ontology, with a query time limit. | Later |
+| **U-37** · The served ontology (after reasoning, if a reasoner ran) can be downloaded from the home page. | Later |
+| **U-38** · Relation trees: besides the subclass tree, a tree for each configured object property (O-12), e.g. `part_of`. A class's parents in it are the classes `D` in its `SubClassOf(P some D)` axioms, including those implied by its equivalence definitions. Counts follow U-8. | Later |
+| **U-39** · Where a reasoner ran, inferred parents and axioms are marked as inferred, on entity pages, in the Usage tab and in the trees. | Later |
+| **U-40** · An inferred parent or axiom has a "Why?" link that shows its explanation: the asserted axioms that entail it, in Manchester syntax. | Later |
 
 ### 1.3 Admin requirements
 
@@ -103,6 +110,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **O-9** · Data that must survive restarts (the loaded ontology, derived data, the admin list) lives on mounted volumes. _(Q16a)_ | v1 |
 | **O-10** · The page cache size is configurable (default 100 pages). _(Q13)_ | v1 |
 | **O-11** · Extra CURIE prefix mappings are configurable and override the ontology's own and the built-in ones. _(Q18b)_ | v1 |
+| **O-12** · The object properties that get relation trees (U-38) are configurable. | Later |
 
 ### 1.5 Non-functional requirements
 
@@ -229,7 +237,7 @@ server worker reports it consistently. _(Q7b, Q14a)_
 | --- | --- |
 | **uploading** | The file is streamed to the data volume. The site switches to the "loading" page (U-16) and the page cache is cleared. |
 | **imports** | Imported ontologies are fetched (see Imports, below). |
-| **reasoning** (optional) | A build script runs ROBOT `reason` with ELK or HermiT. Its output, written as Turtle, replaces the uploaded file as the ontology that gets served. Without reasoning, an `.ofn` upload, which the TDB2 loader can't read (it reads only RDF formats), is converted to Turtle by ROBOT; RDF/XML and Turtle uploads load as they are. Turtle is tentative: P-8 measures which RDF format ROBOT can write that loads fastest. _(Q7a)_ |
+| **reasoning** (optional) | A build script runs ROBOT `reason` with ELK or HermiT. Its output, written as Turtle, replaces the uploaded file as the ontology that gets served. (Later requirements U-39 and U-40 need the asserted axioms kept too; see [Later](#later).) Without reasoning, an `.ofn` upload, which the TDB2 loader can't read (it reads only RDF formats), is converted to Turtle by ROBOT; RDF/XML and Turtle uploads load as they are. Turtle is tentative: P-8 measures which RDF format ROBOT can write that loads fastest. _(Q7a)_ |
 | **loading** | Jena's TDB2 bulk loader builds a new store from the built ontology, in a new directory on the data volume. Fuseki is then switched to it and the previous store deleted. Uberon loads in 4–5 s, NCBITaxon in about 3 min ([S-4 findings](../research/S-4/README.md)). _(Q15)_ |
 | **pre-caching** | A few bulk SPARQL queries fetch the whole-ontology data, and the derived SQLite database is built from them ([2.5](#25-derived-data-pre-caching)), as a new file then swapped in atomically. |
 | **ready** | The new generation number is recorded; pages are served again. |
@@ -675,4 +683,41 @@ go into this document.
 
 ### Later
 
-Requirements marked **Later** (U-18–U-25, A-8, A-9) are not yet broken into work items.
+Requirements marked **Later** (U-18–U-25, U-33–U-40, A-8, A-9, O-12) are not yet broken into work items.
+
+**Novel features** _(post-log)_. EBI's [OLS4](https://github.com/EBISPOT/ols4) already offers much of v1 for many
+ontologies at once. It shows hierarchies along configured properties, but it does no reasoning, and its "Related from"
+section lists only the entities whose `SubClassOf(P some C)` restrictions mention an entity, not the axioms. These
+Later requirements add features not yet offered by existing ontology browsers, building on the OWLAPI, a reasoner in
+the load pipeline, and serving one ontology at a time. In rough priority order:
+
+1. Usage tab filters (U-34).
+2. Axiom annotations (U-35).
+3. SPARQL endpoint and download (U-36, U-37).
+4. Relation trees (U-38, O-12). Unlike OLS4's, their edges also come from equivalence definitions (below).
+5. Inferred axioms and their explanations (U-39, U-40).
+
+**Relation-tree edges from equivalence definitions** (for U-38). `EquivalentClasses(C, A and (P some D))` gives `C` the
+parent `D` in the tree for `P`. Tentatively, the edges query (P-12) finds these itself: it walks the `owl:intersectionOf`
+list of each `owl:equivalentClass` on a named class (in either direction) and keeps the conjuncts that are
+`owl:someValuesFrom` restrictions on a configured property with a named filler. That works; a faster or simpler way can
+replace it later. It also adds no axioms to the store, keeping the asserted/inferred split (below) clean.
+
+browl avoids ROBOT `relax`, the usual tool for this. `relax` does add `SubClassOf(C, P some D)` for each such conjunct,
+but it also turns every object cardinality restriction with a count above 0 into `some`, and no option turns that off.
+That goes beyond what U-38 needs, and for `max` it is wrong: `P max 2 D` allows zero, so it doesn't imply `P some D`.
+The code ([`RelaxOperation.java`](https://github.com/ontodev/robot/blob/master/robot-core/src/main/java/org/obolibrary/robot/RelaxOperation.java),
+checked 2026-11-16) tests for `OWLObjectCardinalityRestriction`, which covers `min`, `exact` and `max`.
+
+**Asserted and inferred kept apart** (for U-39, U-40). Today the reasoned output replaces the uploaded ontology
+([2.4](#24-load-pipeline)), so what was asserted is lost. Following §2.4's store layout (ontology in the default
+graph, imports in named graphs, queries merging every graph with `FROM`), the asserted ontology would stay in the
+default graph and only the inferred axioms would go in a named graph of their own. Queries already merge every graph,
+so they see both unchanged. An axiom is inferred if its triples are in that graph and not in the default graph.
+Inferences are usually far fewer than asserted axioms, so the extra load time and store size that a named graph costs
+(about 2.2× on NCBITaxon, P-3) fall only on them. Explanations are computed on demand (ROBOT `explain` or the OWLAPI
+explanation API) and cached. Settle this before the load pipeline
+(P-7, P-8) is built, so it doesn't have to be reworked.
+
+Out of scope for now: a quality report on upload (ROBOT `report`, which assumes OBO conventions that not every
+ontology follows) and version history with diffs between loads.
