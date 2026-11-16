@@ -174,7 +174,7 @@ Tooling and code conventions are in [`CODING-STANDARDS.md`](CODING-STANDARDS.md)
 | Data models | Pydantic | Entities, settings, job state. |
 | Configuration | pydantic-settings | Defaults in code; environment variables override. _(Q13)_ |
 | Ontology store | Apache Jena Fuseki with TDB2, in its own container | Queried with SPARQL over HTTP. Jena 6 needs Java 21. _(S-4)_ |
-| SPARQL client | HTTPX (async) | Plain SPARQL protocol; results read as TSV, fragments as N-Triples. |
+| SPARQL client | HTTPX2 (async) | Pydantic's maintained continuation of HTTPX, which Starlette's test client also prefers. Plain SPARQL protocol; results read as TSV, fragments as N-Triples. |
 | Manchester rendering | OWLAPI's Manchester syntax renderer, from the classes bundled in `robot.jar` | Renders per-page fragments; see [2.8](#28-entity-pages). _(post-log)_ |
 | Python ↔ Java bridge | JPype | One JVM per process, started at app startup. _(post-log)_ |
 | Derived store and search (v1) | SQLite (Python standard library), queried in a thread pool | FTS5 later for any-word search. _(Q8, Q11)_ |

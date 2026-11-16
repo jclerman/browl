@@ -19,6 +19,8 @@ fastapi = "^0.163"
 pydantic-settings = "^2.16.3"
 pydantic = "^2.14.3"
 langcodes = "^3.5.1"
+uvicorn = "^0.54.0"
+httpx2 = "^2.16.0"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^2.4.1"
