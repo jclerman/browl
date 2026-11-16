@@ -36,6 +36,9 @@ services:
       # 20 requests' 2 MB buffers. The container needs about the heap plus 0.5 GiB: 1.5 GiB at the default (DESIGN.md
       # §2.4, S-6).
       JDK_JAVA_OPTIONS: -Xmx${FUSEKI_HEAP:-1g} -XX:MaxDirectMemorySize=128m
+    # No memory limit unless FUSEKI_MEM_LIMIT is set (0 means none): a limit contains a runaway Fuseki, but must be
+    # raised with FUSEKI_HEAP (DESIGN.md §2.4).
+    mem_limit: ${FUSEKI_MEM_LIMIT:-0}
     volumes:
       - fuseki:/fuseki
     healthcheck:

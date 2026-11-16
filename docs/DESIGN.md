@@ -336,11 +336,16 @@ queries (the heap at 650–790 MiB committed, plus about 140 MiB of JVM overhead
 than with Fuseki's own setup: 528 and 769 a second at 1 and 16 clients, against 302 and 573. Drop the `jetty.xml` once
 browl moves to a Jena release with the fix, and remeasure.
 
-`docker-compose.yml` sets no memory limit, since a fixed one wouldn't follow `FUSEKI_HEAP`. An operator who wants one
-can set the container to the heap plus 0.5 GiB: at 1.5 GiB, and even at 1 GiB, nothing was killed under 16-client load
-and the bulk queries; the kernel reclaimed the store's page cache instead, and the bulk queries slowed from 40 s to
-45–50 s. Below 1,792 MiB the JVM picks SerialGC instead of G1, which made no difference here. A 768 MB heap passed
-the bulk queries but saved nothing.
+`docker stats` counts the store's pages the kernel has cached for Fuseki, which it gives back when anything else needs
+the memory. Without a limit that cache fills spare memory (about 1.6 GiB in `docker stats` under 16-client load on
+NCBITaxon), so judge Fuseki's needs by the cgroup's anonymous memory, not by `docker stats`. A memory limit doesn't
+lower what Fuseki needs; it contains a runaway Fuseki (a heap set too large, a leak), which is then killed and
+restarted instead of squeezing the app or the host. So the limit is optional: `FUSEKI_MEM_LIMIT` in `.env`, read by
+`docker-compose.yml`, with none by default, since a fixed one wouldn't follow `FUSEKI_HEAP`. Set it to the heap plus
+0.5 GiB, and raise it with the heap. At 1.5 GiB, and even at 1 GiB, nothing was killed under 16-client load and the
+bulk queries; the kernel evicted the store's cached pages instead, and the bulk queries slowed from 40 s to 45–50 s.
+Below 1,792 MiB the JVM picks SerialGC instead of G1, which made no difference here. A 768 MB heap passed the bulk
+queries but saved nothing.
 
 ### 2.5 Derived data (pre-caching)
 
