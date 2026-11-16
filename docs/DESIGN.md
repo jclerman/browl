@@ -252,13 +252,22 @@ either container doesn't reload the ontology.
 
 **Switching Fuseki to a new store** happens at the end of every loading stage, including the first. The TDB2 loader
 can only write a new store, not one Fuseki has open, so Fuseki keeps serving the previous store (behind the "loading"
-page) until the new one is built. The app then switches Fuseki over with **Fuseki's admin protocol** (`/$/datasets`):
-it registers the new store as a dataset named after the load's generation number, with a description that sets the
-TDB2 location and the union default graph (Imports, below), then removes the old dataset and deletes its store. The app
-and Fuseki are separate containers, so this avoids the app restarting Fuseki. Fuseki records registered datasets in its
-base directory, which is on a volume, so the current one survives restarts. The admin endpoints are reachable only on
-the Compose network. P-3 tries this. If Fuseki leaks memory or other resources across switches, the fallback is a fixed
-store path and a Fuseki restart, which takes under a second.
+page) until the new one is built. The app then switches Fuseki over with **Fuseki's admin protocol** (`/$/datasets`).
+The app and Fuseki are separate containers, so this avoids the app restarting Fuseki. Tried in P-3 with Fuseki 6.2.0:
+
+- Fuseki 6 refuses a dataset description sent to the admin protocol, so a dataset is registered by name only
+  (`dbName=gen-N`, `dbType=tdb2`), and Fuseki's template puts its store at `{FUSEKI_BASE}/databases/gen-N`. The loader
+  therefore builds each new store at that path, on the Fuseki volume that the app also mounts; registering the name
+  opens it.
+- The template can't set the union default graph (Imports, below), so Fuseki runs with `-Dtdb:unionDefaultGraph=true`,
+  which sets it for every dataset.
+- Removing the old dataset (`DELETE /$/datasets/gen-N`) also deletes its store.
+- Fuseki records registered datasets in its base directory, on the same volume, so the current one survives restarts.
+- The admin endpoints are open to any client that reaches Fuseki (its default allows only localhost, and the app is
+  another container), so Fuseki's port is not published outside the Compose network.
+
+If Fuseki leaks memory or other resources across switches, the fallback is a fixed store path and a Fuseki restart,
+which takes under a second.
 
 **Imports:** browl follows `owl:imports` where it can, and warns where it can't. The TDB2 loader doesn't follow
 imports, and by default ROBOT refuses an ontology whose imports can't be fetched
@@ -268,8 +277,8 @@ imports, and by default ROBOT refuses an ontology whose imports can't be fetched
    the `owl:imports` list, and the upload page lists it as a warning.
 2. Reasoning, if any, gets the fetched files through a catalog file, so ROBOT doesn't fetch them again.
 3. The loading stage loads the ontology and each import into its own named graph, and Fuseki serves their union as the
-   default graph (`tdb2:unionDefaultGraph`). Queries see one ontology, and each triple's source stays known, e.g. to
-   mark imported entities; merging into one file first (ROBOT `merge`) would lose that.
+   default graph (`tdb:unionDefaultGraph`, set for all of Fuseki). Queries see one ontology, and each triple's source
+   stays known, e.g. to mark imported entities; merging into one file first (ROBOT `merge`) would lose that.
 
 P-8 confirms the details.
 
@@ -533,8 +542,8 @@ validated at startup (`browl/settings.py`). Lists and mappings are given as JSON
 | `REASONER_TIMEOUT_S`, `REASONER_MAX_HEAP` | `3600`, `8g`: placeholders until spike S-2 | O-8 |
 | `APP_JVM_MAX_HEAP` | `1g`, to be confirmed in P-4 | heap for the app's in-process JVM, which only renders per-page fragments (S-4) |
 | `FUSEKI_URL` | `http://fuseki:3030` | Fuseki's address on the Compose network |
-| `ROBOT_JAR` | path in the image (placeholder `/opt/robot/robot.jar` until P-3) | used both on the app's classpath and for reasoning subprocesses |
-| `JENA_HOME` | path in the image (placeholder `/opt/jena` until P-3) | Jena's command-line tools, for the TDB2 loader |
+| `ROBOT_JAR` | `/opt/robot/robot.jar`, where the app image installs it | used both on the app's classpath and for reasoning subprocesses |
+| `JENA_HOME` | `/opt/jena`, where the app image installs it | Jena's command-line tools, for the TDB2 loader |
 | `DATA_DIR` | `/data` | mounted volume; O-9 |
 | `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `SEED_ADMINS` | none | required unless `AUTH_DISABLED`; O-6 |
 | `AUTH_DISABLED` | `false` | O-7 |

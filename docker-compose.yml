@@ -1,0 +1,45 @@
+# browl's two services (DESIGN.md §2.1, O-1). Settings (§2.12) come from .env; see .env.example.
+name: browl
+
+services:
+  app:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "${BROWL_PORT:-8000}:8000"
+    volumes:
+      - data:/data
+      # The app's loader builds each new TDB2 store under /fuseki/databases, where Fuseki opens it (§2.4).
+      - fuseki:/fuseki
+    depends_on:
+      - fuseki
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/$${RESERVED_PREFIX:-_browl}/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      start_interval: 2s
+    restart: unless-stopped
+
+  fuseki:
+    build: docker/fuseki
+    # No published ports: the admin protocol is open to anything that reaches Fuseki (docker/fuseki/shiro.ini).
+    environment:
+      JAVA_OPTIONS: -Xmx4g
+    volumes:
+      - fuseki:/fuseki
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3030/$$/ping"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      start_interval: 2s
+    restart: unless-stopped
+
+volumes:
+  # DATA_DIR: uploads, the derived database, job state.
+  data:
+  # FUSEKI_BASE: the registered datasets and their TDB2 stores.
+  fuseki:

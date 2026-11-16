@@ -66,8 +66,8 @@ class Settings(BaseSettings):
         reasoner_max_heap: Reasoner heap limit; placeholder until spike S-2 (O-8).
         app_jvm_max_heap: Heap for the app's JVM, which only renders per-page fragments; to be confirmed in P-4.
         fuseki_url: Fuseki's address.
-        robot_jar: Path to `robot.jar`; placeholder until P-3 builds the image.
-        jena_home: Jena's command-line tools; placeholder until P-3 builds the image.
+        robot_jar: Path to `robot.jar`, where the app image installs it.
+        jena_home: Jena's command-line tools, where the app image installs them.
         data_dir: Mounted volume for data that survives restarts (O-9).
         oidc_client_id: Google OAuth client ID (O-6).
         oidc_client_secret: Google OAuth client secret (O-6).

@@ -1,0 +1,6 @@
+# The app image needs only the dependency lists and the package.
+*
+!pyproject.toml
+!poetry.lock
+!browl/
+**/__pycache__/

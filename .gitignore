@@ -24,3 +24,6 @@ htmlcov/
 *.iml
 # VS Code
 .vscode/
+
+# Local settings for docker-compose.yml (see .env.example)
+.env
