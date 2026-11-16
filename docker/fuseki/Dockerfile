@@ -28,7 +28,7 @@ COPY shiro.ini /opt/fuseki/
 
 # FUSEKI_BASE holds the registered datasets' configuration and, under databases/, their TDB2 stores.
 # JAVA_OPTIONS sets the heap; docker-compose.yml overrides it.
-ENV FUSEKI_BASE=/fuseki JAVA_OPTIONS=-Xmx4g
+ENV FUSEKI_BASE=/fuseki JAVA_OPTIONS=-Xmx1g
 USER fuseki
 EXPOSE 3030
 # FusekiServerCmd is the only server command with the admin protocol, which comes with the UI; an empty static-content

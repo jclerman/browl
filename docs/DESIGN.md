@@ -293,9 +293,19 @@ import (11 s; the store grew to 3.2 GB), the `FROM` merge cost about 1 ms per pa
 was no faster, and returns a triple once per graph that states it. Fuseki's alternative, `tdb:unionDefaultGraph`,
 would put every triple in a named graph and hide the default graph.
 
-**Heap sizes:** the app's JVM only renders per-page fragments, so it needs a small heap (`APP_JVM_MAX_HEAP`). Fuseki's
-memory while serving hasn't been measured yet; TDB2 is disk-based and memory-mapped (P-3 measures it). After a heap
-failure the app restarts its process instead of carrying on, because the error can also kill JPype's internal
+**Heap sizes:** the app's JVM only renders per-page fragments, so it needs a small heap (`APP_JVM_MAX_HEAP`).
+
+Fuseki's heap defaults to 1 GB (`FUSEKI_HEAP` in `.env`, read by `docker-compose.yml`). Measured in P-3 on NCBITaxon,
+with the bulk pre-caching queries ([2.5](#25-derived-data-pre-caching)) and then page queries from 1 and 16 clients:
+the heap held 430–490 MiB after garbage collection at its peak, during the bulk name-dictionary query, so 1 GB leaves
+about 2× headroom. 512 MB was too tight (constant collection; median page time at 16 clients rose from about 22 to
+92 ms), and at 256 MB the dictionary query ran out of memory. Page throughput didn't differ measurably between 1, 2 and
+4 GB; runs varied more with how much of the store the OS had cached. TDB2's store is memory-mapped, so memory not given
+to the heap caches the store. Raise the heap for ontologies larger than NCBITaxon or with large imports, whose bulk
+queries go through the `FROM` merge (not measured). On `OutOfMemoryError` Fuseki exits and Compose restarts it; without
+that, it hung after one and answered nothing.
+
+After an app heap failure the app restarts its process instead of carrying on, because the error can also kill JPype's internal
 reference-cleanup thread ([S-1 findings](../research/S-1/README.md)).
 
 ### 2.5 Derived data (pre-caching)
@@ -576,7 +586,9 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 
 | Risk | Mitigation |
 | --- | --- |
-| Fuseki needs too much memory while serving the largest ontologies | Not measured yet; TDB2 is disk-based and memory-mapped. P-3 measures it with NCBITaxon. |
+| Fuseki needs too much memory while serving the largest ontologies | Measured by P-3: NCBITaxon needs about 500 MiB of heap; the default is 1 GB (2.4). |
+| A bulk query that fails partway returns a truncated result with HTTP 200 | Seen in P-3: Fuseki streams results, so when it ran out of memory partway through the name dictionary, the status had already been sent. P-8 checks that each bulk result is complete (e.g. a final count, or the TSV ends cleanly) before building the derived database. |
+| Fuseki pauses for full garbage collections under page load | Seen in P-3: hundreds of `System.gc()` calls, each pausing 70–275 ms, made by the JDK when Fuseki's direct (I/O) buffers reach their limit, which defaults to the heap size. Raising that limit made throughput worse. P-24 finds what allocates the buffers if page latency needs it. |
 | JPype quirks: thread safety of concurrent OWLAPI calls; Python–Java call overhead | Resolved by S-1: concurrent calls were safe but gave no extra throughput, so OWLAPI calls run on one thread (2.1). Call overhead is small ([S-1 findings](../research/S-1/README.md)). |
 | Memory limit can't be reported reliably | Spike S-2; at worst report "reasoner failed" with ROBOT's output. |
 | Descendant counts too slow or memory-hungry at millions of classes | Resolved by S-3: roaring bitmaps, 4.2 s for NCBITaxon ([S-3 findings](../research/S-3/README.md)). |
