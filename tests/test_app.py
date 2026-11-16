@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx2
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import browl
@@ -23,6 +24,11 @@ UNREACHABLE = "http://127.0.0.1:1"  # nothing listens on port 1, so connections 
 def make_settings(**overrides: object) -> Settings:
     """Return settings for tests: authentication off, and any overrides."""
     return Settings.model_validate({"BASE_URL": "http://example.org/", "AUTH_DISABLED": True} | overrides)
+
+
+def make_app(fuseki_transport: httpx2.AsyncBaseTransport | None = None, **overrides: object) -> FastAPI:
+    """Return an app that doesn't start the JVM, with `make_settings(**overrides)` and the Fuseki transport given."""
+    return create_app(make_settings(**overrides), fuseki_transport=fuseki_transport, start_jvm=False)
 
 
 Answer = httpx2.Response | Exception | Callable[[httpx2.Request], Awaitable[httpx2.Response]]
@@ -45,8 +51,7 @@ def check_health(answer: Answer, path: str = "/_browl/health", **overrides: obje
             return answer
         return await answer(request)
 
-    app = create_app(make_settings(**overrides), fuseki_transport=httpx2.MockTransport(handler), start_jvm=False)
-    with TestClient(app) as client:
+    with TestClient(make_app(httpx2.MockTransport(handler), **overrides)) as client:
         response = client.get(path)
     assert response.status_code == 200
     return response.json(), requests
@@ -55,7 +60,7 @@ def check_health(answer: Answer, path: str = "/_browl/health", **overrides: obje
 @pytest.fixture
 def client() -> Iterator[TestClient]:
     """Yield a test client for an app with default settings, its lifespan running."""
-    with TestClient(create_app(make_settings(), start_jvm=False)) as test_client:
+    with TestClient(make_app()) as test_client:
         yield test_client
 
 
@@ -105,7 +110,7 @@ def test_health_fuseki_slow(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_health_fuseki_unreachable() -> None:
     """Check that the app's default transport reports a refused connection as down."""
-    with TestClient(create_app(make_settings(FUSEKI_URL=UNREACHABLE), start_jvm=False)) as client:
+    with TestClient(make_app(FUSEKI_URL=UNREACHABLE)) as client:
         assert client.get("/_browl/health").json() == {"status": "ok", "fuseki": "down"}
 
 
@@ -113,7 +118,7 @@ def test_reserved_prefix() -> None:
     """Check that the service's own routes live under RESERVED_PREFIX."""
     body, _ = check_health(httpx2.Response(200), path="/_site/health", RESERVED_PREFIX="_site")
     assert body["fuseki"] == "up"
-    with TestClient(create_app(make_settings(RESERVED_PREFIX="_site"), start_jvm=False)) as client:
+    with TestClient(make_app(RESERVED_PREFIX="_site")) as client:
         assert client.get("/_browl/health").status_code == 404
 
 
@@ -139,6 +144,7 @@ def test_startup_starts_jvm(monkeypatch: pytest.MonkeyPatch) -> None:
     app = create_app(make_settings(ROBOT_JAR=str(robot_jar()), APP_JVM_MAX_HEAP="768m"))
     with TestClient(app):
         assert isinstance(app.state.sparql, FusekiClient)
+        assert isinstance(app.state.fuseki_http, httpx2.AsyncClient)
     assert calls == [(robot_jar(), "768m")]
 
 

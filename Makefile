@@ -13,19 +13,21 @@ install:  ## Install dependencies into the Poetry venv, matching poetry.lock
 lint:  ## Run all pre-commit hooks on all files
 	poetry run pre-commit run --all-files
 
-# robot.jar for the tests marked jvm, which tests/conftest.py uses unless ROBOT_JAR is set: the release and checksum the
-# app image pins, read from the Dockerfile. A file target, so it's downloaded only when it isn't already there; the
+# robot.jar for the tests marked jvm, which tests/conftest.py uses unless ROBOT_JAR is set (`make test` then doesn't
+# download it): the release and checksum the app image pins, read from the Dockerfile. A file target that depends on
+# the Dockerfile, so it's downloaded when it's missing or older than the Dockerfile: bumping ROBOT_VERSION gets the new
+# release. Any other Dockerfile edit downloads it again too, which is rare enough not to need a recorded version. The
 # download goes to a .part file first, so a failed one leaves nothing behind that looks complete.
 ROBOT_JAR_CACHE := .cache/robot.jar
 
 .PHONY: test
-test: $(ROBOT_JAR_CACHE)  ## Run tests with coverage
+test: $(if $(ROBOT_JAR),,$(ROBOT_JAR_CACHE))  ## Run tests with coverage
 	poetry run pytest --cov
 
 .PHONY: robot-jar
 robot-jar: $(ROBOT_JAR_CACHE)  ## Download the pinned robot.jar for the tests, unless already present
 
-$(ROBOT_JAR_CACHE):
+$(ROBOT_JAR_CACHE): Dockerfile
 	mkdir -p $(@D)
 	curl -fsSL -o $@.part \
 		"https://github.com/ontodev/robot/releases/download/$$(sed -n 's/^ARG ROBOT_VERSION=//p' Dockerfile)/robot.jar"

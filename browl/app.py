@@ -40,7 +40,7 @@ async def health(request: Request) -> Health:
     A Fuseki outage doesn't fail the check: the app stays up to serve its "not available" page (U-16), and Fuseki's
     container has its own health check.
     """
-    client: httpx2.AsyncClient = request.app.state.fuseki
+    client: httpx2.AsyncClient = request.app.state.fuseki_http
     try:
         # httpx2's own timeout limits each phase (connect, write, read) separately, not the whole call.
         async with asyncio.timeout(FUSEKI_TIMEOUT_S):
@@ -76,7 +76,7 @@ def create_app(
         if start_jvm:
             owlapi.start_jvm(settings.robot_jar, settings.app_jvm_max_heap)
         async with httpx2.AsyncClient(base_url=str(settings.fuseki_url), transport=fuseki_transport) as client:
-            app.state.fuseki = client
+            app.state.fuseki_http = client
             app.state.sparql = FusekiClient(client)
             yield
 

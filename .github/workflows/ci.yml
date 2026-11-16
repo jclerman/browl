@@ -48,6 +48,20 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      # The robot.jar that `make test` downloads, keyed by the Dockerfile that pins it.
+      - name: Cache robot.jar
+        id: robot-jar
+        uses: actions/cache@v6
+        with:
+          path: .cache/robot.jar
+          key: robot-jar-${{ hashFiles('Dockerfile') }}
+
+      # Checkout gives the Dockerfile the current time, so a restored jar looks older than it, and make would download
+      # it again. The key matched the Dockerfile, so the jar is current.
+      - name: Mark the restored robot.jar as current
+        if: steps.robot-jar.outputs.cache-hit == 'true'
+        run: touch .cache/robot.jar
+
       - name: Install dependencies, lint, and test
         run: make install ci
 
