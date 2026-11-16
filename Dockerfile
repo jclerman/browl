@@ -30,9 +30,10 @@ COPY pyproject.toml poetry.lock ./
 RUN poetry install --only main --no-root
 
 FROM ${PYTHON_IMAGE}
-# Java 21 (Jena 6 needs it) from Debian, which backports its security fixes; curl is for the container health check.
+# Java 21 (Jena 6 needs it) from Debian, which backports its security fixes; curl is for the container health check;
+# Jena's bulk loader for large ontologies (tdb2.xloader) needs jq.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl openjdk-21-jre-headless \
+    && apt-get install -y --no-install-recommends curl jq openjdk-21-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 # One UID for the app and Fuseki: the app's loader writes the TDB2 stores that Fuseki then opens and deletes.
 RUN useradd --uid 10001 --user-group --no-create-home browl \
