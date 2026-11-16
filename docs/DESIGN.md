@@ -700,7 +700,7 @@ go into this document.
 
 | ID | Work item | Delivers | Depends on | Status | Tracking |
 | --- | --- | --- | --- | --- | --- |
-| P-5 | Job runner and job state in SQLite; "loading" / "not available" site pages | U-16, A-5 | P-2 | To do | [#14](https://github.com/jclerman/browl/issues/14) |
+| P-5 | Job runner and job state in SQLite; "loading" / "not available" site pages | U-16, A-5 | P-2 | Done | [#14](https://github.com/jclerman/browl/issues/14) |
 | P-6 | Upload page and streaming upload (auth not yet enforced) | A-2, A-4 | P-5 | To do | [#16](https://github.com/jclerman/browl/issues/16) |
 | P-7 | ROBOT build script: optional ELK/HermiT reasoning, with limits | A-3, A-6, O-8 | P-6, S-2 | To do | [#18](https://github.com/jclerman/browl/issues/18) |
 | P-8 | Fetch imports (warn on failures); bulk-load the ontology and imports into a new TDB2 store and switch Fuseki to it; no reload on restart | A-4 | P-4, P-7, S-4 | To do | [#20](https://github.com/jclerman/browl/issues/20) |
