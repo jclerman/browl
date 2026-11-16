@@ -694,10 +694,20 @@ pipeline, and one ontology at a time. In rough priority order:
 1. Usage tab filters (U-34).
 2. Axiom annotations (U-35).
 3. SPARQL endpoint and download (U-36, U-37).
-4. Relation trees (U-38, O-12). Unlike OLS4's, their edges also come from equivalence definitions: in the build
-   step, with or without a reasoner, ROBOT `relax` adds `SubClassOf(C, P some D)` alongside
-   `EquivalentClasses(C, A and (P some D))`, which it keeps.
+4. Relation trees (U-38, O-12). Unlike OLS4's, their edges also come from equivalence definitions (below).
 5. Inferred axioms and their explanations (U-39, U-40).
+
+**Relation-tree edges from equivalence definitions** (for U-38). `EquivalentClasses(C, A and (P some D))` gives `C` the
+parent `D` in the tree for `P`. Tentatively, the edges query (P-12) finds these itself: it walks the `owl:intersectionOf`
+list of each `owl:equivalentClass` on a named class (in either direction) and keeps the conjuncts that are
+`owl:someValuesFrom` restrictions on a configured property with a named filler. That works; a faster or simpler way can
+replace it later. It also adds no axioms to the store, keeping the asserted/inferred split (below) clean.
+
+browl avoids ROBOT `relax`, the usual tool for this. `relax` does add `SubClassOf(C, P some D)` for each such conjunct,
+but it also turns every object cardinality restriction with a count above 0 into `some`, and no option turns that off.
+That goes beyond what U-38 needs, and for `max` it is wrong: `P max 2 D` allows zero, so it doesn't imply `P some D`.
+The code ([`RelaxOperation.java`](https://github.com/ontodev/robot/blob/master/robot-core/src/main/java/org/obolibrary/robot/RelaxOperation.java),
+checked 2026-11-16) tests for `OWLObjectCardinalityRestriction`, which covers `min`, `exact` and `max`.
 
 **Asserted and inferred kept apart** (for U-39, U-40). Today the reasoned output replaces the uploaded ontology
 ([2.4](#24-load-pipeline)), so what was asserted is lost. Loading the asserted axioms and the inferred ones into
