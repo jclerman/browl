@@ -290,7 +290,7 @@ size and load time (5.2 GB and 358 s, against 2.4 GB and 165 s in the default gr
 on both. Keeping only the imports in named graphs means an ontology without imports pays nothing. Adding Uberon as an
 import (11 s; the store grew to 3.2 GB), the `FROM` merge cost about 1 ms per page at one client (median 4.0 against
 2.8 ms) and nothing measurable at 16 (682 against 641 pages a second). An explicit `{ … } UNION { GRAPH ?g { … } }`
-was no faster, and returns a triple once per graph that states it. Fuseki's alternative, `tdb:unionDefaultGraph`,
+was no faster, and returns a triple once per graph that states it. Fuseki's alternative, `tdb2:unionDefaultGraph`,
 would put every triple in a named graph and hide the default graph.
 
 **Heap sizes:** the app's JVM only renders per-page fragments, so it needs a small heap (`APP_JVM_MAX_HEAP`).
