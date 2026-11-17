@@ -28,7 +28,7 @@ async def job_status(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         template,
-        {"job": request.app.state.jobs.state, "stages": list(Stage), "poll_s": STATUS_POLL_S},
+        {"job": await request.app.state.jobs.current(), "stages": list(Stage), "poll_s": STATUS_POLL_S},
         headers={"Cache-Control": "no-store"},
     )
 

@@ -4,15 +4,17 @@ A job starts with `JobRunner.upload`.
 """
 
 import asyncio
+import fcntl
 import logging
 import sqlite3
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager, closing, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, Self
+from typing import IO, Literal, Self
 
 import httpx2
 
@@ -22,6 +24,12 @@ logger = logging.getLogger(__name__)
 
 STATE_DB = "state.sqlite3"
 """The persistent database's file name in `DATA_DIR`: job state, and later admins (§2.11)."""
+
+JOB_LOCK = "job.lock"
+"""The job lock's file name in `DATA_DIR` (`JobLock`)."""
+
+STATE_TTL_S = 1.0
+"""How long a runner serves the job state it last read before reading the database again."""
 
 INTERRUPTED_BY_RESTART = "interrupted by restart"
 INTERRUPTED_BY_SHUTDOWN = "interrupted by shutdown"
@@ -109,7 +117,7 @@ def _now() -> datetime:
 class JobStore:
     """The persistent SQLite database that holds the job state.
 
-    Each call opens its own connection, so calls can run on any thread.
+    Each call opens its own connection, so calls can run on any thread, and in any server worker.
 
     Args:
         path: The database file, created if missing; its schema is migrated to the latest version.
@@ -154,9 +162,47 @@ class JobStore:
     def read(self) -> JobState:
         """Return the stored job state; the empty state if no job has run."""
         with self._connect() as connection:
-            row = connection.execute(
-                "SELECT generation, stage, started_at, finished_at, failed_stage, reason, ready_generation FROM job"
-            ).fetchone()
+            return self._read(connection)
+
+    def write(self, state: JobState) -> None:
+        """Store the job state, replacing the previous one.
+
+        Raises:
+            ValueError: The state has no job.
+        """
+        with self._connect() as connection:
+            self._write(connection, state)
+
+    def claim(self, started_at: datetime) -> JobState:
+        """Record the start of the next job, in the uploading stage, in one transaction, and return its state.
+
+        The caller holds the job lock (`JobLock`), so a job still recorded as running belongs to a process that
+        stopped without recording its end; it's replaced.
+        """
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")  # takes the write lock first, so no other writer comes between
+            try:
+                previous = self._read(connection)
+                if previous.running:
+                    logger.warning("Load job %d was left running by a process that stopped", previous.generation)
+                state = JobState(
+                    generation=(previous.generation or 0) + 1,
+                    stage=Stage.UPLOADING,
+                    started_at=started_at,
+                    ready_generation=previous.ready_generation,
+                )
+                self._write(connection, state)
+                connection.execute("COMMIT")
+            except BaseException:
+                connection.rollback()
+                raise
+        return state
+
+    @staticmethod
+    def _read(connection: sqlite3.Connection) -> JobState:
+        row = connection.execute(
+            "SELECT generation, stage, started_at, finished_at, failed_stage, reason, ready_generation FROM job"
+        ).fetchone()
         if row is None:
             return JobState()
         generation, stage, started_at, finished_at, failed_stage, reason, ready_generation = row
@@ -170,29 +216,57 @@ class JobStore:
             ready_generation=ready_generation,
         )
 
-    def write(self, state: JobState) -> None:
-        """Store the job state, replacing the previous one.
-
-        Raises:
-            ValueError: The state has no job.
-        """
+    @staticmethod
+    def _write(connection: sqlite3.Connection, state: JobState) -> None:
         if state.generation is None or state.stage is None or state.started_at is None:
             raise ValueError("a stored job state needs a generation, stage and start time")
-        with self._connect() as connection:
-            connection.execute(
-                "INSERT OR REPLACE INTO job"
-                " (id, generation, stage, started_at, finished_at, failed_stage, reason, ready_generation)"
-                " VALUES (1, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    state.generation,
-                    state.stage,
-                    state.started_at.isoformat(),
-                    None if state.finished_at is None else state.finished_at.isoformat(),
-                    state.failed_stage,
-                    state.reason,
-                    state.ready_generation,
-                ),
-            )
+        connection.execute(
+            "INSERT OR REPLACE INTO job"
+            " (id, generation, stage, started_at, finished_at, failed_stage, reason, ready_generation)"
+            " VALUES (1, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                state.generation,
+                state.stage,
+                state.started_at.isoformat(),
+                None if state.finished_at is None else state.finished_at.isoformat(),
+                state.failed_stage,
+                state.reason,
+                state.ready_generation,
+            ),
+        )
+
+
+class JobLock:
+    """The job lock: an exclusive `flock` on a file, which the process running a job holds until its end is stored.
+
+    The operating system releases it when the process ends, however it ends, so a job recorded as running while
+    nobody holds the lock was interrupted. It works between processes on one host, as the server workers are.
+
+    Args:
+        path: The lock file, created if missing.
+    """
+
+    def __init__(self, path: Path) -> None:
+        """Make the lock, not yet held."""
+        self.path = path
+        self._file: IO[bytes] | None = None
+
+    def acquire(self) -> bool:
+        """Take the lock if no one holds it, without waiting; return whether it was taken."""
+        file = self.path.open("ab")
+        try:
+            fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            file.close()
+            return False
+        self._file = file
+        return True
+
+    def release(self) -> None:
+        """Release the lock, if held."""
+        if self._file is not None:
+            self._file.close()  # which releases the flock
+            self._file = None
 
 
 @dataclass(frozen=True)
@@ -266,12 +340,14 @@ def _http_timeout_reason(error: httpx2.TimeoutException) -> str:
 
 
 class JobRunner:
-    """Run one load job at a time, recording its state in a `JobStore`.
+    """Run one load job at a time, recording its state in a `JobStore`, the state's source of truth.
 
-    Make one with `open`, which marks failed a job that a previous process left running.
+    Make one with `open`, which marks failed a job that a stopped process left running. Each server worker has a
+    runner; a job runs in the worker that started it, which holds the `JobLock` until the job's end is stored.
 
     Args:
         store: The persistent database.
+        lock: The job lock.
         settings: The app's settings, given to the stage functions.
         state: The state read from the store.
         stages: Stage functions for the background stages; more can be registered later.
@@ -280,42 +356,66 @@ class JobRunner:
     def __init__(
         self,
         store: JobStore,
+        lock: JobLock,
         settings: Settings,
         state: JobState,
         stages: Mapping[Stage, StageFunction] | None = None,
     ) -> None:
         """Make a runner with no job running."""
         self._store = store
+        self._lock = lock
         self._settings = settings
-        self._state = state
         self._stages: dict[Stage, StageFunction] = {}
         for stage, function in (stages or {}).items():
             self.register(stage, function)
-        self._busy = False
+        self._busy = False  # this runner has a job, from claiming it until its end is stored
         self._closing = False
         self._task: asyncio.Task[None] | None = None
         self._writes: set[asyncio.Task[None]] = set()
+        self._unstored: JobState | None = None  # the end of this runner's last job, if it couldn't be stored
+        self._refreshing = asyncio.Lock()
+        self._changes = 0
+        self._set(state)
 
     @classmethod
     async def open(cls, settings: Settings, stages: Mapping[Stage, StageFunction] | None = None) -> Self:
-        """Open the persistent database in `DATA_DIR`, mark failed a job that was running, and return a runner.
+        """Open the persistent database and job lock in `DATA_DIR`, mark failed an interrupted job, and return a runner.
 
-        No job survives a restart, so one the database records as running was interrupted.
+        A job recorded as running is interrupted unless another process holds the job lock, as another server
+        worker running it would.
 
         Raises:
             RuntimeError: The database's schema is newer than this version of browl knows.
         """
         store = await asyncio.to_thread(JobStore, settings.data_dir / STATE_DB)
-        state = await asyncio.to_thread(store.read)
-        if state.running:
-            logger.warning("Load job %d was interrupted by a restart in stage %s", state.generation, state.stage)
-            state = state.failed(INTERRUPTED_BY_RESTART)
-            await asyncio.to_thread(store.write, state)
-        return cls(store, settings, state, stages)
+        lock = JobLock(settings.data_dir / JOB_LOCK)
+        state = await asyncio.to_thread(_recover, store, lock)
+        return cls(store, lock, settings, state, stages)
 
     @property
     def state(self) -> JobState:
-        """Return the job state."""
+        """Return the job state as this runner last read or changed it, without reading the database."""
+        return self._state
+
+    async def current(self) -> JobState:
+        """Return the job state, reading the database at most every `STATE_TTL_S` (this runner's changes show at once).
+
+        While this runner has a job, it is the only writer, so its own state is the stored one.
+        """
+        if self._busy or time.monotonic() - self._read_at < STATE_TTL_S:
+            return self._state
+        async with self._refreshing:
+            if self._busy or time.monotonic() - self._read_at < STATE_TTL_S:
+                return self._state
+            changes = self._changes
+            state = await asyncio.to_thread(self._store.read)
+            if self._changes == changes:  # else this runner changed it meanwhile, which is newer
+                unstored = self._unstored
+                if unstored is not None and state.running and state.generation == unstored.generation:
+                    state = unstored
+                else:
+                    self._unstored = None
+                self._set(state)
         return self._state
 
     def register(self, stage: Stage, function: StageFunction) -> None:
@@ -338,38 +438,29 @@ class JobRunner:
         recorded only as "cancelled".
 
         Raises:
-            JobRunningError: A job is already running.
+            JobRunningError: A job is already running, in this server worker or another.
         """
         if self._busy:
             raise JobRunningError(f"load job {self._state.generation} is running, in stage {self._state.stage}")
         self._busy = True  # set before any await, so a concurrent call is refused
+        await self._claim()
+        context = JobContext(self._state.generation or 0, self._settings)
+        logger.info("Load job %d started", context.generation)
         try:
-            generation = (self._state.generation or 0) + 1
-            await self._record(
-                JobState(
-                    generation=generation,
-                    stage=Stage.UPLOADING,
-                    started_at=_now(),
-                    ready_generation=self._state.ready_generation,
-                )
-            )
-            logger.info("Load job %d started", generation)
-            context = JobContext(generation, self._settings)
+            yield context
+        except BaseException as error:
             try:
-                yield context
-            except BaseException as error:
                 await self._fail(error)
-                raise
-        except BaseException:
-            self._release()
+            finally:
+                self._settle()
             raise
-        self._task = asyncio.create_task(self._run(context), name=f"load job {generation}")
+        self._task = asyncio.create_task(self._run(context), name=f"load job {context.generation}")
 
     async def start(self) -> JobContext:
         """Start a job with nothing to upload, running all its other stages in the background.
 
         Raises:
-            JobRunningError: A job is already running.
+            JobRunningError: A job is already running, in this server worker or another.
         """
         async with self.upload() as context:
             return context
@@ -380,7 +471,7 @@ class JobRunner:
             await asyncio.shield(self._task)
 
     async def close(self) -> None:
-        """Cancel the running job, if any, recording it as interrupted by shutdown; wait for failures to be stored."""
+        """Cancel the running job, if any, recording it as interrupted by shutdown; wait for its end to be stored."""
         self._closing = True
         if self._task is not None and not self._task.done():
             self._task.cancel()
@@ -388,9 +479,48 @@ class JobRunner:
                 await self._task
         await asyncio.gather(*self._writes)
 
+    def _set(self, state: JobState) -> None:
+        self._state = state
+        self._read_at = time.monotonic()
+        self._changes += 1
+
+    async def _claim(self) -> None:
+        """Take the job lock and record the job's start, in a thread that runs to its end even if this is cancelled.
+
+        A job claimed after this was cancelled is failed as cancelled, so it doesn't hold the lock for good.
+
+        Raises:
+            JobRunningError: Another process holds the job lock.
+        """
+        claim = asyncio.ensure_future(asyncio.to_thread(self._claim_in_thread, _now()))
+        try:
+            self._set(await asyncio.shield(claim))
+        except asyncio.CancelledError:
+            claim.add_done_callback(self._abandon_claim)
+            raise
+        except BaseException:
+            self._busy = False
+            raise
+
+    def _claim_in_thread(self, started_at: datetime) -> JobState:
+        if not self._lock.acquire():
+            raise JobRunningError("a load job is running in another server worker")
+        try:
+            return self._store.claim(started_at)
+        except BaseException:
+            self._lock.release()
+            raise
+
+    def _abandon_claim(self, claim: asyncio.Future[JobState]) -> None:
+        if claim.cancelled() or claim.exception() is not None:
+            self._busy = False
+            return
+        self._set(claim.result())
+        self._record_end(self._state.failed(CANCELLED))
+
     async def _record(self, state: JobState) -> None:
         await asyncio.to_thread(self._store.write, state)
-        self._state = state
+        self._set(state)
 
     async def _fail(self, error: BaseException) -> None:
         if isinstance(error, asyncio.CancelledError):
@@ -406,31 +536,40 @@ class JobRunner:
                 exc_info=not isinstance(error, StageError),
             )
         # Shielded: a second cancellation, e.g. from an anyio cancel scope, mustn't stop the failure being stored.
-        await asyncio.shield(self._record_failure(reason))
+        await asyncio.shield(self._record_end(self._state.failed(reason)))
 
-    def _record_failure(self, reason: str) -> asyncio.Task[None]:
-        """Fail the job in memory at once, so the site stops serving, and store it in a task of its own."""
-        state = self._state.failed(reason)
-        self._state = state
-        task = asyncio.create_task(self._write_failure(state))
+    def _record_end(self, state: JobState) -> asyncio.Task[None]:
+        """Show the job's end at once, so the site stops serving "loading", and store it in a task of its own.
+
+        Once it's stored, or couldn't be, the task frees the runner and releases the job lock.
+        """
+        self._set(state)
+        task = asyncio.create_task(self._store_end(state))
         self._writes.add(task)
         task.add_done_callback(self._writes.discard)
         return task
 
-    async def _write_failure(self, state: JobState) -> None:
+    async def _store_end(self, state: JobState) -> None:
         try:
             await asyncio.to_thread(self._store.write, state)
         except Exception:
-            logger.exception("Couldn't record the failure of load job %d", state.generation)
+            # Other workers keep reading it as running until the next job or a restart; this one serves its end.
+            logger.exception("Couldn't record the end of load job %d", state.generation)
+            self._unstored = state
+        finally:
+            self._unlock()
 
-    def _release(self) -> None:
-        """Free the runner, failing a job left recorded as running, so the site can't stay on "loading" for good."""
+    def _unlock(self) -> None:
+        self._lock.release()
         self._busy = False
+
+    def _settle(self) -> None:
+        """Fail a job that stopped while still recorded as running, so the site can't stay on "loading" for good."""
         if self._state.running:
             logger.error(
                 "Load job %d stopped in stage %s without recording why", self._state.generation, self._state.stage
             )
-            self._record_failure(STOPPED_UNRECORDED)
+            self._record_end(self._state.failed(INTERRUPTED_BY_SHUTDOWN if self._closing else STOPPED_UNRECORDED))
 
     async def _run(self, context: JobContext) -> None:
         try:
@@ -442,6 +581,7 @@ class JobRunner:
             await self._record(
                 replace(self._state, stage=Stage.READY, finished_at=_now(), ready_generation=context.generation)
             )
+            self._unlock()
             logger.info("Load job %d is ready", context.generation)
         except asyncio.CancelledError as error:
             await self._fail(error)
@@ -449,4 +589,19 @@ class JobRunner:
         except Exception as error:  # noqa: BLE001  # any stage failure fails the job; _fail logs it
             await self._fail(error)
         finally:
-            self._release()
+            self._settle()
+
+
+def _recover(store: JobStore, lock: JobLock) -> JobState:
+    """Return the stored job state, failing a job recorded as running unless another process holds the job lock."""
+    if not lock.acquire():
+        return store.read()  # another server worker is running the job
+    try:
+        state = store.read()
+        if state.running:
+            logger.warning("Load job %d was interrupted by a restart in stage %s", state.generation, state.stage)
+            state = state.failed(INTERRUPTED_BY_RESTART)
+            store.write(state)
+        return state
+    finally:
+        lock.release()

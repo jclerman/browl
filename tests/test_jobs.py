@@ -183,14 +183,14 @@ async def test_refuses_second_job_while_starting(data_dir: Path, monkeypatch: py
     """Check that a job can't start while another is still recording its start."""
     runner = await open_runner(data_dir)
     entered, release = threading.Event(), threading.Event()
-    write = runner._store.write
+    claim = runner._store.claim
 
-    def blocked(state: JobState) -> None:
+    def blocked(started_at: datetime) -> JobState:
         entered.set()
         release.wait(timeout=5)
-        write(state)
+        return claim(started_at)
 
-    monkeypatch.setattr(runner._store, "write", blocked)
+    monkeypatch.setattr(runner._store, "claim", blocked)
     first = asyncio.create_task(runner.start())
     assert await asyncio.to_thread(entered.wait, 5)
     with pytest.raises(JobRunningError):
@@ -204,16 +204,17 @@ async def test_refuses_second_job_while_starting(data_dir: Path, monkeypatch: py
 async def test_start_not_stored(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that a job whose start can't be stored doesn't start, and frees the runner."""
     runner = await open_runner(data_dir)
-    write = runner._store.write
+    write = JobStore._write
 
-    def broken(state: JobState) -> None:
-        monkeypatch.setattr(runner._store, "write", write)
+    def broken(connection: sqlite3.Connection, state: JobState) -> None:
+        write(connection, state)  # rolled back
+        monkeypatch.setattr(JobStore, "_write", staticmethod(write))
         raise sqlite3.OperationalError("database is locked")
 
-    monkeypatch.setattr(runner._store, "write", broken)
+    monkeypatch.setattr(JobStore, "_write", staticmethod(broken))
     with pytest.raises(sqlite3.OperationalError, match="locked"):
         await runner.start()
-    assert runner.state == JobState()
+    assert runner.state == JobState() == JobStore(data_dir / STATE_DB).read()
     assert (await run_job(runner)).site == "available"
 
 
@@ -333,19 +334,28 @@ async def test_stage_failure(data_dir: Path, error: Exception | Callable[[], Awa
 
 
 async def test_failure_not_stored(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Check that a failure the database can't record still stops the site serving."""
+    """Check that a failure the database can't record still stops the site serving, and doesn't block the next job."""
     runner: JobRunner
+    write = JobStore.write
 
     async def loading(context: JobContext) -> None:
-        def broken(state: JobState) -> None:
-            raise sqlite3.OperationalError("disk I/O error")
+        if context.generation == 1:
 
-        monkeypatch.setattr(runner._store, "write", broken)
-        raise StageError("boom")
+            def broken(state: JobState) -> None:
+                monkeypatch.setattr(runner._store, "write", write.__get__(runner._store))
+                raise sqlite3.OperationalError("disk I/O error")
+
+            monkeypatch.setattr(runner._store, "write", broken)
+            raise StageError("boom")
 
     runner = await open_runner(data_dir, LOADING=loading)
     state = await run_job(runner)
     assert (state.failed_stage, state.reason, state.site) == (Stage.LOADING, "boom", "not available")
+    assert JobStore(data_dir / STATE_DB).read().running
+    monkeypatch.setattr(browl.jobs, "STATE_TTL_S", 0)
+    assert (await runner.current()) == state
+    assert (await run_job(runner)).generation == 2
+    assert (await runner.current()).site == "available"
 
 
 async def test_failure_record_interrupted(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -402,3 +412,101 @@ async def test_register_refuses_stage(data_dir: Path, stage: Stage) -> None:
 
     with pytest.raises(ValueError, match=str(stage)):
         (await open_runner(data_dir)).register(stage, noop)
+
+
+@pytest.mark.parametrize("claimed", [True, False])
+async def test_claim_cancelled(data_dir: Path, monkeypatch: pytest.MonkeyPatch, claimed: bool) -> None:
+    """Check that a job claimed after its start was cancelled is failed as cancelled; either way the runner is freed."""
+    runner = await open_runner(data_dir)
+    entered, release = threading.Event(), threading.Event()
+    claim = runner._store.claim
+
+    def blocked(started_at: datetime) -> JobState:
+        entered.set()
+        release.wait(timeout=5)
+        if not claimed:
+            raise sqlite3.OperationalError("database is locked")
+        return claim(started_at)
+
+    monkeypatch.setattr(runner._store, "claim", blocked)
+    task = asyncio.create_task(runner.start())
+    assert await asyncio.to_thread(entered.wait, 5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    release.set()
+    async with asyncio.timeout(5):
+        while runner._busy:
+            await asyncio.sleep(0.001)
+    state = runner.state
+    if claimed:
+        assert (state.generation, state.failed_stage, state.reason) == (1, Stage.UPLOADING, CANCELLED)
+    else:
+        assert state == JobState()
+    assert (await open_runner(data_dir)).state == state
+    monkeypatch.undo()
+    assert (await run_job(runner)).generation == (2 if claimed else 1)
+
+
+async def test_workers_share_state(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that runners on one `DATA_DIR`, as in several server workers, share the job state through the database.
+
+    One worker's job is refused in the others, and a worker starting up while it runs leaves it running.
+    """
+    release = asyncio.Event()
+
+    async def blocked(context: JobContext) -> None:
+        await release.wait()
+
+    first, second = await open_runner(data_dir, REASONING=blocked), await open_runner(data_dir)
+    assert (await second.current()).site == "not available"
+    await first.start()
+    assert (await first.current()).site == "loading"  # its own change shows at once
+    assert (await second.current()).site == "not available"  # read less than STATE_TTL_S ago
+    monkeypatch.setattr(browl.jobs, "STATE_TTL_S", 0)
+    assert (await second.current()).site == "loading"
+    with pytest.raises(JobRunningError, match="another server worker"):
+        await second.start()
+    assert (await open_runner(data_dir)).state.running
+    release.set()
+    await first.wait()
+    assert (await second.current()) == first.state
+    assert (await run_job(second)).generation == 2
+    assert (await first.current()).generation == 2
+
+
+async def test_refresh_keeps_newer_change(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a database read that a change by the runner overtakes doesn't overwrite that change."""
+    runner = await open_runner(data_dir)
+    entered, release = threading.Event(), threading.Event()
+    read = runner._store.read
+
+    def blocked() -> JobState:
+        state = read()
+        entered.set()
+        release.wait(timeout=5)
+        return state
+
+    monkeypatch.setattr(browl.jobs, "STATE_TTL_S", 0)
+    monkeypatch.setattr(runner._store, "read", blocked)
+    refresh = asyncio.create_task(runner.current())
+    assert await asyncio.to_thread(entered.wait, 5)
+    await run_job(runner)
+    release.set()
+    assert (await refresh).site == "available"
+
+
+async def test_refresh_reads_once(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that requests that find the state stale together read the database once between them."""
+    runner = await open_runner(data_dir)
+    reads: list[JobState] = []
+    read = runner._store.read
+
+    def counted() -> JobState:
+        reads.append(read())
+        return reads[-1]
+
+    monkeypatch.setattr(runner._store, "read", counted)
+    runner._read_at -= browl.jobs.STATE_TTL_S
+    await asyncio.gather(*(runner.current() for _ in range(3)))
+    assert reads == [JobState()]

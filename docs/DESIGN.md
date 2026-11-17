@@ -244,6 +244,18 @@ also records the generation of the last job that reached ready. No job survives 
 as running is marked failed ("interrupted by restart"). The upload handler starts the job and streams the file within
 the uploading stage; the remaining stages then run in the background (P-5).
 
+The database is the job state's source of truth, so nothing here ties browl to one worker (P-5):
+
+- **Reading:** the site gate and the status route read the state at most once a second per worker (a read costs about
+  0.1 ms in the thread pool, on every request otherwise); a worker's own changes show in its responses at once.
+- **Claiming:** a job starts by taking an exclusive `flock` on `DATA_DIR/job.lock`, without waiting, then recording the
+  next generation in one SQLite transaction. The worker running the job holds the lock until the job's end is stored,
+  and the OS frees it if the worker dies. So a second job is refused in any worker, and a job recorded as running while
+  nobody holds the lock was interrupted: startup marks it failed only then, never a job another live worker runs.
+- **Still needed for several workers:** the workers must share one host (`flock` on a local volume). A job's end that
+  the database couldn't store is served only by its own worker; the others show "loading" until the next job or a
+  restart replaces it.
+
 | Stage | What happens |
 | --- | --- |
 | **uploading** | The file is streamed to the data volume. The site switches to the "loading" page (U-16) and the page cache is cleared. |

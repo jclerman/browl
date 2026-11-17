@@ -53,7 +53,7 @@ class SiteGate:
         if root_path and path.startswith(root_path):
             path = path[len(root_path) :]
         request = Request(scope)
-        site = request.app.state.jobs.state.site
+        site = (await request.app.state.jobs.current()).site
         if site == "available" or self.is_exempt(path):
             await self.app(scope, receive, send)
             return
