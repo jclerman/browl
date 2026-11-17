@@ -24,6 +24,7 @@ langcodes = "^3.5.1"
 uvicorn = "^0.54.0"
 httpx2 = "^2.16.0"
 jpype1 = "^1.7.1"
+jinja2 = "^3.1.6"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^2.4.1"

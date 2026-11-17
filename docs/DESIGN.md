@@ -151,8 +151,9 @@ Tooling and code conventions are in [`CODING-STANDARDS.md`](CODING-STANDARDS.md)
           ▼               ▼               ▼
    Fuseki container   derived SQLite   ROBOT (reasoning),
    TDB2 store: the    (aggregates,     Jena TDB2 loader
-   loaded ontology    search index,
-                      admins, job state)
+   loaded ontology    search index)
+                      persistent SQLite
+                      (admins, job state)
 ```
 
 - **Fuseki with a TDB2 store** holds the loaded ontology, in its own container. The store persists on disk, so after a
@@ -233,10 +234,32 @@ up the path:
 
 A path can be both an ordinary entity and a hash prefix; then the entity page is served with the hash script included.
 
+**Reserved paths:** the lookup route (P-13) answers 404 for any path under `/{RESERVED_PREFIX}/`, and a test checks it.
+The site gate ([2.13](#213-url-space-for-the-services-own-pages)) exempts paths by prefix without normalizing them, so
+`/_browl/admin/../../x` (sent as `/_browl/admin%2F..%2F..%2Fx`) passes it while a load runs or has failed, and must not
+reach a lookup (P-5).
+
 ### 2.4 Load pipeline
 
 One background job at a time, run in the app process. Its state (stage, start time, error) is stored in SQLite, so every
-server worker reports it consistently. _(Q7b, Q14a)_
+server worker reports it consistently. _(Q7b, Q14a)_ It's kept in `DATA_DIR/state.sqlite3`, a persistent database
+separate from the derived one, which records its schema version and migrates forward from it; the `admin` table
+([2.11](#211-authentication-and-admins)) goes there too. Each job gets the next generation number, and the database
+also records the generation of the last job that reached ready. No job survives a restart: at startup, a job recorded
+as running is marked failed ("interrupted by restart"). The upload handler starts the job and streams the file within
+the uploading stage; the remaining stages then run in the background (P-5).
+
+The database is the job state's source of truth, so nothing here ties browl to one worker (P-5):
+
+- **Reading:** the site gate and the status route read the state at most once a second per worker (a read costs about
+  0.1 ms in the thread pool, on every request otherwise); a worker's own changes show in its responses at once.
+- **Claiming:** a job starts by taking an exclusive `flock` on `DATA_DIR/job.lock`, without waiting, then recording the
+  next generation in one SQLite transaction. The worker running the job holds the lock until the job's end is stored,
+  and the OS frees it if the worker dies. So a second job is refused in any worker, and a job recorded as running while
+  nobody holds the lock was interrupted: startup marks it failed only then, never a job another live worker runs.
+- **Still needed for several workers:** the workers must share one host (`flock` on a local volume). A job whose worker
+  dies, or whose end the database couldn't store, stays recorded as running: the other workers show "loading" until a
+  worker starts (and marks it failed) or the next upload replaces it; in the second case its own worker shows its end.
 
 | Stage | What happens |
 | --- | --- |
@@ -257,7 +280,10 @@ Uberon goes from upload file to ready in 7 s without reasoning, measured end to 
   `OutOfMemoryError` in ROBOT's output. To be confirmed by spike S-2.
 
 On failure the job records the stage and reason (A-6), and the site stays on a "not available" page until an admin
-uploads again. Downtime during a replace is accepted. _(Q14a)_
+uploads again. Downtime during a replace is accepted. _(Q14a)_ A timeout's reason names what timed out and the limit
+(e.g. "Fuseki HTTP request POST /$/datasets timed out after 60 s"); a job cancelled at shutdown records "interrupted by
+shutdown", any other cancellation "cancelled". A job that stops without recording why is still marked failed, so the
+site never stays on "loading" (P-5).
 
 **App restart:** the store and the derived database stay on the data volume. Fuseki reopens the store in under a
 second, and the app reuses the derived database when its generation number matches, skipping pre-caching. Restarting
@@ -632,7 +658,19 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | `iri?u=…` | Fallback entity URLs (Q1b) |
 | `static/…` | CSS, htmx, hash-IRI script |
 | `admin/…` | Upload, status, admin list, sign-in/out |
+| `admin/status` | The load job's stage, start time, and failed stage and reason (A-5, A-6): an HTML fragment for htmx requests (`HX-Request`), which polls itself while a job runs on a page that loads htmx (P-6), else a page, which refreshes itself while a job runs if JS is off (P-5) |
+| `admin/docs`, `admin/openapi.json` | FastAPI's API docs (Swagger UI only, no ReDoc), as admin routes, so admin sign-in covers them; moved from FastAPI's default root paths, where they would shadow ontology entities. Swagger UI loads its assets from a CDN at an exact pinned version: an accepted exception to the no-CDN rule ([2.2](#22-libraries-and-components)), for admin pages only (P-5) |
 | `health` | Liveness check for the container; also reports whether Fuseki answers |
+
+While a load job runs, every other URL (the ontology's pages, the other routes above, and paths nothing serves) gets
+the "loading" page; when no ontology is loaded, or the last load failed, it gets the "not available" page (U-16).
+`health`, `static/…` and `admin/…` are exempt. Both pages are 503 Service Unavailable with `Cache-Control: no-store`,
+so crawlers and caches treat the outage as temporary and keep the URLs. The loading page adds `Retry-After` and
+refreshes itself at the same interval.
+Neither page says why the site is unavailable; the failure reason is shown only on the admin status (P-5).
+
+Pages link to the service's own routes by root-relative paths, never by URLs built from the request's scheme and
+`Host`, which a proxy may change and a client may forge (P-5).
 
 ### 2.14 Risks
 
@@ -685,7 +723,7 @@ go into this document.
 
 | ID | Work item | Delivers | Depends on | Status | Tracking |
 | --- | --- | --- | --- | --- | --- |
-| P-5 | Job runner and job state in SQLite; "loading" / "not available" site pages | U-16, A-5 | P-2 | To do | [#14](https://github.com/jclerman/browl/issues/14) |
+| P-5 | Job runner and job state in SQLite; "loading" / "not available" site pages | U-16, A-5 | P-2 | Done | [#14](https://github.com/jclerman/browl/issues/14) |
 | P-6 | Upload page and streaming upload (auth not yet enforced) | A-2, A-4 | P-5 | To do | [#16](https://github.com/jclerman/browl/issues/16) |
 | P-7 | ROBOT build script: optional ELK/HermiT reasoning, with limits | A-3, A-6, O-8 | P-6, S-2 | To do | [#18](https://github.com/jclerman/browl/issues/18) |
 | P-8 | Fetch imports (warn on failures); bulk-load the ontology and imports into a new TDB2 store and switch Fuseki to it; no reload on restart | A-4 | P-4, P-7, S-4 | To do | [#20](https://github.com/jclerman/browl/issues/20) |

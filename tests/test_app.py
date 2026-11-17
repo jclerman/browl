@@ -1,6 +1,7 @@
 """Tests for the FastAPI application and its health route."""
 
 import asyncio
+import re
 import tomllib
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
@@ -8,26 +9,21 @@ from typing import Any
 
 import httpx2
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import browl
 import browl.app
+from browl import admin
+from browl.admin import SWAGGER_UI_URL
 from browl.app import create_app
 from browl.fuseki import FusekiClient
-from browl.settings import Settings
+from browl.jobs import JobRunner, Site
+from tests.helpers import make_app, make_settings
 
 UNREACHABLE = "http://127.0.0.1:1"  # nothing listens on port 1, so connections are refused at once
 
 
-def make_settings(**overrides: object) -> Settings:
-    """Return settings for tests: authentication off, and any overrides."""
-    return Settings.model_validate({"BASE_URL": "http://example.org/", "AUTH_DISABLED": True} | overrides)
-
-
-def make_app(fuseki_transport: httpx2.AsyncBaseTransport | None = None, **overrides: object) -> FastAPI:
-    """Return an app that doesn't start the JVM, with `make_settings(**overrides)` and the Fuseki transport given."""
-    return create_app(make_settings(**overrides), fuseki_transport=fuseki_transport, start_jvm=False)
+pytestmark = pytest.mark.usefixtures("data_dir")
 
 
 Answer = httpx2.Response | Exception | Callable[[httpx2.Request], Awaitable[httpx2.Response]]
@@ -118,7 +114,8 @@ def test_reserved_prefix() -> None:
     body, _ = check_health(httpx2.Response(200), path="/_site/health", RESERVED_PREFIX="_site")
     assert body["fuseki"] == "up"
     with TestClient(make_app(RESERVED_PREFIX="_site")) as client:
-        assert client.get("/_browl/health").status_code == 404
+        # An ordinary path now, so with no ontology loaded it gets the "not available" page.
+        assert client.get("/_browl/health").status_code == 503
 
 
 def test_create_app_loads_settings(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -131,9 +128,44 @@ def test_create_app_loads_settings(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_api_docs_show_title_and_version(client: TestClient) -> None:
     """Check that the OpenAPI schema, which the Swagger page shows, has browl's title and its pyproject.toml version."""
     pyproject = tomllib.loads((Path(__file__).parent.parent / "pyproject.toml").read_text())
-    info = client.get("/openapi.json").json()["info"]
+    info = client.get("/_browl/admin/openapi.json").json()["info"]
     assert info["title"] == "OWL Ontology Browser"
     assert info["version"] == browl.__version__ == pyproject["project"]["version"]
+
+
+@pytest.mark.parametrize(("root_path", "servers"), [("", None), ("/site", [{"url": "/site"}])])
+def test_api_docs_servers(root_path: str, servers: list[dict[str, str]] | None) -> None:
+    """Check that the schema names the root path as its server, so "Try it out" calls paths under it."""
+    with TestClient(make_app(), root_path=root_path) as client:
+        schema = client.get(f"{root_path}/_browl/admin/openapi.json").json()
+    assert schema.get("servers") == servers
+
+
+@pytest.mark.parametrize("prefix", ["_browl", "_site"])
+def test_api_docs_are_under_admin(prefix: str) -> None:
+    """Check that the API docs are admin routes, using a pinned Swagger UI, and nothing is at FastAPI's default paths.
+
+    An ontology is loaded, so the gate passes requests through and the default paths reach the router.
+    """
+    with TestClient(make_app(RESERVED_PREFIX=prefix)) as client:
+        jobs = client.app.state.jobs  # type: ignore[attr-defined]
+        client.portal.call(jobs.start)
+        client.portal.call(jobs.wait)
+        page = client.get(f"/{prefix}/admin/docs").text
+        assert f"url: '/{prefix}/admin/openapi.json'" in page
+        assert f"window.location.origin + '/{prefix}/admin/docs/oauth2-redirect'" in page
+        assert f'src="{SWAGGER_UI_URL}/swagger-ui-bundle.js"' in page
+        assert f'href="{SWAGGER_UI_URL}/swagger-ui.css"' in page
+        assert re.fullmatch(r"https://cdn\.jsdelivr\.net/npm/swagger-ui-dist@\d+\.\d+\.\d+", SWAGGER_UI_URL)
+        assert "oauth2" in client.get(f"/{prefix}/admin/docs/oauth2-redirect").text
+        assert not any(
+            "docs" in path or "openapi" in path for path in client.get(f"/{prefix}/admin/openapi.json").json()["paths"]
+        )
+        for path in ["/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc", f"/{prefix}/admin/redoc"]:
+            assert client.get(path).status_code == 404
+    docs = {"/admin/openapi.json", "/admin/docs", "/admin/docs/oauth2-redirect"}
+    assert docs <= {route.path for route in admin.router.routes}  # type: ignore[attr-defined]
+    assert not any("redoc" in route.path for route in admin.router.routes)  # type: ignore[attr-defined]
 
 
 def test_startup_starts_jvm(monkeypatch: pytest.MonkeyPatch, robot_jar: Path) -> None:
@@ -144,6 +176,7 @@ def test_startup_starts_jvm(monkeypatch: pytest.MonkeyPatch, robot_jar: Path) ->
     with TestClient(app):
         assert isinstance(app.state.sparql, FusekiClient)
         assert isinstance(app.state.fuseki_http, httpx2.AsyncClient)
+        assert isinstance(app.state.jobs, JobRunner)
     assert calls == [(robot_jar, "768m")]
 
 
@@ -162,3 +195,11 @@ def test_startup_fails_without_robot_jar(tmp_path: Path) -> None:
         TestClient(create_app(make_settings(ROBOT_JAR=str(tmp_path / "robot.jar")))),
     ):
         pass
+
+
+def test_startup_opens_job_database(data_dir: Path) -> None:
+    """Check that startup opens the job runner on its database in DATA_DIR, with no job yet."""
+    app = make_app()
+    with TestClient(app):
+        assert app.state.jobs.state.site == Site.NOT_AVAILABLE
+    assert (data_dir / "state.sqlite3").is_file()
