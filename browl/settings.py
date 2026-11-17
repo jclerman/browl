@@ -121,17 +121,11 @@ class Settings(BaseSettings):
     @field_validator("materialize_properties")
     @classmethod
     def check_materialize_properties(cls, value: list[str]) -> list[str]:
-        """Require unique absolute IRIs, which ROBOT takes as they are."""
+        """Require absolute IRIs, which ROBOT takes as they are."""
         relative = [iri for iri in value if not _IRI_SCHEME.match(iri)]
         if relative:
             raise ValueError(f"not absolute IRIs: {', '.join(relative)}")
-        return confirm_unique(value)
-
-    @field_validator("name_properties")
-    @classmethod
-    def check_name_properties(cls, value: list[str]) -> list[str]:
-        """Reject duplicate name properties."""
-        return confirm_unique(value)
+        return value
 
     @field_validator("reserved_prefix")
     @classmethod
@@ -154,7 +148,7 @@ class Settings(BaseSettings):
             raise ValueError(f"invalid language tags: {', '.join(invalid)}")
         if UNTAGGED not in ranking:
             ranking.append(UNTAGGED)
-        return confirm_unique(ranking)
+        return ranking
 
     @field_validator("extra_prefixes")
     @classmethod
@@ -170,11 +164,19 @@ class Settings(BaseSettings):
     @field_validator("seed_admins")
     @classmethod
     def check_seed_admins(cls, value: list[str]) -> list[str]:
-        """Check and lowercase the seed admin email addresses, rejecting duplicates."""
+        """Check and lowercase the seed admin email addresses."""
         invalid = [address for address in value if not re.fullmatch(r"[^@\s]+@[^@\s]+", address)]
         if invalid:
             raise ValueError(f"not email addresses: {', '.join(invalid)}")
-        return confirm_unique([address.lower() for address in value])
+        return [address.lower() for address in value]
+
+    # After the validators above: pydantic runs a field's validators in the order they're defined, so this sees the
+    # normalized values, and e.g. "EN" and "en" count as duplicates.
+    @field_validator("name_properties", "materialize_properties", "language_ranking", "seed_admins")
+    @classmethod
+    def check_unique(cls, value: list[str]) -> list[str]:
+        """Reject duplicate entries."""
+        return confirm_unique(value)
 
     @field_validator("auth_disabled")
     @classmethod
