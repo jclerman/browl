@@ -477,6 +477,7 @@ class JobRunner:
             self._task.cancel()
             with suppress(asyncio.CancelledError):
                 await self._task
+            self._settle()  # if the task was cancelled before it started, it recorded nothing
         await asyncio.gather(*self._writes)
 
     def _set(self, state: JobState) -> None:

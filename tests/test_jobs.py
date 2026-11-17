@@ -414,6 +414,17 @@ async def test_register_refuses_stage(data_dir: Path, stage: Stage) -> None:
         (await open_runner(data_dir)).register(stage, noop)
 
 
+async def test_close_right_after_start(data_dir: Path) -> None:
+    """Check that closing the runner before its job's task has run a step still records the job as interrupted."""
+    runner = await open_runner(data_dir)
+    await runner.start()
+    await runner.close()
+    state = runner.state
+    assert (state.failed_stage, state.reason) == (Stage.UPLOADING, INTERRUPTED_BY_SHUTDOWN)
+    assert (await open_runner(data_dir)).state == state
+    assert (await run_job(await open_runner(data_dir))).site == "available"  # the job lock was released
+
+
 @pytest.mark.parametrize("claimed", [True, False])
 async def test_claim_cancelled(data_dir: Path, monkeypatch: pytest.MonkeyPatch, claimed: bool) -> None:
     """Check that a job claimed after its start was cancelled is failed as cancelled; either way the runner is freed."""
