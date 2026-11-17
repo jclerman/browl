@@ -22,7 +22,7 @@ from browl.jobs import (
     Stage,
     StageError,
 )
-from browl.pages import RETRY_AFTER_S, SiteGate, templates
+from browl.pages import RETRY_AFTER_S, SiteGate, file_size, templates
 from tests.helpers import make_app
 
 pytestmark = pytest.mark.usefixtures("data_dir")
@@ -302,3 +302,20 @@ def test_restart_after_interrupted_job(data_dir: Path) -> None:
         assert response.status_code == 503
         assert "<h1>Not available</h1>" in response.text
         assert f"Failed in stage <strong>loading</strong>: {INTERRUPTED_BY_RESTART}" in fragment(client)
+
+
+@pytest.mark.parametrize(
+    ("size", "text"),
+    [
+        (0, "0 B"),
+        (999, "999 B"),
+        (1000, "1.0 kB"),
+        (999_949, "999.9 kB"),
+        (999_950, "1.0 MB"),
+        (412_345_678, "412.3 MB"),
+        (5 * 10**12, "5000.0 GB"),
+    ],
+)
+def test_file_size(size: int, text: str) -> None:
+    """Check that sizes are shown in decimal units, to one decimal place."""
+    assert file_size(size) == text

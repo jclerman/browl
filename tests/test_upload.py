@@ -17,6 +17,7 @@ from starlette.types import Message
 
 import browl.upload
 from browl.jobs import JobContext, JobRunner, Reasoner, Stage
+from browl.pages import file_size
 from browl.upload import SNIFF_BYTES, UPLOADS_DIR, UploadError, check_syntax, receive_upload, sniff_syntax, upload_path
 from tests.helpers import make_app, make_settings
 
@@ -97,6 +98,27 @@ def test_upload(client: TestClient, app: FastAPI, data_dir: Path, filename: str,
     state = app.state.jobs.state
     assert (state.generation, state.stage, state.reasoner) == (1, Stage.READY, Reasoner.NONE)
     assert upload_path(data_dir, 1, suffix).read_bytes() == content
+    assert (state.upload_name, state.upload_bytes) == (filename, len(content))
+    assert state.upload_syntax == browl.upload.SYNTAXES[suffix]
+
+
+def test_upload_shown(client: TestClient, app: FastAPI) -> None:
+    """Check that the status shows the file's name, without the directory a browser may send, syntax and size."""
+    post(client, "C:\\fakepath\\uberon.owl", RDFXML * 20)
+    finish(client, app)
+    text = " ".join(client.get(UPLOAD).text.split())
+    size = len(RDFXML) * 20
+    assert f'File <code>uberon.owl</code>, RDF/XML, <span title="{size:,} bytes">{file_size(size)}</span>.' in text
+
+
+def test_upload_name_cleaned(client: TestClient, app: FastAPI) -> None:
+    """Check that the name recorded loses control characters and is cut short."""
+    filename = b"a\x07b" + b"c" * 300 + b".ttl"
+    body = FILE_START.replace(b'filename="o.ttl"', b'filename="' + filename + b'"') + TURTLE + b"\r\n--b--\r\n"
+    assert client.post(UPLOAD, content=body, headers={"Content-Type": FORM}, follow_redirects=False).status_code == 303
+    finish(client, app)
+    name = app.state.jobs.state.upload_name
+    assert name == ("ab" + "c" * 300)[: browl.upload.MAX_NAME_CHARS]
 
 
 @pytest.mark.parametrize("reasoner", list(Reasoner))
@@ -243,6 +265,9 @@ def test_failed_after_claim(client: TestClient, app: FastAPI, data_dir: Path, bo
     assert reason in (state.reason or "")
     assert "Failed in stage <strong>uploading</strong>" in response.text
     assert not upload_path(data_dir, 1, ".ttl").parent.exists()
+    assert (state.upload_name, state.upload_syntax) == ("o.ttl", "Turtle")
+    assert state.upload_bytes is not None and state.upload_bytes >= len(LONG)
+    assert "received before the failure" in response.text
 
 
 @pytest.mark.parametrize(("code", "status_code"), [(errno.ENOSPC, 507), (errno.EIO, 500)])
@@ -308,7 +333,7 @@ def test_upload_page_while_running_polls(client: TestClient, app: FastAPI) -> No
 
 async def test_small_chunks(data_dir: Path) -> None:
     """Check that a form fed a few bytes at a time, splitting headers and data across chunks, is stored whole."""
-    content = TURTLE * 50
+    content = TURTLE * (2 * SNIFF_BYTES // len(TURTLE))  # claimed mid-file, at the checked part's end
     body = (
         b'--boundary\r\nContent-Disposition: form-data; name="reasoner"\r\n\r\nhermit\r\n'
         b'--boundary\r\nContent-Disposition: form-data; name="ontology"; filename="o.ttl"\r\n'
@@ -338,6 +363,7 @@ async def test_small_chunks(data_dir: Path) -> None:
     assert context.reasoner == Reasoner.HERMIT
     assert context.upload == upload_path(data_dir, 1, ".ttl")
     assert context.upload.read_bytes() == content
+    assert runner.state.upload_bytes == len(content)
     assert runner.state.stage == Stage.READY
 
 

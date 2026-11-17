@@ -10,6 +10,15 @@
     {% if job.running %}is running{% elif job.failed_stage is not none %}failed{% else %}is ready{% endif %},
     started <time datetime="{{ job.started_at.isoformat() }}">{{ job.started_at.strftime("%Y-%m-%d %H:%M:%S UTC") }}</time>.
   </p>
+  {% if job.upload_name is not none %}
+  <p class="upload-file">
+    File <code>{{ job.upload_name }}</code>, {{ job.upload_syntax }}
+    {%- if job.upload_bytes is not none %},
+    <span title="{{ '{:,}'.format(job.upload_bytes) }} bytes">{{ job.upload_bytes | file_size }}</span>
+    {%- if job.failed_stage == "uploading" %} received before the failure{% endif %}
+    {%- endif %}.
+  </p>
+  {% endif %}
   <ol class="stages">
     {% set current = stages.index(job.stage) %}
     {% for stage in stages %}

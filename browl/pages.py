@@ -19,6 +19,19 @@ STATIC_DIR = PACKAGE_DIR / "static"
 RETRY_AFTER_S = 10
 """How soon a client should retry while a load runs: the loading page's `Retry-After` and its refresh interval."""
 
+
+def file_size(size: int) -> str:
+    """Return a size in bytes for people to read, in decimal units, e.g. "412.3 MB"."""
+    if size < 1000:
+        return f"{size} B"
+    value = float(size)
+    for unit in ("kB", "MB", "GB"):
+        value /= 1000
+        if value < 999.95 or unit == "GB":
+            return f"{value:.1f} {unit}"
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
 templates = Jinja2Templates(
     env=jinja2.Environment(
         loader=jinja2.FileSystemLoader(PACKAGE_DIR / "templates"),
@@ -26,6 +39,7 @@ templates = Jinja2Templates(
         undefined=jinja2.StrictUndefined,
     )
 )
+templates.env.filters["file_size"] = file_size
 
 
 def clear_page_cache() -> None:

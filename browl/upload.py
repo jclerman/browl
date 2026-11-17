@@ -13,7 +13,7 @@ import re
 import shutil
 from collections.abc import Callable
 from contextlib import AsyncExitStack, suppress
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import IO
 
 from python_multipart.multipart import MultipartParser, parse_options_header
@@ -39,6 +39,9 @@ SYNTAXES = {".ttl": "Turtle", ".rdf": "RDF/XML", ".ofn": "OWL Functional Syntax"
 
 SNIFF_BYTES = 8192
 """How much of the start of the file `check_syntax` looks at, before the job is claimed."""
+
+MAX_NAME_CHARS = 255
+"""The longest file name recorded with the job; a longer one is cut short."""
 
 MAX_FIELD_BYTES = 64
 """The longest form field other than the file; a longer one is refused."""
@@ -198,6 +201,7 @@ class _Upload:
         self.data_dir: Path = request.app.state.settings.data_dir
         self.reasoner: Reasoner | None = None
         self.suffix: str | None = None  # the file's stored suffix, once its part has started
+        self.name: str | None = None  # the file's name, without any directory a browser sent
         self.context: JobContext | None = None
         self.file: IO[bytes] | None = None
         self.field: str | None = None  # the current part's field name
@@ -216,10 +220,12 @@ class _Upload:
             raise UploadError("the form has more than one file")
         if filename is None or not filename:
             raise UploadError("no file was chosen")
-        suffix = stored_suffix(filename.decode("utf-8", "replace"))
+        name = PureWindowsPath(filename.decode("utf-8", "replace")).name  # also splits on "/"
+        suffix = stored_suffix(name)
         if self.reasoner is None:
             raise UploadError(f"the form's {REASONER_FIELD!r} field must come before its file")
         self.suffix = suffix
+        self.name = "".join(char for char in name if char.isprintable())[:MAX_NAME_CHARS]
 
     async def start(self) -> None:
         """Check the file's start, claim the job, clear the page cache, and open the file, removing earlier uploads."""
@@ -228,12 +234,15 @@ class _Upload:
             raise UploadError("the file is empty")
         check_syntax(bytes(self.buffer[:SNIFF_BYTES]), self.suffix)
         suffix = self.suffix
-        self.context = await self.stack.enter_async_context(self.runner.upload(self.reasoner))
+        self.context = await self.stack.enter_async_context(
+            self.runner.upload(self.reasoner, self.name, SYNTAXES[self.suffix])
+        )
         clear_page_cache()
         path = upload_path(self.data_dir, self.context.generation, suffix)
         self.file = await asyncio.to_thread(_open, path)
         self.stack.callback(self.file.close)
         self.context.upload = path
+        self.context.upload_bytes = self.size
         logger.info("Load job %d: storing the upload at %s", self.context.generation, path)
 
     async def data(self, data: bytes) -> None:
@@ -242,6 +251,8 @@ class _Upload:
             self.size += len(data)
             if self.context is None and len(self.buffer) >= SNIFF_BYTES:
                 await self.start()
+            if self.context is not None:
+                self.context.upload_bytes = self.size
             if len(self.buffer) >= WRITE_BYTES:
                 await self.flush()
         elif self.field == REASONER_FIELD:

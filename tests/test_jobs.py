@@ -201,10 +201,10 @@ async def test_refuses_second_job_while_starting(data_dir: Path, monkeypatch: py
     entered, release = threading.Event(), threading.Event()
     claim = runner._store.claim
 
-    def blocked(started_at: datetime, reasoner: Reasoner) -> JobState:
+    def blocked(started_at: datetime, reasoner: Reasoner, name: str | None, syntax: str | None) -> JobState:
         entered.set()
         release.wait(timeout=5)
-        return claim(started_at, reasoner)
+        return claim(started_at, reasoner, name, syntax)
 
     monkeypatch.setattr(runner._store, "claim", blocked)
     first = asyncio.create_task(runner.start())
@@ -281,7 +281,7 @@ async def test_upload_path_reaches_stages(data_dir: Path) -> None:
 
 
 def test_store_migrates_version_1(data_dir: Path) -> None:
-    """Check that a version 1 database, with no reasoner column, migrates, and its job reads as having none."""
+    """Check that a version 1 database migrates, its job read as having no reasoner and no upload recorded."""
     path = data_dir / STATE_DB
     with closing(sqlite3.connect(path)) as connection:
         connection.executescript(
@@ -291,7 +291,35 @@ def test_store_migrates_version_1(data_dir: Path) -> None:
         )
     state = JobStore(path).read()
     assert (state.generation, state.reasoner) == (4, Reasoner.NONE)
+    assert (state.upload_name, state.upload_syntax, state.upload_bytes) == (None, None, None)
     assert schema_version(path) == 2
+
+
+async def test_upload_recorded(data_dir: Path) -> None:
+    """Check that an upload's name and syntax are stored at the job's start, and its size when the block ends."""
+    runner = await open_runner(data_dir)
+    async with runner.upload(Reasoner.NONE, "onto.ttl", "Turtle") as context:
+        stored = JobStore(data_dir / STATE_DB).read()
+        assert (stored.upload_name, stored.upload_syntax, stored.upload_bytes) == ("onto.ttl", "Turtle", None)
+        context.upload_bytes = 1234
+    await runner.wait()
+    stored = JobStore(data_dir / STATE_DB).read()
+    assert (stored.stage, stored.upload_name, stored.upload_bytes) == (Stage.READY, "onto.ttl", 1234)
+    await runner.start()
+    await runner.wait()
+    assert (runner.state.upload_name, runner.state.upload_bytes) == (None, None)
+
+
+async def test_upload_recorded_on_failure(data_dir: Path) -> None:
+    """Check that a failed upload's size so far is stored with its failure."""
+    runner = await open_runner(data_dir)
+    with pytest.raises(StageError):
+        async with runner.upload(Reasoner.NONE, "onto.ttl", "Turtle") as context:
+            context.upload_bytes = 99
+            raise StageError("cut short")
+    await runner.close()
+    stored = JobStore(data_dir / STATE_DB).read()
+    assert (stored.failed_stage, stored.upload_bytes) == (Stage.UPLOADING, 99)
 
 
 async def test_upload_failure(data_dir: Path) -> None:
@@ -547,12 +575,12 @@ async def test_claim_cancelled(data_dir: Path, monkeypatch: pytest.MonkeyPatch, 
     entered, release = threading.Event(), threading.Event()
     claim = runner._store.claim
 
-    def blocked(started_at: datetime, reasoner: Reasoner) -> JobState:
+    def blocked(started_at: datetime, reasoner: Reasoner, name: str | None, syntax: str | None) -> JobState:
         entered.set()
         release.wait(timeout=5)
         if not claimed:
             raise sqlite3.OperationalError("database is locked")
-        return claim(started_at, reasoner)
+        return claim(started_at, reasoner, name, syntax)
 
     monkeypatch.setattr(runner._store, "claim", blocked)
     task = asyncio.create_task(runner.start())
