@@ -64,7 +64,7 @@ class Settings(BaseSettings):
         page_cache_size: Rendered pages kept in memory; 0 turns the cache off (O-10).
         reasoner_timeout_s: Reasoner time limit in seconds, for the whole ROBOT run (O-8).
         reasoner_max_heap: Reasoner heap limit (O-8).
-        materialize_properties: Object property IRIs whose inferred `SubClassOf(P some C)` axioms reasoning adds.
+        materialize_properties: Object property IRIs whose inferred `SubClassOf(C, P some D)` axioms reasoning adds.
         app_jvm_max_heap: Heap for the app's JVM, which only renders per-page fragments; to be confirmed in P-4.
         fuseki_url: Fuseki's address.
         robot_jar: Path to `robot.jar`, where the app image installs it.

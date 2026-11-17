@@ -61,8 +61,7 @@ def create_app(
     """Build the application, loading the settings from the environment unless given.
 
     On startup the app starts the JVM (DESIGN.md §2.1), on the main thread, where Uvicorn runs the startup (a test
-    client doesn't, so tests start it first); it opens its Fuseki client and the load job runner (`app.state.jobs`),
-    with the stages built so far.
+    client doesn't, so tests start it first); it opens its Fuseki client and the load job runner (`app.state.jobs`).
     On shutdown a running load job is cancelled. Pages are gated on the job state (`SiteGate`, §2.13).
 
     Args:

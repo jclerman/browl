@@ -1,12 +1,15 @@
 PREFIX owl: <http://www.w3.org/2002/07/owl#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 
-# Delete shortcut rdfs:subClassOf links: X ⊑ Z where another parent Y of X already gives X the superclass Z, by
-#  1. Y ⊑ Z2, or
-#  2. Y = `p some W` for a transitive p, and W ⊑ Z2 (finger part_of hand, hand part_of body),
-# where Z2 is Z itself, or a separate restriction node with Z's property and filler (both `p some T`).
-# The UNION's two branches match 1 and 2; the FILTER after it checks Z2 against Z.
-# Assumes no rdfs:subClassOf cycles, as after `robot reason`, which removes them; else a cycle's shortcuts all go.
+# Delete shortcut rdfs:subClassOf links: ?sub ⊑ ?super where another parent ?mid of ?sub already gives ?sub the
+# superclass ?super, by
+#  1. ?mid ⊑ ?super2, or
+#  2. ?mid = `?p some ?w` for a transitive ?p, and ?w ⊑ ?super2 (finger part_of hand, hand part_of body),
+# where ?super2 is ?super itself, or a separate restriction node with ?super's property and filler (`?q some ?t`).
+# The UNION's two branches match 1 and 2; the FILTER after it checks ?super2 against ?super.
+# Branch 2 skips ?w from which ?sub can be reached back, as in `X ⊑ p some X`, or `X ⊑ p some W` and `W ⊑ p some X`:
+# there each shortcut would justify deleting another, and all would go. Branch 1 assumes no rdfs:subClassOf cycles,
+# as after `robot reason`, which turns them into equivalences.
 DELETE { ?sub rdfs:subClassOf ?super }
 WHERE {
   ?sub rdfs:subClassOf ?super, ?mid .
@@ -15,17 +18,22 @@ WHERE {
   UNION
   { ?mid a owl:Restriction ;
       owl:onProperty ?p ;
-      owl:someValuesFrom/rdfs:subClassOf ?super2 .
+      owl:someValuesFrom ?w .
     ?p a owl:TransitiveProperty .
+    ?w rdfs:subClassOf ?super2 .
     ?super2 a owl:Restriction ;
       owl:onProperty ?p
   }
-  FILTER (?super2 = ?super || EXISTS {
-    ?super a owl:Restriction ;
-      owl:onProperty ?q ;
-      owl:someValuesFrom ?t .
-    ?super2 a owl:Restriction ;
-      owl:onProperty ?q ;
-      owl:someValuesFrom ?t }
+  # Outside the UNION, where ?sub is bound (inside branch 2 the zero-length path would always match); one FILTER, so
+  # the costly reach-back check runs only on rows that are shortcuts.
+  FILTER (
+    (?super2 = ?super || EXISTS {
+      ?super a owl:Restriction ;
+        owl:onProperty ?q ;
+        owl:someValuesFrom ?t .
+      ?super2 a owl:Restriction ;
+        owl:onProperty ?q ;
+        owl:someValuesFrom ?t })
+    && (!BOUND(?w) || NOT EXISTS { ?w (rdfs:subClassOf|owl:someValuesFrom)* ?sub })
   )
 }

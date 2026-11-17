@@ -53,6 +53,11 @@ def iris(node: object) -> Iterator[URIRef]:
         yield from iris(vars(node))
 
 
+def nonstandard(iris: set[URIRef]) -> list[str]:
+    """Return the IRIs that aren't terms of the standard vocabularies, sorted."""
+    return sorted(str(iri) for iri in iris if not any(iri in vocabulary for vocabulary in STANDARD))
+
+
 def test_files_found() -> None:
     """Check that there are SPARQL files to check, so the tests below can't pass vacuously."""
     assert FILES
@@ -69,13 +74,16 @@ def test_standard_terms_only(path: Path) -> None:
     """Check that every IRI the file names is a term defined in the RDF, RDFS, OWL or XSD vocabulary."""
     found = set(iris(algebra(path.read_text())))
     assert found
-    assert sorted(iri for iri in found if not any(iri in vocabulary for vocabulary in STANDARD)) == []
+    assert nonstandard(found) == []
 
 
 @pytest.mark.parametrize(
     ("text", "bad"),
     [
-        ("PREFIX owl: <http://www.w3.org/2002/07/owl#>\nSELECT * { ?r owl:someValueFrom ?c }", "someValueFrom"),
+        (
+            "PREFIX owl: <http://www.w3.org/2002/07/owl#>\nSELECT * { ?r owl:someValueFrom ?c }",
+            f"{namespace.OWL}someValueFrom",
+        ),
         ("SELECT * { ?s <http://example.org/p> ?o }", "http://example.org/p"),
         ('SELECT * { ?s ?p "x"^^<http://example.org/t> }', "http://example.org/t"),
         (
@@ -89,10 +97,7 @@ def test_standard_terms_only(path: Path) -> None:
 )
 def test_nonstandard_terms_found(text: str, bad: str) -> None:
     """Check that the walk finds non-standard IRIs and misspelt terms, in paths, datatypes and updates too."""
-    found = set(iris(algebra(text)))
-    assert [iri for iri in found if not any(iri in vocabulary for vocabulary in STANDARD)] == [
-        next(iri for iri in found if iri.endswith(bad))
-    ]
+    assert nonstandard(set(iris(algebra(text)))) == [bad]
 
 
 def test_invalid_syntax() -> None:

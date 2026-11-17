@@ -28,7 +28,14 @@ Ontology(<http://example.org/s>
   SubClassOf(:X ObjectSomeValuesFrom(:part_of :T))
   # Materialized from the definition: Q ⊑ part_of some R.
   EquivalentClasses(:Q ObjectIntersectionOf(:P ObjectSomeValuesFrom(:part_of :R)))
-  # A cycle: kept as an equivalence.
+  # part_of cycles: each part_of some CycT would justify deleting the other, so both stay; Loop's too.
+  SubClassOf(:Cyc1 ObjectSomeValuesFrom(:part_of :Cyc2))
+  SubClassOf(:Cyc2 ObjectSomeValuesFrom(:part_of :Cyc1))
+  SubClassOf(:Cyc1 ObjectSomeValuesFrom(:part_of :CycT))
+  SubClassOf(:Cyc2 ObjectSomeValuesFrom(:part_of :CycT))
+  SubClassOf(:Loop ObjectSomeValuesFrom(:part_of :Loop))
+  SubClassOf(:Loop ObjectSomeValuesFrom(:part_of :LoopT))
+  # A subclass cycle: kept as an equivalence.
   SubClassOf(:U :V)
   SubClassOf(:V :U)
 )

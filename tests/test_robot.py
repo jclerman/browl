@@ -6,9 +6,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 import browl.robot
-from browl.jobs import JobContext, Reasoner, StageError
+from browl.jobs import JobContext, Reasoner, Stage, StageError
 from browl.robot import (
     OUT_OF_MEMORY,
     PARSE_ERROR,
@@ -23,12 +24,14 @@ from browl.robot import (
 )
 from browl.settings import Settings
 from tests.conftest import DATA, find_robot_jar
-from tests.helpers import make_settings
+from tests.helpers import make_app, make_settings
 
 pytestmark = pytest.mark.anyio
 
 REASONING = DATA / "reasoning"
 NS = "http://example.org/s/"
+OUTPUT_ARG = 'while [ $# -gt 0 ]; do [ "$1" = --output ] && out=$2; shift; done'
+"""Shell that sets `out` to the fake ROBOT's `--output` argument."""
 
 
 def output_of(*lines: str) -> RobotOutput:
@@ -58,6 +61,17 @@ async def reason(settings: Settings, data_dir: Path, fixture: str, reasoner: Rea
     context = JobContext(1, settings, reasoner, upload(data_dir, fixture))
     await reasoning_stage(context)
     return context
+
+
+async def axioms(ontology: Path, namespace: str, settings: Settings, tmp_path: Path) -> set[str]:
+    """Return an ontology's SubClassOf and EquivalentClasses axioms, but those with owl:Thing, minus the namespace."""
+    ofn = tmp_path / "axioms.ofn"
+    await run_robot(["convert", "--input", str(ontology), "--output", str(ofn)], settings)
+    return {
+        line.replace(f"<{namespace}", "").replace(">", "")
+        for line in ofn.read_text().splitlines()
+        if line.startswith(("SubClassOf", "EquivalentClasses")) and "owl:Thing" not in line
+    }
 
 
 def pigeonhole(path: Path, holes: int) -> Path:
@@ -127,7 +141,7 @@ def test_reason_args(data_dir: Path) -> None:
     """Check that materialize runs only when properties are configured, and the shortcuts query always."""
     source, out = Path("in.ofn"), Path("out.ttl")
     plain = reason_args(Reasoner.HERMIT, source, out, make_settings())
-    assert plain[:4] == ["reason", "--input", "in.ofn", "--reasoner"] and plain[4] == "HermiT"
+    assert plain[:5] == ["reason", "--input", "in.ofn", "--reasoner", "HermiT"]
     assert "materialize" not in plain
     assert plain[-5:] == ["query", "--update", str(browl.robot.SHORTCUTS_QUERY), "--output", "out.ttl"]
     properties = [f"{NS}part_of", f"{NS}has_part"]
@@ -177,16 +191,66 @@ async def test_stops_group_on_cancel(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert running_in_group(int(pid_file.read_text())) == []
 
 
+async def test_failed_run_leaves_no_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: Settings, data_dir: Path
+) -> None:
+    """Check that a run that fails after writing its output leaves neither a partial nor a reasoned file."""
+    fake_java(tmp_path, monkeypatch, f'{OUTPUT_ARG}; echo x > "$out"; echo boom; exit 1')
+    context = JobContext(1, settings, Reasoner.ELK, upload(data_dir, "ok.ofn"))
+    with pytest.raises(StageError, match=r"^reasoner failed \(ROBOT exit status 1\):\nboom$"):
+        await reasoning_stage(context)
+    assert context.reasoned is None
+    assert [path.name for path in context.upload.parent.iterdir()] == ["ontology.ofn"]
+
+
+async def test_time_limit_stops_group(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path) -> None:
+    """Check that a run past the time limit is stopped, its whole process group too, and leaves no output."""
+    pid_file = tmp_path / "pid"
+    fake_java(
+        tmp_path, monkeypatch, f"{OUTPUT_ARG}; echo x > \"$out\"; trap '' TERM; sleep 60 & echo $$ > {pid_file}; wait"
+    )
+    monkeypatch.setattr(browl.robot, "TERM_GRACE_S", 0.2)
+    settings = make_settings(REASONER_TIMEOUT_S=1)
+    context = JobContext(1, settings, Reasoner.ELK, upload(data_dir, "ok.ofn"))
+    with pytest.raises(StageError, match=r"^time limit: "):
+        await reasoning_stage(context)
+    assert running_in_group(int(pid_file.read_text())) == []
+    assert [path.name for path in context.upload.parent.iterdir()] == ["ontology.ofn"]
+
+
+@pytest.mark.parametrize(
+    ("script", "stage", "reason"),
+    [
+        (f'{OUTPUT_ARG}; echo x > "$out"', Stage.READY, None),
+        ("echo boom; exit 2", Stage.REASONING, "reasoner failed (ROBOT exit status 2):\nboom"),
+    ],
+)
+def test_app_runs_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path, script: str, stage: Stage, reason: str | None
+) -> None:
+    """Check that the app's uploads run the reasoning stage, and a failure is recorded with ROBOT's output (A-6)."""
+    fake_java(tmp_path, monkeypatch, script)
+    app = make_app()
+    with TestClient(app) as client:
+        files = {"ontology": ("o.ttl", b"@prefix ex: <http://example.org/> .\nex:a a ex:B .\n")}
+        response = client.post("/_browl/admin/upload", data={"reasoner": "elk"}, files=files, follow_redirects=False)
+        assert response.status_code == 303
+        assert client.portal is not None
+        client.portal.call(app.state.jobs.wait)
+    state = app.state.jobs.state
+    assert (state.stage, state.reason) == (stage, reason)
+    assert (data_dir / "uploads" / "1" / REASONED).exists() is (reason is None)
+
+
 @pytest.mark.jvm
 @pytest.mark.usefixtures("jvm")
 @pytest.mark.parametrize("reasoner", [Reasoner.ELK, Reasoner.HERMIT])
-async def test_success(settings: Settings, data_dir: Path, reasoner: Reasoner) -> None:
+async def test_success(settings: Settings, data_dir: Path, tmp_path: Path, reasoner: Reasoner) -> None:
     """Check that a reasoned ontology replaces the upload as the one served, with inferred parents."""
     context = await reason(settings, data_dir, "ok.ofn", reasoner)
     assert context.reasoned == context.ontology == context.upload.with_name(REASONED)
     assert context.upload.with_name(browl.robot.PARTIAL).exists() is False
-    text = context.reasoned.read_text()
-    assert "s2/Dog" in text and "s2/Pet" in text  # Turtle; Dog ⊑ Pet is checked with the shortcuts below
+    assert "SubClassOf(Dog Pet)" in await axioms(context.reasoned, "http://example.org/s2/", settings, tmp_path)
 
 
 @pytest.mark.jvm
@@ -195,15 +259,8 @@ async def test_materialize_and_shortcuts(settings: Settings, data_dir: Path, tmp
     """Check reasoning's result: materialized restrictions added, shortcuts removed, all else and equivalences kept."""
     settings = settings.model_copy(update={"materialize_properties": [f"{NS}part_of"]})
     context = await reason(settings, data_dir, "shortcuts.ofn")
-    ofn = tmp_path / "out.ofn"
-    await run_robot(["convert", "--input", str(context.reasoned), "--output", str(ofn)], settings)
-    axioms = {
-        line.replace(f"<{NS}", "").replace(">", "")
-        for line in ofn.read_text().splitlines()
-        if line.startswith(("SubClassOf", "EquivalentClasses")) and "owl:Thing" not in line
-    }
     some = "SubClassOf({} ObjectSomeValuesFrom({} {}))".format
-    assert axioms == {
+    assert await axioms(context.reasoned, NS, settings, tmp_path) == {
         "SubClassOf(A B)",
         "SubClassOf(B C)",
         "SubClassOf(D E)",
@@ -222,6 +279,12 @@ async def test_materialize_and_shortcuts(settings: Settings, data_dir: Path, tmp
         "SubClassOf(Q P)",
         some("Q", "part_of", "R"),
         "EquivalentClasses(U V)",
+        some("Cyc1", "part_of", "Cyc2"),
+        some("Cyc2", "part_of", "Cyc1"),
+        some("Cyc1", "part_of", "CycT"),
+        some("Cyc2", "part_of", "CycT"),
+        some("Loop", "part_of", "Loop"),
+        some("Loop", "part_of", "LoopT"),
     }
 
 

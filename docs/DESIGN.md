@@ -283,11 +283,13 @@ Uberon goes from upload file to ready in 7 s without reasoning, measured end to 
    inferred `SubClassOf(C, P some D)`, e.g. from equivalence definitions.
 3. `query --update remove-superclass-shortcuts.rq` (`browl/sparql/`) deletes shortcut `rdfs:subClassOf` links: `X ⊑ Z`
    where another parent `Y` of `X` already gives `Z` (`Y ⊑ Z`, `Y ⊑` the same `P some T` restriction, or for a
-   transitive `P`, `Y = P some W` with `W ⊑ P some T`). It relies on `reason` having removed subclass cycles first.
+   transitive `P`, `Y = P some W` with `W ⊑ P some T`). It relies on `reason` having removed subclass cycles first,
+   and skips a `W` from which `X` can be reached back, where shortcuts in a `P some` cycle would justify each other.
 
 On Uberon with ELK and an 8 GB heap, `reason` alone took 17 s; with `materialize` of `part_of`, 24 s (it added nothing:
-Uberon's release is already materialized); with the shortcut query too, 38 s, removing 6,196 of 80,598 `SubClassOf`
-axioms. The query's run converts the ontology to Jena's in-memory model and back, so it needs heap of its own.
+Uberon's release is already materialized); with the shortcut query too, 43 s, removing 6,175 of 80,598 `SubClassOf`
+axioms (without the cycle check, 38 s, wrongly removing 21 more). The query's run converts the ontology to Jena's
+in-memory model and back, so it needs heap of its own.
 
 **Reasoner limits** _(Q7)_, which cover the whole ROBOT run:
 
@@ -758,7 +760,7 @@ go into this document.
 | --- | --- | --- | --- | --- | --- |
 | P-5 | Job runner and job state in SQLite; "loading" / "not available" site pages | U-16, A-5 | P-2 | Done | [#14](https://github.com/jclerman/browl/issues/14) |
 | P-6 | Upload page and streaming upload (auth not yet enforced) | A-2, A-4 | P-5 | Done | [#16](https://github.com/jclerman/browl/issues/16) |
-| P-7 | ROBOT build script: optional ELK/HermiT reasoning, with limits | A-3, A-6, O-8 | P-6, S-2 | Done | [#18](https://github.com/jclerman/browl/issues/18) |
+| P-7 | Reasoning stage: ROBOT with optional ELK/HermiT reasoning, with limits | A-3, A-6, O-8 | P-6, S-2 | Done | [#18](https://github.com/jclerman/browl/issues/18) |
 | P-8 | Fetch imports (warn on failures); bulk-load the ontology and imports into a new TDB2 store and switch Fuseki to it; no reload on restart | A-4 | P-4, P-7, S-4 | To do | [#20](https://github.com/jclerman/browl/issues/20) |
 
 ### Phase 3: Derived data
