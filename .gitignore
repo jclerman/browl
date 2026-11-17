@@ -30,3 +30,6 @@ htmlcov/
 
 # Local settings for docker-compose.yml (see .env.example)
 .env
+
+# Local PR review notes
+docs/pr_reviews/
