@@ -15,7 +15,8 @@
     File <code>{{ job.upload_name }}</code>, {{ job.upload_syntax }}
     {%- if job.upload_bytes is not none %},
     <span title="{{ '{:,}'.format(job.upload_bytes) }} bytes">{{ job.upload_bytes | file_size }}</span>
-    {%- if job.failed_stage == "uploading" %} received before the failure{% endif %}
+    {%- if job.failed_stage == "uploading" %} received before the failure
+    {%- elif job.running and job.stage == "uploading" %} received so far{% endif %}
     {%- endif %}.
   </p>
   {% endif %}

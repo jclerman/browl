@@ -31,6 +31,9 @@ JOB_LOCK = "job.lock"
 STATE_TTL_S = 1.0
 """How long a runner serves the job state it last read before reading the database again."""
 
+UPLOAD_PROGRESS_S = 1.0
+"""How often a running upload's size so far is recorded, for the status to show it growing."""
+
 INTERRUPTED_BY_RESTART = "interrupted by restart"
 INTERRUPTED_BY_SHUTDOWN = "interrupted by shutdown"
 CANCELLED = "cancelled"
@@ -117,7 +120,7 @@ class JobState:
         upload_name: The name of the file uploaded for it, as the admin's browser gave it; None if it had none.
         upload_syntax: The file's syntax, e.g. "RDF/XML".
         upload_bytes: The file's size; while it's being uploaded, or if the upload failed, how much had arrived when
-            last recorded. None until the upload has ended.
+            last recorded (every `UPLOAD_PROGRESS_S`). None until the first record.
     """
 
     generation: int | None = None
@@ -327,8 +330,8 @@ class JobContext:
         upload: The uploaded ontology file, on the data volume; None until the upload handler has stored it, and for a
             job with nothing to upload. Its suffix says the format: `.ttl` (Turtle), `.rdf` (RDF/XML) or `.ofn`
             (OWL Functional Syntax).
-        upload_bytes: How much of the file the upload handler has received; recorded with the job state when the
-            upload ends, whether it succeeds or fails.
+        upload_bytes: How much of the file the upload handler has received; recorded with the job state every
+            `UPLOAD_PROGRESS_S` while it uploads, and when the upload ends, whether it succeeds or fails.
     """
 
     generation: int
@@ -428,6 +431,7 @@ class JobRunner:
         self._task: asyncio.Task[None] | None = None
         self._writes: set[asyncio.Task[None]] = set()
         self._unstored: JobState | None = None  # the end of this runner's last job, if it couldn't be stored
+        self._progress_write: asyncio.Future[None] | None = None  # the running upload's last progress write
         self._refreshing = asyncio.Lock()
         self._changes = 0
         self._set(state)
@@ -490,7 +494,8 @@ class JobRunner:
         """Start a job in the uploading stage; on leaving the block, run its other stages in the background.
 
         The block streams the file to the data volume and sets the context's `upload` and `upload_bytes` (see
-        `browl.upload`). The file's name and syntax are recorded with the job's start, its size when the block ends.
+        `browl.upload`). The file's name and syntax are recorded with the job's start, its size so far every
+        `UPLOAD_PROGRESS_S`, and its size when the block ends.
 
         A request handler streams the upload inside the block, as it can't hand its request body to a background task.
         If the block raises, the job fails in the uploading stage and the exception propagates. A time limit on the
@@ -506,8 +511,16 @@ class JobRunner:
         await self._claim(reasoner, name, syntax)
         context = JobContext(self._state.generation or 0, self._settings, reasoner)
         logger.info("Load job %d started", context.generation)
+        progress = asyncio.create_task(self._record_progress(context), name=f"load job {context.generation} upload")
         try:
-            yield context
+            try:
+                yield context
+            finally:
+                progress.cancel()
+                pending: set[asyncio.Future[None]] = {progress}
+                if self._progress_write is not None:
+                    pending.add(self._progress_write)  # a write can outlive its cancelled task
+                await asyncio.wait(pending)
         except BaseException as error:
             self._set(replace(self._state, upload_bytes=context.upload_bytes))
             try:
@@ -541,6 +554,24 @@ class JobRunner:
                 await self._task
             self._settle()  # if the task was cancelled before it started, it recorded nothing
         await asyncio.gather(*self._writes)
+
+    async def _record_progress(self, context: JobContext) -> None:
+        """Record how much of the file has arrived, every `UPLOAD_PROGRESS_S`, until cancelled.
+
+        A failed write is logged and skipped: the status just shows an older size.
+        """
+        while True:
+            await asyncio.sleep(UPLOAD_PROGRESS_S)
+            if context.upload_bytes == self._state.upload_bytes:
+                continue
+            state = replace(self._state, upload_bytes=context.upload_bytes)
+            self._set(state)
+            # A cancelled await leaves the thread writing, so the job's end waits for it (`_store_end`).
+            write = self._progress_write = asyncio.ensure_future(asyncio.to_thread(self._store.write, state))
+            try:
+                await asyncio.shield(write)
+            except Exception:
+                logger.warning("Couldn't record load job %d's upload progress", context.generation, exc_info=True)
 
     def _set(self, state: JobState) -> None:
         self._state = state
@@ -618,6 +649,8 @@ class JobRunner:
 
     async def _store_end(self, state: JobState) -> None:
         try:
+            if self._progress_write is not None:
+                await asyncio.wait({self._progress_write})  # so it can't land after, and overwrite, the end
             await asyncio.to_thread(self._store.write, state)
         except Exception:
             # Other workers keep reading it as running until the next job or a restart; this one serves its end.

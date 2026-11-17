@@ -676,3 +676,74 @@ async def test_long_reason_cut_short(data_dir: Path, caplog: pytest.LogCaptureFi
     state = await run_job(await open_runner(data_dir, {Stage.REASONING: reasoning}))
     assert state.reason == f"{message[: browl.jobs.MAX_REASON_CHARS]}… (cut short; the app's log has it all)"
     assert message in caplog.text
+
+
+async def test_upload_progress(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a running upload's size so far is recorded every `UPLOAD_PROGRESS_S`, and only when it has grown."""
+    monkeypatch.setattr(browl.jobs, "UPLOAD_PROGRESS_S", 0.01)
+    runner = await open_runner(data_dir)
+    writes: list[JobState] = []
+    write = runner._store.write
+    monkeypatch.setattr(runner._store, "write", lambda state: (writes.append(state), write(state))[1])
+    async with runner.upload(Reasoner.NONE, "onto.ttl", "Turtle") as context:
+        context.upload_bytes = 5
+        await asyncio.sleep(0.1)
+        stored = JobStore(data_dir / STATE_DB).read()
+        assert (stored.stage, stored.finished_at, stored.upload_bytes) == (Stage.UPLOADING, None, 5)
+        assert runner.state.upload_bytes == 5
+        context.upload_bytes = 10
+    await runner.wait()
+    assert [state.upload_bytes for state in writes if state.stage == Stage.UPLOADING] == [5]
+    assert JobStore(data_dir / STATE_DB).read().upload_bytes == 10
+
+
+async def test_upload_progress_write_fails(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Check that a failed progress write is logged and skipped, leaving the upload to carry on."""
+    monkeypatch.setattr(browl.jobs, "UPLOAD_PROGRESS_S", 0.01)
+    runner = await open_runner(data_dir)
+    write = runner._store.write
+
+    def failing(state: JobState) -> None:
+        if state.stage == Stage.UPLOADING:
+            raise sqlite3.OperationalError("database is locked")
+        write(state)
+
+    monkeypatch.setattr(runner._store, "write", failing)
+    async with runner.upload() as context:
+        context.upload_bytes = 5
+        await asyncio.sleep(0.05)
+    await runner.wait()
+    assert runner.state.stage == Stage.READY
+    assert "Couldn't record load job 1's upload progress" in caplog.text
+
+
+async def test_upload_progress_write_before_end(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a progress write still running when the upload is cancelled can't overwrite the job's end."""
+    monkeypatch.setattr(browl.jobs, "UPLOAD_PROGRESS_S", 0.01)
+    runner = await open_runner(data_dir)
+    entered, release = threading.Event(), threading.Event()
+    write = runner._store.write
+
+    def slow(state: JobState) -> None:
+        if state.stage == Stage.UPLOADING and state.finished_at is None:
+            entered.set()
+            release.wait(timeout=5)
+        write(state)
+
+    monkeypatch.setattr(runner._store, "write", slow)
+    timer = threading.Timer(0.2, release.set)  # the end, recorded meanwhile, must wait for the write
+    # anyio's cancellation, as Starlette's, cancels every await in the scope, even the block's wait for the write.
+    with anyio.CancelScope() as scope:
+        async with runner.upload() as context:
+            context.upload_bytes = 5
+            assert await asyncio.to_thread(entered.wait, 5)
+            scope.cancel()
+            timer.start()
+            await asyncio.Event().wait()
+    await runner.close()
+    assert runner._progress_write is not None
+    await asyncio.wait({runner._progress_write})
+    stored = JobStore(data_dir / STATE_DB).read()
+    assert (stored.failed_stage, stored.reason, stored.upload_bytes) == (Stage.UPLOADING, CANCELLED, 5)

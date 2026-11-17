@@ -15,6 +15,7 @@ from markupsafe import escape
 from starlette.requests import Request
 from starlette.types import Message
 
+import browl.jobs
 import browl.upload
 from browl.jobs import JobContext, JobRunner, Reasoner, Stage
 from browl.pages import file_size
@@ -440,3 +441,15 @@ def test_check_syntax_indistinct(suffix: str) -> None:
     """Check that an RDF/XML or OWL Functional Syntax file must start distinctively."""
     with pytest.raises(UploadError, match="isn't recognizable"):
         check_syntax(b"ex:a a ex:B .", suffix)
+
+
+def test_upload_progress_shown(client: TestClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that while a file uploads, the status shows how much has arrived so far."""
+    monkeypatch.setattr(browl.jobs, "UPLOAD_PROGRESS_S", 0.01)
+    assert client.portal is not None
+    with client.portal.wrap_async_context_manager(app.state.jobs.upload(Reasoner.NONE, "big.ttl", "Turtle")) as context:
+        context.upload_bytes = 2_500_000
+        client.portal.call(asyncio.sleep, 0.1)
+        text = " ".join(client.get(UPLOAD).text.split())
+    assert '<span title="2,500,000 bytes">2.5 MB</span> received so far.' in text
+    assert "File <code>big.ttl</code>, Turtle" in text
