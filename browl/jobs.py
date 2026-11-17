@@ -1,10 +1,6 @@
 """The load job (DESIGN.md §2.4): its stages, its state in a persistent SQLite database, and the runner.
 
-One job runs at a time, as an asyncio task in the app process. The upload is streamed by a request handler, which can't
-hand its request body to a background task, so a job starts in two steps: `JobRunner.upload()` claims the runner and
-records the uploading stage, the handler streams the file inside it, and leaving it starts the remaining stages in the
-background. The other stages are async functions registered with `JobRunner.register`; a stage with none registered
-passes at once.
+A job starts with `JobRunner.upload`.
 """
 
 import asyncio
@@ -18,6 +14,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal, Self
 
+import httpx2
+
 from browl.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -27,6 +25,8 @@ STATE_DB = "state.sqlite3"
 
 INTERRUPTED_BY_RESTART = "interrupted by restart"
 INTERRUPTED_BY_SHUTDOWN = "interrupted by shutdown"
+CANCELLED = "cancelled"
+STOPPED_UNRECORDED = "internal error: the job stopped without recording why"
 
 MIGRATIONS: list[str] = [
     # Version 1. The job table has at most one row, the latest job.
@@ -220,12 +220,49 @@ class StageError(Exception):
     """A stage failed for a reason worth showing to admins as it is (A-6), e.g. "time limit"."""
 
 
+@asynccontextmanager
+async def time_limit(seconds: float, operation: str) -> AsyncIterator[None]:
+    """Fail the stage if the block takes longer than `seconds`, with a reason that names the operation (A-6).
+
+    Stage code wraps each step that can hang in one, e.g. `time_limit(60, "Fuseki HTTP request POST /$/datasets")`,
+    whose reason would be "Fuseki HTTP request POST /$/datasets timed out after 60 s". Other timeouts get a generic
+    reason (see `_reason`).
+
+    Raises:
+        StageError: The block took too long.
+    """
+    timeout = asyncio.timeout(seconds)
+    try:
+        async with timeout:
+            yield
+    except TimeoutError as error:
+        if not timeout.expired():
+            raise
+        raise StageError(f"{operation} timed out after {seconds:g} s") from error
+
+
 def _reason(error: BaseException) -> str:
     if isinstance(error, StageError):
         return str(error)
+    if isinstance(error, httpx2.TimeoutException):
+        return _http_timeout_reason(error)
+    if isinstance(error, TimeoutError):
+        return f"timed out: {error}" if str(error) else "timed out; the app's log shows where"
     return (
         f"internal error: {type(error).__name__}: {error}" if str(error) else f"internal error: {type(error).__name__}"
     )
+
+
+def _http_timeout_reason(error: httpx2.TimeoutException) -> str:
+    try:
+        request = error.request
+    except RuntimeError:  # not set
+        return f"HTTP request timed out ({type(error).__name__})"
+    url = request.url.copy_with(userinfo=b"", query=None)
+    phase = type(error).__name__.removesuffix("Timeout").lower()  # connect, read, write or pool
+    limit = request.extensions.get("timeout", {}).get(phase)
+    after = "" if limit is None else f" after {limit:g} s"
+    return f"HTTP request {request.method} {url} timed out{after} ({type(error).__name__})"
 
 
 class JobRunner:
@@ -255,7 +292,9 @@ class JobRunner:
         for stage, function in (stages or {}).items():
             self.register(stage, function)
         self._busy = False
+        self._closing = False
         self._task: asyncio.Task[None] | None = None
+        self._writes: set[asyncio.Task[None]] = set()
 
     @classmethod
     async def open(cls, settings: Settings, stages: Mapping[Stage, StageFunction] | None = None) -> Self:
@@ -276,7 +315,7 @@ class JobRunner:
 
     @property
     def state(self) -> JobState:
-        """Return the job state, as last stored."""
+        """Return the job state."""
         return self._state
 
     def register(self, stage: Stage, function: StageFunction) -> None:
@@ -293,8 +332,10 @@ class JobRunner:
     async def upload(self) -> AsyncIterator[JobContext]:
         """Start a job in the uploading stage; on leaving the block, run its other stages in the background.
 
-        The caller streams the upload inside the block. If the block raises, the job fails in the uploading stage
-        and the exception propagates.
+        A request handler streams the upload inside the block, as it can't hand its request body to a background task.
+        If the block raises, the job fails in the uploading stage and the exception propagates. A time limit on the
+        upload belongs inside the block (`time_limit`), so the reason names it; a cancellation from outside is
+        recorded only as "cancelled".
 
         Raises:
             JobRunningError: A job is already running.
@@ -320,7 +361,7 @@ class JobRunner:
                 await self._fail(error)
                 raise
         except BaseException:
-            self._busy = False
+            self._release()
             raise
         self._task = asyncio.create_task(self._run(context), name=f"load job {generation}")
 
@@ -339,11 +380,13 @@ class JobRunner:
             await asyncio.shield(self._task)
 
     async def close(self) -> None:
-        """Cancel the running job, if any, recording it as interrupted by shutdown."""
+        """Cancel the running job, if any, recording it as interrupted by shutdown; wait for failures to be stored."""
+        self._closing = True
         if self._task is not None and not self._task.done():
             self._task.cancel()
             with suppress(asyncio.CancelledError):
                 await self._task
+        await asyncio.gather(*self._writes)
 
     async def _record(self, state: JobState) -> None:
         await asyncio.to_thread(self._store.write, state)
@@ -351,8 +394,8 @@ class JobRunner:
 
     async def _fail(self, error: BaseException) -> None:
         if isinstance(error, asyncio.CancelledError):
-            reason = INTERRUPTED_BY_SHUTDOWN
-            logger.warning("Load job %d was cancelled in stage %s", self._state.generation, self._state.stage)
+            reason = INTERRUPTED_BY_SHUTDOWN if self._closing else CANCELLED
+            logger.warning("Load job %d was %s in stage %s", self._state.generation, reason, self._state.stage)
         else:
             reason = _reason(error)
             logger.error(
@@ -362,12 +405,32 @@ class JobRunner:
                 reason,
                 exc_info=not isinstance(error, StageError),
             )
+        # Shielded: a second cancellation, e.g. from an anyio cancel scope, mustn't stop the failure being stored.
+        await asyncio.shield(self._record_failure(reason))
+
+    def _record_failure(self, reason: str) -> asyncio.Task[None]:
+        """Fail the job in memory at once, so the site stops serving, and store it in a task of its own."""
         state = self._state.failed(reason)
+        self._state = state
+        task = asyncio.create_task(self._write_failure(state))
+        self._writes.add(task)
+        task.add_done_callback(self._writes.discard)
+        return task
+
+    async def _write_failure(self, state: JobState) -> None:
         try:
-            await self._record(state)
+            await asyncio.to_thread(self._store.write, state)
         except Exception:
             logger.exception("Couldn't record the failure of load job %d", state.generation)
-            self._state = state  # the site still stops serving
+
+    def _release(self) -> None:
+        """Free the runner, failing a job left recorded as running, so the site can't stay on "loading" for good."""
+        self._busy = False
+        if self._state.running:
+            logger.error(
+                "Load job %d stopped in stage %s without recording why", self._state.generation, self._state.stage
+            )
+            self._record_failure(STOPPED_UNRECORDED)
 
     async def _run(self, context: JobContext) -> None:
         try:
@@ -386,4 +449,4 @@ class JobRunner:
         except Exception as error:  # noqa: BLE001  # any stage failure fails the job; _fail logs it
             await self._fail(error)
         finally:
-            self._busy = False
+            self._release()

@@ -263,7 +263,10 @@ Uberon goes from upload file to ready in 7 s without reasoning, measured end to 
   `OutOfMemoryError` in ROBOT's output. To be confirmed by spike S-2.
 
 On failure the job records the stage and reason (A-6), and the site stays on a "not available" page until an admin
-uploads again. Downtime during a replace is accepted. _(Q14a)_
+uploads again. Downtime during a replace is accepted. _(Q14a)_ A timeout's reason names what timed out and the limit
+(e.g. "Fuseki HTTP request POST /$/datasets timed out after 60 s"); a job cancelled at shutdown records "interrupted by
+shutdown", any other cancellation "cancelled". A job that stops without recording why is still marked failed, so the
+site never stays on "loading" (P-5).
 
 **App restart:** the store and the derived database stay on the data volume. Fuseki reopens the store in under a
 second, and the app reuses the derived database when its generation number matches, skipping pre-caching. Restarting

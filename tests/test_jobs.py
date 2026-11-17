@@ -2,16 +2,22 @@
 
 import asyncio
 import sqlite3
+import threading
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+import anyio
+import httpx2
 import pytest
 
 import browl.jobs
 from browl.jobs import (
+    CANCELLED,
     INTERRUPTED_BY_RESTART,
     INTERRUPTED_BY_SHUTDOWN,
     STATE_DB,
+    STOPPED_UNRECORDED,
     JobContext,
     JobRunner,
     JobRunningError,
@@ -19,6 +25,7 @@ from browl.jobs import (
     JobStore,
     Stage,
     StageError,
+    time_limit,
 )
 from tests.test_app import make_settings
 
@@ -172,6 +179,44 @@ async def test_refuses_second_job(data_dir: Path) -> None:
     assert (await run_job(runner)).generation == 2
 
 
+async def test_refuses_second_job_while_starting(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a job can't start while another is still recording its start."""
+    runner = await open_runner(data_dir)
+    entered, release = threading.Event(), threading.Event()
+    write = runner._store.write
+
+    def blocked(state: JobState) -> None:
+        entered.set()
+        release.wait(timeout=5)
+        write(state)
+
+    monkeypatch.setattr(runner._store, "write", blocked)
+    first = asyncio.create_task(runner.start())
+    assert await asyncio.to_thread(entered.wait, 5)
+    with pytest.raises(JobRunningError):
+        await runner.start()
+    release.set()
+    assert (await first).generation == 1
+    await runner.wait()
+    assert runner.state.site == "available"
+
+
+async def test_start_not_stored(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a job whose start can't be stored doesn't start, and frees the runner."""
+    runner = await open_runner(data_dir)
+    write = runner._store.write
+
+    def broken(state: JobState) -> None:
+        monkeypatch.setattr(runner._store, "write", write)
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(runner._store, "write", broken)
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        await runner.start()
+    assert runner.state == JobState()
+    assert (await run_job(runner)).site == "available"
+
+
 async def test_upload_stage(data_dir: Path) -> None:
     """Check that the upload block runs in the uploading stage, and the other stages only after it."""
     runner = await open_runner(data_dir)
@@ -194,21 +239,87 @@ async def test_upload_failure(data_dir: Path) -> None:
     assert (await run_job(runner)).site == "available"
 
 
+async def upload_slowly(runner: JobRunner) -> None:
+    """Take a second over an upload."""
+    async with runner.upload():
+        await asyncio.sleep(1)
+
+
+@pytest.mark.parametrize("scope", ["anyio", "asyncio"])
+async def test_upload_cancelled(data_dir: Path, scope: str) -> None:
+    """Check that an upload cancelled from outside, by a cancel scope or time limit, is recorded as cancelled.
+
+    An anyio cancel scope also cancels the failure record, which must still stop the site serving.
+    """
+    runner = await open_runner(data_dir)
+    if scope == "anyio":
+        with anyio.move_on_after(0.05):
+            await upload_slowly(runner)
+    else:
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(0.05):
+                await upload_slowly(runner)
+    state = runner.state
+    assert (state.failed_stage, state.reason, state.site) == (Stage.UPLOADING, CANCELLED, "not available")
+    await runner.close()
+    assert (await open_runner(data_dir)).state == state
+    assert (await run_job(runner)).site == "available"
+
+
+async def test_upload_time_limit(data_dir: Path) -> None:
+    """Check that a time limit inside the upload block names the operation that timed out."""
+    runner = await open_runner(data_dir)
+    with pytest.raises(StageError):
+        async with runner.upload(), time_limit(0.05, "Reading the upload"):
+            await asyncio.sleep(1)
+    assert runner.state.reason == "Reading the upload timed out after 0.05 s"
+
+
+async def fuseki_timeout() -> None:
+    """Raise the timeout of a request to a Fuseki that doesn't answer in time."""
+
+    def slow(request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ReadTimeout("timed out", request=request)
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(slow), timeout=7.5) as client:
+        await client.post("http://user:secret@fuseki:3030/$/datasets?dbName=gen-2")
+
+
+async def other_timeout() -> None:
+    """Raise a timeout from inside a time limit that isn't reached."""
+    async with time_limit(10, "Building the store"):
+        raise TimeoutError("lock wait")
+
+
+async def time_limit_reached() -> None:
+    """Exceed a time limit."""
+    async with time_limit(0.01, "Fuseki HTTP request POST /$/datasets"):
+        await asyncio.sleep(1)
+
+
 @pytest.mark.parametrize(
     ("error", "reason"),
     [
         (StageError("time limit"), "time limit"),
         (ValueError("bad value"), "internal error: ValueError: bad value"),
         (KeyError(), "internal error: KeyError"),
+        (TimeoutError(), "timed out; the app's log shows where"),
+        (other_timeout, "timed out: lock wait"),
+        (time_limit_reached, "Fuseki HTTP request POST /$/datasets timed out after 0.01 s"),
+        (fuseki_timeout, "HTTP request POST http://fuseki:3030/$/datasets timed out after 7.5 s (ReadTimeout)"),
+        (httpx2.ConnectTimeout("no route"), "HTTP request timed out (ConnectTimeout)"),
     ],
 )
-async def test_stage_failure(data_dir: Path, error: Exception, reason: str) -> None:
+async def test_stage_failure(data_dir: Path, error: Exception | Callable[[], Awaitable[None]], reason: str) -> None:
     """Check that a failing stage records the stage and reason, keeping the previous ready generation."""
     fail = False
 
     async def reasoning(context: JobContext) -> None:
-        if fail:
+        if not fail:
+            return
+        if isinstance(error, Exception):
             raise error
+        await error()
 
     runner = await open_runner(data_dir, REASONING=reasoning)
     await run_job(runner)
@@ -235,6 +346,26 @@ async def test_failure_not_stored(data_dir: Path, monkeypatch: pytest.MonkeyPatc
     runner = await open_runner(data_dir, LOADING=loading)
     state = await run_job(runner)
     assert (state.failed_stage, state.reason, state.site) == (Stage.LOADING, "boom", "not available")
+
+
+async def test_failure_record_interrupted(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a job that ends without recording its failure is still failed, so the site doesn't stay loading."""
+
+    async def reasoning(context: JobContext) -> None:
+        raise StageError("boom")
+
+    async def interrupted(error: BaseException) -> None:
+        raise RuntimeError("failure record interrupted")
+
+    runner = await open_runner(data_dir, REASONING=reasoning)
+    monkeypatch.setattr(runner, "_fail", interrupted)
+    await runner.start()
+    with pytest.raises(RuntimeError, match="interrupted"):
+        await runner.wait()
+    state = runner.state
+    assert (state.failed_stage, state.reason, state.site) == (Stage.REASONING, STOPPED_UNRECORDED, "not available")
+    await runner.close()
+    assert (await open_runner(data_dir)).state == state
 
 
 async def test_restart_fails_running_job(data_dir: Path) -> None:
