@@ -11,8 +11,8 @@ import errno
 import logging
 import re
 import shutil
-from collections.abc import Callable
-from contextlib import AsyncExitStack, suppress
+from collections.abc import AsyncGenerator, Callable
+from contextlib import AsyncExitStack, aclosing, suppress
 from pathlib import Path, PureWindowsPath
 from typing import IO
 
@@ -48,6 +48,9 @@ MAX_FIELD_BYTES = 64
 
 WRITE_BYTES = 1 << 20
 """How much of the file to buffer before each write, to keep thread hand-offs few."""
+
+IDLE_S = 60.0
+"""How long the upload may go without receiving data before it fails, e.g. when the admin's laptop sleeps."""
 
 
 class UploadError(StageError):
@@ -237,10 +240,9 @@ class _Upload:
         self.field: str | None = None  # the current part's field name
         self.value = b""  # the current non-file part's value
         self.buffer = bytearray()
-        self.size = 0
         self.ended = False
 
-    async def headers(self, disposition: bytes) -> None:
+    def headers(self, disposition: bytes) -> None:
         _, options = parse_options_header(disposition)
         self.field = options.get(b"name", b"").decode("utf-8", "replace")
         filename = options.get(b"filename")
@@ -248,7 +250,7 @@ class _Upload:
             return
         if self.suffix is not None:
             raise UploadError("the form has more than one file")
-        if filename is None or not filename:
+        if not filename:
             raise UploadError("no file was chosen")
         name = PureWindowsPath(filename.decode("utf-8", "replace")).name  # also splits on "/"
         suffix = stored_suffix(name)
@@ -263,26 +265,25 @@ class _Upload:
         if not self.buffer:
             raise UploadError("the file is empty")
         check_syntax(bytes(self.buffer[:SNIFF_BYTES]), self.suffix)
-        suffix = self.suffix
         self.context = await self.stack.enter_async_context(
             self.runner.upload(self.reasoner, self.name, SYNTAXES[self.suffix])
         )
         clear_page_cache()
-        path = upload_path(self.data_dir, self.context.generation, suffix)
-        self.file = await asyncio.to_thread(_open, path)
+        path = upload_path(self.data_dir, self.context.generation, self.suffix)
+        self.file = await _storing(_open, path)
         self.stack.callback(self.file.close)
         self.context.upload = path
-        self.context.upload_bytes = self.size
+        self.context.upload_bytes = len(self.buffer)
         logger.info("Load job %d: storing the upload at %s", self.context.generation, path)
 
     async def data(self, data: bytes) -> None:
         if self.field == FILE_FIELD:
             self.buffer += data
-            self.size += len(data)
-            if self.context is None and len(self.buffer) >= SNIFF_BYTES:
-                await self.start()
-            if self.context is not None:
-                self.context.upload_bytes = self.size
+            if self.context is None:
+                if len(self.buffer) >= SNIFF_BYTES:
+                    await self.start()
+            else:
+                self.context.upload_bytes = (self.context.upload_bytes or 0) + len(data)
             if len(self.buffer) >= WRITE_BYTES:
                 await self.flush()
         elif self.field == REASONER_FIELD:
@@ -305,7 +306,7 @@ class _Upload:
 
     async def flush(self) -> None:
         if self.buffer and self.file is not None:
-            await asyncio.to_thread(_write, self.file, bytes(self.buffer))
+            await _storing(_write, self.file, bytes(self.buffer))
             self.buffer.clear()
 
     async def discard(self) -> None:
@@ -318,9 +319,17 @@ class _Upload:
             raise UploadError("the upload was cut short")
         if self.context is None or self.file is None:
             raise UploadError("no file was chosen")
-        await asyncio.to_thread(self.file.close)
-        logger.info("Load job %d: stored %d bytes", self.context.generation, self.size)
+        await _storing(self.file.close)
+        logger.info("Load job %d: stored %d bytes", self.context.generation, self.context.upload_bytes)
         return self.context
+
+
+async def _storing[**P, T](function: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+    """Run file work in a thread, reporting an `OSError` as a `StorageError`."""
+    try:
+        return await asyncio.to_thread(function, *args, **kwargs)
+    except OSError as error:
+        raise StorageError(error) from error
 
 
 def _write(file: IO[bytes], data: bytes) -> None:
@@ -371,30 +380,51 @@ async def receive_upload(request: Request, runner: JobRunner) -> JobContext:
     async with AsyncExitStack() as stack:
         upload = _Upload(request, runner, stack)
         try:
-            async for chunk in request.stream():
-                parser.write(chunk)
-                await _handle(upload, events)
-            parser.finalize()
+            async with aclosing(_chunks(request)) as chunks:
+                async for chunk in chunks:
+                    _parse(parser.write, chunk)
+                    await _handle(upload, events)
+            _parse(parser.finalize)
             await _handle(upload, events)
-            return await upload.finish()
-        except BaseException as error:
+            context = await upload.finish()
+        except BaseException:
             await upload.discard()
-            if isinstance(error, ClientDisconnect):
-                raise UploadError("the upload was cut short: the client disconnected") from error
-            if isinstance(error, OSError):
-                raise StorageError(error) from error
-            if isinstance(error, ValueError):
-                # python-multipart's errors (e.g. MultipartParseError) are ValueErrors
-                raise UploadError(f"the form is malformed: {error}") from error
             raise
-    raise AssertionError("unreachable")  # pragma: no cover  # an exit stack doesn't swallow exceptions
+    return context
+
+
+async def _chunks(request: Request) -> AsyncGenerator[bytes]:
+    """Yield the request body's chunks, failing the upload if the client disconnects or sends nothing for `IDLE_S`."""
+    async with aclosing(request.stream()) as stream:
+        while True:
+            timeout = asyncio.timeout(IDLE_S)
+            try:
+                async with timeout:
+                    chunk = await anext(stream)
+            except StopAsyncIteration:
+                return
+            except ClientDisconnect as error:
+                raise UploadError("the upload was cut short: the client disconnected") from error
+            except TimeoutError:
+                if not timeout.expired():
+                    raise
+                raise UploadError(f"the upload stalled: no data arrived for {IDLE_S:g} s") from None
+            yield chunk
+
+
+def _parse[**P](function: Callable[P, object], *args: P.args, **kwargs: P.kwargs) -> None:
+    """Feed the multipart parser, reporting its errors (`ValueError`s, e.g. `MultipartParseError`) as `UploadError`s."""
+    try:
+        function(*args, **kwargs)
+    except ValueError as error:
+        raise UploadError(f"the form is malformed: {error}") from error
 
 
 async def _handle(upload: _Upload, events: _Events) -> None:
     pending, events.events = events.events, []
     for kind, data in pending:
         if kind == "headers":
-            await upload.headers(data)
+            upload.headers(data)
         elif kind == "data":
             await upload.data(data)
         elif kind == "part_end":

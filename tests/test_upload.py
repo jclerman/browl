@@ -53,6 +53,19 @@ def client(app: FastAPI) -> Iterator[TestClient]:
         yield test_client
 
 
+@pytest.fixture
+def loading(app: FastAPI) -> threading.Event:
+    """Register a loading stage that never ends; return an event set once it has started."""
+    started = threading.Event()
+
+    async def forever(context: JobContext) -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    app.state.jobs.register(Stage.LOADING, forever)
+    return started
+
+
 def post(
     client: TestClient, filename: str = "onto.ttl", content: bytes = TURTLE, reasoner: str | None = "none"
 ) -> httpx2.Response:
@@ -160,13 +173,24 @@ def test_upload_large(client: TestClient, app: FastAPI, data_dir: Path, monkeypa
     assert upload_path(data_dir, 1, ".ttl").read_bytes() == content
 
 
+def record_clears(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, bool]]:
+    """Record each page cache clear: the running job's generation, and whether its file had been opened yet."""
+    cleared: list[tuple[int, bool]] = []
+
+    def clear() -> None:
+        generation = app.state.jobs.state.generation
+        cleared.append((generation, upload_path(app.state.settings.data_dir, generation, ".ttl").exists()))
+
+    monkeypatch.setattr(browl.upload, "clear_page_cache", clear)
+    return cleared
+
+
 def test_upload_clears_page_cache(client: TestClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Check that an upload clears the page cache once its job has started."""
-    cleared: list[int] = []
-    monkeypatch.setattr(browl.upload, "clear_page_cache", lambda: cleared.append(app.state.jobs.state.generation))
+    """Check that an upload clears the page cache as soon as its job has started, before its file is stored."""
+    cleared = record_clears(app, monkeypatch)
     post(client)
     finish(client, app)
-    assert cleared == [1]
+    assert cleared == [(1, False)]
 
 
 @pytest.mark.parametrize(
@@ -186,6 +210,7 @@ def test_upload_clears_page_cache(client: TestClient, app: FastAPI, monkeypatch:
         ),
         ({"filename": "onto.owl", "content": b'<Ontology xmlns="http://www.w3.org/2002/07/owl#"/>'}, "OWL/XML"),
         ({"content": b"\x1f\x8b\x08\x00"}, "looks compressed"),
+        ({"filename": "", "content": b""}, "no file was chosen"),  # as a browser sends a form with no file chosen
     ],
 )
 def test_refused_before_claim(client: TestClient, app: FastAPI, kwargs: dict[str, object], reason: str) -> None:
@@ -197,33 +222,23 @@ def test_refused_before_claim(client: TestClient, app: FastAPI, kwargs: dict[str
     assert app.state.jobs.state.generation is None
 
 
-def test_refused_reasoner_after_file(client: TestClient, app: FastAPI) -> None:
-    """Check that a form whose file comes before its reasoner field is refused, and starts no job."""
-    body = (
-        b'--b\r\nContent-Disposition: form-data; name="ontology"; filename="o.ttl"\r\n\r\n' + TURTLE + b"\r\n"
-        b'--b\r\nContent-Disposition: form-data; name="reasoner"\r\n\r\nnone\r\n--b--\r\n'
-    )
-    response = client.post(UPLOAD, content=body, headers={"Content-Type": "multipart/form-data; boundary=b"})
-    assert response.status_code == 400
-    assert "field must come before its file" in response.text
-    assert app.state.jobs.state.generation is None
-
-
 @pytest.mark.parametrize(
     ("headers", "body", "reason"),
     [
         ({"Content-Type": "application/x-www-form-urlencoded"}, b"reasoner=none", "isn't a multipart form"),
         ({"Content-Type": "multipart/form-data"}, b"", "isn't a multipart form"),
         (
-            {"Content-Type": "multipart/form-data; boundary=b"},
+            {"Content-Type": FORM},
             b'--b\r\nContent-Disposition: form-data; name="reasoner"\r\n\r\nnone\r\n--b--\r\n',
             "no file was chosen",
         ),
         (
-            {"Content-Type": "multipart/form-data; boundary=b"},
-            b"no boundary here",
-            "the form is malformed",
+            {"Content-Type": FORM},
+            b'--b\r\nContent-Disposition: form-data; name="ontology"; filename="o.ttl"\r\n\r\n' + TURTLE + b"\r\n"
+            b'--b\r\nContent-Disposition: form-data; name="reasoner"\r\n\r\nnone\r\n--b--\r\n',
+            "field must come before its file",
         ),
+        ({"Content-Type": FORM}, b"no boundary here", "the form is malformed"),
         ({"Content-Type": FORM}, FILE_START + TURTLE, "the upload was cut short"),
     ],
 )
@@ -232,14 +247,6 @@ def test_refused_request(client: TestClient, app: FastAPI, headers: dict[str, st
     response = client.post(UPLOAD, content=body, headers=headers)
     assert response.status_code == 400
     assert escape(reason) in response.text
-    assert app.state.jobs.state.generation is None
-
-
-def test_refused_no_file_chosen(client: TestClient, app: FastAPI) -> None:
-    """Check that a form sent with no file chosen, as a browser sends it (an empty file name), starts no job."""
-    response = post(client, filename="", content=b"")
-    assert response.status_code == 400
-    assert "no file was chosen" in response.text
     assert app.state.jobs.state.generation is None
 
 
@@ -256,11 +263,14 @@ def test_refused_no_file_chosen(client: TestClient, app: FastAPI) -> None:
         (LONG, "the upload was cut short"),
     ],
 )
-def test_failed_after_claim(client: TestClient, app: FastAPI, data_dir: Path, body: bytes, reason: str) -> None:
+def test_failed_after_claim(
+    client: TestClient, app: FastAPI, data_dir: Path, monkeypatch: pytest.MonkeyPatch, body: bytes, reason: str
+) -> None:
     """Check that a form found invalid once its job is claimed fails the job in the uploading stage (A-6).
 
-    The partial file is removed.
+    The page cache was still cleared, and the partial file is removed.
     """
+    cleared = record_clears(app, monkeypatch)
     response = client.post(UPLOAD, content=FILE_START + body, headers={"Content-Type": FORM})
     assert response.status_code == 400
     assert escape(reason) in response.text
@@ -270,8 +280,9 @@ def test_failed_after_claim(client: TestClient, app: FastAPI, data_dir: Path, bo
     assert "Failed in stage <strong>uploading</strong>" in response.text
     assert not upload_path(data_dir, 1, ".ttl").parent.exists()
     assert (state.upload_name, state.upload_syntax) == ("o.ttl", "Turtle")
-    assert state.upload_bytes is not None and state.upload_bytes >= len(LONG)
+    assert state.upload_bytes == len(LONG)
     assert "received before the failure" in response.text
+    assert cleared == [(1, False)]
 
 
 @pytest.mark.parametrize(("code", "status_code"), [(errno.ENOSPC, 507), (errno.EIO, 500)])
@@ -301,15 +312,8 @@ def test_storage_error(
     assert not upload_path(data_dir, 1, ".ttl").parent.exists()
 
 
-def test_refused_while_running(client: TestClient, app: FastAPI, data_dir: Path) -> None:
+def test_refused_while_running(client: TestClient, app: FastAPI, data_dir: Path, loading: threading.Event) -> None:
     """Check that an upload while a job runs is refused with 409, leaving that job and its upload alone."""
-    loading = threading.Event()
-
-    async def forever(context: JobContext) -> None:
-        loading.set()
-        await asyncio.Event().wait()
-
-    app.state.jobs.register(Stage.LOADING, forever)
     post(client)
     assert loading.wait(timeout=5)
     response = post(client, content=b"other")
@@ -319,15 +323,8 @@ def test_refused_while_running(client: TestClient, app: FastAPI, data_dir: Path)
     assert upload_path(data_dir, 1, ".ttl").read_bytes() == TURTLE
 
 
-def test_upload_page_while_running_polls(client: TestClient, app: FastAPI) -> None:
+def test_upload_page_while_running_polls(client: TestClient, loading: threading.Event) -> None:
     """Check that while a job runs, the page's status polls, and without JS the page refreshes itself."""
-    loading = threading.Event()
-
-    async def forever(context: JobContext) -> None:
-        loading.set()
-        await asyncio.Event().wait()
-
-    app.state.jobs.register(Stage.LOADING, forever)
     post(client)
     assert loading.wait(timeout=5)
     text = client.get(UPLOAD).text
@@ -430,6 +427,96 @@ async def test_client_disconnect(data_dir: Path) -> None:
     assert runner.state.failed_stage == Stage.UPLOADING
     assert "client disconnected" in (runner.state.reason or "")
     assert not upload_path(data_dir, 1, ".ttl").parent.exists()
+
+
+@pytest.mark.parametrize(("file", "claimed"), [(TURTLE, False), (LONG, True)], ids=["unclaimed", "claimed"])
+async def test_stalled(data_dir: Path, monkeypatch: pytest.MonkeyPatch, file: bytes, claimed: bool) -> None:
+    """Check that an upload that stops sending data fails and frees the runner; a claimed job fails saying why."""
+    monkeypatch.setattr(browl.upload, "IDLE_S", 0.05)
+    messages: list[Message] = [{"type": "http.request", "body": FILE_START + file, "more_body": True}]
+
+    async def receive() -> Message:
+        if not messages:
+            await asyncio.Event().wait()
+        return messages.pop(0)
+
+    reason = "the upload stalled: no data arrived for 0.05 s"
+    runner = await JobRunner.open(make_settings())
+    try:
+        with pytest.raises(UploadError) as raised:
+            async with asyncio.timeout(5):  # so a stall that isn't caught fails the test rather than hanging it
+                await receive_upload(asgi_request(receive), runner)
+        assert str(raised.value) == reason
+        if claimed:
+            assert (runner.state.failed_stage, runner.state.reason) == (Stage.UPLOADING, reason)
+            assert not upload_path(data_dir, 1, ".ttl").parent.exists()
+        else:
+            assert runner.state.generation is None
+        await runner.start()  # the runner is free
+    finally:
+        await runner.close()
+
+
+async def test_other_timeout_unmapped(data_dir: Path) -> None:
+    """Check that a `TimeoutError` from reading the request isn't reported as the upload stalling."""
+    error = TimeoutError("from the server")
+
+    async def receive() -> Message:
+        raise error
+
+    runner = await JobRunner.open(make_settings())
+    try:
+        with pytest.raises(TimeoutError) as raised:
+            await receive_upload(asgi_request(receive), runner)
+    finally:
+        await runner.close()
+    assert raised.value is error
+
+
+@pytest.mark.parametrize("error", [ValueError("bad state"), PermissionError(errno.EACCES, "no access")])
+async def test_other_errors_unmapped(data_dir: Path, monkeypatch: pytest.MonkeyPatch, error: Exception) -> None:
+    """Check that errors from outside the form's parsing and the file's storage aren't reported as either."""
+    messages: list[Message] = [{"type": "http.request", "body": FILE_START + LONG, "more_body": False}]
+
+    async def receive() -> Message:
+        return messages.pop(0)
+
+    def claim(*args: object) -> None:
+        raise error
+
+    runner = await JobRunner.open(make_settings())
+    monkeypatch.setattr(runner._store, "claim", claim)
+    try:
+        with pytest.raises(type(error)) as raised:
+            await receive_upload(asgi_request(receive), runner)
+    finally:
+        await runner.close()
+    assert raised.value is error
+
+
+async def test_upload_progress_streamed(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that the size recorded while a file streams in follows each chunk, not just the claim and the end."""
+    monkeypatch.setattr(browl.jobs, "UPLOAD_PROGRESS_S", 0.01)
+    file_chunks = [LONG, TURTLE, TURTLE]
+    messages = [FILE_START + file_chunks[0], *file_chunks[1:], b"\r\n--b--\r\n"]
+    sent = 0
+    runner = await JobRunner.open(make_settings())
+
+    async def receive() -> Message:
+        nonlocal sent
+        if sent:  # the claim is made in the first chunk
+            async with asyncio.timeout(2):
+                while runner.state.upload_bytes != sum(map(len, file_chunks[:sent])):
+                    await asyncio.sleep(0.005)
+        sent += 1
+        return {"type": "http.request", "body": messages.pop(0), "more_body": bool(messages)}
+
+    try:
+        await receive_upload(asgi_request(receive), runner)
+        await runner.wait()
+    finally:
+        await runner.close()
+    assert runner.state.upload_bytes == sum(map(len, file_chunks))
 
 
 @pytest.mark.parametrize(

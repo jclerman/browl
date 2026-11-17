@@ -72,6 +72,9 @@ _COLUMNS = (
 )
 """The job table's columns but its id, in `JobState`'s order."""
 
+_PLACEHOLDERS = ", ".join("?" for _ in _COLUMNS.split(","))
+"""A `?` for each of `_COLUMNS`."""
+
 
 class Stage(StrEnum):
     """The stages of a load job, in the order they run."""
@@ -119,8 +122,7 @@ class JobState:
         reasoner: The reasoner chosen for the latest job.
         upload_name: The name of the file uploaded for it, as the admin's browser gave it; None if it had none.
         upload_syntax: The file's syntax, e.g. "RDF/XML".
-        upload_bytes: The file's size; while it's being uploaded, or if the upload failed, how much had arrived when
-            last recorded (every `UPLOAD_PROGRESS_S`). None until the first record.
+        upload_bytes: The file's size, or while uploading or after a failed upload, how much had arrived.
     """
 
     generation: int | None = None
@@ -249,7 +251,19 @@ class JobStore:
         row = connection.execute(f"SELECT {_COLUMNS} FROM job").fetchone()
         if row is None:
             return JobState()
-        generation, stage, started_at, finished_at, failed_stage, reason, ready_generation, reasoner, *upload = row
+        (
+            generation,
+            stage,
+            started_at,
+            finished_at,
+            failed_stage,
+            reason,
+            ready_generation,
+            reasoner,
+            upload_name,
+            upload_syntax,
+            upload_bytes,
+        ) = row
         return JobState(
             generation=generation,
             stage=Stage(stage),
@@ -259,9 +273,9 @@ class JobStore:
             reason=reason,
             ready_generation=ready_generation,
             reasoner=Reasoner(reasoner),
-            upload_name=upload[0],
-            upload_syntax=upload[1],
-            upload_bytes=upload[2],
+            upload_name=upload_name,
+            upload_syntax=upload_syntax,
+            upload_bytes=upload_bytes,
         )
 
     @staticmethod
@@ -269,7 +283,7 @@ class JobStore:
         if state.generation is None or state.stage is None or state.started_at is None:
             raise ValueError("a stored job state needs a generation, stage and start time")
         connection.execute(
-            f"INSERT OR REPLACE INTO job (id, {_COLUMNS}) VALUES (1, {', '.join('?' * 11)})",
+            f"INSERT OR REPLACE INTO job (id, {_COLUMNS}) VALUES (1, {_PLACEHOLDERS})",
             (
                 state.generation,
                 state.stage,
@@ -327,11 +341,8 @@ class JobContext:
         generation: The job's generation number, one more than the previous job's.
         settings: The app's settings.
         reasoner: The reasoner the admin chose.
-        upload: The uploaded ontology file, on the data volume; None until the upload handler has stored it, and for a
-            job with nothing to upload. Its suffix says the format: `.ttl` (Turtle), `.rdf` (RDF/XML) or `.ofn`
-            (OWL Functional Syntax).
-        upload_bytes: How much of the file the upload handler has received; recorded with the job state every
-            `UPLOAD_PROGRESS_S` while it uploads, and when the upload ends, whether it succeeds or fails.
+        upload: The uploaded file, its suffix naming its format (`browl.upload.FORMATS`); None until it's stored.
+        upload_bytes: How much of the file has arrived.
     """
 
     generation: int
@@ -493,9 +504,7 @@ class JobRunner:
     ) -> AsyncIterator[JobContext]:
         """Start a job in the uploading stage; on leaving the block, run its other stages in the background.
 
-        The block streams the file to the data volume and sets the context's `upload` and `upload_bytes` (see
-        `browl.upload`). The file's name and syntax are recorded with the job's start, its size so far every
-        `UPLOAD_PROGRESS_S`, and its size when the block ends.
+        The block stores the file and sets the context's `upload` and `upload_bytes`, which is recorded as it grows.
 
         A request handler streams the upload inside the block, as it can't hand its request body to a background task.
         If the block raises, the job fails in the uploading stage and the exception propagates. A time limit on the
@@ -517,18 +526,18 @@ class JobRunner:
                 yield context
             finally:
                 progress.cancel()
+                # Before the wait, which an anyio cancellation can cancel; stored with the job's end or next stage.
+                self._set(replace(self._state, upload_bytes=context.upload_bytes))
                 pending: set[asyncio.Future[None]] = {progress}
                 if self._progress_write is not None:
                     pending.add(self._progress_write)  # a write can outlive its cancelled task
                 await asyncio.wait(pending)
         except BaseException as error:
-            self._set(replace(self._state, upload_bytes=context.upload_bytes))
             try:
                 await self._fail(error)
             finally:
                 self._settle()
             raise
-        self._set(replace(self._state, upload_bytes=context.upload_bytes))  # stored with the next stage
         self._task = asyncio.create_task(self._run(context), name=f"load job {context.generation}")
 
     async def start(self, reasoner: Reasoner = Reasoner.NONE) -> JobContext:
