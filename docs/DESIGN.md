@@ -265,7 +265,7 @@ The database is the job state's source of truth, so nothing here ties browl to o
 | --- | --- |
 | **uploading** | The file is streamed to the data volume, at `DATA_DIR/uploads/{generation}/ontology.{ttl,rdf,ofn}`, the suffix naming its format (an `.owl` file is taken to be RDF/XML); earlier uploads are deleted. A failed upload (e.g. the disk is full, or the client disconnects) deletes its partial file. An upload larger than `MAX_UPLOAD_BYTES`, or than the free space less a margin (from `Content-Length`), is refused before the job starts; one that receives nothing for a minute fails. The form's reasoner choice is stored with the job, as are the file's name, syntax and size, recorded as it grows so the status shows progress. The site switches to the "loading" page (U-16) and the page cache is cleared (P-6). |
 | **imports** | Imported ontologies are fetched (see Imports, below). |
-| **reasoning** (optional) | A build script runs ROBOT `reason` with ELK or HermiT. Its output, written as Turtle, replaces the uploaded file as the ontology that gets served. (Later requirements U-39 and U-40 need the asserted axioms kept too; see [Later](#later).) Without reasoning, an `.ofn` upload, which the TDB2 loader can't read (it reads only RDF formats), is converted to Turtle by ROBOT; RDF/XML and Turtle uploads load as they are. Turtle is tentative: P-8 measures which RDF format ROBOT can write that loads fastest. _(Q7a)_ |
+| **reasoning** (optional) | One ROBOT run (see Reasoning, below) classifies the upload with ELK or HermiT. Its output, `reasoned.ttl` beside the upload, replaces the uploaded file as the ontology that gets served; the upload is kept (P-7). (Later requirements U-39 and U-40 need the asserted axioms kept too; see [Later](#later).) Without reasoning, an `.ofn` upload, which the TDB2 loader can't read (it reads only RDF formats), is converted to Turtle by ROBOT; RDF/XML and Turtle uploads load as they are. Turtle is tentative: P-8 measures which RDF format ROBOT can write that loads fastest. _(Q7a)_ |
 | **loading** | Jena's TDB2 bulk loader builds a new store from the built ontology, in a new directory on the data volume. Fuseki is then switched to it and the previous store deleted. Uberon loads in 4–5 s, NCBITaxon in about 3 min ([S-4 findings](../research/S-4/README.md)). _(Q15)_ |
 | **pre-caching** | A few bulk SPARQL queries fetch the whole-ontology data, and the derived SQLite database is built from them ([2.5](#25-derived-data-pre-caching)), as a new file then swapped in atomically. |
 | **ready** | The new generation number is recorded; pages are served again. |
@@ -273,12 +273,35 @@ The database is the job state's source of truth, so nothing here ties browl to o
 Uberon goes from upload file to ready in 7 s without reasoning, measured end to end; NCBITaxon is estimated at about
 5 minutes ([S-4 findings](../research/S-4/README.md)).
 
-**Reasoner limits** _(Q7)_:
+**Reasoning** (P-7) chains three ROBOT commands in one run, so the ontology is parsed once:
+
+1. `reason --axiom-generators "SubClass EquivalentClass ClassAssertion"`, with ROBOT's default
+   `--equivalent-classes-allowed all`, since browl shows equivalence groups (U-9). ClassAssertion gives individuals
+   their inferred types. Without EquivalentClass, `reason` drops a subclass cycle's axioms as redundant, losing the
+   classes' equivalence.
+2. `materialize --term P` for each property in `MATERIALIZE_PROPERTIES` (none by default, which skips it): asserts the
+   inferred `SubClassOf(C, P some D)`, e.g. from equivalence definitions.
+3. `query --update remove-superclass-shortcuts.rq` (`browl/sparql/`) deletes shortcut `rdfs:subClassOf` links: `X ⊑ Z`
+   where another parent `Y` of `X` already gives `Z` (`Y ⊑ Z`, `Y ⊑` the same `P some T` restriction, or for a
+   transitive `P`, `Y = P some W` with `W ⊑ P some T`). It relies on `reason` having removed subclass cycles first,
+   and skips a `W` from which `X` can be reached back, where shortcuts in a `P some` cycle would justify each other.
+
+On Uberon with ELK and an 8 GB heap, `reason` alone took 17 s; with `materialize` of `part_of`, 24 s (it added nothing:
+Uberon's release is already materialized); with the shortcut query too, 43–45 s, removing 6,175 of 80,598
+`SubClassOf` axioms (without the cycle check, it wrongly removed 21 more). The query itself takes about 5 s of that (8 s
+before its restriction cases became joins); converting the ontology to Jena's in-memory model and back takes about
+20 s, and needs heap of its own.
+
+**Reasoner limits** _(Q7)_, which cover the whole ROBOT run:
 
 - ROBOT runs as `java -Xmx{REASONER_MAX_HEAP} -XX:+ExitOnOutOfMemoryError -jar robot.jar -vv reason …`, in its own
-  process group. It is a single JVM, so there is no wrapper process to outlive it.
-- Time: when `REASONER_TIMEOUT_S` is reached, the process group gets SIGTERM, then SIGKILL after a few seconds; the
-  JVM exits on SIGTERM and leaves nothing behind. The job records "time limit".
+  process group. It is a single JVM, so there is no wrapper process to outlive it. The group is also stopped if the job
+  is cancelled.
+- Time: when `REASONER_TIMEOUT_S` is reached, the process group gets SIGTERM, then SIGKILL once ROBOT exits or after a
+  few seconds, for anything left; the JVM exits on SIGTERM and leaves nothing behind. The job records "time limit".
+- Disk: the output can be far larger than the upload (e.g. EquivalentClass and ClassAssertion axioms among many
+  equivalent classes), so while ROBOT runs, browl checks the data volume's free space every second, and stops ROBOT
+  once it's below the upload's margin (1 GB). The job records "disk space".
 - Memory: `-XX:+ExitOnOutOfMemoryError` makes any thread's `OutOfMemoryError` end the JVM with status 3 and the line
   `Terminating due to java.lang.OutOfMemoryError`; the job records "memory limit". Without the flag, an ELK worker's
   breach shows only as a generic failure.
@@ -286,8 +309,7 @@ Uberon goes from upload file to ready in 7 s without reasoning, measured end to 
   `The ontology is inconsistent` ("inconsistent ontology"), `There are N unsatisfiable classes` ("unsatisfiable
   classes", with the classes it lists), `INVALID ONTOLOGY FILE ERROR` ("parse error"); anything else is "reasoner
   failed" with ROBOT's last lines.
-- ROBOT writes its output only after reasoning succeeds; the build script still writes it to a temporary path and
-  renames it.
+- ROBOT writes its output only after reasoning succeeds; browl still writes it to a temporary path and renames it.
 
 Measured in S-2 ([findings](../research/S-2/README.md)): ELK classifies Uberon in 13 s within 1 GB, and NCBITaxon in
 about 6.5 min, needing a 16 GB heap. HermiT can't classify Uberon: it ran out of 16 GB after 8 minutes (and HermiT
@@ -325,9 +347,13 @@ store path and a Fuseki restart, which takes under a second.
 imports, and by default ROBOT refuses an ontology whose imports can't be fetched
 ([S-1 findings](../research/S-1/README.md)), so the pipeline resolves them itself:
 
-1. Fetch each imported ontology, recursively, into the data volume. An import that can't be fetched is dropped from
-   the `owl:imports` list, and the upload page lists it as a warning.
-2. Reasoning, if any, gets the fetched files through a catalog file, so ROBOT doesn't fetch them again.
+1. Fetch each imported ontology, recursively, into the data volume. Only `http` and `https` IRIs are fetched, never
+   from loopback, private or link-local addresses (checked on each redirect too), and each fetch is size-limited; an
+   import that can't be fetched, or isn't allowed (e.g. `file:`), is dropped from the `owl:imports` list, and the
+   upload page lists it as a warning.
+2. Reasoning, if any, gets a catalog file mapping every import in the closure: to its fetched file, or to an empty
+   ontology if it was dropped. So ROBOT never resolves an import itself; its catalog accepts only exact IRIs, and the
+   OWLAPI has no option to skip imports, so browl must list them (P-8).
 3. The loading stage loads the ontology into the store's default graph, and each import into its own named graph. Each
    triple's source stays known, e.g. to mark imported entities; merging into one file first (ROBOT `merge`) would lose
    that.
@@ -653,6 +679,7 @@ validated at startup (`browl/settings.py`). Lists and mappings are given as JSON
 | `EXTRA_PREFIXES` | `{}` | O-11 |
 | `PAGE_CACHE_SIZE` | `100` | `0` turns the cache off; O-10 |
 | `REASONER_TIMEOUT_S`, `REASONER_MAX_HEAP` | `3600`, `8g` (S-2) | O-8; ELK needs 1 GB for Uberon and 16 GB for NCBITaxon, so set `16g` for ontologies of that size |
+| `MATERIALIZE_PROPERTIES` | `[]` | object property IRIs, or CURIEs with ROBOT's default prefixes (e.g. `obo:BFO_0000050`), for which reasoning materializes `SubClassOf(C, P some D)` (2.4) |
 | `APP_JVM_MAX_HEAP` | `1g`, confirmed in P-4 (2.4) | heap for the app's in-process JVM, which only renders per-page fragments (S-4) |
 | `FUSEKI_URL` | `http://fuseki:3030` | Fuseki's address on the Compose network |
 | `ROBOT_JAR` | `/opt/robot/robot.jar`, where the app image installs it | used both on the app's classpath and for reasoning subprocesses |
@@ -696,6 +723,7 @@ Pages link to the service's own routes by root-relative paths, never by URLs bui
 | A Fuseki response that fails partway returns a truncated result with HTTP 200 | Seen in P-3 and S-6: once Fuseki has sent the status, it appends the error as plain text and ends the response normally. It sends it as soon as a SPARQL JSON or TSV result is cut short (the writer flushes what it has), and once any other response outgrows the 2 MB output buffer (2.4). So browl treats any status other than 2xx as a failed query, and never discards the HTTP client's error for a body that ends early (Fuseki exiting or restarting mid-response drops the connection before the last chunk). It parses every Fuseki response strictly, as SPARQL JSON results or N-Triples, and parses each TSV cell as an RDF term, so the appended error text can't pass as a one-column row. N-Triples results may hold only triples, since Jena writes no comments or blank lines and the appended text can start with `#`, which N-Triples reads as a comment (P-4); a parse error is a failed query, never a short result. P-8 checks that each bulk result is complete (e.g. a final count or sentinel), which also catches a result that breaks off cleanly at a row boundary, or an error with no text appended. |
 | Fuseki pauses for full garbage collections under page load | Resolved by S-6: the `System.gc()` calls P-3 saw came from Fuseki 6.2.0 allocating an unpooled 5 MB direct output buffer per response (Jena GH-4084). Fuseki's `jetty.xml` pools a 2 MB buffer instead, which removed them; pages went from 302 to 528 a second at 1 client, and from 573 to 769 at 16 (2.4). |
 | JPype quirks: thread safety of concurrent OWLAPI calls; Python–Java call overhead | Resolved by S-1: concurrent calls were safe but gave no extra throughput, so OWLAPI calls run on one thread (2.1). Call overhead is small ([S-1 findings](../research/S-1/README.md)). P-4 found three more, each handled: the JVM must start on the main thread, its signal handlers bypassed Uvicorn's graceful shutdown (`-Xrs`), and the OWLAPI fetched a fragment's `owl:imports` from their IRIs, web or `file:`, so the bridge refuses every document load but the fragment's own (2.1). |
+| An upload's `owl:imports` make ROBOT read local files (`file:`) or send requests from the app container (`http:`), and its errors can quote what it read | Found in P-7's review: until P-8, reasoning follows imports itself. P-8 lists the imports, fetches only what the policy allows, and gives ROBOT a catalog covering every import (2.4). P-7 isn't deployed before P-8, nor before P-22 protects the upload. |
 | Memory limit can't be reported reliably | Resolved by S-2: with `-XX:+ExitOnOutOfMemoryError`, a heap breach in any thread exits with status 3 and a fixed message; each other failure kind has its own ROBOT log line (2.4). |
 | Descendant counts too slow or memory-hungry at millions of classes | Resolved by S-3: roaring bitmaps, 4.2 s for NCBITaxon ([S-3 findings](../research/S-3/README.md)). |
 | Loading a very large ontology takes minutes | Accepted for uploads (Q14a), shown on the status page. Restarts don't reload (2.4). NCBITaxon: about 5 minutes, estimated; Uberon: 7 s, measured ([S-4 findings](../research/S-4/README.md)). P-24 checks whether extracting the dictionary and edges by streaming the upload file, in parallel with the TDB2 load, is worth it. |
@@ -741,7 +769,7 @@ go into this document.
 | --- | --- | --- | --- | --- | --- |
 | P-5 | Job runner and job state in SQLite; "loading" / "not available" site pages | U-16, A-5 | P-2 | Done | [#14](https://github.com/jclerman/browl/issues/14) |
 | P-6 | Upload page and streaming upload (auth not yet enforced) | A-2, A-4 | P-5 | Done | [#16](https://github.com/jclerman/browl/issues/16) |
-| P-7 | ROBOT build script: optional ELK/HermiT reasoning, with limits | A-3, A-6, O-8 | P-6, S-2 | To do | [#18](https://github.com/jclerman/browl/issues/18) |
+| P-7 | Reasoning stage: ROBOT with optional ELK/HermiT reasoning, with limits | A-3, A-6, O-8 | P-6, S-2 | Done | [#18](https://github.com/jclerman/browl/issues/18) |
 | P-8 | Fetch imports (warn on failures); bulk-load the ontology and imports into a new TDB2 store and switch Fuseki to it; no reload on restart | A-4 | P-4, P-7, S-4 | To do | [#20](https://github.com/jclerman/browl/issues/20) |
 
 ### Phase 3: Derived data
@@ -805,7 +833,9 @@ the load pipeline, and serving one ontology at a time. In rough priority order:
 parent `D` in the tree for `P`. Tentatively, the edges query (P-12) finds these itself: it walks the `owl:intersectionOf`
 list of each `owl:equivalentClass` on a named class (in either direction) and keeps the conjuncts that are
 `owl:someValuesFrom` restrictions on a configured property with a named filler. That works; a faster or simpler way can
-replace it later. It also adds no axioms to the store, keeping the asserted/inferred split (below) clean.
+replace it later. It also adds no axioms to the store, keeping the asserted/inferred split (below) clean. Where reasoning
+ran with `P` in `MATERIALIZE_PROPERTIES` ([2.4](#24-load-pipeline)), `materialize` has already asserted these edges, so
+O-12's properties might default to that list.
 
 browl avoids ROBOT `relax`, the usual tool for this. `relax` does add `SubClassOf(C, P some D)` for each such conjunct,
 but it also turns every object cardinality restriction with a count above 0 into `some`, and no option turns that off.
@@ -814,14 +844,15 @@ The code ([`RelaxOperation.java`](https://github.com/ontodev/robot/blob/master/r
 checked 2026-11-16) tests for `OWLObjectCardinalityRestriction`, which covers `min`, `exact` and `max`.
 
 **Asserted and inferred kept apart** (for U-39, U-40). Today the reasoned output replaces the uploaded ontology
-([2.4](#24-load-pipeline)), so what was asserted is lost. Following §2.4's store layout (ontology in the default
-graph, imports in named graphs, queries merging every graph with `FROM`), the asserted ontology would stay in the
-default graph and only the inferred axioms would go in a named graph of their own. Queries already merge every graph,
-so they see both unchanged. An axiom is inferred if its triples are in that graph and not in the default graph.
+([2.4](#24-load-pipeline)), so what was asserted is lost to the store; P-7 keeps the upload on disk beside it, so the
+split needs no change to reasoning. The reasoned output isn't a superset of the upload: reasoning removes redundant
+and shortcut subclass axioms, so the asserted axioms come from the upload. Following §2.4's store layout (ontology in
+the default graph, imports in named graphs, queries merging every graph with `FROM`), the asserted ontology would stay
+in the default graph and only the inferred axioms would go in a named graph of their own. Queries already merge every
+graph, so they see both unchanged. An axiom is inferred if its triples are in that graph and not in the default graph.
 Inferences are usually far fewer than asserted axioms, so the extra load time and store size that a named graph costs
 (about 2.2× on NCBITaxon, P-3) fall only on them. Explanations are computed on demand (ROBOT `explain` or the OWLAPI
-explanation API) and cached. Settle this before the load pipeline
-(P-7, P-8) is built, so it doesn't have to be reworked.
+explanation API) and cached. Settle this before P-8 is built, so loading doesn't have to be reworked.
 
 Out of scope for now: a quality report on upload (ROBOT `report`, which assumes OBO conventions that not every
 ontology follows) and version history with diffs between loads.

@@ -29,6 +29,7 @@ DEFAULTS = [
     ("page_cache_size", 100),
     ("reasoner_timeout_s", 3600),
     ("reasoner_max_heap", "8g"),
+    ("materialize_properties", []),
     ("app_jvm_max_heap", "1g"),
     ("fuseki_url", HttpUrl("http://fuseki:3030")),
     ("robot_jar", Path("/opt/robot/robot.jar")),
@@ -125,6 +126,11 @@ def test_base_url_is_required(settings_env: pytest.MonkeyPatch) -> None:
         ),
         ("EXTRA_PREFIXES", '{"ex": "http://example.org/", "": "urn:x:"}', {"ex": "http://example.org/", "": "urn:x:"}),
         ("SEED_ADMINS", '["Admin@Example.org"]', ["admin@example.org"]),
+        (
+            "MATERIALIZE_PROPERTIES",
+            '["http://purl.obolibrary.org/obo/BFO_0000050", "obo:BFO_0000051"]',
+            ["http://purl.obolibrary.org/obo/BFO_0000050", "obo:BFO_0000051"],
+        ),
     ],
 )
 def test_valid_setting_is_stored(settings_env: pytest.MonkeyPatch, name: str, value: str, expected: object) -> None:
@@ -210,6 +216,8 @@ def test_only_uppercase_env_names_are_read(
         ("NAME_PROPERTIES", '["rdfs:label", "rdfs:label"]', f"{DUPLICATES}: rdfs:label$"),
         ("EXTRA_PREFIXES", '{"1x": "http://example.org/"}', "invalid prefix name '1x'"),
         ("EXTRA_PREFIXES", '{"ex": "example.org/"}', "namespace for 'ex' must be an absolute IRI"),
+        ("MATERIALIZE_PROPERTIES", '["BFO_0000050", "urn:x:p"]', "not absolute IRIs or CURIEs: BFO_0000050$"),
+        ("MATERIALIZE_PROPERTIES", '["urn:x:p", "urn:x:p"]', f"{DUPLICATES}: urn:x:p$"),
         ("PAGE_CACHE_SIZE", "-1", "greater than or equal to 0"),
         ("MAX_UPLOAD_BYTES", "0", "greater than 0"),
         ("REASONER_TIMEOUT_S", "0", "greater than 0"),

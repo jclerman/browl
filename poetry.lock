@@ -1261,6 +1261,21 @@ files = [
 windows-terminal = ["colorama (>=0.4.6)"]
 
 [[package]]
+name = "pyparsing"
+version = "3.3.3"
+description = "pyparsing - Classes and methods to define and execute parsing grammars"
+optional = false
+python-versions = ">=3.9"
+groups = ["dev"]
+files = [
+    {file = "pyparsing-3.3.3-py3-none-any.whl", hash = "sha256:ece8c00a69cf01b45d0b1dedabb469c90d8caf996d4fda40f147627a122849a4"},
+    {file = "pyparsing-3.3.3.tar.gz", hash = "sha256:928ae7e20211f3b6f3915a72f06a0cfd29ab9d24279dd6346b6b1a7146397d36"},
+]
+
+[package.extras]
+diagrams = ["jinja2", "railroad-diagrams"]
+
+[[package]]
 name = "pytest"
 version = "9.2.0"
 description = "pytest: simple powerful testing with Python"
@@ -1447,6 +1462,30 @@ files = [
 ]
 
 [[package]]
+name = "rdflib"
+version = "7.6.0"
+description = "RDFLib is a Python library for working with RDF, a simple yet powerful language for representing information."
+optional = false
+python-versions = ">=3.8.1"
+groups = ["dev"]
+files = [
+    {file = "rdflib-7.6.0-py3-none-any.whl", hash = "sha256:30c0a3ebf4c0e09215f066be7246794b6492e054e782d7ac2a34c9f70a15e0dd"},
+    {file = "rdflib-7.6.0.tar.gz", hash = "sha256:6c831288d5e4a5a7ece85d0ccde9877d512a3d0f02d7c06455d00d6d0ea379df"},
+]
+
+[package.dependencies]
+pyparsing = ">=2.1.0,<4"
+
+[package.extras]
+berkeleydb = ["berkeleydb (>=18.1.0,<19.0.0)"]
+graphdb = ["httpx (>=0.28.1,<0.29.0)"]
+html = ["html5rdf (>=1.2,<2)"]
+lxml = ["lxml (>=4.3,<6.0)"]
+networkx = ["networkx (>=2,<4)"]
+orjson = ["orjson (>=3.9.14,<4)"]
+rdf4j = ["httpx (>=0.28.1,<0.29.0)"]
+
+[[package]]
 name = "starlette"
 version = "1.10.0"
 description = "The little ASGI library that shines."
@@ -1561,4 +1600,4 @@ python-discovery = ">=1.6.1"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12"
-content-hash = "b36d476ab7bcd8ed821230c678809916ae364a5368cb8350ffb54d4b77147f1e"
+content-hash = "849c89e2e5ecd3d87b9d3bde34271e259f079c8c5c1d7c3968432bb1b6e91e16"

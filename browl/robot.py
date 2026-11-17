@@ -1,0 +1,261 @@
+"""The reasoning stage (DESIGN.md §2.4): ROBOT run as a subprocess, held to the reasoner time and heap limits (O-8).
+
+ROBOT runs as `java -Xmx… -XX:+ExitOnOutOfMemoryError -jar robot.jar -vv …` in its own process group, which is stopped
+at the time limit, if the data volume runs low on space, or if the job is cancelled. A failure's reason says which limit
+was hit, or what else went wrong, using the output signatures S-2 found (A-6, `failure_reason`).
+"""
+
+import asyncio
+import codecs
+import logging
+import os
+import re
+import shutil
+import signal
+from collections import deque
+from collections.abc import Sequence
+from contextlib import suppress
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from browl.jobs import JobContext, Reasoner, StageError
+from browl.settings import Settings
+from browl.upload import FREE_SPACE_MARGIN_BYTES
+
+logger = logging.getLogger(__name__)
+
+SHORTCUTS_QUERY = Path(__file__).parent / "sparql" / "remove-superclass-shortcuts.rq"
+"""The SPARQL update that removes shortcut `rdfs:subClassOf` links after reasoning."""
+
+AXIOM_GENERATORS = "SubClass EquivalentClass ClassAssertion"
+"""The inferred axioms `robot reason` adds. Without EquivalentClass, it drops a subclass cycle's axioms as redundant and
+the classes' equivalence is lost."""
+
+ROBOT_REASONERS = {Reasoner.ELK: "ELK", Reasoner.HERMIT: "HermiT"}
+
+REASONED = "reasoned.ttl"
+"""The reasoned ontology's file name, beside the upload."""
+
+PARTIAL = "reasoned.partial.ttl"
+"""ROBOT's output while it's written, renamed to `REASONED` once complete; ROBOT picks the syntax by its suffix."""
+
+TERM_GRACE_S = 5.0
+"""How long ROBOT gets to exit after SIGTERM before it's sent SIGKILL."""
+
+SPACE_CHECK_S = 1.0
+"""How often the data volume's free space is checked while ROBOT runs; it stops ROBOT below
+`FREE_SPACE_MARGIN_BYTES`."""
+
+TAIL_LINES = 20
+"""How many of ROBOT's last output lines a failure's reason quotes."""
+
+READ_BYTES = 65536
+"""How much of ROBOT's output is read at a time."""
+
+MAX_LINE_CHARS = 2000
+"""The longest output line kept; a longer one is cut short."""
+
+UNSATISFIABLE_SHOWN = 10
+"""How many unsatisfiable classes a failure's reason names."""
+
+OUT_OF_MEMORY = "Terminating due to java.lang.OutOfMemoryError"
+OUT_OF_MEMORY_STATUS = 3  # the JVM's exit status with -XX:+ExitOnOutOfMemoryError; ROBOT itself exits 1 on any error
+STACK_OVERFLOW = "StackOverflowError"
+INCONSISTENT = "The ontology is inconsistent"
+UNSATISFIABLE = re.compile(r"There are (\d+) unsatisfiable classes")
+UNSATISFIABLE_CLASS = re.compile(r"unsatisfiable: (\S+)")
+PARSE_ERROR = "INVALID ONTOLOGY FILE ERROR"
+
+
+@dataclass
+class RobotOutput:
+    """What browl keeps of ROBOT's output: its last lines and the lines that tell failures apart.
+
+    Attributes:
+        tail: The last `TAIL_LINES` lines.
+        unsatisfiable: The first `UNSATISFIABLE_SHOWN` unsatisfiable classes ROBOT listed.
+        signals: The failure signatures seen (`OUT_OF_MEMORY`, `STACK_OVERFLOW`, `INCONSISTENT`, `PARSE_ERROR`).
+        unsatisfiable_count: How many unsatisfiable classes ROBOT reported; None if it reported none.
+    """
+
+    tail: deque[str] = field(default_factory=lambda: deque(maxlen=TAIL_LINES))
+    unsatisfiable: list[str] = field(default_factory=list)
+    signals: set[str] = field(default_factory=set)
+    unsatisfiable_count: int | None = None
+
+    def add(self, line: str) -> None:
+        """Keep a line of output."""
+        line = line.rstrip()[:MAX_LINE_CHARS]
+        self.tail.append(line)
+        for signal_ in (OUT_OF_MEMORY, STACK_OVERFLOW, INCONSISTENT, PARSE_ERROR):
+            if signal_ in line:
+                self.signals.add(signal_)
+        if match := UNSATISFIABLE.search(line):
+            self.unsatisfiable_count = int(match[1])
+        elif (match := UNSATISFIABLE_CLASS.search(line)) and len(self.unsatisfiable) < UNSATISFIABLE_SHOWN:
+            self.unsatisfiable.append(match[1])
+
+
+def failure_reason(
+    status: int | None, output: RobotOutput, timed_out: bool, settings: Settings, out_of_space: bool = False
+) -> str:
+    """Return why a reasoning run failed, checking for each kind of failure in S-2's order (A-6).
+
+    Args:
+        status: ROBOT's exit status; negative for a signal.
+        output: What was kept of its output.
+        timed_out: Whether it was stopped at the time limit.
+        settings: The settings, for the limits.
+        out_of_space: Whether it was stopped because the data volume ran low on space.
+    """
+    if timed_out:
+        return f"time limit: reasoning took longer than REASONER_TIMEOUT_S ({settings.reasoner_timeout_s} s)"
+    if out_of_space:
+        return f"disk space: the data volume fell below {FREE_SPACE_MARGIN_BYTES:,} bytes free while reasoning ran"
+    if status == OUT_OF_MEMORY_STATUS and OUT_OF_MEMORY in output.signals:
+        return f"memory limit: reasoning needed more than REASONER_MAX_HEAP ({settings.reasoner_max_heap})"
+    if STACK_OVERFLOW in output.signals:
+        return "stack overflow: the reasoner recursed too deeply"
+    if INCONSISTENT in output.signals:
+        return "inconsistent ontology"
+    if output.unsatisfiable_count is not None:
+        shown = ", ".join(output.unsatisfiable)
+        more = output.unsatisfiable_count - len(output.unsatisfiable)
+        return f"{output.unsatisfiable_count} unsatisfiable classes: {shown}{f' and {more} more' if more > 0 else ''}"
+    tail = "\n".join(output.tail)
+    if PARSE_ERROR in output.signals:
+        return f"parse error: ROBOT couldn't read the ontology:\n{tail}"
+    return f"reasoner failed (ROBOT exit status {status}):\n{tail}"
+
+
+def java() -> str:
+    """Return the Java executable: `JAVA_HOME`'s, else `java` on the PATH."""
+    home = os.environ.get("JAVA_HOME")
+    return str(Path(home) / "bin" / "java") if home else "java"
+
+
+def reason_args(reasoner: Reasoner, source: Path, output: Path, settings: Settings) -> list[str]:
+    """Return ROBOT's arguments for a reasoning run: reason, materialize if configured, then remove shortcuts."""
+    name = ROBOT_REASONERS[reasoner]
+    args = ["reason", "--input", str(source), "--reasoner", name, "--axiom-generators", AXIOM_GENERATORS]
+    if settings.materialize_properties:
+        args += ["materialize", "--reasoner", name]
+        for prop in settings.materialize_properties:
+            args += ["--term", prop]
+    return [*args, "query", "--update", str(SHORTCUTS_QUERY), "--output", str(output)]
+
+
+async def run_robot(args: Sequence[str], settings: Settings) -> None:
+    """Run ROBOT with the arguments, within the reasoner limits, in a process group stopped however this ends.
+
+    Raises:
+        StageError: ROBOT failed; the reason says how (`failure_reason`).
+    """
+    command = [
+        java(),
+        f"-Xmx{settings.reasoner_max_heap}",
+        "-XX:+ExitOnOutOfMemoryError",
+        "-jar",
+        str(settings.robot_jar),
+        "-vv",
+        *args,
+    ]
+    logger.info("Running %s", " ".join(command))
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,  # its own process group, so the JVM and anything it starts can be stopped together
+    )
+    output = RobotOutput()
+    run = asyncio.ensure_future(_read(process, output))
+    timed_out = out_of_space = False
+    try:
+        try:
+            async with asyncio.timeout(settings.reasoner_timeout_s):
+                out_of_space = not await _watch_space(run, settings.data_dir)
+        except TimeoutError:
+            timed_out = True
+    finally:
+        run.cancel()
+        # Shielded: a cancelled job still stops ROBOT, even if cancelled again meanwhile.
+        await asyncio.shield(_stop(process))
+    if timed_out or out_of_space or process.returncode != 0:
+        raise StageError(failure_reason(process.returncode, output, timed_out, settings, out_of_space))
+
+
+async def _watch_space(run: asyncio.Future[None], data_dir: Path) -> bool:
+    """Wait for the run; return False as soon as the data volume has less than `FREE_SPACE_MARGIN_BYTES` free."""
+    while True:
+        done, _ = await asyncio.wait({run}, timeout=SPACE_CHECK_S)
+        if done:
+            run.result()
+            return True
+        if await asyncio.to_thread(free_bytes, data_dir) < FREE_SPACE_MARGIN_BYTES:
+            return False
+
+
+def free_bytes(path: Path) -> int:
+    """Return the free space on the file system that holds the path."""
+    return shutil.disk_usage(path).free
+
+
+async def _read(process: asyncio.subprocess.Process, output: RobotOutput) -> None:
+    """Keep and log ROBOT's output lines until it ends, read in chunks, so no line is too long to read."""
+    assert process.stdout is not None
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")  # keeps a character split between reads whole
+    rest = ""
+    while chunk := await process.stdout.read(READ_BYTES):
+        lines = (rest + decoder.decode(chunk)).split("\n")
+        rest = lines.pop()[:MAX_LINE_CHARS]
+        for line in lines:
+            _keep(line, output)
+    if rest := rest + decoder.decode(b"", final=True):
+        _keep(rest, output)
+    await process.wait()
+
+
+def _keep(line: str, output: RobotOutput) -> None:
+    output.add(line)
+    logger.info("ROBOT: %s", output.tail[-1])
+
+
+async def _stop(process: asyncio.subprocess.Process) -> None:
+    """Stop whatever is left in ROBOT's process group: SIGTERM, then SIGKILL once ROBOT exits or `TERM_GRACE_S` passes.
+
+    The group is signalled even after ROBOT exits, as a process it started could outlive it. A group's ID isn't reused
+    while any process is left in it. macOS refuses to signal a group of zombies (EPERM), which is as good as gone.
+    """
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return  # nothing left
+    try:
+        async with asyncio.timeout(TERM_GRACE_S):
+            await process.wait()
+    except TimeoutError:
+        logger.warning("ROBOT (pid %d) didn't exit on SIGTERM", process.pid)
+    with suppress(ProcessLookupError, PermissionError):
+        os.killpg(process.pid, signal.SIGKILL)
+    await process.wait()
+
+
+async def reasoning_stage(context: JobContext) -> None:
+    """Classify the upload with the chosen reasoner, setting the context's `reasoned` file; skip it if none was chosen.
+
+    The output is written to a temporary file and renamed, so a run stopped mid-write leaves no partial ontology.
+
+    Raises:
+        StageError: Reasoning failed (`failure_reason`).
+    """
+    if context.reasoner is Reasoner.NONE or context.upload is None:
+        return
+    partial, reasoned = context.upload.with_name(PARTIAL), context.upload.with_name(REASONED)
+    try:
+        await run_robot(reason_args(context.reasoner, context.upload, partial, context.settings), context.settings)
+        await asyncio.to_thread(partial.replace, reasoned)
+    except BaseException:
+        await asyncio.to_thread(partial.unlink, missing_ok=True)
+        raise
+    context.reasoned = reasoned

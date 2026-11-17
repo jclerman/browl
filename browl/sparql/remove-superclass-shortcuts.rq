@@ -1,0 +1,45 @@
+PREFIX owl: <http://www.w3.org/2002/07/owl#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+# Delete shortcut rdfs:subClassOf links: ?sub ⊑ ?super where another parent ?mid of ?sub already gives ?sub the
+# superclass ?super, by
+#  1. ?mid ⊑ ?super;
+#  2. ?mid ⊑ ?super2, a separate restriction node that says what ?super says (`?q some ?t`); or
+#  3. ?mid = `?q some ?w` for a transitive ?q, and ?w ⊑ ?super2, a `?q some ?t` like ?super (?super2 may be ?super
+#     itself): finger part_of hand, hand part_of body.
+# The restriction cases are joins, not a FILTER EXISTS comparing nodes, so Jena answers them from its indexes.
+# Branch 3 skips a ?w from which ?sub can be reached back, as in `X ⊑ p some X`, or `X ⊑ p some W` and `W ⊑ p some X`:
+# there each shortcut would justify deleting another, and all would go. Branch 1 assumes no rdfs:subClassOf cycles,
+# as after `robot reason`, which turns them into equivalences.
+DELETE { ?sub rdfs:subClassOf ?super }
+WHERE {
+  ?sub rdfs:subClassOf ?super, ?mid .
+  FILTER (?mid NOT IN (?sub, ?super))
+  {
+    ?mid rdfs:subClassOf ?super
+  } UNION {
+    ?super a owl:Restriction ;
+      owl:onProperty ?q ;
+      owl:someValuesFrom ?t .
+    ?mid rdfs:subClassOf ?super2 .
+    ?super2 a owl:Restriction ;
+      owl:onProperty ?q ;
+      owl:someValuesFrom ?t
+  } UNION {
+    # ?super must be a `some` restriction too, even when ?super2 is the same node: `X ⊑ p some W` and `W ⊑ p only T`
+    # don't give `X ⊑ p only T`. (ROBOT's output never shares a restriction node; other RDF can.)
+    ?super a owl:Restriction ;
+      owl:onProperty ?q ;
+      owl:someValuesFrom ?t .
+    ?q a owl:TransitiveProperty .
+    ?mid a owl:Restriction ;
+      owl:onProperty ?q ;
+      owl:someValuesFrom ?w .
+    ?w rdfs:subClassOf ?super2 .
+    ?super2 a owl:Restriction ;
+      owl:onProperty ?q ;
+      owl:someValuesFrom ?t
+  }
+  # Outside the UNION, where ?sub is bound; inside branch 3 it isn't, and the zero-length path would always match.
+  FILTER (!BOUND(?w) || NOT EXISTS { ?w (rdfs:subClassOf|owl:someValuesFrom)* ?sub })
+}

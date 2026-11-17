@@ -62,8 +62,10 @@ class Settings(BaseSettings):
         language_ranking: Language tags, best first, lowercased; `UNTAGGED` is appended when not listed (O-5).
         extra_prefixes: CURIE prefix → namespace, overriding the ontology's own and the built-in ones (O-11).
         page_cache_size: Rendered pages kept in memory; 0 turns the cache off (O-10).
-        reasoner_timeout_s: Reasoner time limit in seconds; placeholder until spike S-2 (O-8).
-        reasoner_max_heap: Reasoner heap limit; placeholder until spike S-2 (O-8).
+        reasoner_timeout_s: Reasoner time limit in seconds, for the whole ROBOT run (O-8).
+        reasoner_max_heap: Reasoner heap limit (O-8).
+        materialize_properties: Object property IRIs, or CURIEs with ROBOT's default prefixes, whose inferred
+            `SubClassOf(C, P some D)` axioms reasoning adds.
         app_jvm_max_heap: Heap for the app's JVM, which only renders per-page fragments; to be confirmed in P-4.
         fuseki_url: Fuseki's address.
         robot_jar: Path to `robot.jar`, where the app image installs it.
@@ -89,6 +91,7 @@ class Settings(BaseSettings):
     page_cache_size: int = Field(default=100, ge=0)
     reasoner_timeout_s: int = Field(default=3600, gt=0)
     reasoner_max_heap: str = "8g"
+    materialize_properties: list[str] = []
     app_jvm_max_heap: str = "1g"
     fuseki_url: HttpUrl = HttpUrl("http://fuseki:3030")
     robot_jar: Path = Path("/opt/robot/robot.jar")
@@ -116,11 +119,14 @@ class Settings(BaseSettings):
             raise ValueError("must be a Java heap size, such as 512m or 8g")
         return value
 
-    @field_validator("name_properties")
+    @field_validator("materialize_properties")
     @classmethod
-    def check_name_properties(cls, value: list[str]) -> list[str]:
-        """Reject duplicate name properties."""
-        return confirm_unique(value)
+    def check_materialize_properties(cls, value: list[str]) -> list[str]:
+        """Require absolute IRIs, or CURIEs such as `obo:BFO_0000050`, which ROBOT expands with its default prefixes."""
+        relative = [iri for iri in value if not _IRI_SCHEME.match(iri)]
+        if relative:
+            raise ValueError(f"not absolute IRIs or CURIEs: {', '.join(relative)}")
+        return value
 
     @field_validator("reserved_prefix")
     @classmethod
@@ -143,7 +149,7 @@ class Settings(BaseSettings):
             raise ValueError(f"invalid language tags: {', '.join(invalid)}")
         if UNTAGGED not in ranking:
             ranking.append(UNTAGGED)
-        return confirm_unique(ranking)
+        return ranking
 
     @field_validator("extra_prefixes")
     @classmethod
@@ -159,11 +165,19 @@ class Settings(BaseSettings):
     @field_validator("seed_admins")
     @classmethod
     def check_seed_admins(cls, value: list[str]) -> list[str]:
-        """Check and lowercase the seed admin email addresses, rejecting duplicates."""
+        """Check and lowercase the seed admin email addresses."""
         invalid = [address for address in value if not re.fullmatch(r"[^@\s]+@[^@\s]+", address)]
         if invalid:
             raise ValueError(f"not email addresses: {', '.join(invalid)}")
-        return confirm_unique([address.lower() for address in value])
+        return [address.lower() for address in value]
+
+    # After the validators above: pydantic runs a field's validators in the order they're defined, so this sees the
+    # normalized values, and e.g. "EN" and "en" count as duplicates.
+    @field_validator("name_properties", "materialize_properties", "language_ranking", "seed_admins")
+    @classmethod
+    def check_unique(cls, value: list[str]) -> list[str]:
+        """Reject duplicate entries."""
+        return confirm_unique(value)
 
     @field_validator("auth_disabled")
     @classmethod

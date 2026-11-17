@@ -11,9 +11,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import browl
-from browl import admin, owlapi
+from browl import admin, owlapi, robot
 from browl.fuseki import FusekiClient
-from browl.jobs import JobRunner
+from browl.jobs import JobRunner, Stage
 from browl.pages import STATIC_DIR, SiteGate
 from browl.settings import Settings, load_settings
 
@@ -82,7 +82,7 @@ def create_app(
         async with httpx2.AsyncClient(base_url=str(settings.fuseki_url), transport=fuseki_transport) as client:
             app.state.fuseki_http = client
             app.state.sparql = FusekiClient(client)
-            app.state.jobs = await JobRunner.open(settings)
+            app.state.jobs = await JobRunner.open(settings, {Stage.REASONING: robot.reasoning_stage})
             try:
                 yield
             finally:

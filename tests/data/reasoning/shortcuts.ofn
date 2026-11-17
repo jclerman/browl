@@ -1,0 +1,61 @@
+Prefix(:=<http://example.org/s/>)
+Prefix(owl:=<http://www.w3.org/2002/07/owl#>)
+
+Ontology(<http://example.org/s>
+  Declaration(ObjectProperty(:part_of))
+  Declaration(ObjectProperty(:has_part))
+  TransitiveObjectProperty(:part_of)
+  # A shortcut to a named class: removed.
+  SubClassOf(:A :B)
+  SubClassOf(:B :C)
+  SubClassOf(:A :C)
+  # A restriction the parent already has: removed.
+  SubClassOf(:D :E)
+  SubClassOf(:E ObjectSomeValuesFrom(:part_of :F))
+  SubClassOf(:D ObjectSomeValuesFrom(:part_of :F))
+  # A transitive part_of shortcut: removed.
+  SubClassOf(:G ObjectSomeValuesFrom(:part_of :H))
+  SubClassOf(:H ObjectSomeValuesFrom(:part_of :I))
+  SubClassOf(:G ObjectSomeValuesFrom(:part_of :I))
+  # Not shortcuts: J part_of some K and K ⊑ L don't give J ⊑ L; has_part isn't transitive; X's only parent stays.
+  SubClassOf(:J ObjectSomeValuesFrom(:part_of :K))
+  SubClassOf(:K :L)
+  SubClassOf(:J :L)
+  SubClassOf(:M ObjectSomeValuesFrom(:has_part :N))
+  SubClassOf(:N ObjectSomeValuesFrom(:has_part :O))
+  SubClassOf(:M ObjectSomeValuesFrom(:has_part :O))
+  SubClassOf(:T ObjectSomeValuesFrom(:part_of :T))
+  SubClassOf(:X ObjectSomeValuesFrom(:part_of :T))
+  # Materialized from the definition: Q ⊑ part_of some R.
+  EquivalentClasses(:Q ObjectIntersectionOf(:P ObjectSomeValuesFrom(:part_of :R)))
+  # A longer chain with every shortcut: only the chain stays.
+  SubClassOf(:Ch1 :Ch2)
+  SubClassOf(:Ch2 :Ch3)
+  SubClassOf(:Ch3 :Ch4)
+  SubClassOf(:Ch1 :Ch3)
+  SubClassOf(:Ch1 :Ch4)
+  SubClassOf(:Ch2 :Ch4)
+  # Not shortcuts: the parent's restriction differs in filler (D2, G2) or property (D3, G3).
+  SubClassOf(:D2 :E2)
+  SubClassOf(:E2 ObjectSomeValuesFrom(:part_of :F))
+  SubClassOf(:D2 ObjectSomeValuesFrom(:part_of :F2))
+  SubClassOf(:D3 :E3)
+  SubClassOf(:E3 ObjectSomeValuesFrom(:part_of :F))
+  SubClassOf(:D3 ObjectSomeValuesFrom(:has_part :F))
+  SubClassOf(:G2 ObjectSomeValuesFrom(:part_of :H2))
+  SubClassOf(:H2 ObjectSomeValuesFrom(:part_of :I2))
+  SubClassOf(:G2 ObjectSomeValuesFrom(:part_of :I3))
+  SubClassOf(:G3 ObjectSomeValuesFrom(:part_of :H3))
+  SubClassOf(:H3 ObjectSomeValuesFrom(:has_part :I4))
+  SubClassOf(:G3 ObjectSomeValuesFrom(:part_of :I4))
+  # part_of cycles: each part_of some CycT would justify deleting the other, so both stay; Loop's too.
+  SubClassOf(:Cyc1 ObjectSomeValuesFrom(:part_of :Cyc2))
+  SubClassOf(:Cyc2 ObjectSomeValuesFrom(:part_of :Cyc1))
+  SubClassOf(:Cyc1 ObjectSomeValuesFrom(:part_of :CycT))
+  SubClassOf(:Cyc2 ObjectSomeValuesFrom(:part_of :CycT))
+  SubClassOf(:Loop ObjectSomeValuesFrom(:part_of :Loop))
+  SubClassOf(:Loop ObjectSomeValuesFrom(:part_of :LoopT))
+  # A subclass cycle: kept as an equivalence.
+  SubClassOf(:U :V)
+  SubClassOf(:V :U)
+)
