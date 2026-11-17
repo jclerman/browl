@@ -1,7 +1,6 @@
 """Tests for the FastAPI application and its health route."""
 
 import asyncio
-import os
 import re
 import tomllib
 from collections.abc import Awaitable, Callable, Iterator
@@ -10,7 +9,6 @@ from typing import Any
 
 import httpx2
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import browl
@@ -19,24 +17,13 @@ from browl import admin
 from browl.admin import SWAGGER_UI_URL
 from browl.app import create_app
 from browl.fuseki import FusekiClient
-from browl.jobs import JobRunner
-from browl.settings import Settings
+from browl.jobs import JobRunner, Site
+from tests.helpers import make_app, make_settings
 
 UNREACHABLE = "http://127.0.0.1:1"  # nothing listens on port 1, so connections are refused at once
 
 
 pytestmark = pytest.mark.usefixtures("data_dir")
-
-
-def make_settings(**overrides: object) -> Settings:
-    """Return settings for tests: authentication off, DATA_DIR from the environment, and any overrides."""
-    defaults = {"BASE_URL": "http://example.org/", "AUTH_DISABLED": True, "DATA_DIR": os.environ["DATA_DIR"]}
-    return Settings.model_validate(defaults | overrides)
-
-
-def make_app(fuseki_transport: httpx2.AsyncBaseTransport | None = None, **overrides: object) -> FastAPI:
-    """Return an app that doesn't start the JVM, with `make_settings(**overrides)` and the Fuseki transport given."""
-    return create_app(make_settings(**overrides), fuseki_transport=fuseki_transport, start_jvm=False)
 
 
 Answer = httpx2.Response | Exception | Callable[[httpx2.Request], Awaitable[httpx2.Response]]
@@ -214,5 +201,5 @@ def test_startup_opens_job_database(data_dir: Path) -> None:
     """Check that startup opens the job runner on its database in DATA_DIR, with no job yet."""
     app = make_app()
     with TestClient(app):
-        assert app.state.jobs.state.site == "not available"
+        assert app.state.jobs.state.site == Site.NOT_AVAILABLE
     assert (data_dir / "state.sqlite3").is_file()

@@ -666,7 +666,7 @@ While a load job runs, every other URL (the ontology's pages, the other routes a
 the "loading" page; when no ontology is loaded, or the last load failed, it gets the "not available" page (U-16).
 `health`, `static/…` and `admin/…` are exempt. Both pages are 503 Service Unavailable with `Cache-Control: no-store`,
 so crawlers and caches treat the outage as temporary and keep the URLs. The loading page adds `Retry-After` and
-refreshes itself at the same interval (10 s), with a `<meta>` refresh rather than a script.
+refreshes itself at the same interval.
 Neither page says why the site is unavailable; the failure reason is shown only on the admin status (P-5).
 
 Pages link to the service's own routes by root-relative paths, never by URLs built from the request's scheme and

@@ -11,6 +11,8 @@ from starlette.requests import Request
 from starlette.templating import Jinja2Templates
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from browl.jobs import Site
+
 PACKAGE_DIR = Path(__file__).parent
 STATIC_DIR = PACKAGE_DIR / "static"
 
@@ -54,15 +56,14 @@ class SiteGate:
             path = path[len(root_path) :]
         request = Request(scope)
         site = (await request.app.state.jobs.current()).site
-        if site == "available" or self.is_exempt(path):
+        if site == Site.AVAILABLE or self.is_exempt(path):
             await self.app(scope, receive, send)
             return
         headers = {"Cache-Control": "no-store"}
-        if site == "loading":
+        if site == Site.LOADING:
             headers["Retry-After"] = str(RETRY_AFTER_S)
-            response = templates.TemplateResponse(
-                request, "loading.html", {"refresh_s": RETRY_AFTER_S}, status_code=503, headers=headers
-            )
+            template, context = "loading.html", {"refresh_s": RETRY_AFTER_S}
         else:
-            response = templates.TemplateResponse(request, "not_available.html", status_code=503, headers=headers)
+            template, context = "not_available.html", {}
+        response = templates.TemplateResponse(request, template, context, status_code=503, headers=headers)
         await response(scope, receive, send)

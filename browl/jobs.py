@@ -14,7 +14,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import IO, Literal, Self
+from typing import IO, Self
 
 import httpx2
 
@@ -36,6 +36,9 @@ INTERRUPTED_BY_SHUTDOWN = "interrupted by shutdown"
 CANCELLED = "cancelled"
 STOPPED_UNRECORDED = "internal error: the job stopped without recording why"
 
+MAX_REASON_CHARS = 2000
+"""The longest failure reason stored and shown to admins; a longer one, e.g. a tool's whole stderr, is cut short."""
+
 MIGRATIONS: list[str] = [
     # Version 1. The job table has at most one row, the latest job.
     """
@@ -53,6 +56,9 @@ MIGRATIONS: list[str] = [
 ]
 """The persistent database's schema migrations: entry n migrates from version n to n + 1."""
 
+_COLUMNS = "generation, stage, started_at, finished_at, failed_stage, reason, ready_generation"
+"""The job table's columns but its id, in `JobState`'s order."""
+
 
 class Stage(StrEnum):
     """The stages of a load job, in the order they run."""
@@ -63,6 +69,14 @@ class Stage(StrEnum):
     LOADING = "loading"
     PRE_CACHING = "pre-caching"
     READY = "ready"
+
+
+class Site(StrEnum):
+    """What the site serves (U-16): the "loading" page, the "not available" page, or the ontology."""
+
+    LOADING = "loading"
+    NOT_AVAILABLE = "not available"
+    AVAILABLE = "available"
 
 
 BACKGROUND_STAGES = (Stage.IMPORTS, Stage.REASONING, Stage.LOADING, Stage.PRE_CACHING)
@@ -97,13 +111,13 @@ class JobState:
         return self.started_at is not None and self.finished_at is None
 
     @property
-    def site(self) -> Literal["loading", "not available", "available"]:
-        """Return what the site serves: the "loading" page, the "not available" page, or the ontology (U-16)."""
+    def site(self) -> Site:
+        """Return what the site serves."""
         if self.running:
-            return "loading"
+            return Site.LOADING
         if self.failed_stage is not None or self.ready_generation is None:
-            return "not available"
-        return "available"
+            return Site.NOT_AVAILABLE
+        return Site.AVAILABLE
 
     def failed(self, reason: str) -> Self:
         """Return this state with the job failed in its current stage."""
@@ -152,13 +166,6 @@ class JobStore:
                         connection.rollback()
                     raise
 
-    @property
-    def version(self) -> int:
-        """Return the database's schema version."""
-        with self._connect() as connection:
-            version: int = connection.execute("PRAGMA user_version").fetchone()[0]
-            return version
-
     def read(self) -> JobState:
         """Return the stored job state; the empty state if no job has run."""
         with self._connect() as connection:
@@ -200,9 +207,7 @@ class JobStore:
 
     @staticmethod
     def _read(connection: sqlite3.Connection) -> JobState:
-        row = connection.execute(
-            "SELECT generation, stage, started_at, finished_at, failed_stage, reason, ready_generation FROM job"
-        ).fetchone()
+        row = connection.execute(f"SELECT {_COLUMNS} FROM job").fetchone()
         if row is None:
             return JobState()
         generation, stage, started_at, finished_at, failed_stage, reason, ready_generation = row
@@ -221,9 +226,7 @@ class JobStore:
         if state.generation is None or state.stage is None or state.started_at is None:
             raise ValueError("a stored job state needs a generation, stage and start time")
         connection.execute(
-            "INSERT OR REPLACE INTO job"
-            " (id, generation, stage, started_at, finished_at, failed_stage, reason, ready_generation)"
-            " VALUES (1, ?, ?, ?, ?, ?, ?, ?)",
+            f"INSERT OR REPLACE INTO job (id, {_COLUMNS}) VALUES (1, ?, ?, ?, ?, ?, ?, ?)",
             (
                 state.generation,
                 state.stage,
@@ -322,9 +325,8 @@ def _reason(error: BaseException) -> str:
         return _http_timeout_reason(error)
     if isinstance(error, TimeoutError):
         return f"timed out: {error}" if str(error) else "timed out; the app's log shows where"
-    return (
-        f"internal error: {type(error).__name__}: {error}" if str(error) else f"internal error: {type(error).__name__}"
-    )
+    name = f"internal error: {type(error).__name__}"
+    return f"{name}: {error}" if str(error) else name
 
 
 def _http_timeout_reason(error: httpx2.TimeoutException) -> str:
@@ -536,6 +538,8 @@ class JobRunner:
                 reason,
                 exc_info=not isinstance(error, StageError),
             )
+        if len(reason) > MAX_REASON_CHARS:
+            reason = f"{reason[:MAX_REASON_CHARS]}… (cut short; the app's log has it all)"
         # Shielded: a second cancellation, e.g. from an anyio cancel scope, mustn't stop the failure being stored.
         await asyncio.shield(self._record_end(self._state.failed(reason)))
 

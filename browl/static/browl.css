@@ -76,7 +76,6 @@ a {
 
 .stages .current {
   color: var(--accent);
-  font-weight: 600;
 }
 
 .stages .failed,
@@ -84,6 +83,7 @@ a {
   color: var(--danger);
 }
 
+.stages .current,
 .stages .failed {
   font-weight: 600;
 }

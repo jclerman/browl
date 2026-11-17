@@ -1,10 +1,12 @@
 """Tests for the load job: its persistent state, schema migrations, and the runner."""
 
 import asyncio
+import itertools
 import sqlite3
 import threading
-from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from collections.abc import Awaitable, Callable, Mapping
+from contextlib import closing
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import anyio
@@ -23,20 +25,22 @@ from browl.jobs import (
     JobRunningError,
     JobState,
     JobStore,
+    Site,
     Stage,
     StageError,
+    StageFunction,
     time_limit,
 )
-from tests.test_app import make_settings
+from tests.helpers import make_settings
 
 pytestmark = pytest.mark.anyio
 
 STARTED = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
 
 
-async def open_runner(data_dir: Path, **stages: browl.jobs.StageFunction) -> JobRunner:
-    """Open a runner on the database in `data_dir`, with stage functions named after their stages' members."""
-    return await JobRunner.open(make_settings(DATA_DIR=str(data_dir)), {Stage[name]: f for name, f in stages.items()})
+async def open_runner(data_dir: Path, stages: Mapping[Stage, StageFunction] | None = None) -> JobRunner:
+    """Open a runner on the database in `data_dir`, the `DATA_DIR` that `make_settings` reads, with these functions."""
+    return await JobRunner.open(make_settings(), stages)
 
 
 async def run_job(runner: JobRunner) -> JobState:
@@ -46,10 +50,17 @@ async def run_job(runner: JobRunner) -> JobState:
     return runner.state
 
 
+def schema_version(path: Path) -> int:
+    """Return the schema version of the database at `path`."""
+    with closing(sqlite3.connect(path)) as connection:
+        version: int = connection.execute("PRAGMA user_version").fetchone()[0]
+        return version
+
+
 def test_store_migrates_new_database(data_dir: Path) -> None:
     """Check that a new database is created at the latest schema version, with no job."""
     store = JobStore(data_dir / "sub" / STATE_DB)
-    assert store.version == len(browl.jobs.MIGRATIONS) == 1
+    assert schema_version(store.path) == len(browl.jobs.MIGRATIONS) == 1
     assert store.read() == JobState()
 
 
@@ -60,7 +71,7 @@ def test_store_migrates_forward(data_dir: Path, monkeypatch: pytest.MonkeyPatch)
     JobStore(path).write(state)
     monkeypatch.setattr(browl.jobs, "MIGRATIONS", [*browl.jobs.MIGRATIONS, "CREATE TABLE admin (email TEXT);"])
     store = JobStore(path)
-    assert store.version == 2
+    assert schema_version(path) == 2
     assert store.read() == state
     with sqlite3.connect(path) as connection:
         assert connection.execute("SELECT count(*) FROM admin").fetchone() == (0,)
@@ -74,8 +85,8 @@ def test_store_rolls_back_failed_migration(data_dir: Path, monkeypatch: pytest.M
     monkeypatch.setattr(browl.jobs, "MIGRATIONS", [*browl.jobs.MIGRATIONS, bad])
     with pytest.raises(sqlite3.OperationalError, match="missing"):
         JobStore(path)
+    assert schema_version(path) == 1
     with sqlite3.connect(path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone() == (1,)
         assert connection.execute("SELECT name FROM sqlite_master WHERE name = 'admin'").fetchone() is None
 
 
@@ -97,12 +108,12 @@ def test_store_refuses_state_without_job(data_dir: Path) -> None:
 @pytest.mark.parametrize(
     ("state", "site"),
     [
-        (JobState(), "not available"),
-        (JobState(generation=1, stage=Stage.LOADING, started_at=STARTED), "loading"),
-        (JobState(generation=2, stage=Stage.IMPORTS, started_at=STARTED, ready_generation=1), "loading"),
+        (JobState(), Site.NOT_AVAILABLE),
+        (JobState(generation=1, stage=Stage.LOADING, started_at=STARTED), Site.LOADING),
+        (JobState(generation=2, stage=Stage.IMPORTS, started_at=STARTED, ready_generation=1), Site.LOADING),
         (
             JobState(generation=1, stage=Stage.READY, started_at=STARTED, finished_at=STARTED, ready_generation=1),
-            "available",
+            Site.AVAILABLE,
         ),
         (
             JobState(
@@ -114,28 +125,30 @@ def test_store_refuses_state_without_job(data_dir: Path) -> None:
                 reason="boom",
                 ready_generation=1,
             ),
-            "not available",
+            Site.NOT_AVAILABLE,
         ),
     ],
     ids=["never-loaded", "first-load", "reload", "ready", "failed"],
 )
-def test_site(state: JobState, site: str) -> None:
+def test_site(state: JobState, site: Site) -> None:
     """Check what the site serves in each job state."""
     assert state.site == site
 
 
-async def test_runs_stages_in_order(data_dir: Path) -> None:
+async def test_runs_stages_in_order(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that a job records each stage before running its function, in order, and ends ready."""
+    times = (STARTED + timedelta(seconds=n) for n in itertools.count())
+    monkeypatch.setattr(browl.jobs, "_now", lambda: next(times))
     seen: list[tuple[Stage, Stage | None, int]] = []
     runner: JobRunner
 
-    def stage(name: Stage) -> browl.jobs.StageFunction:
+    def stage(name: Stage) -> StageFunction:
         async def run(context: JobContext) -> None:
             seen.append((name, runner.state.stage, context.generation))
 
         return run
 
-    runner = await open_runner(data_dir, IMPORTS=stage(Stage.IMPORTS), LOADING=stage(Stage.LOADING))
+    runner = await open_runner(data_dir, {Stage.IMPORTS: stage(Stage.IMPORTS), Stage.LOADING: stage(Stage.LOADING)})
     runner.register(Stage.PRE_CACHING, stage(Stage.PRE_CACHING))
     state = await run_job(runner)
     assert seen == [
@@ -146,8 +159,8 @@ async def test_runs_stages_in_order(data_dir: Path) -> None:
     assert state.stage == Stage.READY
     assert state.ready_generation == state.generation == 1
     assert state.failed_stage is None
-    assert state.started_at is not None and state.finished_at is not None and state.started_at <= state.finished_at
-    assert state.site == "available"
+    assert (state.started_at, state.finished_at) == (STARTED, STARTED + timedelta(seconds=1))
+    assert state.site == Site.AVAILABLE
     assert (await run_job(runner)).ready_generation == 2
 
 
@@ -159,15 +172,17 @@ async def test_state_persists(data_dir: Path) -> None:
 
 async def test_refuses_second_job(data_dir: Path) -> None:
     """Check that a job can't start while one runs, and can once it has finished."""
-    release = asyncio.Event()
+    entered, release = asyncio.Event(), asyncio.Event()
 
     async def blocked(context: JobContext) -> None:
+        entered.set()
         await release.wait()
 
-    runner = await open_runner(data_dir, REASONING=blocked)
+    runner = await open_runner(data_dir, {Stage.REASONING: blocked})
     await runner.start()
-    await asyncio.sleep(0)
-    assert runner.state.site == "loading"
+    async with asyncio.timeout(5):
+        await entered.wait()
+    assert (runner.state.stage, runner.state.site) == (Stage.REASONING, Site.LOADING)
     with pytest.raises(JobRunningError, match="running"):
         await runner.start()
     with pytest.raises(JobRunningError):
@@ -198,7 +213,7 @@ async def test_refuses_second_job_while_starting(data_dir: Path, monkeypatch: py
     release.set()
     assert (await first).generation == 1
     await runner.wait()
-    assert runner.state.site == "available"
+    assert runner.state.site == Site.AVAILABLE
 
 
 async def test_start_not_stored(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -215,7 +230,7 @@ async def test_start_not_stored(data_dir: Path, monkeypatch: pytest.MonkeyPatch)
     with pytest.raises(sqlite3.OperationalError, match="locked"):
         await runner.start()
     assert runner.state == JobState() == JobStore(data_dir / STATE_DB).read()
-    assert (await run_job(runner)).site == "available"
+    assert (await run_job(runner)).site == Site.AVAILABLE
 
 
 async def test_upload_stage(data_dir: Path) -> None:
@@ -224,7 +239,7 @@ async def test_upload_stage(data_dir: Path) -> None:
     async with runner.upload() as context:
         assert context.generation == 1
         assert runner.state.stage == Stage.UPLOADING
-        assert runner.state.site == "loading"
+        assert runner.state.site == Site.LOADING
     await runner.wait()
     assert runner.state.stage == Stage.READY
 
@@ -237,7 +252,7 @@ async def test_upload_failure(data_dir: Path) -> None:
             raise OSError("disk full")
     assert runner.state.failed_stage == Stage.UPLOADING
     assert runner.state.reason == "internal error: OSError: disk full"
-    assert (await run_job(runner)).site == "available"
+    assert (await run_job(runner)).site == Site.AVAILABLE
 
 
 async def upload_slowly(runner: JobRunner) -> None:
@@ -246,25 +261,34 @@ async def upload_slowly(runner: JobRunner) -> None:
         await asyncio.sleep(1)
 
 
-@pytest.mark.parametrize("scope", ["anyio", "asyncio"])
+@pytest.mark.parametrize("scope", ["anyio", "asyncio", "task"])
 async def test_upload_cancelled(data_dir: Path, scope: str) -> None:
-    """Check that an upload cancelled from outside, by a cancel scope or time limit, is recorded as cancelled.
+    """Check that an upload cancelled from outside is recorded as cancelled, and frees the runner.
 
-    An anyio cancel scope also cancels the failure record, which must still stop the site serving.
+    It's cancelled by a cancel scope, a time limit, or cancelling the request's task, as a server may when a client
+    disconnects. An anyio cancel scope also cancels the failure record, which must still stop the site serving.
     """
     runner = await open_runner(data_dir)
     if scope == "anyio":
         with anyio.move_on_after(0.05):
             await upload_slowly(runner)
-    else:
+    elif scope == "asyncio":
         with pytest.raises(TimeoutError):
             async with asyncio.timeout(0.05):
                 await upload_slowly(runner)
+    else:
+        task = asyncio.create_task(upload_slowly(runner))
+        async with asyncio.timeout(5):
+            while not runner.state.running:
+                await asyncio.sleep(0.001)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
     state = runner.state
-    assert (state.failed_stage, state.reason, state.site) == (Stage.UPLOADING, CANCELLED, "not available")
+    assert (state.failed_stage, state.reason, state.site) == (Stage.UPLOADING, CANCELLED, Site.NOT_AVAILABLE)
     await runner.close()
     assert (await open_runner(data_dir)).state == state
-    assert (await run_job(runner)).site == "available"
+    assert (await run_job(runner)).site == Site.AVAILABLE
 
 
 async def test_upload_time_limit(data_dir: Path) -> None:
@@ -322,14 +346,14 @@ async def test_stage_failure(data_dir: Path, error: Exception | Callable[[], Awa
             raise error
         await error()
 
-    runner = await open_runner(data_dir, REASONING=reasoning)
+    runner = await open_runner(data_dir, {Stage.REASONING: reasoning})
     await run_job(runner)
     fail = True
     state = await run_job(runner)
     assert (state.generation, state.failed_stage, state.reason) == (2, Stage.REASONING, reason)
     assert state.ready_generation == 1
     assert state.finished_at is not None
-    assert state.site == "not available"
+    assert state.site == Site.NOT_AVAILABLE
     assert (await open_runner(data_dir)).state == state
 
 
@@ -348,14 +372,14 @@ async def test_failure_not_stored(data_dir: Path, monkeypatch: pytest.MonkeyPatc
             monkeypatch.setattr(runner._store, "write", broken)
             raise StageError("boom")
 
-    runner = await open_runner(data_dir, LOADING=loading)
+    runner = await open_runner(data_dir, {Stage.LOADING: loading})
     state = await run_job(runner)
-    assert (state.failed_stage, state.reason, state.site) == (Stage.LOADING, "boom", "not available")
+    assert (state.failed_stage, state.reason, state.site) == (Stage.LOADING, "boom", Site.NOT_AVAILABLE)
     assert JobStore(data_dir / STATE_DB).read().running
     monkeypatch.setattr(browl.jobs, "STATE_TTL_S", 0)
     assert (await runner.current()) == state
     assert (await run_job(runner)).generation == 2
-    assert (await runner.current()).site == "available"
+    assert (await runner.current()).site == Site.AVAILABLE
 
 
 async def test_failure_record_interrupted(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -367,13 +391,13 @@ async def test_failure_record_interrupted(data_dir: Path, monkeypatch: pytest.Mo
     async def interrupted(error: BaseException) -> None:
         raise RuntimeError("failure record interrupted")
 
-    runner = await open_runner(data_dir, REASONING=reasoning)
+    runner = await open_runner(data_dir, {Stage.REASONING: reasoning})
     monkeypatch.setattr(runner, "_fail", interrupted)
     await runner.start()
     with pytest.raises(RuntimeError, match="interrupted"):
         await runner.wait()
     state = runner.state
-    assert (state.failed_stage, state.reason, state.site) == (Stage.REASONING, STOPPED_UNRECORDED, "not available")
+    assert (state.failed_stage, state.reason, state.site) == (Stage.REASONING, STOPPED_UNRECORDED, Site.NOT_AVAILABLE)
     await runner.close()
     assert (await open_runner(data_dir)).state == state
 
@@ -384,23 +408,64 @@ async def test_restart_fails_running_job(data_dir: Path) -> None:
         JobState(generation=3, stage=Stage.LOADING, started_at=STARTED, ready_generation=2)
     )
     state = (await open_runner(data_dir)).state
-    assert (state.failed_stage, state.reason, state.site) == (Stage.LOADING, INTERRUPTED_BY_RESTART, "not available")
+    assert (state.failed_stage, state.reason, state.site) == (Stage.LOADING, INTERRUPTED_BY_RESTART, Site.NOT_AVAILABLE)
     assert (await open_runner(data_dir)).state == state
 
 
 async def test_close_cancels_job(data_dir: Path) -> None:
-    """Check that closing the runner cancels a running job and records it as interrupted."""
+    """Check that closing the runner cancels a running job's task and records the job as interrupted."""
+    entered = asyncio.Event()
 
     async def forever(context: JobContext) -> None:
+        entered.set()
         await asyncio.Event().wait()
 
-    runner = await open_runner(data_dir, PRE_CACHING=forever)
+    runner = await open_runner(data_dir, {Stage.PRE_CACHING: forever})
     await runner.start()
-    while runner.state.stage != Stage.PRE_CACHING:
-        await asyncio.sleep(0.001)
+    async with asyncio.timeout(5):
+        await entered.wait()
+    task = runner._task
     await runner.close()
+    assert task is not None and task.cancelled()
     state = (await open_runner(data_dir)).state
     assert (state.failed_stage, state.reason) == (Stage.PRE_CACHING, INTERRUPTED_BY_SHUTDOWN)
+
+
+async def test_wait_cancelled(data_dir: Path) -> None:
+    """Check that cancelling a caller waiting for a job doesn't cancel the job."""
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def blocked(context: JobContext) -> None:
+        entered.set()
+        await release.wait()
+
+    runner = await open_runner(data_dir, {Stage.REASONING: blocked})
+    await runner.start()
+    waiter = asyncio.create_task(runner.wait())
+    async with asyncio.timeout(5):
+        await entered.wait()
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    release.set()
+    await runner.wait()
+    assert runner.state.site == Site.AVAILABLE
+
+
+async def test_register_replaces(data_dir: Path) -> None:
+    """Check that registering a function for a stage replaces the one registered before."""
+    seen: list[str] = []
+
+    async def first(context: JobContext) -> None:
+        seen.append("first")
+
+    async def second(context: JobContext) -> None:
+        seen.append("second")
+
+    runner = await open_runner(data_dir, {Stage.IMPORTS: first})
+    runner.register(Stage.IMPORTS, second)
+    await run_job(runner)
+    assert seen == ["second"]
 
 
 @pytest.mark.parametrize("stage", [Stage.UPLOADING, Stage.READY])
@@ -422,7 +487,7 @@ async def test_close_right_after_start(data_dir: Path) -> None:
     state = runner.state
     assert (state.failed_stage, state.reason) == (Stage.UPLOADING, INTERRUPTED_BY_SHUTDOWN)
     assert (await open_runner(data_dir)).state == state
-    assert (await run_job(await open_runner(data_dir))).site == "available"  # the job lock was released
+    assert (await run_job(await open_runner(data_dir))).site == Site.AVAILABLE  # the job lock was released
 
 
 @pytest.mark.parametrize("claimed", [True, False])
@@ -469,13 +534,13 @@ async def test_workers_share_state(data_dir: Path, monkeypatch: pytest.MonkeyPat
     async def blocked(context: JobContext) -> None:
         await release.wait()
 
-    first, second = await open_runner(data_dir, REASONING=blocked), await open_runner(data_dir)
-    assert (await second.current()).site == "not available"
+    first, second = await open_runner(data_dir, {Stage.REASONING: blocked}), await open_runner(data_dir)
+    assert (await second.current()).site == Site.NOT_AVAILABLE
     await first.start()
-    assert (await first.current()).site == "loading"  # its own change shows at once
-    assert (await second.current()).site == "not available"  # read less than STATE_TTL_S ago
+    assert (await first.current()).site == Site.LOADING  # its own change shows at once
+    assert (await second.current()).site == Site.NOT_AVAILABLE  # read less than STATE_TTL_S ago
     monkeypatch.setattr(browl.jobs, "STATE_TTL_S", 0)
-    assert (await second.current()).site == "loading"
+    assert (await second.current()).site == Site.LOADING
     with pytest.raises(JobRunningError, match="another server worker"):
         await second.start()
     assert (await open_runner(data_dir)).state.running
@@ -504,7 +569,7 @@ async def test_refresh_keeps_newer_change(data_dir: Path, monkeypatch: pytest.Mo
     assert await asyncio.to_thread(entered.wait, 5)
     await run_job(runner)
     release.set()
-    assert (await refresh).site == "available"
+    assert (await refresh).site == Site.AVAILABLE
 
 
 async def test_refresh_reads_once(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -521,3 +586,15 @@ async def test_refresh_reads_once(data_dir: Path, monkeypatch: pytest.MonkeyPatc
     runner._read_at -= browl.jobs.STATE_TTL_S
     await asyncio.gather(*(runner.current() for _ in range(3)))
     assert reads == [JobState()]
+
+
+async def test_long_reason_cut_short(data_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Check that a long failure reason is stored cut short, and logged in full."""
+    message = "x" * (browl.jobs.MAX_REASON_CHARS * 2)
+
+    async def reasoning(context: JobContext) -> None:
+        raise StageError(message)
+
+    state = await run_job(await open_runner(data_dir, {Stage.REASONING: reasoning}))
+    assert state.reason == f"{message[: browl.jobs.MAX_REASON_CHARS]}… (cut short; the app's log has it all)"
+    assert message in caplog.text

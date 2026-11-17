@@ -4,15 +4,26 @@ import asyncio
 import re
 import threading
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from browl.jobs import INTERRUPTED_BY_SHUTDOWN, STATE_DB, JobContext, JobStore, Stage, StageError
+from browl.jobs import (
+    INTERRUPTED_BY_RESTART,
+    INTERRUPTED_BY_SHUTDOWN,
+    STATE_DB,
+    JobContext,
+    JobState,
+    JobStore,
+    Site,
+    Stage,
+    StageError,
+)
 from browl.pages import RETRY_AFTER_S, SiteGate, templates
-from tests.test_app import make_app
+from tests.helpers import make_app
 
 pytestmark = pytest.mark.usefixtures("data_dir")
 
@@ -97,7 +108,7 @@ def test_not_available_after_failure(client: TestClient, app: FastAPI) -> None:
     """Check that a failed load shows the "not available" page, without the failure reason."""
     run_job(client, app)
     run_job(client, app, reasoning=SECRET_REASON)
-    assert app.state.jobs.state.site == "not available"
+    assert app.state.jobs.state.site == Site.NOT_AVAILABLE
     response = client.get("/example.org/onto")
     assert response.status_code == 503
     assert "<h1>Not available</h1>" in response.text
@@ -127,17 +138,17 @@ def test_loading_other_methods(client: TestClient, app: FastAPI) -> None:
 def test_available(client: TestClient, app: FastAPI) -> None:
     """Check that once a load is ready the gate passes requests through to the routes."""
     run_job(client, app)
-    assert app.state.jobs.state.site == "available"
+    assert app.state.jobs.state.site == Site.AVAILABLE
     response = client.get("/no/such/page")
     assert response.status_code == 404
     assert response.json() == {"detail": "Not Found"}
 
 
 @pytest.mark.parametrize("path", EXEMPT)
-@pytest.mark.parametrize("site", ["loading", "not available"])
-def test_exempt(client: TestClient, app: FastAPI, path: str, site: str) -> None:
+@pytest.mark.parametrize("site", [Site.LOADING, Site.NOT_AVAILABLE])
+def test_exempt(client: TestClient, app: FastAPI, path: str, site: Site) -> None:
     """Check that the health, static and admin routes, including the API docs, are served whatever the job state."""
-    if site == "loading":
+    if site == Site.LOADING:
         start_job(client, app)
     assert app.state.jobs.state.site == site
     assert client.get(path).status_code == 200
@@ -247,6 +258,7 @@ def test_status_page(client: TestClient, app: FastAPI) -> None:
     refresh = '<noscript><meta http-equiv="refresh" content="2"></noscript>'
     response = client.get(STATUS)
     assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
     assert "<title>Load status · browl</title>" in response.text
     assert '<section id="job-status"' in response.text
     assert "refresh" not in response.text
@@ -267,3 +279,26 @@ def test_templates_autoescape() -> None:
     """Check that every template autoescapes, including ones not named .html."""
     assert templates.env.autoescape is True
     assert templates.env.from_string("{{ value }}").render(value="<b>&") == "&lt;b&gt;&amp;"
+
+
+def test_restart_serves_loaded_ontology() -> None:
+    """Check that an app started on the DATA_DIR of one that loaded an ontology serves it, as the loaded generation."""
+    first = make_app()
+    with TestClient(first) as client:
+        run_job(client, first)
+    with TestClient(make_app()) as client:
+        assert client.get("/no/such/page").status_code == 404  # past the gate, to the router
+        assert "Load 1 is ready" in fragment(client)
+
+
+def test_restart_after_interrupted_job(data_dir: Path) -> None:
+    """Check that an app started after a process stopped mid-job shows "not available", and why, to admins."""
+    started = datetime(2026, 1, 2, tzinfo=UTC)
+    JobStore(data_dir / STATE_DB).write(
+        JobState(generation=2, stage=Stage.LOADING, started_at=started, ready_generation=1)
+    )
+    with TestClient(make_app()) as client:
+        response = client.get("/example.org/onto")
+        assert response.status_code == 503
+        assert "<h1>Not available</h1>" in response.text
+        assert f"Failed in stage <strong>loading</strong>: {INTERRUPTED_BY_RESTART}" in fragment(client)

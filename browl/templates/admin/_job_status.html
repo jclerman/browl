@@ -6,10 +6,8 @@
   <p>No ontology has been loaded yet.</p>
   {% else %}
   <p>
-    {% if job.running %}Load {{ job.generation }} is running,
-    {% elif job.failed_stage is not none %}Load {{ job.generation }} failed,
-    {% else %}Load {{ job.generation }} is ready,
-    {% endif %}
+    Load {{ job.generation }}
+    {% if job.running %}is running{% elif job.failed_stage is not none %}failed{% else %}is ready{% endif %},
     started <time datetime="{{ job.started_at.isoformat() }}">{{ job.started_at.strftime("%Y-%m-%d %H:%M:%S UTC") }}</time>.
   </p>
   <ol class="stages">
