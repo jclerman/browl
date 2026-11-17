@@ -257,9 +257,9 @@ The database is the job state's source of truth, so nothing here ties browl to o
   next generation in one SQLite transaction. The worker running the job holds the lock until the job's end is stored,
   and the OS frees it if the worker dies. So a second job is refused in any worker, and a job recorded as running while
   nobody holds the lock was interrupted: startup marks it failed only then, never a job another live worker runs.
-- **Still needed for several workers:** the workers must share one host (`flock` on a local volume). A job's end that
-  the database couldn't store is served only by its own worker; the others show "loading" until the next job or a
-  restart replaces it.
+- **Still needed for several workers:** the workers must share one host (`flock` on a local volume). A job whose worker
+  dies, or whose end the database couldn't store, stays recorded as running: the other workers show "loading" until a
+  worker starts (and marks it failed) or the next upload replaces it; in the second case its own worker shows its end.
 
 | Stage | What happens |
 | --- | --- |
