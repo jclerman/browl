@@ -6,7 +6,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from browl.jobs import JobRunningError, Reasoner, Stage
 from browl.pages import templates
-from browl.upload import FORMATS, UploadError, receive_upload
+from browl.upload import FORMATS, StorageError, UploadError, receive_upload
 
 STATUS_POLL_S = 2
 """How often the status fragment polls itself while a job runs."""
@@ -69,12 +69,16 @@ async def upload(request: Request) -> Response:
     `.rdf`, `.owl` as RDF/XML, or `.ofn`). It's read as it streams in, so FastAPI can't describe it.
 
     On success, redirects to the upload page, which shows the job's progress; a refused upload gets the page with the
-    reason, 400 if the request was invalid, 409 if a job was already running.
+    reason: 400 if the request was invalid, 409 if a job was already running, 507 if the data volume is full, 500 if
+    the file couldn't be stored for another reason.
     """
     try:
         await receive_upload(request, request.app.state.jobs)
     except UploadError as error:
         return await _upload_page(request, str(error), status.HTTP_400_BAD_REQUEST)
+    except StorageError as error:
+        code = status.HTTP_507_INSUFFICIENT_STORAGE if error.no_space else status.HTTP_500_INTERNAL_SERVER_ERROR
+        return await _upload_page(request, str(error), code)
     except JobRunningError:
         return await _upload_page(request, "a load job is already running", status.HTTP_409_CONFLICT)
     return RedirectResponse(request.url_for("upload_page").path, status.HTTP_303_SEE_OTHER)

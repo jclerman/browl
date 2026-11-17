@@ -2,15 +2,17 @@
 
 Starlette's own form parser spools a file to a temporary file before the handler sees it, which for a multi-gigabyte
 ontology would mean writing it twice; this parser writes each chunk to the data volume as it arrives. The job is
-claimed only once the file's part has started and its name has been checked, so a malformed request leaves the served
-ontology alone.
+claimed only once the file's name has been checked and its first bytes found to look like the syntax the name says
+(`check_syntax`), so a malformed request, or a mislabelled file, leaves the served ontology alone.
 """
 
 import asyncio
+import errno
 import logging
+import re
 import shutil
 from collections.abc import Callable
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, suppress
 from pathlib import Path
 from typing import IO
 
@@ -32,6 +34,12 @@ FORMATS = {".ttl": ".ttl", ".rdf": ".rdf", ".owl": ".rdf", ".ofn": ".ofn"}
 """The file name suffixes accepted (A-2), and the suffix each is stored with, which says its format: `.ttl` Turtle,
 `.rdf` RDF/XML, `.ofn` OWL Functional Syntax. An `.owl` file is taken to be RDF/XML, as OBO ontologies' are."""
 
+SYNTAXES = {".ttl": "Turtle", ".rdf": "RDF/XML", ".ofn": "OWL Functional Syntax"}
+"""The syntax each stored suffix stands for."""
+
+SNIFF_BYTES = 8192
+"""How much of the start of the file `check_syntax` looks at, before the job is claimed."""
+
 MAX_FIELD_BYTES = 64
 """The longest form field other than the file; a longer one is refused."""
 
@@ -40,7 +48,24 @@ WRITE_BYTES = 1 << 20
 
 
 class UploadError(StageError):
-    """The request isn't a valid upload. Raised before the job is claimed, it leaves the job state alone."""
+    """The request isn't a valid upload.
+
+    Raised before the job is claimed, it leaves the job state alone; after, the job has failed in the uploading stage
+    with it as its reason.
+    """
+
+
+class StorageError(StageError):
+    """The file couldn't be written to the data volume, e.g. it's full; the job has failed in the uploading stage.
+
+    Attributes:
+        no_space: Whether the volume was full.
+    """
+
+    def __init__(self, error: OSError) -> None:
+        """Describe the error for admins (A-6), without the path."""
+        super().__init__(f"couldn't store the uploaded file: {error.strerror or error}")
+        self.no_space = error.errno in {errno.ENOSPC, errno.EDQUOT}
 
 
 def upload_path(data_dir: Path, generation: int, suffix: str) -> Path:
@@ -59,6 +84,68 @@ def stored_suffix(filename: str) -> str:
         accepted = ", ".join(sorted(FORMATS))
         raise UploadError(f"unsupported file type {suffix or '(none)'!r}; accepted: {accepted}")
     return FORMATS[suffix]
+
+
+_XML_ROOT = re.compile(r"<([A-Za-z_][\w.-]*:)?([A-Za-z_][\w.-]*)([^>]*)")
+"""An XML start tag: its prefix, local name, and attributes so far (the tag may run past the sample)."""
+
+_TURTLE_START = re.compile(r"(@prefix|@base|prefix\s|base\s|<[^\s<>\"{}|^`\\]*>)", re.IGNORECASE)
+"""How a Turtle document can start, distinctively: a prefix or base directive, or an IRI."""
+
+_OFN_START = re.compile(r"(Prefix|Ontology)\s*\(")
+"""How an OWL Functional Syntax document starts: its grammar allows only prefix declarations before the ontology."""
+
+
+def sniff_syntax(sample: bytes) -> str | None:
+    """Return the syntax the start of a file looks like, or None if it isn't distinctive.
+
+    The result is one of `SYNTAXES`' values, "OWL/XML", or "compressed". It's a heuristic, from the first token or XML
+    element after any comments: a file that looks right can still fail to parse later in the job.
+    """
+    if sample.startswith((b"\x1f\x8b", b"PK\x03\x04", b"BZh", b"\xfd7zXZ")):  # gzip, zip, bzip2, xz
+        return "compressed"
+    text = sample.decode("utf-8", "replace").removeprefix("\ufeff")
+    while (text := text.lstrip()).startswith("#"):  # Turtle comments; the OWLAPI allows them in OWL Functional Syntax
+        text = text.partition("\n")[2]
+    if _OFN_START.match(text):
+        return SYNTAXES[".ofn"]
+    if _TURTLE_START.match(text):
+        return SYNTAXES[".ttl"]
+    if not text.startswith("<"):
+        return None
+    # XML: skip the declaration, comments, processing instructions and the doctype (its internal subset can be long)
+    body = re.sub(r"<\?.*?\?>|<!--.*?-->|<!DOCTYPE(\[.*?\]|[^>\[])*>", "", text, flags=re.DOTALL)
+    root = _XML_ROOT.search(body)
+    if root is None:
+        return SYNTAXES[".rdf"]  # still in the prologue: XML, so RDF/XML is the only accepted syntax it can be
+    prefix, name, attributes = root.groups()
+    if name == "Ontology" and (prefix is None or "ontologyIRI" in attributes):
+        return "OWL/XML"
+    return SYNTAXES[".rdf"]
+
+
+def check_syntax(sample: bytes, suffix: str) -> None:
+    """Check that the start of a file looks like the syntax its stored suffix says.
+
+    A file whose start isn't distinctive passes, except as RDF/XML or OWL Functional Syntax, which must start with an
+    XML tag or a prefix or ontology declaration.
+
+    Raises:
+        UploadError: The file looks like another syntax, or is compressed.
+    """
+    expected = SYNTAXES[suffix]
+    found = sniff_syntax(sample)
+    if found == expected or (found is None and suffix == ".ttl"):
+        return
+    if found == "compressed":
+        raise UploadError("the file looks compressed; upload it uncompressed")
+    if found == "OWL/XML":
+        raise UploadError(
+            "the file looks like OWL/XML, which isn't supported; convert it to RDF/XML, Turtle or OWL Functional"
+            " Syntax, e.g. with ROBOT convert"
+        )
+    looks = "isn't recognizable" if found is None else f"looks like {found}"
+    raise UploadError(f"the file's name says {expected}, but its content {looks}")
 
 
 class _Events:
@@ -110,6 +197,7 @@ class _Upload:
         self.stack = stack
         self.data_dir: Path = request.app.state.settings.data_dir
         self.reasoner: Reasoner | None = None
+        self.suffix: str | None = None  # the file's stored suffix, once its part has started
         self.context: JobContext | None = None
         self.file: IO[bytes] | None = None
         self.field: str | None = None  # the current part's field name
@@ -124,18 +212,22 @@ class _Upload:
         filename = options.get(b"filename")
         if self.field != FILE_FIELD:
             return
-        if self.context is not None:
+        if self.suffix is not None:
             raise UploadError("the form has more than one file")
         if filename is None or not filename:
             raise UploadError("no file was chosen")
         suffix = stored_suffix(filename.decode("utf-8", "replace"))
         if self.reasoner is None:
             raise UploadError(f"the form's {REASONER_FIELD!r} field must come before its file")
-        await self.start(suffix)
+        self.suffix = suffix
 
-    async def start(self, suffix: str) -> None:
-        """Claim the job, clear the page cache, and open the file, removing earlier jobs' uploads."""
-        assert self.reasoner is not None
+    async def start(self) -> None:
+        """Check the file's start, claim the job, clear the page cache, and open the file, removing earlier uploads."""
+        assert self.reasoner is not None and self.suffix is not None
+        if not self.buffer:
+            raise UploadError("the file is empty")
+        check_syntax(bytes(self.buffer[:SNIFF_BYTES]), self.suffix)
+        suffix = self.suffix
         self.context = await self.stack.enter_async_context(self.runner.upload(self.reasoner))
         clear_page_cache()
         path = upload_path(self.data_dir, self.context.generation, suffix)
@@ -148,6 +240,8 @@ class _Upload:
         if self.field == FILE_FIELD:
             self.buffer += data
             self.size += len(data)
+            if self.context is None and len(self.buffer) >= SNIFF_BYTES:
+                await self.start()
             if len(self.buffer) >= WRITE_BYTES:
                 await self.flush()
         elif self.field == REASONER_FIELD:
@@ -157,6 +251,8 @@ class _Upload:
 
     async def part_end(self) -> None:
         if self.field == FILE_FIELD:
+            if self.context is None:
+                await self.start()
             await self.flush()
         elif self.field == REASONER_FIELD:
             value = self.value.decode("utf-8", "replace")
@@ -171,16 +267,27 @@ class _Upload:
             await asyncio.to_thread(self.file.write, bytes(self.buffer))
             self.buffer.clear()
 
+    async def discard(self) -> None:
+        """Close and remove the file, if it was opened, so a failed upload doesn't keep its disk space."""
+        if self.context is not None and self.context.upload is not None:
+            await asyncio.to_thread(_remove, self.context.upload.parent, self.file)
+
     async def finish(self) -> JobContext:
         if not self.ended:
             raise UploadError("the upload was cut short")
         if self.context is None or self.file is None:
             raise UploadError("no file was chosen")
-        if self.size == 0:
-            raise UploadError("the file is empty")
         await asyncio.to_thread(self.file.close)
         logger.info("Load job %d: stored %d bytes", self.context.generation, self.size)
         return self.context
+
+
+def _remove(path: Path, file: IO[bytes] | None) -> None:
+    """Close a job's upload file, if open, ignoring a failed flush (e.g. the disk is full), and remove its directory."""
+    if file is not None:
+        with suppress(OSError):
+            file.close()
+    shutil.rmtree(path, ignore_errors=True)
 
 
 def _open(path: Path) -> IO[bytes]:
@@ -203,7 +310,10 @@ async def receive_upload(request: Request, runner: JobRunner) -> JobContext:
     Raises:
         UploadError: The request isn't a valid upload. If it was found invalid after the job was claimed (e.g. it was
             cut short), the job has failed in the uploading stage with this as its reason.
+        StorageError: The file couldn't be written; the job has failed in the uploading stage with this as its reason.
         JobRunningError: A job is already running.
+
+    A job that fails here leaves no partial file behind.
     """
     content_type, options = parse_options_header(request.headers.get("content-type"))
     boundary = options.get(b"boundary")
@@ -219,13 +329,17 @@ async def receive_upload(request: Request, runner: JobRunner) -> JobContext:
                 await _handle(upload, events)
             parser.finalize()
             await _handle(upload, events)
-        except ClientDisconnect as error:
-            raise UploadError("the upload was cut short: the client disconnected") from error
-        except UploadError:
+            return await upload.finish()
+        except BaseException as error:
+            await upload.discard()
+            if isinstance(error, ClientDisconnect):
+                raise UploadError("the upload was cut short: the client disconnected") from error
+            if isinstance(error, OSError):
+                raise StorageError(error) from error
+            if isinstance(error, ValueError):
+                # python-multipart's errors (e.g. MultipartParseError) are ValueErrors
+                raise UploadError(f"the form is malformed: {error}") from error
             raise
-        except ValueError as error:  # python-multipart's errors (e.g. MultipartParseError) are ValueErrors
-            raise UploadError(f"the form is malformed: {error}") from error
-        return await upload.finish()
     raise AssertionError("unreachable")  # pragma: no cover  # an exit stack doesn't swallow exceptions
 
 

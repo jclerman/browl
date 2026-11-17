@@ -1,6 +1,7 @@
 """Tests for the upload page and the streaming upload (A-2, A-3, A-4)."""
 
 import asyncio
+import errno
 import os
 import threading
 from collections.abc import Iterator
@@ -16,13 +17,22 @@ from starlette.types import Message
 
 import browl.upload
 from browl.jobs import JobContext, JobRunner, Reasoner, Stage
-from browl.upload import UPLOADS_DIR, UploadError, receive_upload, upload_path
+from browl.upload import SNIFF_BYTES, UPLOADS_DIR, UploadError, check_syntax, receive_upload, sniff_syntax, upload_path
 from tests.helpers import make_app, make_settings
 
 UPLOAD = "/_browl/admin/upload"
 pytestmark = pytest.mark.anyio
 
 TURTLE = b"@prefix ex: <http://example.org/> .\nex:a a ex:B .\n"
+RDFXML = b'<?xml version="1.0"?>\n<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/>\n'
+OFN = b"Prefix(:=<http://example.org/>)\nOntology(<http://example.org/onto>)\n"
+LONG = TURTLE * (SNIFF_BYTES // len(TURTLE) + 1)
+"""A Turtle file longer than the part checked before the job is claimed, so the job is claimed while it streams."""
+FORM = "multipart/form-data; boundary=b"
+FILE_START = (
+    b'--b\r\nContent-Disposition: form-data; name="reasoner"\r\n\r\nelk\r\n'
+    b'--b\r\nContent-Disposition: form-data; name="ontology"; filename="o.ttl"\r\n\r\n'
+)
 
 
 @pytest.fixture
@@ -69,18 +79,24 @@ def test_upload_page(client: TestClient) -> None:
 
 
 @pytest.mark.parametrize(
-    ("filename", "suffix"),
-    [("onto.ttl", ".ttl"), ("onto.rdf", ".rdf"), ("uberon.OWL", ".rdf"), ("onto.ofn", ".ofn")],
+    ("filename", "content", "suffix"),
+    [
+        ("onto.ttl", TURTLE, ".ttl"),
+        ("onto.rdf", RDFXML, ".rdf"),
+        ("uberon.OWL", RDFXML, ".rdf"),
+        ("onto.ofn", OFN, ".ofn"),
+        ("big.ttl", LONG, ".ttl"),
+    ],
 )
-def test_upload(client: TestClient, app: FastAPI, data_dir: Path, filename: str, suffix: str) -> None:
+def test_upload(client: TestClient, app: FastAPI, data_dir: Path, filename: str, content: bytes, suffix: str) -> None:
     """Check that an upload is stored with the suffix for its format, and starts a job that reaches ready."""
-    response = post(client, filename)
+    response = post(client, filename, content)
     assert response.status_code == 303
     assert response.headers["location"] == UPLOAD
     finish(client, app)
     state = app.state.jobs.state
     assert (state.generation, state.stage, state.reasoner) == (1, Stage.READY, Reasoner.NONE)
-    assert upload_path(data_dir, 1, suffix).read_bytes() == TURTLE
+    assert upload_path(data_dir, 1, suffix).read_bytes() == content
 
 
 @pytest.mark.parametrize("reasoner", list(Reasoner))
@@ -112,7 +128,7 @@ def test_upload_replaces(client: TestClient, app: FastAPI, data_dir: Path) -> No
 def test_upload_large(client: TestClient, app: FastAPI, data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that a file larger than the write buffer arrives whole, in several writes."""
     monkeypatch.setattr(browl.upload, "WRITE_BYTES", 1 << 16)
-    content = os.urandom(3 << 20)
+    content = TURTLE + os.urandom(3 << 20)
     assert post(client, content=content).status_code == 303
     finish(client, app)
     assert upload_path(data_dir, 1, ".ttl").read_bytes() == content
@@ -135,6 +151,15 @@ def test_upload_clears_page_cache(client: TestClient, app: FastAPI, monkeypatch:
         ({"reasoner": "pellet"}, "unknown reasoner 'pellet'"),
         ({"reasoner": "x" * 100}, "field is too long"),
         ({"reasoner": None}, "field must come before its file"),
+        ({"content": b""}, "the file is empty"),
+        ({"filename": "onto.rdf"}, "the file's name says RDF/XML, but its content looks like Turtle"),
+        ({"filename": "onto.ttl", "content": RDFXML}, "says Turtle, but its content looks like RDF/XML"),
+        (
+            {"filename": "onto.ofn", "content": b"Ontology"},
+            "says OWL Functional Syntax, but its content isn't recognizable",
+        ),
+        ({"filename": "onto.owl", "content": b'<Ontology xmlns="http://www.w3.org/2002/07/owl#"/>'}, "OWL/XML"),
+        ({"content": b"\x1f\x8b\x08\x00"}, "looks compressed"),
     ],
 )
 def test_refused_before_claim(client: TestClient, app: FastAPI, kwargs: dict[str, object], reason: str) -> None:
@@ -173,6 +198,7 @@ def test_refused_reasoner_after_file(client: TestClient, app: FastAPI) -> None:
             b"no boundary here",
             "the form is malformed",
         ),
+        ({"Content-Type": FORM}, FILE_START + TURTLE, "the upload was cut short"),
     ],
 )
 def test_refused_request(client: TestClient, app: FastAPI, headers: dict[str, str], body: bytes, reason: str) -> None:
@@ -194,27 +220,56 @@ def test_refused_no_file_chosen(client: TestClient, app: FastAPI) -> None:
 @pytest.mark.parametrize(
     ("body", "reason"),
     [
-        (b"", "the file is empty"),
-        (TURTLE + b'\r\n--b\r\nContent-Disposition: form-data; name="ontology"; filename="p.ttl"', "more than one"),
-        (TURTLE, "the upload was cut short"),
+        (
+            LONG
+            + b'\r\n--b\r\nContent-Disposition: form-data; name="ontology"; filename="p.ttl"\r\n\r\n'
+            + TURTLE
+            + b"\r\n--b--\r\n",
+            "more than one",
+        ),
+        (LONG, "the upload was cut short"),
     ],
 )
-def test_failed_after_claim(client: TestClient, app: FastAPI, body: bytes, reason: str) -> None:
-    """Check that a form found invalid once its file has started fails the job in the uploading stage (A-6)."""
-    start = b'--b\r\nContent-Disposition: form-data; name="reasoner"\r\n\r\nelk\r\n'
-    start += b'--b\r\nContent-Disposition: form-data; name="ontology"; filename="o.ttl"\r\n\r\n'
-    end = b"\r\n--b--\r\n" if reason != "the upload was cut short" else b""
-    if reason == "more than one":
-        body += b"\r\n\r\n" + TURTLE
-    response = client.post(
-        UPLOAD, content=start + body + end, headers={"Content-Type": "multipart/form-data; boundary=b"}
-    )
+def test_failed_after_claim(client: TestClient, app: FastAPI, data_dir: Path, body: bytes, reason: str) -> None:
+    """Check that a form found invalid once its job is claimed fails the job in the uploading stage (A-6).
+
+    The partial file is removed.
+    """
+    response = client.post(UPLOAD, content=FILE_START + body, headers={"Content-Type": FORM})
     assert response.status_code == 400
     assert escape(reason) in response.text
     state = app.state.jobs.state
     assert (state.generation, state.failed_stage, state.reasoner) == (1, Stage.UPLOADING, Reasoner.ELK)
     assert reason in (state.reason or "")
     assert "Failed in stage <strong>uploading</strong>" in response.text
+    assert not upload_path(data_dir, 1, ".ttl").parent.exists()
+
+
+@pytest.mark.parametrize(("code", "status_code"), [(errno.ENOSPC, 507), (errno.EIO, 500)])
+def test_storage_error(
+    client: TestClient, app: FastAPI, data_dir: Path, monkeypatch: pytest.MonkeyPatch, code: int, status_code: int
+) -> None:
+    """Check that a failed write, e.g. a full disk, fails the job saying why, and removes the partial file."""
+    opened = browl.upload._open
+
+    class Failing:
+        def __init__(self, path: Path) -> None:
+            self.file = opened(path)
+
+        def write(self, data: bytes) -> int:
+            raise OSError(code, os.strerror(code))
+
+        def close(self) -> None:
+            self.file.close()
+
+    monkeypatch.setattr(browl.upload, "_open", Failing)
+    response = post(client)
+    assert response.status_code == status_code
+    reason = f"couldn't store the uploaded file: {os.strerror(code)}"
+    assert escape(reason) in response.text
+    state = app.state.jobs.state
+    assert (state.failed_stage, state.reason) == (Stage.UPLOADING, reason)
+    assert not upload_path(data_dir, 1, ".ttl").parent.exists()
 
 
 def test_refused_while_running(client: TestClient, app: FastAPI, data_dir: Path) -> None:
@@ -292,7 +347,7 @@ async def test_client_disconnect(data_dir: Path) -> None:
         {
             "type": "http.request",
             "body": b'--b\r\nContent-Disposition: form-data; name="reasoner"\r\n\r\nnone\r\n'
-            b'--b\r\nContent-Disposition: form-data; name="ontology"; filename="o.ttl"\r\n\r\n' + TURTLE,
+            b'--b\r\nContent-Disposition: form-data; name="ontology"; filename="o.ttl"\r\n\r\n' + LONG,
             "more_body": True,
         },
         {"type": "http.disconnect"},
@@ -314,3 +369,48 @@ async def test_client_disconnect(data_dir: Path) -> None:
         await runner.close()
     assert runner.state.failed_stage == Stage.UPLOADING
     assert "client disconnected" in (runner.state.reason or "")
+    assert not upload_path(data_dir, 1, ".ttl").parent.exists()
+
+
+@pytest.mark.parametrize(
+    ("sample", "syntax"),
+    [
+        (TURTLE, "Turtle"),
+        (b"\xef\xbb\xbf# a comment\n\nPREFIX ex: <http://example.org/>\n", "Turtle"),
+        (b"<http://example.org/a> a <http://example.org/B> .", "Turtle"),
+        (b"ex:a a ex:B .", None),
+        (RDFXML, "RDF/XML"),
+        (b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">', "RDF/XML"),
+        (
+            (
+                b'<?xml version="1.0"?>\n<!DOCTYPE rdf:RDF [\n<!ENTITY owl "http://www.w3.org/2002/07/owl#">\n]>\n'
+                b"<!-- c -->\n<rdf:RDF"
+            ),
+            "RDF/XML",
+        ),
+        (b'<?xml version="1.0"?>\n<!DOCTYPE rdf:RDF [\n<!ENTITY owl "http://www.w3.org/2002/07/owl#">', "RDF/XML"),
+        (b'<owl:Ontology rdf:about="http://example.org/onto"/>', "RDF/XML"),
+        (b'<?xml version="1.0"?>\n<Ontology xmlns="http://www.w3.org/2002/07/owl#" ontologyIRI="x">', "OWL/XML"),
+        (b'<owl:Ontology xmlns:owl="http://www.w3.org/2002/07/owl#" ontologyIRI="x">', "OWL/XML"),
+        (OFN, "OWL Functional Syntax"),
+        (b"# comment\nOntology (<http://example.org/onto>)", "OWL Functional Syntax"),
+        (b"PK\x03\x04", "compressed"),
+        (b"", None),
+    ],
+)
+def test_sniff_syntax(sample: bytes, syntax: str | None) -> None:
+    """Check the syntax the start of a file is taken to be."""
+    assert sniff_syntax(sample) == syntax
+
+
+@pytest.mark.parametrize(("sample", "suffix"), [(b"ex:a a ex:B .", ".ttl"), (RDFXML, ".rdf"), (OFN, ".ofn")])
+def test_check_syntax_passes(sample: bytes, suffix: str) -> None:
+    """Check that a file passes when it looks like its suffix's syntax, or, as Turtle, isn't distinctive."""
+    check_syntax(sample, suffix)
+
+
+@pytest.mark.parametrize("suffix", [".rdf", ".ofn"])
+def test_check_syntax_indistinct(suffix: str) -> None:
+    """Check that an RDF/XML or OWL Functional Syntax file must start distinctively."""
+    with pytest.raises(UploadError, match="isn't recognizable"):
+        check_syntax(b"ex:a a ex:B .", suffix)
