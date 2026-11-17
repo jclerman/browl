@@ -11,10 +11,18 @@ WHERE {
   FILTER (?mid NOT IN (?sub, ?super))
   { ?mid rdfs:subClassOf ?super2 }
   UNION
-  { ?mid owl:onProperty ?p ; owl:someValuesFrom/rdfs:subClassOf ?super2 .
+  { ?mid a owl:Restriction ;
+      owl:onProperty ?p ;
+      owl:someValuesFrom/rdfs:subClassOf ?super2 .
     ?p a owl:TransitiveProperty .
-    ?super2 owl:onProperty ?p }
+    ?super2 owl:onProperty ?p
+  }
   FILTER (?super2 = ?super || EXISTS {
-    ?super owl:onProperty ?q ; owl:someValuesFrom ?t .
-    ?super2 owl:onProperty ?q ; owl:someValuesFrom ?t })
+    ?super a owl:Restriction ;
+      owl:onProperty ?q ;
+      owl:someValuesFrom ?t .
+    ?super2 a owl:Restriction ;
+      owl:onProperty ?q ;
+      owl:someValuesFrom ?t }
+  )
 }
