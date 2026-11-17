@@ -33,6 +33,7 @@ pre-commit = "^4.7.0"
 pytest = "^9.2.0"
 pytest-cov = "^7.1.0"
 pytest-sugar = "^1.1.1"
+rdflib = "^7.6.0"
 
 [tool.pytest]
 # An xfail test that unexpectedly passes is a failure, not a silent pass.
