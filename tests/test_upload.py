@@ -3,15 +3,18 @@
 import asyncio
 import errno
 import os
+import shutil
 import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import IO
 
 import httpx2
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from jinja2.filters import do_filesizeformat
 from markupsafe import escape
 from starlette.requests import Request
 from starlette.types import Message, Receive
@@ -19,8 +22,16 @@ from starlette.types import Message, Receive
 import browl.jobs
 import browl.upload
 from browl.jobs import JobContext, JobRunner, Reasoner, Stage
-from browl.pages import file_size
-from browl.upload import SNIFF_BYTES, UPLOADS_DIR, UploadError, check_syntax, receive_upload, sniff_syntax, upload_path
+from browl.upload import (
+    SNIFF_BYTES,
+    UPLOADS_DIR,
+    Syntax,
+    UploadError,
+    check_syntax,
+    receive_upload,
+    sniff_syntax,
+    upload_path,
+)
 from tests.helpers import make_app, make_settings
 
 UPLOAD = "/_browl/admin/upload"
@@ -104,6 +115,7 @@ def test_upload_page(client: TestClient) -> None:
         ("uberon.OWL", RDFXML, ".rdf"),
         ("onto.ofn", OFN, ".ofn"),
         ("big.ttl", LONG, ".ttl"),
+        ("commented.ofn", b"# a comment line\n" * 120 + OFN * 200, ".ofn"),  # the first 2 KB are comments
     ],
 )
 def test_upload(client: TestClient, app: FastAPI, data_dir: Path, filename: str, content: bytes, suffix: str) -> None:
@@ -116,7 +128,7 @@ def test_upload(client: TestClient, app: FastAPI, data_dir: Path, filename: str,
     assert (state.generation, state.stage, state.reasoner) == (1, Stage.READY, Reasoner.NONE)
     assert upload_path(data_dir, 1, suffix).read_bytes() == content
     assert (state.upload_name, state.upload_bytes) == (filename, len(content))
-    assert state.upload_syntax == browl.upload.SYNTAXES[suffix]
+    assert state.upload_syntax == {".ttl": "Turtle", ".rdf": "RDF/XML", ".ofn": "OWL Functional Syntax"}[suffix]
 
 
 def test_upload_shown(client: TestClient, app: FastAPI) -> None:
@@ -125,7 +137,9 @@ def test_upload_shown(client: TestClient, app: FastAPI) -> None:
     finish(client, app)
     text = " ".join(client.get(UPLOAD).text.split())
     size = len(RDFXML) * 20
-    assert f'File <code>uberon.owl</code>, RDF/XML, <span title="{size:,} bytes">{file_size(size)}</span>.' in text
+    assert (
+        f'File <code>uberon.owl</code>, RDF/XML, <span title="{size:,} bytes">{do_filesizeformat(size)}</span>.' in text
+    )
 
 
 def test_upload_name_cleaned(client: TestClient, app: FastAPI) -> None:
@@ -136,6 +150,15 @@ def test_upload_name_cleaned(client: TestClient, app: FastAPI) -> None:
     finish(client, app)
     name = app.state.jobs.state.upload_name
     assert name == ("ab" + "c" * 300)[: browl.upload.MAX_NAME_CHARS]
+
+
+@pytest.mark.parametrize("filename", [b"dir/onto.ttl", b"dir\\onto.ttl", b"C:\\fakepath\\onto.ttl"])
+def test_upload_name_without_directory(client: TestClient, app: FastAPI, filename: bytes) -> None:
+    """Check that the name recorded loses any directory the browser sent, with either kind of slash."""
+    body = FILE_START.replace(b'filename="o.ttl"', b'filename="' + filename + b'"') + TURTLE + b"\r\n--b--\r\n"
+    assert client.post(UPLOAD, content=body, headers={"Content-Type": FORM}, follow_redirects=False).status_code == 303
+    finish(client, app)
+    assert app.state.jobs.state.upload_name == "onto.ttl"
 
 
 @pytest.mark.parametrize("reasoner", list(Reasoner))
@@ -211,6 +234,7 @@ def test_upload_clears_page_cache(client: TestClient, app: FastAPI, monkeypatch:
         ({"filename": "onto.owl", "content": b'<Ontology xmlns="http://www.w3.org/2002/07/owl#"/>'}, "OWL/XML"),
         ({"content": b"\x1f\x8b\x08\x00"}, "looks compressed"),
         ({"filename": "", "content": b""}, "no file was chosen"),  # as a browser sends a form with no file chosen
+        ({"filename": "onto.ttl", "content": RDFXML * 200}, "says Turtle, but its content looks like RDF/XML"),
     ],
 )
 def test_refused_before_claim(client: TestClient, app: FastAPI, kwargs: dict[str, object], reason: str) -> None:
@@ -239,6 +263,14 @@ def test_refused_before_claim(client: TestClient, app: FastAPI, kwargs: dict[str
             "field must come before its file",
         ),
         ({"Content-Type": FORM}, b"no boundary here", "the form is malformed"),
+        (
+            {"Content-Type": FORM},
+            b'--b\r\nContent-Disposition: form-data; name="reasoner"\r\n\r\nnone\r\n'
+            + FILE_START
+            + TURTLE
+            + b"\r\n--b--\r\n",
+            "the form has more than one 'reasoner' field",
+        ),
         ({"Content-Type": FORM}, FILE_START + TURTLE, "the upload was cut short"),
     ],
 )
@@ -261,6 +293,10 @@ def test_refused_request(client: TestClient, app: FastAPI, headers: dict[str, st
             "more than one",
         ),
         (LONG, "the upload was cut short"),
+        (
+            LONG + b'\r\n--b\r\nContent-Disposition: form-data; name="reasoner"\r\n\r\nnone\r\n--b--\r\n',
+            "the form has more than one 'reasoner' field",
+        ),
     ],
 )
 def test_failed_after_claim(
@@ -285,7 +321,7 @@ def test_failed_after_claim(
     assert cleared == [(1, False)]
 
 
-@pytest.mark.parametrize(("code", "status_code"), [(errno.ENOSPC, 507), (errno.EIO, 500)])
+@pytest.mark.parametrize(("code", "status_code"), [(errno.ENOSPC, 507), (errno.EDQUOT, 507), (errno.EIO, 500)])
 def test_storage_error(
     client: TestClient, app: FastAPI, data_dir: Path, monkeypatch: pytest.MonkeyPatch, code: int, status_code: int
 ) -> None:
@@ -312,6 +348,123 @@ def test_storage_error(
     assert not upload_path(data_dir, 1, ".ttl").parent.exists()
 
 
+def test_open_fails(client: TestClient, app: FastAPI, data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a file that can't be opened, its directory already made, fails the job and leaves no directory."""
+
+    def failing(path: Path) -> IO[bytes]:
+        path.parent.mkdir(parents=True)
+        raise PermissionError(errno.EACCES, os.strerror(errno.EACCES))
+
+    monkeypatch.setattr(browl.upload, "_open", failing)
+    assert post(client).status_code == 500
+    assert app.state.jobs.state.failed_stage == Stage.UPLOADING
+    assert not upload_path(data_dir, 1, ".ttl").parent.exists()
+
+
+async def test_cancelled_while_opening(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that an upload cancelled while its file opens closes and removes the file once the open has finished."""
+    entered, release = threading.Event(), threading.Event()
+    opened: list[IO[bytes]] = []
+    open_file = browl.upload._open
+
+    def slow(path: Path) -> IO[bytes]:
+        entered.set()
+        release.wait(timeout=5)
+        opened.append(open_file(path))
+        return opened[-1]
+
+    monkeypatch.setattr(browl.upload, "_open", slow)
+    messages: list[Message] = [{"type": "http.request", "body": FILE_START + LONG, "more_body": True}]
+
+    async def receive() -> Message:
+        if not messages:
+            await asyncio.Event().wait()
+        return messages.pop(0)
+
+    runner = await JobRunner.open(make_settings())
+    try:
+        task = asyncio.create_task(receive_upload(asgi_request(receive), runner))
+        assert await asyncio.to_thread(entered.wait, 5)
+        task.cancel()
+        for _ in range(5):  # let the cancellation reach the upload before the open finishes
+            await asyncio.sleep(0)
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        await runner.close()
+    assert opened[0].closed
+    assert not upload_path(data_dir, 1, ".ttl").parent.exists()
+    assert runner.state.failed_stage == Stage.UPLOADING
+
+
+@pytest.mark.parametrize(
+    ("overrides", "free", "status_code", "reason"),
+    [
+        ({"MAX_UPLOAD_BYTES": 100}, 10**12, 413, "the upload is larger than the limit of 100 bytes (MAX_UPLOAD_BYTES)"),
+        ({}, browl.upload.FREE_SPACE_MARGIN_BYTES + 100, 507, "the data volume has too little free space"),
+    ],
+)
+def test_refused_too_large(
+    data_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, object],
+    free: int,
+    status_code: int,
+    reason: str,
+) -> None:
+    """Check that an upload whose size, from `Content-Length`, is over the limit or the free space starts no job."""
+    usage = shutil.disk_usage(data_dir)
+    monkeypatch.setattr(browl.upload.shutil, "disk_usage", lambda path: usage._replace(free=free))
+    app = make_app(**overrides)
+    with TestClient(app) as client:
+        response = post(client)
+    assert response.status_code == status_code
+    assert escape(reason) in response.text
+    assert app.state.jobs.state.generation is None
+
+
+@pytest.mark.parametrize(("max_bytes", "claimed"), [(100, False), (len(LONG), True)], ids=["unclaimed", "claimed"])
+async def test_streamed_over_limit(data_dir: Path, max_bytes: int, claimed: bool) -> None:
+    """Check that a file sent without `Content-Length` is refused once it's larger than `MAX_UPLOAD_BYTES`.
+
+    Found before the claim, it starts no job; after, its job fails.
+    """
+    messages: list[Message] = [
+        {"type": "http.request", "body": FILE_START + LONG, "more_body": True},
+        {"type": "http.request", "body": TURTLE, "more_body": False},
+    ]
+
+    async def receive() -> Message:
+        return messages.pop(0)
+
+    request = asgi_request(receive)
+    request.app.state.settings = make_settings(MAX_UPLOAD_BYTES=max_bytes)
+    runner = await JobRunner.open(request.app.state.settings)
+    try:
+        with pytest.raises(UploadError, match="larger than the limit") as raised:
+            await receive_upload(request, runner)
+    finally:
+        await runner.close()
+    assert raised.value.status_code == 413
+    assert runner.state.failed_stage == (Stage.UPLOADING if claimed else None)
+    assert not upload_path(data_dir, 1, ".ttl").parent.exists()
+
+
+@pytest.mark.parametrize(("site", "status_code"), [("cross-site", 403), ("same-site", 403), ("same-origin", 303)])
+def test_cross_site_refused(client: TestClient, app: FastAPI, site: str, status_code: int) -> None:
+    """Check that an upload a browser sent from another site's page is refused before it's read (CSRF)."""
+    response = client.post(
+        UPLOAD,
+        data={"reasoner": "none"},
+        files={"ontology": ("onto.ttl", TURTLE)},
+        headers={"Sec-Fetch-Site": site},
+        follow_redirects=False,
+    )
+    assert response.status_code == status_code
+    assert (app.state.jobs.state.generation is None) == (status_code == 403)
+
+
 def test_refused_while_running(client: TestClient, app: FastAPI, data_dir: Path, loading: threading.Event) -> None:
     """Check that an upload while a job runs is refused with 409, leaving that job and its upload alone."""
     post(client)
@@ -324,12 +477,15 @@ def test_refused_while_running(client: TestClient, app: FastAPI, data_dir: Path,
 
 
 def test_upload_page_while_running_polls(client: TestClient, loading: threading.Event) -> None:
-    """Check that while a job runs, the page's status polls, and without JS the page refreshes itself."""
+    """Check that while a job runs, the status polls (or without JS, the page refreshes), and the site is loading."""
     post(client)
     assert loading.wait(timeout=5)
     text = client.get(UPLOAD).text
     assert 'hx-trigger="every' in text
     assert '<noscript><meta http-equiv="refresh"' in text
+    response = client.get("/example.org/onto")
+    assert response.status_code == 503
+    assert "<h1>Loading the ontology</h1>" in response.text
 
 
 def asgi_request(receive: Receive, boundary: bytes = b"b") -> Request:
@@ -496,7 +652,7 @@ async def test_other_errors_unmapped(data_dir: Path, monkeypatch: pytest.MonkeyP
 
 async def test_upload_progress_streamed(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that the size recorded while a file streams in follows each chunk, not just the claim and the end."""
-    monkeypatch.setattr(browl.jobs, "UPLOAD_PROGRESS_S", 0.01)
+    monkeypatch.setattr(browl.jobs, "UPLOAD_PROGRESS_S", 0)
     file_chunks = [LONG, TURTLE, TURTLE]
     messages = [FILE_START + file_chunks[0], *file_chunks[1:], b"\r\n--b--\r\n"]
     sent = 0
@@ -578,26 +734,28 @@ def test_sniff_syntax_fast(sample: bytes) -> None:
     assert time.perf_counter() - started < 0.05
 
 
-@pytest.mark.parametrize(("sample", "suffix"), [(b"ex:a a ex:B .", ".ttl"), (RDFXML, ".rdf"), (OFN, ".ofn")])
-def test_check_syntax_passes(sample: bytes, suffix: str) -> None:
-    """Check that a file passes when it looks like its suffix's syntax, or, as Turtle, isn't distinctive."""
-    check_syntax(sample, suffix)
+@pytest.mark.parametrize(
+    ("sample", "syntax"), [(b"ex:a a ex:B .", Syntax.TURTLE), (RDFXML, Syntax.RDF_XML), (OFN, Syntax.OFN)]
+)
+def test_check_syntax_passes(sample: bytes, syntax: Syntax) -> None:
+    """Check that a file passes when it looks like its name's syntax, or, as Turtle, isn't distinctive."""
+    check_syntax(sample, syntax)
 
 
-@pytest.mark.parametrize("suffix", [".rdf", ".ofn"])
-def test_check_syntax_indistinct(suffix: str) -> None:
+@pytest.mark.parametrize("syntax", [Syntax.RDF_XML, Syntax.OFN])
+def test_check_syntax_indistinct(syntax: Syntax) -> None:
     """Check that an RDF/XML or OWL Functional Syntax file must start distinctively."""
     with pytest.raises(UploadError, match="isn't recognizable"):
-        check_syntax(b"ex:a a ex:B .", suffix)
+        check_syntax(b"ex:a a ex:B .", syntax)
 
 
 def test_upload_progress_shown(client: TestClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that while a file uploads, the status shows how much has arrived so far."""
-    monkeypatch.setattr(browl.jobs, "UPLOAD_PROGRESS_S", 0.01)
+    monkeypatch.setattr(browl.jobs, "UPLOAD_PROGRESS_S", 0)
     assert client.portal is not None
     with client.portal.wrap_async_context_manager(app.state.jobs.upload(Reasoner.NONE, "big.ttl", "Turtle")) as context:
         context.upload_bytes = 2_500_000
-        client.portal.call(asyncio.sleep, 0.1)
+        client.portal.call(app.state.jobs.record_upload_progress, context)
         text = " ".join(client.get(UPLOAD).text.split())
     assert '<span title="2,500,000 bytes">2.5 MB</span> received so far.' in text
     assert "File <code>big.ttl</code>, Turtle" in text

@@ -106,6 +106,6 @@ a {
   margin-top: calc(var(--space) / 4);
 }
 
-.warning {
+.note {
   color: var(--muted);
 }

@@ -1,6 +1,6 @@
 """Admin routes, under `/{RESERVED_PREFIX}/admin` (DESIGN.md §2.13). Authentication isn't enforced yet (P-22)."""
 
-from fastapi import APIRouter, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.openapi.docs import get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
@@ -61,7 +61,20 @@ async def upload_page(request: Request) -> HTMLResponse:
     return await _upload_page(request)
 
 
-@router.post("/upload", response_class=HTMLResponse)
+def same_origin(request: Request) -> None:
+    """Refuse a request a browser sent from another site's page, e.g. one submitting the upload form (CSRF).
+
+    Browsers say where a request came from in `Sec-Fetch-Site`; a request without it, e.g. from curl, passes. It's
+    checked before the body is read, so it suits the streaming upload.
+
+    Raises:
+        HTTPException: 403, the request came from another site.
+    """
+    if request.headers.get("Sec-Fetch-Site", "none") not in {"same-origin", "none"}:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "requests from other sites are refused")
+
+
+@router.post("/upload", response_class=HTMLResponse, dependencies=[Depends(same_origin)])
 async def upload(request: Request) -> Response:
     """Start a load job that replaces the ontology with the uploaded file, streamed to the data volume (A-2, A-4).
 
@@ -69,13 +82,18 @@ async def upload(request: Request) -> Response:
     `.rdf`, `.owl` as RDF/XML, or `.ofn`). It's read as it streams in, so FastAPI can't describe it.
 
     On success, redirects to the upload page, which shows the job's progress; a refused upload gets the page with the
-    reason: 400 if the request was invalid, 409 if a job was already running, 507 if the data volume is full, 500 if
-    the file couldn't be stored for another reason.
+    reason: 400 if the request was invalid, 403 if it came from another site's page, 409 if a job was already running,
+    413 if it's larger than `MAX_UPLOAD_BYTES`, 507 if the data volume is full or would be, 500 if the file couldn't
+    be stored for another reason.
     """
+    # A refusal before the body has been read (e.g. a bad suffix, or 409) responds while the browser may still be
+    # sending a large file. Some browsers might then show a connection reset instead of the page (review C3); curl and
+    # a client that sends the whole body first both got the page from uvicorn, so it's unconfirmed. If it shows up,
+    # read and discard the rest of the body, up to a cap, before responding.
     try:
         await receive_upload(request, request.app.state.jobs)
     except UploadError as error:
-        return await _upload_page(request, str(error), status.HTTP_400_BAD_REQUEST)
+        return await _upload_page(request, str(error), error.status_code)
     except StorageError as error:
         code = status.HTTP_507_INSUFFICIENT_STORAGE if error.no_space else status.HTTP_500_INTERNAL_SERVER_ERROR
         return await _upload_page(request, str(error), code)
