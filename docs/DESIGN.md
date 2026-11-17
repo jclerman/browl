@@ -234,6 +234,11 @@ up the path:
 
 A path can be both an ordinary entity and a hash prefix; then the entity page is served with the hash script included.
 
+**Reserved paths:** the lookup route (P-13) answers 404 for any path under `/{RESERVED_PREFIX}/`, and a test checks it.
+The site gate ([2.13](#213-url-space-for-the-services-own-pages)) exempts paths by prefix without normalizing them, so
+`/_browl/admin/../../x` (sent as `/_browl/admin%2F..%2F..%2Fx`) passes it while a load runs or has failed, and must not
+reach a lookup (P-5).
+
 ### 2.4 Load pipeline
 
 One background job at a time, run in the app process. Its state (stage, start time, error) is stored in SQLite, so every
