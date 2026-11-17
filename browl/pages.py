@@ -27,11 +27,7 @@ templates = Jinja2Templates(
 
 
 class SiteGate:
-    """Serve the "loading" or "not available" page in place of every page but the exempt ones (U-16).
-
-    Both are 503 Service Unavailable, so crawlers and caches treat them as temporary and keep the URL. The loading page
-    adds `Retry-After`, since the load will end; the "not available" page doesn't, since only an admin's upload ends
-    it. Neither says why the site is unavailable: the failure reason is for admins, on the status route.
+    """Serve the "loading" or "not available" page in place of every page but the exempt ones (U-16, DESIGN.md §2.13).
 
     Args:
         app: The application it wraps.

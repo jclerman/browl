@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import re
 import tomllib
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
@@ -14,6 +15,8 @@ from fastapi.testclient import TestClient
 
 import browl
 import browl.app
+from browl import admin
+from browl.admin import SWAGGER_UI_URL
 from browl.app import create_app
 from browl.fuseki import FusekiClient
 from browl.jobs import JobRunner
@@ -145,24 +148,29 @@ def test_api_docs_show_title_and_version(client: TestClient) -> None:
 
 @pytest.mark.parametrize("prefix", ["_browl", "_site"])
 def test_api_docs_are_under_admin(prefix: str) -> None:
-    """Check that the API docs are served under the reserved prefix's admin/, and not at FastAPI's default paths."""
+    """Check that the API docs are admin routes, using a pinned Swagger UI, and nothing is at FastAPI's default paths.
+
+    An ontology is loaded, so the gate passes requests through and the default paths reach the router.
+    """
     with TestClient(make_app(RESERVED_PREFIX=prefix)) as client:
-        schema = client.get(f"/{prefix}/admin/openapi.json")
-        assert schema.status_code == 200
-        assert schema.json()["info"]["title"] == "OWL Ontology Browser"
-        for page, marker in [("docs", "swagger-ui"), ("redoc", "redoc")]:
-            response = client.get(f"/{prefix}/admin/{page}")
-            assert response.status_code == 200
-            assert marker in response.text
-            assert f"/{prefix}/admin/openapi.json" in response.text
-        assert client.get(f"/{prefix}/admin/docs/oauth2-redirect").status_code == 200
-        paths = {getattr(route, "path", None) for route in client.app.routes}  # type: ignore[attr-defined]
-        for default in ["/openapi.json", "/docs", "/redoc", "/docs/oauth2-redirect"]:
-            assert default not in paths
-            response = client.get(default)
-            assert response.status_code != 200
-            assert "swagger-ui" not in response.text
-            assert '"openapi"' not in response.text
+        jobs = client.app.state.jobs  # type: ignore[attr-defined]
+        client.portal.call(jobs.start)
+        client.portal.call(jobs.wait)
+        page = client.get(f"/{prefix}/admin/docs").text
+        assert f"url: '/{prefix}/admin/openapi.json'" in page
+        assert f"window.location.origin + '/{prefix}/admin/docs/oauth2-redirect'" in page
+        assert f'src="{SWAGGER_UI_URL}/swagger-ui-bundle.js"' in page
+        assert f'href="{SWAGGER_UI_URL}/swagger-ui.css"' in page
+        assert re.fullmatch(r"https://cdn\.jsdelivr\.net/npm/swagger-ui-dist@\d+\.\d+\.\d+", SWAGGER_UI_URL)
+        assert "oauth2" in client.get(f"/{prefix}/admin/docs/oauth2-redirect").text
+        assert not any(
+            "docs" in path or "openapi" in path for path in client.get(f"/{prefix}/admin/openapi.json").json()["paths"]
+        )
+        for path in ["/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc", f"/{prefix}/admin/redoc"]:
+            assert client.get(path).status_code == 404
+    docs = {"/admin/openapi.json", "/admin/docs", "/admin/docs/oauth2-redirect"}
+    assert docs <= {route.path for route in admin.router.routes}  # type: ignore[attr-defined]
+    assert not any("redoc" in route.path for route in admin.router.routes)  # type: ignore[attr-defined]
 
 
 def test_startup_starts_jvm(monkeypatch: pytest.MonkeyPatch, robot_jar: Path) -> None:

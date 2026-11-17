@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   {% block head %}{% endblock %}
   <title>{% block title %}{% endblock %} · browl</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='browl.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='browl.css').path }}">
 </head>
 <body>
   <header class="site-bar">

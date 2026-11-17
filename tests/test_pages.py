@@ -4,12 +4,13 @@ import asyncio
 import re
 import threading
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from browl.jobs import JobContext, Stage, StageError
+from browl.jobs import INTERRUPTED_BY_SHUTDOWN, STATE_DB, JobContext, JobStore, Stage, StageError
 from browl.pages import RETRY_AFTER_S, SiteGate, templates
 from tests.test_app import make_app
 
@@ -135,7 +136,7 @@ def test_available(client: TestClient, app: FastAPI) -> None:
 @pytest.mark.parametrize("path", EXEMPT)
 @pytest.mark.parametrize("site", ["loading", "not available"])
 def test_exempt(client: TestClient, app: FastAPI, path: str, site: str) -> None:
-    """Check that the health, static and admin routes, which include the API docs, are served whatever the job state."""
+    """Check that the health, static and admin routes, including the API docs, are served whatever the job state."""
     if site == "loading":
         start_job(client, app)
     assert app.state.jobs.state.site == site
@@ -163,7 +164,24 @@ def test_exempt_under_root_path(app: FastAPI) -> None:
     """Check that exemption is judged on the path within the app when it's served under a root path."""
     with TestClient(app, root_path="/site") as client:
         assert client.get("/site/_browl/health").status_code == 200
-        assert client.get("/site/example.org/onto").status_code == 503
+        response = client.get("/site/example.org/onto")
+        assert response.status_code == 503
+        assert 'href="/site/_browl/static/browl.css"' in response.text
+
+
+def test_links_ignore_request_host(client: TestClient, app: FastAPI) -> None:
+    """Check that pages link to root-relative paths, never to the scheme and host a request claims."""
+    start_job(client, app)
+    forged = {"Host": "evil.example", "X-Forwarded-Host": "evil.example"}
+    pages = [
+        client.get("/example.org/onto", headers=forged),
+        client.get(STATUS, headers=forged),
+        client.get(STATUS, headers=forged | HTMX),
+    ]
+    for response in pages:
+        assert "evil.example" not in response.text
+    assert 'href="/_browl/static/browl.css"' in pages[0].text
+    assert 'hx-get="/_browl/admin/status"' in pages[2].text
 
 
 def test_static_css(client: TestClient) -> None:
@@ -188,7 +206,7 @@ def test_status_running(client: TestClient, app: FastAPI) -> None:
     html = fragment(client)
     assert "Load 1 is running, started" in html
     assert f'<time datetime="{started.isoformat()}">{started:%Y-%m-%d %H:%M:%S} UTC</time>' in html
-    assert 'hx-get="http://testserver/_browl/admin/status" hx-trigger="every 2s" hx-swap="outerHTML"' in html
+    assert 'hx-get="/_browl/admin/status" hx-trigger="every 2s" hx-swap="outerHTML"' in html
     stages = re.findall(r'<li class="(\w+)"( aria-current="step")?>([\w-]+)', html)
     assert stages == [
         ("done", "", "uploading"),
@@ -224,12 +242,25 @@ def test_status_failed(client: TestClient, app: FastAPI) -> None:
     assert SECRET_REASON not in html
 
 
-def test_status_page(client: TestClient) -> None:
-    """Check that a request not from htmx gets the status in a whole page."""
+def test_status_page(client: TestClient, app: FastAPI) -> None:
+    """Check that a request not from htmx gets the status in a page, which refreshes without JS while a job runs."""
+    refresh = '<noscript><meta http-equiv="refresh" content="2"></noscript>'
     response = client.get(STATUS)
     assert response.status_code == 200
     assert "<title>Load status · browl</title>" in response.text
     assert '<section id="job-status"' in response.text
+    assert "refresh" not in response.text
+    start_job(client, app)
+    assert refresh in client.get(STATUS).text
+    assert "refresh" not in client.get(STATUS, headers=HTMX).text
+
+
+def test_shutdown_cancels_job(app: FastAPI, data_dir: Path) -> None:
+    """Check that the app cancels a running job when it shuts down, recording why."""
+    with TestClient(app) as client:
+        start_job(client, app)
+    state = JobStore(data_dir / STATE_DB).read()
+    assert (state.failed_stage, state.reason) == (Stage.LOADING, INTERRUPTED_BY_SHUTDOWN)
 
 
 def test_templates_autoescape() -> None:

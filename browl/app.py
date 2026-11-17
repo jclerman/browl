@@ -60,10 +60,9 @@ def create_app(
 ) -> FastAPI:
     """Build the application, loading the settings from the environment unless given.
 
-    On startup the app starts the JVM (DESIGN.md §2.1), opens its HTTP client for Fuseki, and opens the load job
-    runner (`app.state.jobs`) on its database in `DATA_DIR`. Uvicorn runs the startup on the main thread, where the JVM
-    must start; a test client doesn't, so tests start it first. On shutdown a running load job is cancelled. Every page
-    but the health, static and admin routes (which include FastAPI's API docs) is gated on the job state (`SiteGate`).
+    On startup the app starts the JVM (DESIGN.md §2.1), on the main thread, where Uvicorn runs the startup (a test
+    client doesn't, so tests start it first); it opens its Fuseki client and the load job runner (`app.state.jobs`).
+    On shutdown a running load job is cancelled. Pages are gated on the job state (`SiteGate`, §2.13).
 
     Args:
         settings: The settings; loaded from the environment if not given.
@@ -90,15 +89,14 @@ def create_app(
                 await app.state.jobs.close()
 
     reserved = f"/{settings.reserved_prefix}"
-    # The API docs live under admin/, not FastAPI's default root paths, which would shadow ontology entities.
+    # The API docs are admin routes (admin.py), not at FastAPI's default root paths, which would shadow entities.
     app = FastAPI(
         title=browl.DESCRIPTIVE_TITLE,
         version=browl.__version__,
         lifespan=lifespan,
-        openapi_url=f"{reserved}/admin/openapi.json",
-        docs_url=f"{reserved}/admin/docs",
-        redoc_url=f"{reserved}/admin/redoc",
-        swagger_ui_oauth2_redirect_url=f"{reserved}/admin/docs/oauth2-redirect",
+        openapi_url=None,
+        docs_url=None,
+        redoc_url=None,
     )
     app.state.settings = settings
     app.include_router(router, prefix=reserved)
