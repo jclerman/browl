@@ -1,8 +1,8 @@
 """Tests for the reasoning stage: ROBOT under the reasoner limits, and how each failure is reported (A-3, A-6, O-8)."""
 
 import asyncio
-import os
 import stat
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -79,13 +79,14 @@ def fake_java(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, script: str) -> N
     monkeypatch.setenv("JAVA_HOME", str(java.parent.parent))
 
 
-def gone(pid: int) -> bool:
-    """Return whether no process is left in the process group."""
-    try:
-        os.killpg(pid, 0)
-    except ProcessLookupError:
-        return True
-    return False
+def running_in_group(pgid: int) -> list[str]:
+    """Return the `ps` lines of the processes still running in the process group, ignoring zombies.
+
+    A zombie has exited, but stays in its group until its parent reaps it: here a child of the killed shell, which is
+    reparented to a process that may never reap it (as on GitHub's runners), so `os.killpg(pgid, 0)` still succeeds.
+    """
+    ps = subprocess.run(["ps", "-A", "-o", "pgid=,stat=,pid=,command="], check=True, capture_output=True, text=True)
+    return [line for line in ps.stdout.splitlines() if int(line.split()[0]) == pgid and line.split()[1][0] != "Z"]
 
 
 @pytest.mark.parametrize(
@@ -173,7 +174,7 @@ async def test_stops_group_on_cancel(tmp_path: Path, monkeypatch: pytest.MonkeyP
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert gone(int(pid_file.read_text()))
+    assert running_in_group(int(pid_file.read_text())) == []
 
 
 @pytest.mark.jvm
