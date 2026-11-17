@@ -1,13 +1,14 @@
 """Checks of the SPARQL files browl runs (`browl/sparql/`): each parses, and names only W3C-standard terms.
 
-browl serves any OWL ontology, so its queries can rely only on the RDF, RDFS, OWL and XSD vocabularies.
+browl serves any OWL ontology, so its queries can rely only on the RDF, RDFS, OWL and XSD vocabularies. Cases ROBOT's
+output can't show, such as a shared restriction node, run on rdflib; the rest are tested through ROBOT (test_robot.py).
 """
 
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from rdflib import Literal, URIRef, namespace
+from rdflib import Graph, Literal, URIRef, namespace
 from rdflib.paths import Path as PropertyPath
 from rdflib.plugins.sparql import prepareQuery, prepareUpdate
 
@@ -104,3 +105,26 @@ def test_invalid_syntax() -> None:
     """Check that text that's neither a query nor an update is rejected, with both parsers' errors."""
     with pytest.raises(ValueError, match=r"as a query: .*; as an update: "):
         algebra("PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\nDELETE { ?a rdfs:subClassOf ?b ; ?b } WHERE {}")
+
+
+@pytest.mark.parametrize(("filler", "deleted"), [("someValuesFrom", True), ("allValuesFrom", False)])
+def test_shortcuts_need_some_restriction(filler: str, deleted: bool) -> None:
+    """Check that `X ⊑ p some W`, `W ⊑ R` and `X ⊑ R` delete `X ⊑ R` only when R is `p some T`, not `p only T`.
+
+    R is one node shared by X and W, which ROBOT's output never has.
+    """
+    graph = Graph().parse(
+        format="turtle",
+        data=f"""
+            @prefix : <http://example.org/s/> .
+            @prefix owl: <{namespace.OWL}> .
+            @prefix rdfs: <{namespace.RDFS}> .
+            :p a owl:TransitiveProperty .
+            :X rdfs:subClassOf [ a owl:Restriction ; owl:onProperty :p ; owl:someValuesFrom :W ], _:r .
+            :W rdfs:subClassOf _:r .
+            _:r a owl:Restriction ; owl:onProperty :p ; owl:{filler} :T .
+        """,
+    )
+    shared = graph.value(URIRef("http://example.org/s/W"), namespace.RDFS.subClassOf)
+    graph.update((SPARQL_DIR / "remove-superclass-shortcuts.rq").read_text())
+    assert ((URIRef("http://example.org/s/X"), namespace.RDFS.subClassOf, shared) in graph) is not deleted

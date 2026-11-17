@@ -28,6 +28,26 @@ Ontology(<http://example.org/s>
   SubClassOf(:X ObjectSomeValuesFrom(:part_of :T))
   # Materialized from the definition: Q ⊑ part_of some R.
   EquivalentClasses(:Q ObjectIntersectionOf(:P ObjectSomeValuesFrom(:part_of :R)))
+  # A longer chain with every shortcut: only the chain stays.
+  SubClassOf(:Ch1 :Ch2)
+  SubClassOf(:Ch2 :Ch3)
+  SubClassOf(:Ch3 :Ch4)
+  SubClassOf(:Ch1 :Ch3)
+  SubClassOf(:Ch1 :Ch4)
+  SubClassOf(:Ch2 :Ch4)
+  # Not shortcuts: the parent's restriction differs in filler (D2, G2) or property (D3, G3).
+  SubClassOf(:D2 :E2)
+  SubClassOf(:E2 ObjectSomeValuesFrom(:part_of :F))
+  SubClassOf(:D2 ObjectSomeValuesFrom(:part_of :F2))
+  SubClassOf(:D3 :E3)
+  SubClassOf(:E3 ObjectSomeValuesFrom(:part_of :F))
+  SubClassOf(:D3 ObjectSomeValuesFrom(:has_part :F))
+  SubClassOf(:G2 ObjectSomeValuesFrom(:part_of :H2))
+  SubClassOf(:H2 ObjectSomeValuesFrom(:part_of :I2))
+  SubClassOf(:G2 ObjectSomeValuesFrom(:part_of :I3))
+  SubClassOf(:G3 ObjectSomeValuesFrom(:part_of :H3))
+  SubClassOf(:H3 ObjectSomeValuesFrom(:has_part :I4))
+  SubClassOf(:G3 ObjectSomeValuesFrom(:part_of :I4))
   # part_of cycles: each part_of some CycT would justify deleting the other, so both stay; Loop's too.
   SubClassOf(:Cyc1 ObjectSomeValuesFrom(:part_of :Cyc2))
   SubClassOf(:Cyc2 ObjectSomeValuesFrom(:part_of :Cyc1))

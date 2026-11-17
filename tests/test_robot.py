@@ -293,6 +293,21 @@ async def test_materialize_and_shortcuts(settings: Settings, data_dir: Path, tmp
         some("Cyc2", "part_of", "CycT"),
         some("Loop", "part_of", "Loop"),
         some("Loop", "part_of", "LoopT"),
+        "SubClassOf(Ch1 Ch2)",
+        "SubClassOf(Ch2 Ch3)",
+        "SubClassOf(Ch3 Ch4)",
+        "SubClassOf(D2 E2)",
+        some("E2", "part_of", "F"),
+        some("D2", "part_of", "F2"),
+        "SubClassOf(D3 E3)",
+        some("E3", "part_of", "F"),
+        some("D3", "has_part", "F"),
+        some("G2", "part_of", "H2"),
+        some("H2", "part_of", "I2"),
+        some("G2", "part_of", "I3"),
+        some("G3", "part_of", "H3"),
+        some("H3", "has_part", "I4"),
+        some("G3", "part_of", "I4"),
     }
 
 
