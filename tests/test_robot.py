@@ -1,6 +1,7 @@
 """Tests for the reasoning stage: ROBOT under the reasoner limits, and how each failure is reported (A-3, A-6, O-8)."""
 
 import asyncio
+import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -158,6 +159,13 @@ def test_reason_args(data_dir: Path) -> None:
     ]
 
 
+async def test_no_upload_skips(data_dir: Path) -> None:
+    """Check that a job with a reasoner but nothing uploaded (`JobRunner.start`) skips reasoning."""
+    context = JobContext(1, make_settings(ROBOT_JAR="/nonexistent"), Reasoner.ELK)
+    await reasoning_stage(context)
+    assert context.reasoned is context.ontology is None
+
+
 async def test_none_skips(data_dir: Path) -> None:
     """Check that with no reasoner chosen the stage does nothing, and the upload is what's served."""
     context = JobContext(1, make_settings(ROBOT_JAR="/nonexistent"), Reasoner.NONE, upload(data_dir, "ok.ofn"))
@@ -226,6 +234,37 @@ async def test_time_limit_stops_group(tmp_path: Path, monkeypatch: pytest.Monkey
     assert [path.name for path in context.upload.parent.iterdir()] == ["ontology.ofn"]
 
 
+async def test_stops_group_after_robot_exits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path) -> None:
+    """Check that a process ROBOT started is stopped, even once ROBOT itself has exited."""
+    pid_file = tmp_path / "pid"
+    fake_java(tmp_path, monkeypatch, f"echo $$ > {pid_file}; sleep 60 &")  # the sleep holds the output open
+    with pytest.raises(StageError, match=r"^time limit: "):
+        await run_robot([], make_settings(REASONER_TIMEOUT_S=1))
+    assert running_in_group(int(pid_file.read_text())) == []
+
+
+async def test_low_space_stops(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path) -> None:
+    """Check that ROBOT is stopped, leaving no output, once the data volume's free space falls below the margin."""
+    pid_file = tmp_path / "pid"
+    fake_java(tmp_path, monkeypatch, f'{OUTPUT_ARG}; echo x > "$out"; sleep 60 & echo $$ > {pid_file}; wait')
+    margin = browl.robot.FREE_SPACE_MARGIN_BYTES
+    # Space runs low once the fake ROBOT has started.
+    monkeypatch.setattr(
+        browl.robot, "free_bytes", lambda path: margin - bool(pid_file.exists() and pid_file.read_text())
+    )
+    monkeypatch.setattr(browl.robot, "SPACE_CHECK_S", 0.05)
+    context = JobContext(1, make_settings(), Reasoner.ELK, upload(data_dir, "ok.ofn"))
+    with pytest.raises(StageError, match=r"^disk space: the data volume fell below 1,000,000,000 bytes free"):
+        await reasoning_stage(context)
+    assert running_in_group(int(pid_file.read_text())) == []
+    assert [path.name for path in context.upload.parent.iterdir()] == ["ontology.ofn"]
+
+
+def test_free_bytes(tmp_path: Path) -> None:
+    """Check that the free space reported is the file system's."""
+    assert 0 < browl.robot.free_bytes(tmp_path) <= shutil.disk_usage(tmp_path).total
+
+
 @pytest.mark.parametrize(
     ("script", "stage", "reason"),
     [
@@ -265,7 +304,7 @@ async def test_success(settings: Settings, data_dir: Path, tmp_path: Path, reaso
 @pytest.mark.usefixtures("jvm")
 async def test_materialize_and_shortcuts(settings: Settings, data_dir: Path, tmp_path: Path) -> None:
     """Check reasoning's result: materialized restrictions added, shortcuts removed, all else and equivalences kept."""
-    settings = settings.model_copy(update={"materialize_properties": [f"{NS}part_of"]})
+    settings = make_settings(ROBOT_JAR=str(find_robot_jar()), MATERIALIZE_PROPERTIES=[f"{NS}part_of"])
     context = await reason(settings, data_dir, "shortcuts.ofn")
     some = "SubClassOf({} ObjectSomeValuesFrom({} {}))".format
     assert await axioms(context.reasoned, NS, settings, tmp_path) == {

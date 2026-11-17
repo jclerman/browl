@@ -355,7 +355,10 @@ class JobContext:
 
     @property
     def ontology(self) -> Path | None:
-        """Return the ontology to serve: the reasoned one if reasoning ran, else the upload."""
+        """Return the ontology to serve: the reasoned one if reasoning ran, else the upload.
+
+        Without reasoning, that can be an `.ofn` upload, which the TDB2 loader can't read until P-8 converts it.
+        """
         return self.reasoned or self.upload
 
 

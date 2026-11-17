@@ -64,7 +64,8 @@ class Settings(BaseSettings):
         page_cache_size: Rendered pages kept in memory; 0 turns the cache off (O-10).
         reasoner_timeout_s: Reasoner time limit in seconds, for the whole ROBOT run (O-8).
         reasoner_max_heap: Reasoner heap limit (O-8).
-        materialize_properties: Object property IRIs whose inferred `SubClassOf(C, P some D)` axioms reasoning adds.
+        materialize_properties: Object property IRIs, or CURIEs with ROBOT's default prefixes, whose inferred
+            `SubClassOf(C, P some D)` axioms reasoning adds.
         app_jvm_max_heap: Heap for the app's JVM, which only renders per-page fragments; to be confirmed in P-4.
         fuseki_url: Fuseki's address.
         robot_jar: Path to `robot.jar`, where the app image installs it.
@@ -121,10 +122,10 @@ class Settings(BaseSettings):
     @field_validator("materialize_properties")
     @classmethod
     def check_materialize_properties(cls, value: list[str]) -> list[str]:
-        """Require absolute IRIs, which ROBOT takes as they are."""
+        """Require absolute IRIs, or CURIEs such as `obo:BFO_0000050`, which ROBOT expands with its default prefixes."""
         relative = [iri for iri in value if not _IRI_SCHEME.match(iri)]
         if relative:
-            raise ValueError(f"not absolute IRIs: {', '.join(relative)}")
+            raise ValueError(f"not absolute IRIs or CURIEs: {', '.join(relative)}")
         return value
 
     @field_validator("reserved_prefix")

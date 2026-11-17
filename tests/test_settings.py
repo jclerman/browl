@@ -128,8 +128,8 @@ def test_base_url_is_required(settings_env: pytest.MonkeyPatch) -> None:
         ("SEED_ADMINS", '["Admin@Example.org"]', ["admin@example.org"]),
         (
             "MATERIALIZE_PROPERTIES",
-            '["http://purl.obolibrary.org/obo/BFO_0000050"]',
-            ["http://purl.obolibrary.org/obo/BFO_0000050"],
+            '["http://purl.obolibrary.org/obo/BFO_0000050", "obo:BFO_0000051"]',
+            ["http://purl.obolibrary.org/obo/BFO_0000050", "obo:BFO_0000051"],
         ),
     ],
 )
@@ -216,7 +216,7 @@ def test_only_uppercase_env_names_are_read(
         ("NAME_PROPERTIES", '["rdfs:label", "rdfs:label"]', f"{DUPLICATES}: rdfs:label$"),
         ("EXTRA_PREFIXES", '{"1x": "http://example.org/"}', "invalid prefix name '1x'"),
         ("EXTRA_PREFIXES", '{"ex": "example.org/"}', "namespace for 'ex' must be an absolute IRI"),
-        ("MATERIALIZE_PROPERTIES", '["BFO_0000050", "urn:x:p"]', "not absolute IRIs: BFO_0000050$"),
+        ("MATERIALIZE_PROPERTIES", '["BFO_0000050", "urn:x:p"]', "not absolute IRIs or CURIEs: BFO_0000050$"),
         ("MATERIALIZE_PROPERTIES", '["urn:x:p", "urn:x:p"]', f"{DUPLICATES}: urn:x:p$"),
         ("PAGE_CACHE_SIZE", "-1", "greater than or equal to 0"),
         ("MAX_UPLOAD_BYTES", "0", "greater than 0"),

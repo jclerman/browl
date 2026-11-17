@@ -287,17 +287,21 @@ Uberon goes from upload file to ready in 7 s without reasoning, measured end to 
    and skips a `W` from which `X` can be reached back, where shortcuts in a `P some` cycle would justify each other.
 
 On Uberon with ELK and an 8 GB heap, `reason` alone took 17 s; with `materialize` of `part_of`, 24 s (it added nothing:
-Uberon's release is already materialized); with the shortcut query too, 43 s, removing 6,175 of 80,598 `SubClassOf`
-axioms (without the cycle check, 38 s, wrongly removing 21 more). The query's run converts the ontology to Jena's
-in-memory model and back, so it needs heap of its own.
+Uberon's release is already materialized); with the shortcut query too, 43–45 s, removing 6,175 of 80,598
+`SubClassOf` axioms (without the cycle check, it wrongly removed 21 more). The query itself takes about 5 s of that (8 s
+before its restriction cases became joins); converting the ontology to Jena's in-memory model and back takes about
+20 s, and needs heap of its own.
 
 **Reasoner limits** _(Q7)_, which cover the whole ROBOT run:
 
 - ROBOT runs as `java -Xmx{REASONER_MAX_HEAP} -XX:+ExitOnOutOfMemoryError -jar robot.jar -vv reason …`, in its own
   process group. It is a single JVM, so there is no wrapper process to outlive it. The group is also stopped if the job
   is cancelled.
-- Time: when `REASONER_TIMEOUT_S` is reached, the process group gets SIGTERM, then SIGKILL after a few seconds; the
-  JVM exits on SIGTERM and leaves nothing behind. The job records "time limit".
+- Time: when `REASONER_TIMEOUT_S` is reached, the process group gets SIGTERM, then SIGKILL once ROBOT exits or after a
+  few seconds, for anything left; the JVM exits on SIGTERM and leaves nothing behind. The job records "time limit".
+- Disk: the output can be far larger than the upload (e.g. EquivalentClass and ClassAssertion axioms among many
+  equivalent classes), so while ROBOT runs, browl checks the data volume's free space every second, and stops ROBOT
+  once it's below the upload's margin (1 GB). The job records "disk space".
 - Memory: `-XX:+ExitOnOutOfMemoryError` makes any thread's `OutOfMemoryError` end the JVM with status 3 and the line
   `Terminating due to java.lang.OutOfMemoryError`; the job records "memory limit". Without the flag, an ELK worker's
   breach shows only as a generic failure.
@@ -675,7 +679,7 @@ validated at startup (`browl/settings.py`). Lists and mappings are given as JSON
 | `EXTRA_PREFIXES` | `{}` | O-11 |
 | `PAGE_CACHE_SIZE` | `100` | `0` turns the cache off; O-10 |
 | `REASONER_TIMEOUT_S`, `REASONER_MAX_HEAP` | `3600`, `8g` (S-2) | O-8; ELK needs 1 GB for Uberon and 16 GB for NCBITaxon, so set `16g` for ontologies of that size |
-| `MATERIALIZE_PROPERTIES` | `[]` | object property IRIs for which reasoning materializes `SubClassOf(C, P some D)` (2.4) |
+| `MATERIALIZE_PROPERTIES` | `[]` | object property IRIs, or CURIEs with ROBOT's default prefixes (e.g. `obo:BFO_0000050`), for which reasoning materializes `SubClassOf(C, P some D)` (2.4) |
 | `APP_JVM_MAX_HEAP` | `1g`, confirmed in P-4 (2.4) | heap for the app's in-process JVM, which only renders per-page fragments (S-4) |
 | `FUSEKI_URL` | `http://fuseki:3030` | Fuseki's address on the Compose network |
 | `ROBOT_JAR` | `/opt/robot/robot.jar`, where the app image installs it | used both on the app's classpath and for reasoning subprocesses |

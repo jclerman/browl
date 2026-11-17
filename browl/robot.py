@@ -1,8 +1,8 @@
 """The reasoning stage (DESIGN.md §2.4): ROBOT run as a subprocess, held to the reasoner time and heap limits (O-8).
 
-ROBOT runs as `java -Xmx… -XX:+ExitOnOutOfMemoryError -jar robot.jar -vv …` in its own process group, which is killed
-at the time limit or if the job is cancelled. A failure's reason says which limit was hit, or what else went wrong
-(A-6), as S-2 found each to show (`failure_reason`).
+ROBOT runs as `java -Xmx… -XX:+ExitOnOutOfMemoryError -jar robot.jar -vv …` in its own process group, which is stopped
+at the time limit, if the data volume runs low on space, or if the job is cancelled. A failure's reason says which limit
+was hit, or what else went wrong, using the output signatures S-2 found (A-6, `failure_reason`).
 """
 
 import asyncio
@@ -10,14 +10,17 @@ import codecs
 import logging
 import os
 import re
+import shutil
 import signal
 from collections import deque
 from collections.abc import Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from browl.jobs import JobContext, Reasoner, StageError
 from browl.settings import Settings
+from browl.upload import FREE_SPACE_MARGIN_BYTES
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +41,10 @@ PARTIAL = "reasoned.partial.ttl"
 
 TERM_GRACE_S = 5.0
 """How long ROBOT gets to exit after SIGTERM before it's sent SIGKILL."""
+
+SPACE_CHECK_S = 1.0
+"""How often the data volume's free space is checked while ROBOT runs; it stops ROBOT below
+`FREE_SPACE_MARGIN_BYTES`."""
 
 TAIL_LINES = 20
 """How many of ROBOT's last output lines a failure's reason quotes."""
@@ -89,7 +96,9 @@ class RobotOutput:
             self.unsatisfiable.append(match[1])
 
 
-def failure_reason(status: int | None, output: RobotOutput, timed_out: bool, settings: Settings) -> str:
+def failure_reason(
+    status: int | None, output: RobotOutput, timed_out: bool, settings: Settings, out_of_space: bool = False
+) -> str:
     """Return why a reasoning run failed, checking for each kind of failure in S-2's order (A-6).
 
     Args:
@@ -97,9 +106,12 @@ def failure_reason(status: int | None, output: RobotOutput, timed_out: bool, set
         output: What was kept of its output.
         timed_out: Whether it was stopped at the time limit.
         settings: The settings, for the limits.
+        out_of_space: Whether it was stopped because the data volume ran low on space.
     """
     if timed_out:
         return f"time limit: reasoning took longer than REASONER_TIMEOUT_S ({settings.reasoner_timeout_s} s)"
+    if out_of_space:
+        return f"disk space: the data volume fell below {FREE_SPACE_MARGIN_BYTES:,} bytes free while reasoning ran"
     if status == OUT_OF_MEMORY_STATUS and OUT_OF_MEMORY in output.signals:
         return f"memory limit: reasoning needed more than REASONER_MAX_HEAP ({settings.reasoner_max_heap})"
     if STACK_OVERFLOW in output.signals:
@@ -157,33 +169,51 @@ async def run_robot(args: Sequence[str], settings: Settings) -> None:
         start_new_session=True,  # its own process group, so the JVM and anything it starts can be stopped together
     )
     output = RobotOutput()
-    timed_out = False
+    run = asyncio.ensure_future(_read(process, output))
+    timed_out = out_of_space = False
     try:
         try:
             async with asyncio.timeout(settings.reasoner_timeout_s):
-                await _read(process, output)
-                await process.wait()
+                out_of_space = not await _watch_space(run, settings.data_dir)
         except TimeoutError:
             timed_out = True
     finally:
+        run.cancel()
         # Shielded: a cancelled job still stops ROBOT, even if cancelled again meanwhile.
         await asyncio.shield(_stop(process))
-    if timed_out or process.returncode != 0:
-        raise StageError(failure_reason(process.returncode, output, timed_out, settings))
+    if timed_out or out_of_space or process.returncode != 0:
+        raise StageError(failure_reason(process.returncode, output, timed_out, settings, out_of_space))
+
+
+async def _watch_space(run: asyncio.Future[None], data_dir: Path) -> bool:
+    """Wait for the run; return False as soon as the data volume has less than `FREE_SPACE_MARGIN_BYTES` free."""
+    while True:
+        done, _ = await asyncio.wait({run}, timeout=SPACE_CHECK_S)
+        if done:
+            run.result()
+            return True
+        if await asyncio.to_thread(free_bytes, data_dir) < FREE_SPACE_MARGIN_BYTES:
+            return False
+
+
+def free_bytes(path: Path) -> int:
+    """Return the free space on the file system that holds the path."""
+    return shutil.disk_usage(path).free
 
 
 async def _read(process: asyncio.subprocess.Process, output: RobotOutput) -> None:
-    """Keep and log ROBOT's output lines, in chunks, so no line is too long to read."""
+    """Keep and log ROBOT's output lines until it ends, read in chunks, so no line is too long to read."""
     assert process.stdout is not None
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")  # keeps a character split between reads whole
     rest = ""
     while chunk := await process.stdout.read(READ_BYTES):
         lines = (rest + decoder.decode(chunk)).split("\n")
-        rest = lines.pop()[: MAX_LINE_CHARS + 1]
+        rest = lines.pop()[:MAX_LINE_CHARS]
         for line in lines:
             _keep(line, output)
     if rest := rest + decoder.decode(b"", final=True):
         _keep(rest, output)
+    await process.wait()
 
 
 def _keep(line: str, output: RobotOutput) -> None:
@@ -192,20 +222,22 @@ def _keep(line: str, output: RobotOutput) -> None:
 
 
 async def _stop(process: asyncio.subprocess.Process) -> None:
-    """Stop the process group if the process still runs: SIGTERM, then SIGKILL after `TERM_GRACE_S`."""
-    if process.returncode is not None:
-        return
-    for sent in (signal.SIGTERM, signal.SIGKILL):
-        try:
-            os.killpg(process.pid, sent)
-        except ProcessLookupError:
-            break
-        try:
-            async with asyncio.timeout(TERM_GRACE_S):
-                await process.wait()
-            return
-        except TimeoutError:
-            logger.warning("ROBOT (pid %d) didn't exit on %s", process.pid, sent.name)
+    """Stop whatever is left in ROBOT's process group: SIGTERM, then SIGKILL once ROBOT exits or `TERM_GRACE_S` passes.
+
+    The group is signalled even after ROBOT exits, as a process it started could outlive it. A group's ID isn't reused
+    while any process is left in it. macOS refuses to signal a group of zombies (EPERM), which is as good as gone.
+    """
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return  # nothing left
+    try:
+        async with asyncio.timeout(TERM_GRACE_S):
+            await process.wait()
+    except TimeoutError:
+        logger.warning("ROBOT (pid %d) didn't exit on SIGTERM", process.pid)
+    with suppress(ProcessLookupError, PermissionError):
+        os.killpg(process.pid, signal.SIGKILL)
     await process.wait()
 
 
@@ -219,11 +251,11 @@ async def reasoning_stage(context: JobContext) -> None:
     """
     if context.reasoner is Reasoner.NONE or context.upload is None:
         return
-    partial = context.upload.with_name(PARTIAL)
+    partial, reasoned = context.upload.with_name(PARTIAL), context.upload.with_name(REASONED)
     try:
         await run_robot(reason_args(context.reasoner, context.upload, partial, context.settings), context.settings)
-        reasoned = context.upload.with_name(REASONED)
         await asyncio.to_thread(partial.replace, reasoned)
-    finally:
+    except BaseException:
         await asyncio.to_thread(partial.unlink, missing_ok=True)
+        raise
     context.reasoned = reasoned
