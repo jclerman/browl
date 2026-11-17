@@ -343,9 +343,13 @@ store path and a Fuseki restart, which takes under a second.
 imports, and by default ROBOT refuses an ontology whose imports can't be fetched
 ([S-1 findings](../research/S-1/README.md)), so the pipeline resolves them itself:
 
-1. Fetch each imported ontology, recursively, into the data volume. An import that can't be fetched is dropped from
-   the `owl:imports` list, and the upload page lists it as a warning.
-2. Reasoning, if any, gets the fetched files through a catalog file, so ROBOT doesn't fetch them again.
+1. Fetch each imported ontology, recursively, into the data volume. Only `http` and `https` IRIs are fetched, never
+   from loopback, private or link-local addresses (checked on each redirect too), and each fetch is size-limited; an
+   import that can't be fetched, or isn't allowed (e.g. `file:`), is dropped from the `owl:imports` list, and the
+   upload page lists it as a warning.
+2. Reasoning, if any, gets a catalog file mapping every import in the closure: to its fetched file, or to an empty
+   ontology if it was dropped. So ROBOT never resolves an import itself; its catalog accepts only exact IRIs, and the
+   OWLAPI has no option to skip imports, so browl must list them (P-8).
 3. The loading stage loads the ontology into the store's default graph, and each import into its own named graph. Each
    triple's source stays known, e.g. to mark imported entities; merging into one file first (ROBOT `merge`) would lose
    that.
@@ -715,6 +719,7 @@ Pages link to the service's own routes by root-relative paths, never by URLs bui
 | A Fuseki response that fails partway returns a truncated result with HTTP 200 | Seen in P-3 and S-6: once Fuseki has sent the status, it appends the error as plain text and ends the response normally. It sends it as soon as a SPARQL JSON or TSV result is cut short (the writer flushes what it has), and once any other response outgrows the 2 MB output buffer (2.4). So browl treats any status other than 2xx as a failed query, and never discards the HTTP client's error for a body that ends early (Fuseki exiting or restarting mid-response drops the connection before the last chunk). It parses every Fuseki response strictly, as SPARQL JSON results or N-Triples, and parses each TSV cell as an RDF term, so the appended error text can't pass as a one-column row. N-Triples results may hold only triples, since Jena writes no comments or blank lines and the appended text can start with `#`, which N-Triples reads as a comment (P-4); a parse error is a failed query, never a short result. P-8 checks that each bulk result is complete (e.g. a final count or sentinel), which also catches a result that breaks off cleanly at a row boundary, or an error with no text appended. |
 | Fuseki pauses for full garbage collections under page load | Resolved by S-6: the `System.gc()` calls P-3 saw came from Fuseki 6.2.0 allocating an unpooled 5 MB direct output buffer per response (Jena GH-4084). Fuseki's `jetty.xml` pools a 2 MB buffer instead, which removed them; pages went from 302 to 528 a second at 1 client, and from 573 to 769 at 16 (2.4). |
 | JPype quirks: thread safety of concurrent OWLAPI calls; Python–Java call overhead | Resolved by S-1: concurrent calls were safe but gave no extra throughput, so OWLAPI calls run on one thread (2.1). Call overhead is small ([S-1 findings](../research/S-1/README.md)). P-4 found three more, each handled: the JVM must start on the main thread, its signal handlers bypassed Uvicorn's graceful shutdown (`-Xrs`), and the OWLAPI fetched a fragment's `owl:imports` from their IRIs, web or `file:`, so the bridge refuses every document load but the fragment's own (2.1). |
+| An upload's `owl:imports` make ROBOT read local files (`file:`) or send requests from the app container (`http:`), and its errors can quote what it read | Found in P-7's review: until P-8, reasoning follows imports itself. P-8 lists the imports, fetches only what the policy allows, and gives ROBOT a catalog covering every import (2.4). P-7 isn't deployed before P-8, nor before P-22 protects the upload. |
 | Memory limit can't be reported reliably | Resolved by S-2: with `-XX:+ExitOnOutOfMemoryError`, a heap breach in any thread exits with status 3 and a fixed message; each other failure kind has its own ROBOT log line (2.4). |
 | Descendant counts too slow or memory-hungry at millions of classes | Resolved by S-3: roaring bitmaps, 4.2 s for NCBITaxon ([S-3 findings](../research/S-3/README.md)). |
 | Loading a very large ontology takes minutes | Accepted for uploads (Q14a), shown on the status page. Restarts don't reload (2.4). NCBITaxon: about 5 minutes, estimated; Uberon: 7 s, measured ([S-4 findings](../research/S-4/README.md)). P-24 checks whether extracting the dictionary and edges by streaming the upload file, in parallel with the TDB2 load, is worth it. |
