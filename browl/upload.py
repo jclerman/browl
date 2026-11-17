@@ -305,7 +305,7 @@ class _Upload:
 
     async def flush(self) -> None:
         if self.buffer and self.file is not None:
-            await asyncio.to_thread(self.file.write, bytes(self.buffer))
+            await asyncio.to_thread(_write, self.file, bytes(self.buffer))
             self.buffer.clear()
 
     async def discard(self) -> None:
@@ -321,6 +321,12 @@ class _Upload:
         await asyncio.to_thread(self.file.close)
         logger.info("Load job %d: stored %d bytes", self.context.generation, self.size)
         return self.context
+
+
+def _write(file: IO[bytes], data: bytes) -> None:
+    """Write to the file and flush it, so a write smaller than the file's buffer (128 KiB in Python 3.14) isn't held."""
+    file.write(data)
+    file.flush()
 
 
 def _remove(path: Path, file: IO[bytes] | None) -> None:
