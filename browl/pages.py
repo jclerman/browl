@@ -19,6 +19,7 @@ STATIC_DIR = PACKAGE_DIR / "static"
 RETRY_AFTER_S = 10
 """How soon a client should retry while a load runs: the loading page's `Retry-After` and its refresh interval."""
 
+
 templates = Jinja2Templates(
     env=jinja2.Environment(
         loader=jinja2.FileSystemLoader(PACKAGE_DIR / "templates"),
@@ -26,6 +27,10 @@ templates = Jinja2Templates(
         undefined=jinja2.StrictUndefined,
     )
 )
+
+
+def clear_page_cache() -> None:
+    """Empty the page cache, when a load job starts (DESIGN.md §2.4). It does nothing until the cache exists (P-21)."""
 
 
 class SiteGate:

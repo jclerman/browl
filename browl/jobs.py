@@ -1,6 +1,6 @@
 """The load job (DESIGN.md §2.4): its stages, its state in a persistent SQLite database, and the runner.
 
-A job starts with `JobRunner.upload`.
+A job starts with `JobRunner.upload`, which the upload handler (`browl.upload`) runs.
 """
 
 import asyncio
@@ -31,6 +31,9 @@ JOB_LOCK = "job.lock"
 STATE_TTL_S = 1.0
 """How long a runner serves the job state it last read before reading the database again."""
 
+UPLOAD_PROGRESS_S = 1.0
+"""How often a running upload's size so far is recorded, for the status to show it growing."""
+
 INTERRUPTED_BY_RESTART = "interrupted by restart"
 INTERRUPTED_BY_SHUTDOWN = "interrupted by shutdown"
 CANCELLED = "cancelled"
@@ -53,11 +56,24 @@ MIGRATIONS: list[str] = [
         ready_generation INTEGER
     );
     """,
+    # Version 2: the reasoner the admin chose for the job (A-3), and the file uploaded.
+    """
+    ALTER TABLE job ADD COLUMN reasoner TEXT NOT NULL DEFAULT 'none';
+    ALTER TABLE job ADD COLUMN upload_name TEXT;
+    ALTER TABLE job ADD COLUMN upload_syntax TEXT;
+    ALTER TABLE job ADD COLUMN upload_bytes INTEGER;
+    """,
 ]
 """The persistent database's schema migrations: entry n migrates from version n to n + 1."""
 
-_COLUMNS = "generation, stage, started_at, finished_at, failed_stage, reason, ready_generation"
+_COLUMNS = (
+    "generation, stage, started_at, finished_at, failed_stage, reason, ready_generation, reasoner,"
+    " upload_name, upload_syntax, upload_bytes"
+)
 """The job table's columns but its id, in `JobState`'s order."""
+
+_PLACEHOLDERS = ", ".join("?" for _ in _COLUMNS.split(","))
+"""A `?` for each of `_COLUMNS`."""
 
 
 class Stage(StrEnum):
@@ -69,6 +85,14 @@ class Stage(StrEnum):
     LOADING = "loading"
     PRE_CACHING = "pre-caching"
     READY = "ready"
+
+
+class Reasoner(StrEnum):
+    """The reasoner an admin chooses for a job (A-3); `NONE` skips the reasoning stage."""
+
+    NONE = "none"
+    ELK = "elk"
+    HERMIT = "hermit"
 
 
 class Site(StrEnum):
@@ -95,6 +119,10 @@ class JobState:
         failed_stage: The stage it failed in; None unless it failed.
         reason: Why it failed.
         ready_generation: The generation of the latest job that reached ready; None if none has.
+        reasoner: The reasoner chosen for the latest job.
+        upload_name: The name of the file uploaded for it, as the admin's browser gave it; None if it had none.
+        upload_syntax: The file's syntax, e.g. "RDF/XML".
+        upload_bytes: The file's size, or while uploading or after a failed upload, how much had arrived.
     """
 
     generation: int | None = None
@@ -104,6 +132,10 @@ class JobState:
     failed_stage: Stage | None = None
     reason: str | None = None
     ready_generation: int | None = None
+    reasoner: Reasoner = Reasoner.NONE
+    upload_name: str | None = None
+    upload_syntax: str | None = None
+    upload_bytes: int | None = None
 
     @property
     def running(self) -> bool:
@@ -180,7 +212,13 @@ class JobStore:
         with self._connect() as connection:
             self._write(connection, state)
 
-    def claim(self, started_at: datetime) -> JobState:
+    def claim(
+        self,
+        started_at: datetime,
+        reasoner: Reasoner = Reasoner.NONE,
+        upload_name: str | None = None,
+        upload_syntax: str | None = None,
+    ) -> JobState:
         """Record the start of the next job, in the uploading stage, in one transaction, and return its state.
 
         The caller holds the job lock (`JobLock`), so a job still recorded as running belongs to a process that
@@ -197,6 +235,9 @@ class JobStore:
                     stage=Stage.UPLOADING,
                     started_at=started_at,
                     ready_generation=previous.ready_generation,
+                    reasoner=reasoner,
+                    upload_name=upload_name,
+                    upload_syntax=upload_syntax,
                 )
                 self._write(connection, state)
                 connection.execute("COMMIT")
@@ -210,7 +251,19 @@ class JobStore:
         row = connection.execute(f"SELECT {_COLUMNS} FROM job").fetchone()
         if row is None:
             return JobState()
-        generation, stage, started_at, finished_at, failed_stage, reason, ready_generation = row
+        (
+            generation,
+            stage,
+            started_at,
+            finished_at,
+            failed_stage,
+            reason,
+            ready_generation,
+            reasoner,
+            upload_name,
+            upload_syntax,
+            upload_bytes,
+        ) = row
         return JobState(
             generation=generation,
             stage=Stage(stage),
@@ -219,6 +272,10 @@ class JobStore:
             failed_stage=None if failed_stage is None else Stage(failed_stage),
             reason=reason,
             ready_generation=ready_generation,
+            reasoner=Reasoner(reasoner),
+            upload_name=upload_name,
+            upload_syntax=upload_syntax,
+            upload_bytes=upload_bytes,
         )
 
     @staticmethod
@@ -226,7 +283,7 @@ class JobStore:
         if state.generation is None or state.stage is None or state.started_at is None:
             raise ValueError("a stored job state needs a generation, stage and start time")
         connection.execute(
-            f"INSERT OR REPLACE INTO job (id, {_COLUMNS}) VALUES (1, ?, ?, ?, ?, ?, ?, ?)",
+            f"INSERT OR REPLACE INTO job (id, {_COLUMNS}) VALUES (1, {_PLACEHOLDERS})",
             (
                 state.generation,
                 state.stage,
@@ -235,6 +292,10 @@ class JobStore:
                 state.failed_stage,
                 state.reason,
                 state.ready_generation,
+                state.reasoner,
+                state.upload_name,
+                state.upload_syntax,
+                state.upload_bytes,
             ),
         )
 
@@ -272,17 +333,23 @@ class JobLock:
             self._file = None
 
 
-@dataclass(frozen=True)
+@dataclass
 class JobContext:
     """What a job's stage functions get.
 
     Attributes:
         generation: The job's generation number, one more than the previous job's.
         settings: The app's settings.
+        reasoner: The reasoner the admin chose.
+        upload: The uploaded file, its suffix naming its format (`browl.upload.FORMATS`); None until it's stored.
+        upload_bytes: How much of the file has arrived.
     """
 
     generation: int
     settings: Settings
+    reasoner: Reasoner = Reasoner.NONE
+    upload: Path | None = None
+    upload_bytes: int | None = None
 
 
 StageFunction = Callable[[JobContext], Awaitable[None]]
@@ -375,6 +442,8 @@ class JobRunner:
         self._task: asyncio.Task[None] | None = None
         self._writes: set[asyncio.Task[None]] = set()
         self._unstored: JobState | None = None  # the end of this runner's last job, if it couldn't be stored
+        self._progress_write: asyncio.Future[None] | None = None  # the running upload's last progress write
+        self._progress_at = 0.0  # when the running upload's progress was last recorded
         self._refreshing = asyncio.Lock()
         self._changes = 0
         self._set(state)
@@ -431,8 +500,13 @@ class JobRunner:
         self._stages[stage] = function
 
     @asynccontextmanager
-    async def upload(self) -> AsyncIterator[JobContext]:
+    async def upload(
+        self, reasoner: Reasoner = Reasoner.NONE, name: str | None = None, syntax: str | None = None
+    ) -> AsyncIterator[JobContext]:
         """Start a job in the uploading stage; on leaving the block, run its other stages in the background.
+
+        The block stores the file, sets the context's `upload` and `upload_bytes`, and records the size as it grows
+        (`record_upload_progress`).
 
         A request handler streams the upload inside the block, as it can't hand its request body to a background task.
         If the block raises, the job fails in the uploading stage and the exception propagates. A time limit on the
@@ -445,11 +519,15 @@ class JobRunner:
         if self._busy:
             raise JobRunningError(f"load job {self._state.generation} is running, in stage {self._state.stage}")
         self._busy = True  # set before any await, so a concurrent call is refused
-        await self._claim()
-        context = JobContext(self._state.generation or 0, self._settings)
+        await self._claim(reasoner, name, syntax)
+        context = JobContext(self._state.generation or 0, self._settings, reasoner)
         logger.info("Load job %d started", context.generation)
+        self._progress_at = time.monotonic()
         try:
-            yield context
+            try:
+                yield context
+            finally:
+                self._set(replace(self._state, upload_bytes=context.upload_bytes))  # stored with the end or next stage
         except BaseException as error:
             try:
                 await self._fail(error)
@@ -458,13 +536,13 @@ class JobRunner:
             raise
         self._task = asyncio.create_task(self._run(context), name=f"load job {context.generation}")
 
-    async def start(self) -> JobContext:
+    async def start(self, reasoner: Reasoner = Reasoner.NONE) -> JobContext:
         """Start a job with nothing to upload, running all its other stages in the background.
 
         Raises:
             JobRunningError: A job is already running, in this server worker or another.
         """
-        async with self.upload() as context:
+        async with self.upload(reasoner) as context:
             return context
 
     async def wait(self) -> None:
@@ -482,12 +560,31 @@ class JobRunner:
             self._settle()  # if the task was cancelled before it started, it recorded nothing
         await asyncio.gather(*self._writes)
 
+    async def record_upload_progress(self, context: JobContext) -> None:
+        """Record the running upload's size so far, if it has grown and `UPLOAD_PROGRESS_S` has passed since last time.
+
+        The upload handler calls it as data arrives. A failed write is logged and skipped: the status just shows an
+        older size.
+        """
+        now = time.monotonic()
+        if now - self._progress_at < UPLOAD_PROGRESS_S or context.upload_bytes == self._state.upload_bytes:
+            return
+        self._progress_at = now
+        state = replace(self._state, upload_bytes=context.upload_bytes)
+        self._set(state)
+        # A cancelled await leaves the thread writing, so the job's end waits for it (`_store_end`).
+        write = self._progress_write = asyncio.ensure_future(asyncio.to_thread(self._store.write, state))
+        try:
+            await asyncio.shield(write)
+        except Exception:
+            logger.warning("Couldn't record load job %d's upload progress", context.generation, exc_info=True)
+
     def _set(self, state: JobState) -> None:
         self._state = state
         self._read_at = time.monotonic()
         self._changes += 1
 
-    async def _claim(self) -> None:
+    async def _claim(self, reasoner: Reasoner, name: str | None, syntax: str | None) -> None:
         """Take the job lock and record the job's start, in a thread that runs to its end even if this is cancelled.
 
         A job claimed after this was cancelled is failed as cancelled, so it doesn't hold the lock for good.
@@ -495,7 +592,7 @@ class JobRunner:
         Raises:
             JobRunningError: Another process holds the job lock.
         """
-        claim = asyncio.ensure_future(asyncio.to_thread(self._claim_in_thread, _now()))
+        claim = asyncio.ensure_future(asyncio.to_thread(self._claim_in_thread, _now(), reasoner, name, syntax))
         try:
             self._set(await asyncio.shield(claim))
         except asyncio.CancelledError:
@@ -505,11 +602,13 @@ class JobRunner:
             self._busy = False
             raise
 
-    def _claim_in_thread(self, started_at: datetime) -> JobState:
+    def _claim_in_thread(
+        self, started_at: datetime, reasoner: Reasoner, name: str | None, syntax: str | None
+    ) -> JobState:
         if not self._lock.acquire():
             raise JobRunningError("a load job is running in another server worker")
         try:
-            return self._store.claim(started_at)
+            return self._store.claim(started_at, reasoner, name, syntax)
         except BaseException:
             self._lock.release()
             raise
@@ -556,6 +655,8 @@ class JobRunner:
 
     async def _store_end(self, state: JobState) -> None:
         try:
+            if self._progress_write is not None:
+                await asyncio.wait({self._progress_write})  # so it can't land after, and overwrite, the end
             await asyncio.to_thread(self._store.write, state)
         except Exception:
             # Other workers keep reading it as running until the next job or a restart; this one serves its end.

@@ -87,3 +87,25 @@ a {
 .stages .failed {
   font-weight: 600;
 }
+
+.upload {
+  max-width: var(--measure);
+}
+
+.upload fieldset {
+  border: 1px solid var(--border);
+  padding: calc(var(--space) / 2) var(--space);
+}
+
+.upload fieldset label {
+  margin-right: var(--space);
+}
+
+.upload input[type="file"] {
+  display: block;
+  margin-top: calc(var(--space) / 4);
+}
+
+.note {
+  color: var(--muted);
+}

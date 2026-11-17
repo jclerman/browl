@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import anyio
 import httpx2
@@ -25,6 +26,7 @@ from browl.jobs import (
     JobRunningError,
     JobState,
     JobStore,
+    Reasoner,
     Site,
     Stage,
     StageError,
@@ -60,7 +62,7 @@ def schema_version(path: Path) -> int:
 def test_store_migrates_new_database(data_dir: Path) -> None:
     """Check that a new database is created at the latest schema version, with no job."""
     store = JobStore(data_dir / "sub" / STATE_DB)
-    assert schema_version(store.path) == len(browl.jobs.MIGRATIONS) == 1
+    assert schema_version(store.path) == len(browl.jobs.MIGRATIONS) == 2
     assert store.read() == JobState()
 
 
@@ -71,7 +73,7 @@ def test_store_migrates_forward(data_dir: Path, monkeypatch: pytest.MonkeyPatch)
     JobStore(path).write(state)
     monkeypatch.setattr(browl.jobs, "MIGRATIONS", [*browl.jobs.MIGRATIONS, "CREATE TABLE admin (email TEXT);"])
     store = JobStore(path)
-    assert schema_version(path) == 2
+    assert schema_version(path) == len(browl.jobs.MIGRATIONS)
     assert store.read() == state
     with sqlite3.connect(path) as connection:
         assert connection.execute("SELECT count(*) FROM admin").fetchone() == (0,)
@@ -85,7 +87,7 @@ def test_store_rolls_back_failed_migration(data_dir: Path, monkeypatch: pytest.M
     monkeypatch.setattr(browl.jobs, "MIGRATIONS", [*browl.jobs.MIGRATIONS, bad])
     with pytest.raises(sqlite3.OperationalError, match="missing"):
         JobStore(path)
-    assert schema_version(path) == 1
+    assert schema_version(path) == len(browl.jobs.MIGRATIONS) - 1
     with sqlite3.connect(path) as connection:
         assert connection.execute("SELECT name FROM sqlite_master WHERE name = 'admin'").fetchone() is None
 
@@ -200,10 +202,10 @@ async def test_refuses_second_job_while_starting(data_dir: Path, monkeypatch: py
     entered, release = threading.Event(), threading.Event()
     claim = runner._store.claim
 
-    def blocked(started_at: datetime) -> JobState:
+    def blocked(*args: Any) -> JobState:
         entered.set()
         release.wait(timeout=5)
-        return claim(started_at)
+        return claim(*args)
 
     monkeypatch.setattr(runner._store, "claim", blocked)
     first = asyncio.create_task(runner.start())
@@ -242,6 +244,69 @@ async def test_upload_stage(data_dir: Path) -> None:
         assert runner.state.site == Site.LOADING
     await runner.wait()
     assert runner.state.stage == Stage.READY
+
+
+async def test_reasoner_choice(data_dir: Path) -> None:
+    """Check that a job's reasoner reaches its stage functions and its stored state, and the next job's replaces it."""
+    seen: list[Reasoner] = []
+
+    async def reasoning(context: JobContext) -> None:
+        seen.append(context.reasoner)
+
+    runner = await open_runner(data_dir, {Stage.REASONING: reasoning})
+    assert runner.state.reasoner == Reasoner.NONE
+    async with runner.upload(Reasoner.HERMIT) as context:
+        assert context.reasoner == runner.state.reasoner == Reasoner.HERMIT
+        assert JobStore(data_dir / STATE_DB).read().reasoner == Reasoner.HERMIT
+    await runner.wait()
+    assert seen == [Reasoner.HERMIT]
+    assert (await open_runner(data_dir)).state.reasoner == Reasoner.HERMIT
+    await runner.start(Reasoner.ELK)
+    await runner.wait()
+    assert seen == [Reasoner.HERMIT, Reasoner.ELK]
+    assert runner.state.reasoner == Reasoner.ELK
+
+
+def test_store_migrates_version_1(data_dir: Path) -> None:
+    """Check that a version 1 database migrates, its job read as having no reasoner and no upload recorded."""
+    path = data_dir / STATE_DB
+    with closing(sqlite3.connect(path)) as connection:
+        connection.executescript(
+            f"BEGIN;\n{browl.jobs.MIGRATIONS[0]}\nPRAGMA user_version = 1;\n"
+            "INSERT INTO job VALUES (1, 4, 'ready', '2026-01-02T03:04:05+00:00', '2026-01-02T03:04:06+00:00',"
+            " NULL, NULL, 4);\nCOMMIT;"
+        )
+    state = JobStore(path).read()
+    assert (state.generation, state.reasoner) == (4, Reasoner.NONE)
+    assert (state.upload_name, state.upload_syntax, state.upload_bytes) == (None, None, None)
+    assert schema_version(path) == len(browl.jobs.MIGRATIONS)
+
+
+async def test_upload_recorded(data_dir: Path) -> None:
+    """Check that an upload's name and syntax are stored at the job's start, and its size when the block ends."""
+    runner = await open_runner(data_dir)
+    async with runner.upload(Reasoner.NONE, "onto.ttl", "Turtle") as context:
+        stored = JobStore(data_dir / STATE_DB).read()
+        assert (stored.upload_name, stored.upload_syntax, stored.upload_bytes) == ("onto.ttl", "Turtle", None)
+        context.upload_bytes = 1234
+    await runner.wait()
+    stored = JobStore(data_dir / STATE_DB).read()
+    assert (stored.stage, stored.upload_name, stored.upload_bytes) == (Stage.READY, "onto.ttl", 1234)
+    await runner.start()
+    await runner.wait()
+    assert (runner.state.upload_name, runner.state.upload_bytes) == (None, None)
+
+
+async def test_upload_recorded_on_failure(data_dir: Path) -> None:
+    """Check that a failed upload's size so far is stored with its failure."""
+    runner = await open_runner(data_dir)
+    with pytest.raises(StageError):
+        async with runner.upload(Reasoner.NONE, "onto.ttl", "Turtle") as context:
+            context.upload_bytes = 99
+            raise StageError("cut short")
+    await runner.close()
+    stored = JobStore(data_dir / STATE_DB).read()
+    assert (stored.failed_stage, stored.upload_bytes) == (Stage.UPLOADING, 99)
 
 
 async def test_upload_failure(data_dir: Path) -> None:
@@ -497,12 +562,12 @@ async def test_claim_cancelled(data_dir: Path, monkeypatch: pytest.MonkeyPatch, 
     entered, release = threading.Event(), threading.Event()
     claim = runner._store.claim
 
-    def blocked(started_at: datetime) -> JobState:
+    def blocked(*args: Any) -> JobState:
         entered.set()
         release.wait(timeout=5)
         if not claimed:
             raise sqlite3.OperationalError("database is locked")
-        return claim(started_at)
+        return claim(*args)
 
     monkeypatch.setattr(runner._store, "claim", blocked)
     task = asyncio.create_task(runner.start())
@@ -598,3 +663,77 @@ async def test_long_reason_cut_short(data_dir: Path, caplog: pytest.LogCaptureFi
     state = await run_job(await open_runner(data_dir, {Stage.REASONING: reasoning}))
     assert state.reason == f"{message[: browl.jobs.MAX_REASON_CHARS]}… (cut short; the app's log has it all)"
     assert message in caplog.text
+
+
+async def test_upload_progress(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a running upload's size so far is recorded once `UPLOAD_PROGRESS_S` has passed, if it has grown."""
+    runner = await open_runner(data_dir)
+    writes: list[JobState] = []
+    write = runner._store.write
+    monkeypatch.setattr(runner._store, "write", lambda state: (writes.append(state), write(state))[1])
+    async with runner.upload(Reasoner.NONE, "onto.ttl", "Turtle") as context:
+        context.upload_bytes = 5
+        await runner.record_upload_progress(context)  # too soon after the claim
+        assert runner.state.upload_bytes is None
+        monkeypatch.setattr(browl.jobs, "UPLOAD_PROGRESS_S", 0)
+        await runner.record_upload_progress(context)
+        await runner.record_upload_progress(context)  # not grown
+        stored = JobStore(data_dir / STATE_DB).read()
+        assert (stored.stage, stored.finished_at, stored.upload_bytes) == (Stage.UPLOADING, None, 5)
+        assert runner.state.upload_bytes == 5
+        context.upload_bytes = 10
+    await runner.wait()
+    assert [state.upload_bytes for state in writes if state.stage == Stage.UPLOADING] == [5]
+    assert JobStore(data_dir / STATE_DB).read().upload_bytes == 10
+
+
+async def test_upload_progress_write_fails(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Check that a failed progress write is logged and skipped, leaving the upload to carry on."""
+    monkeypatch.setattr(browl.jobs, "UPLOAD_PROGRESS_S", 0)
+    runner = await open_runner(data_dir)
+    write = runner._store.write
+
+    def failing(state: JobState) -> None:
+        if state.stage == Stage.UPLOADING:
+            raise sqlite3.OperationalError("database is locked")
+        write(state)
+
+    monkeypatch.setattr(runner._store, "write", failing)
+    async with runner.upload() as context:
+        context.upload_bytes = 5
+        await runner.record_upload_progress(context)
+    await runner.wait()
+    assert runner.state.stage == Stage.READY
+    assert "Couldn't record load job 1's upload progress" in caplog.text
+
+
+async def test_upload_progress_write_before_end(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a progress write still running when the upload is cancelled can't overwrite the job's end."""
+    monkeypatch.setattr(browl.jobs, "UPLOAD_PROGRESS_S", 0)
+    runner = await open_runner(data_dir)
+    release = threading.Event()
+    write = runner._store.write
+    loop = asyncio.get_running_loop()
+
+    def slow(state: JobState) -> None:
+        if state.stage == Stage.UPLOADING and state.finished_at is None:
+            loop.call_soon_threadsafe(scope.cancel)
+            release.wait(timeout=5)
+        write(state)
+
+    monkeypatch.setattr(runner._store, "write", slow)
+    # anyio's cancellation, as Starlette's, cancels every await in the scope, even the upload's wait for the write.
+    with anyio.CancelScope() as scope:
+        async with runner.upload() as context:
+            context.upload_bytes = 5
+            await runner.record_upload_progress(context)
+    # The end can't be stored while the progress write runs. On a slow machine this wait could end before a wrongly
+    # unordered end is stored, letting the test pass when it shouldn't, but never failing it when it should pass.
+    done, _ = await asyncio.wait(runner._writes, timeout=0.1)
+    assert not done
+    release.set()
+    await runner.close()
+    stored = JobStore(data_dir / STATE_DB).read()
+    assert (stored.failed_stage, stored.reason, stored.upload_bytes) == (Stage.UPLOADING, CANCELLED, 5)

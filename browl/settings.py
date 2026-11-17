@@ -69,6 +69,7 @@ class Settings(BaseSettings):
         robot_jar: Path to `robot.jar`, where the app image installs it.
         jena_home: Jena's command-line tools, where the app image installs them.
         data_dir: Mounted volume for data that survives restarts (O-9).
+        max_upload_bytes: The largest ontology upload accepted, in bytes (A-2).
         oidc_client_id: Google OAuth client ID (O-6).
         oidc_client_secret: Google OAuth client secret (O-6).
         seed_admins: Admin email addresses, lowercased; they can't be removed in the UI (O-6).
@@ -93,6 +94,7 @@ class Settings(BaseSettings):
     robot_jar: Path = Path("/opt/robot/robot.jar")
     jena_home: Path = Path("/opt/jena")
     data_dir: Path = Path("/data")
+    max_upload_bytes: int = Field(default=20 * 10**9, gt=0)
     oidc_client_id: str | None = None
     oidc_client_secret: SecretStr | None = None
     seed_admins: list[str] = []

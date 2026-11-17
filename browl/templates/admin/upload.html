@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{# The upload form (A-2, A-3) and the load job's status (A-5, A-6), which htmx polls while a job runs; without JS
+   (U-17), the page refreshes itself instead. The reasoner field comes before the file: the server reads the form as it
+   streams in, and needs the choice when the file starts. #}
+{% block head %}{% if job.running %}<noscript><meta http-equiv="refresh" content="{{ poll_s }}"></noscript>{% endif %}{% endblock %}
+{% block title %}Upload an ontology{% endblock %}
+{% block content %}
+<h1>Upload an ontology</h1>
+{% if error %}
+<p class="failure" role="alert">The upload was refused: {{ error }}</p>
+{% endif %}
+<form class="upload" method="post" action="{{ url_for('upload').path }}" enctype="multipart/form-data">
+  <fieldset>
+    <legend>Reasoner</legend>
+    {% for reasoner, label in reasoners %}
+    <label><input type="radio" name="reasoner" value="{{ reasoner }}"{% if loop.first %} checked{% endif %}> {{ label }}</label>
+    {% endfor %}
+  </fieldset>
+  <p>
+    <label for="ontology">Ontology file (RDF/XML, Turtle or OWL Functional Syntax)</label>
+    <input type="file" id="ontology" name="ontology" accept="{{ accept }}" required>
+  </p>
+  <p class="note">Uploading replaces the current ontology; the site shows a "loading" page until the new one is ready.</p>
+  <p><button type="submit">Upload</button></p>
+</form>
+<h2>Load status</h2>
+{% include "admin/_job_status.html" %}
+{% endblock %}
