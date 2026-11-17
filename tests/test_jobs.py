@@ -25,6 +25,7 @@ from browl.jobs import (
     JobRunningError,
     JobState,
     JobStore,
+    Reasoner,
     Site,
     Stage,
     StageError,
@@ -60,7 +61,7 @@ def schema_version(path: Path) -> int:
 def test_store_migrates_new_database(data_dir: Path) -> None:
     """Check that a new database is created at the latest schema version, with no job."""
     store = JobStore(data_dir / "sub" / STATE_DB)
-    assert schema_version(store.path) == len(browl.jobs.MIGRATIONS) == 1
+    assert schema_version(store.path) == len(browl.jobs.MIGRATIONS) == 2
     assert store.read() == JobState()
 
 
@@ -71,7 +72,7 @@ def test_store_migrates_forward(data_dir: Path, monkeypatch: pytest.MonkeyPatch)
     JobStore(path).write(state)
     monkeypatch.setattr(browl.jobs, "MIGRATIONS", [*browl.jobs.MIGRATIONS, "CREATE TABLE admin (email TEXT);"])
     store = JobStore(path)
-    assert schema_version(path) == 2
+    assert schema_version(path) == len(browl.jobs.MIGRATIONS)
     assert store.read() == state
     with sqlite3.connect(path) as connection:
         assert connection.execute("SELECT count(*) FROM admin").fetchone() == (0,)
@@ -85,7 +86,7 @@ def test_store_rolls_back_failed_migration(data_dir: Path, monkeypatch: pytest.M
     monkeypatch.setattr(browl.jobs, "MIGRATIONS", [*browl.jobs.MIGRATIONS, bad])
     with pytest.raises(sqlite3.OperationalError, match="missing"):
         JobStore(path)
-    assert schema_version(path) == 1
+    assert schema_version(path) == len(browl.jobs.MIGRATIONS) - 1
     with sqlite3.connect(path) as connection:
         assert connection.execute("SELECT name FROM sqlite_master WHERE name = 'admin'").fetchone() is None
 
@@ -200,10 +201,10 @@ async def test_refuses_second_job_while_starting(data_dir: Path, monkeypatch: py
     entered, release = threading.Event(), threading.Event()
     claim = runner._store.claim
 
-    def blocked(started_at: datetime) -> JobState:
+    def blocked(started_at: datetime, reasoner: Reasoner) -> JobState:
         entered.set()
         release.wait(timeout=5)
-        return claim(started_at)
+        return claim(started_at, reasoner)
 
     monkeypatch.setattr(runner._store, "claim", blocked)
     first = asyncio.create_task(runner.start())
@@ -242,6 +243,55 @@ async def test_upload_stage(data_dir: Path) -> None:
         assert runner.state.site == Site.LOADING
     await runner.wait()
     assert runner.state.stage == Stage.READY
+
+
+async def test_reasoner_choice(data_dir: Path) -> None:
+    """Check that a job's reasoner reaches its stage functions and its stored state, and the next job's replaces it."""
+    seen: list[Reasoner] = []
+
+    async def reasoning(context: JobContext) -> None:
+        seen.append(context.reasoner)
+
+    runner = await open_runner(data_dir, {Stage.REASONING: reasoning})
+    assert runner.state.reasoner == Reasoner.NONE
+    async with runner.upload(Reasoner.HERMIT) as context:
+        assert context.reasoner == runner.state.reasoner == Reasoner.HERMIT
+        assert JobStore(data_dir / STATE_DB).read().reasoner == Reasoner.HERMIT
+    await runner.wait()
+    assert seen == [Reasoner.HERMIT]
+    assert (await open_runner(data_dir)).state.reasoner == Reasoner.HERMIT
+    await runner.start(Reasoner.ELK)
+    await runner.wait()
+    assert seen == [Reasoner.HERMIT, Reasoner.ELK]
+    assert runner.state.reasoner == Reasoner.ELK
+
+
+async def test_upload_path_reaches_stages(data_dir: Path) -> None:
+    """Check that the path the upload block sets on the context is what the stage functions get."""
+    seen: list[Path | None] = []
+
+    async def reasoning(context: JobContext) -> None:
+        seen.append(context.upload)
+
+    runner = await open_runner(data_dir, {Stage.REASONING: reasoning})
+    async with runner.upload() as context:
+        context.upload = data_dir / "ontology.ttl"
+    await runner.wait()
+    assert seen == [data_dir / "ontology.ttl"]
+
+
+def test_store_migrates_version_1(data_dir: Path) -> None:
+    """Check that a version 1 database, with no reasoner column, migrates, and its job reads as having none."""
+    path = data_dir / STATE_DB
+    with closing(sqlite3.connect(path)) as connection:
+        connection.executescript(
+            f"BEGIN;\n{browl.jobs.MIGRATIONS[0]}\nPRAGMA user_version = 1;\n"
+            "INSERT INTO job VALUES (1, 4, 'ready', '2026-01-02T03:04:05+00:00', '2026-01-02T03:04:06+00:00',"
+            " NULL, NULL, 4);\nCOMMIT;"
+        )
+    state = JobStore(path).read()
+    assert (state.generation, state.reasoner) == (4, Reasoner.NONE)
+    assert schema_version(path) == 2
 
 
 async def test_upload_failure(data_dir: Path) -> None:
@@ -497,12 +547,12 @@ async def test_claim_cancelled(data_dir: Path, monkeypatch: pytest.MonkeyPatch, 
     entered, release = threading.Event(), threading.Event()
     claim = runner._store.claim
 
-    def blocked(started_at: datetime) -> JobState:
+    def blocked(started_at: datetime, reasoner: Reasoner) -> JobState:
         entered.set()
         release.wait(timeout=5)
         if not claimed:
             raise sqlite3.OperationalError("database is locked")
-        return claim(started_at)
+        return claim(started_at, reasoner)
 
     monkeypatch.setattr(runner._store, "claim", blocked)
     task = asyncio.create_task(runner.start())

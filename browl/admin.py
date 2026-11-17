@@ -1,11 +1,12 @@
 """Admin routes, under `/{RESERVED_PREFIX}/admin` (DESIGN.md §2.13). Authentication isn't enforced yet (P-22)."""
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response, status
 from fastapi.openapi.docs import get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from browl.jobs import Stage
+from browl.jobs import JobRunningError, Reasoner, Stage
 from browl.pages import templates
+from browl.upload import FORMATS, UploadError, receive_upload
 
 STATUS_POLL_S = 2
 """How often the status fragment polls itself while a job runs."""
@@ -20,9 +21,9 @@ router = APIRouter(prefix="/admin")
 async def job_status(request: Request) -> HTMLResponse:
     """Show the load job's stage, start time, and failed stage and reason (A-5, A-6).
 
-    An htmx request gets just the status fragment, for the upload page (P-6) to embed; while a job runs, the fragment
-    polls this route and replaces itself. Any other request gets the fragment in a page, which, while a job runs,
-    refreshes itself when JavaScript is off; polling needs a page that loads htmx (P-6).
+    An htmx request gets just the status fragment, which the upload page embeds; while a job runs, the fragment polls
+    this route and replaces itself. Any other request gets the fragment in a page, which, while a job runs, polls the
+    same way, or refreshes itself when JavaScript is off.
     """
     template = "admin/_job_status.html" if request.headers.get("HX-Request") == "true" else "admin/status.html"
     return templates.TemplateResponse(
@@ -31,6 +32,52 @@ async def job_status(request: Request) -> HTMLResponse:
         {"job": await request.app.state.jobs.current(), "stages": list(Stage), "poll_s": STATUS_POLL_S},
         headers={"Cache-Control": "no-store"},
     )
+
+
+REASONER_LABELS = {Reasoner.NONE: "None", Reasoner.ELK: "ELK", Reasoner.HERMIT: "HermiT"}
+"""The upload form's reasoner choices (A-3), the first the default."""
+
+
+async def _upload_page(request: Request, error: str | None = None, status_code: int = 200) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "admin/upload.html",
+        {
+            "job": await request.app.state.jobs.current(),
+            "stages": list(Stage),
+            "poll_s": STATUS_POLL_S,
+            "reasoners": list(REASONER_LABELS.items()),
+            "accept": ",".join(sorted(FORMATS)),
+            "error": error,
+        },
+        status_code=status_code,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/upload", response_class=HTMLResponse)
+async def upload_page(request: Request) -> HTMLResponse:
+    """Show the upload form (A-2, A-3) and the load job's status (A-5, A-6)."""
+    return await _upload_page(request)
+
+
+@router.post("/upload", response_class=HTMLResponse)
+async def upload(request: Request) -> Response:
+    """Start a load job that replaces the ontology with the uploaded file, streamed to the data volume (A-2, A-4).
+
+    The body is a multipart form: a `reasoner` field (`none`, `elk` or `hermit`), then an `ontology` file (`.ttl`,
+    `.rdf`, `.owl` as RDF/XML, or `.ofn`). It's read as it streams in, so FastAPI can't describe it.
+
+    On success, redirects to the upload page, which shows the job's progress; a refused upload gets the page with the
+    reason, 400 if the request was invalid, 409 if a job was already running.
+    """
+    try:
+        await receive_upload(request, request.app.state.jobs)
+    except UploadError as error:
+        return await _upload_page(request, str(error), status.HTTP_400_BAD_REQUEST)
+    except JobRunningError:
+        return await _upload_page(request, "a load job is already running", status.HTTP_409_CONFLICT)
+    return RedirectResponse(request.url_for("upload_page").path, status.HTTP_303_SEE_OTHER)
 
 
 @router.get("/openapi.json", include_in_schema=False)

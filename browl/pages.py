@@ -28,6 +28,10 @@ templates = Jinja2Templates(
 )
 
 
+def clear_page_cache() -> None:
+    """Empty the page cache, when a load job starts (DESIGN.md §2.4). It does nothing until the cache exists (P-21)."""
+
+
 class SiteGate:
     """Serve the "loading" or "not available" page in place of every page but the exempt ones (U-16, DESIGN.md §2.13).
 

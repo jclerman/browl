@@ -263,7 +263,7 @@ The database is the job state's source of truth, so nothing here ties browl to o
 
 | Stage | What happens |
 | --- | --- |
-| **uploading** | The file is streamed to the data volume. The site switches to the "loading" page (U-16) and the page cache is cleared. |
+| **uploading** | The file is streamed to the data volume, at `DATA_DIR/uploads/{generation}/ontology.{ttl,rdf,ofn}`, the suffix naming its format (an `.owl` file is taken to be RDF/XML); earlier uploads are deleted. The form's reasoner choice is stored with the job. The site switches to the "loading" page (U-16) and the page cache is cleared (P-6). |
 | **imports** | Imported ontologies are fetched (see Imports, below). |
 | **reasoning** (optional) | A build script runs ROBOT `reason` with ELK or HermiT. Its output, written as Turtle, replaces the uploaded file as the ontology that gets served. (Later requirements U-39 and U-40 need the asserted axioms kept too; see [Later](#later).) Without reasoning, an `.ofn` upload, which the TDB2 loader can't read (it reads only RDF formats), is converted to Turtle by ROBOT; RDF/XML and Turtle uploads load as they are. Turtle is tentative: P-8 measures which RDF format ROBOT can write that loads fastest. _(Q7a)_ |
 | **loading** | Jena's TDB2 bulk loader builds a new store from the built ontology, in a new directory on the data volume. Fuseki is then switched to it and the previous store deleted. Uberon loads in 4–5 s, NCBITaxon in about 3 min ([S-4 findings](../research/S-4/README.md)). _(Q15)_ |
@@ -658,7 +658,8 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | `iri?u=…` | Fallback entity URLs (Q1b) |
 | `static/…` | CSS, htmx, hash-IRI script |
 | `admin/…` | Upload, status, admin list, sign-in/out |
-| `admin/status` | The load job's stage, start time, and failed stage and reason (A-5, A-6): an HTML fragment for htmx requests (`HX-Request`), which polls itself while a job runs on a page that loads htmx (P-6), else a page, which refreshes itself while a job runs if JS is off (P-5) |
+| `admin/upload` | The upload form (A-2, A-3) and the load job's status. The form is parsed as it streams in, the file written straight to the data volume, never held whole in memory or spooled to a temporary file; its reasoner field must come before its file. The job is claimed only once the file's part has started and its name checked, so a malformed request (400) leaves the served ontology alone; an upload while a job runs gets 409. A success redirects (303) back to the page (P-6) |
+| `admin/status` | The load job's stage, start time, and failed stage and reason (A-5, A-6): an HTML fragment for htmx requests (`HX-Request`), which polls itself while a job runs, else a page, which polls the same way, or refreshes itself while a job runs if JS is off (P-5) |
 | `admin/docs`, `admin/openapi.json` | FastAPI's API docs (Swagger UI only, no ReDoc), as admin routes, so admin sign-in covers them; moved from FastAPI's default root paths, where they would shadow ontology entities. Swagger UI loads its assets from a CDN at an exact pinned version: an accepted exception to the no-CDN rule ([2.2](#22-libraries-and-components)), for admin pages only (P-5) |
 | `health` | Liveness check for the container; also reports whether Fuseki answers |
 
@@ -724,7 +725,7 @@ go into this document.
 | ID | Work item | Delivers | Depends on | Status | Tracking |
 | --- | --- | --- | --- | --- | --- |
 | P-5 | Job runner and job state in SQLite; "loading" / "not available" site pages | U-16, A-5 | P-2 | Done | [#14](https://github.com/jclerman/browl/issues/14) |
-| P-6 | Upload page and streaming upload (auth not yet enforced) | A-2, A-4 | P-5 | To do | [#16](https://github.com/jclerman/browl/issues/16) |
+| P-6 | Upload page and streaming upload (auth not yet enforced) | A-2, A-4 | P-5 | Done | [#16](https://github.com/jclerman/browl/issues/16) |
 | P-7 | ROBOT build script: optional ELK/HermiT reasoning, with limits | A-3, A-6, O-8 | P-6, S-2 | To do | [#18](https://github.com/jclerman/browl/issues/18) |
 | P-8 | Fetch imports (warn on failures); bulk-load the ontology and imports into a new TDB2 store and switch Fuseki to it; no reload on restart | A-4 | P-4, P-7, S-4 | To do | [#20](https://github.com/jclerman/browl/issues/20) |
 
