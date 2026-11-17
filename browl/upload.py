@@ -99,6 +99,38 @@ _OFN_START = re.compile(r"(Prefix|Ontology)\s*\(")
 """How an OWL Functional Syntax document starts: its grammar allows only prefix declarations before the ontology."""
 
 
+def _skip_xml_prologue(text: str) -> str:
+    """Return the text after an XML prologue: the declaration, comments, processing instructions and the doctype.
+
+    It's scanned with `str.find`, not a regex, so its time grows linearly with the text, whatever an upload holds.
+    Returns "" if the prologue runs past the text, as a long doctype's internal subset can.
+    """
+    while True:
+        text = text.lstrip()
+        if text.startswith("<?"):
+            end = _end_of(text, "?>")
+        elif text.startswith("<!--"):
+            end = _end_of(text, "-->")
+        elif text.startswith("<!DOCTYPE"):
+            subset = text.find("[")
+            if subset >= 0 and not 0 <= text.find(">") < subset:  # an internal subset, which can hold ">"
+                subset_end = text.find("]", subset)
+                end = -1 if subset_end < 0 else _end_of(text, ">", subset_end)
+            else:
+                end = _end_of(text, ">")
+        else:
+            return text
+        if end < 0:
+            return ""
+        text = text[end:]
+
+
+def _end_of(text: str, marker: str, start: int = 0) -> int:
+    """Return the index just past the first `marker` at or after `start`, or -1 if there's none."""
+    index = text.find(marker, start)
+    return -1 if index < 0 else index + len(marker)
+
+
 def sniff_syntax(sample: bytes) -> str | None:
     """Return the syntax the start of a file looks like, or None if it isn't distinctive.
 
@@ -116,9 +148,7 @@ def sniff_syntax(sample: bytes) -> str | None:
         return SYNTAXES[".ttl"]
     if not text.startswith("<"):
         return None
-    # XML: skip the declaration, comments, processing instructions and the doctype (its internal subset can be long)
-    body = re.sub(r"<\?.*?\?>|<!--.*?-->|<!DOCTYPE(\[.*?\]|[^>\[])*>", "", text, flags=re.DOTALL)
-    root = _XML_ROOT.search(body)
+    root = _XML_ROOT.match(_skip_xml_prologue(text))
     if root is None:
         return SYNTAXES[".rdf"]  # still in the prologue: XML, so RDF/XML is the only accepted syntax it can be
     prefix, name, attributes = root.groups()

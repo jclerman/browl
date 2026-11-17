@@ -4,6 +4,7 @@ import asyncio
 import errno
 import os
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -13,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from markupsafe import escape
 from starlette.requests import Request
-from starlette.types import Message
+from starlette.types import Message, Receive
 
 import browl.jobs
 import browl.upload
@@ -31,6 +32,8 @@ OFN = b"Prefix(:=<http://example.org/>)\nOntology(<http://example.org/onto>)\n"
 LONG = TURTLE * (SNIFF_BYTES // len(TURTLE) + 1)
 """A Turtle file longer than the part checked before the job is claimed, so the job is claimed while it streams."""
 FORM = "multipart/form-data; boundary=b"
+STREAM_WRITE_BYTES = 1 << 16
+"""The write size `test_streamed` sets, small so a test file spans many writes."""
 FILE_START = (
     b'--b\r\nContent-Disposition: form-data; name="reasoner"\r\n\r\nelk\r\n'
     b'--b\r\nContent-Disposition: form-data; name="ontology"; filename="o.ttl"\r\n\r\n'
@@ -332,6 +335,51 @@ def test_upload_page_while_running_polls(client: TestClient, app: FastAPI) -> No
     assert '<noscript><meta http-equiv="refresh"' in text
 
 
+def asgi_request(receive: Receive, boundary: bytes = b"b") -> Request:
+    """Return an upload request, its body read from `receive`, for an app with test settings."""
+    app = FastAPI()
+    app.state.settings = make_settings()
+    content_type = b"multipart/form-data; boundary=" + boundary
+    return Request(
+        {"type": "http", "method": "POST", "headers": [(b"content-type", content_type)], "app": app}, receive
+    )
+
+
+@pytest.mark.parametrize("chunk_bytes", [1000, 10_000, 3 * STREAM_WRITE_BYTES])
+async def test_streamed(data_dir: Path, monkeypatch: pytest.MonkeyPatch, chunk_bytes: int) -> None:
+    """Check that the file is written as it arrives: between chunks, less than `WRITE_BYTES` of it is held in memory.
+
+    The bound holds however the body is chunked, so it's checked as each chunk is asked for, with chunks smaller than
+    a write and larger than one.
+    """
+    monkeypatch.setattr(browl.upload, "WRITE_BYTES", STREAM_WRITE_BYTES)
+    content = TURTLE + os.urandom(1 << 20)
+    body = FILE_START + content + b"\r\n--b--\r\n"
+    chunks = [body[i : i + chunk_bytes] for i in range(0, len(body), chunk_bytes)]
+    path = upload_path(data_dir, 1, ".ttl")
+    sent = 0
+    held: list[int] = []  # how much of the file had arrived but wasn't on disk, each time a chunk was asked for
+
+    async def receive() -> Message:
+        nonlocal sent
+        arrived = min(max(sent - len(FILE_START), 0), len(content))
+        held.append(arrived - (path.stat().st_size if path.exists() else 0))
+        chunk = chunks.pop(0)
+        sent += len(chunk)
+        return {"type": "http.request", "body": chunk, "more_body": bool(chunks)}
+
+    count = len(chunks)
+    runner = await JobRunner.open(make_settings())
+    try:
+        await receive_upload(asgi_request(receive), runner)
+        await runner.wait()
+    finally:
+        await runner.close()
+    assert path.read_bytes() == content
+    assert len(held) == count
+    assert 0 <= max(held) < STREAM_WRITE_BYTES
+
+
 async def test_small_chunks(data_dir: Path) -> None:
     """Check that a form fed a few bytes at a time, splitting headers and data across chunks, is stored whole."""
     content = TURTLE * (2 * SNIFF_BYTES // len(TURTLE))  # claimed mid-file, at the checked part's end
@@ -346,18 +394,9 @@ async def test_small_chunks(data_dir: Path) -> None:
         chunk = chunks.pop(0)
         return {"type": "http.request", "body": chunk, "more_body": bool(chunks)}
 
-    settings = make_settings()
-    runner = await JobRunner.open(settings)
-    app = FastAPI()
-    app.state.settings = settings
-    scope = {
-        "type": "http",
-        "method": "POST",
-        "headers": [(b"content-type", b"multipart/form-data; boundary=boundary")],
-        "app": app,
-    }
+    runner = await JobRunner.open(make_settings())
     try:
-        context = await receive_upload(Request(scope, receive), runner)
+        context = await receive_upload(asgi_request(receive, b"boundary"), runner)
         await runner.wait()
     finally:
         await runner.close()
@@ -373,8 +412,7 @@ async def test_client_disconnect(data_dir: Path) -> None:
     messages: list[Message] = [
         {
             "type": "http.request",
-            "body": b'--b\r\nContent-Disposition: form-data; name="reasoner"\r\n\r\nnone\r\n'
-            b'--b\r\nContent-Disposition: form-data; name="ontology"; filename="o.ttl"\r\n\r\n' + LONG,
+            "body": FILE_START + LONG,
             "more_body": True,
         },
         {"type": "http.disconnect"},
@@ -383,15 +421,10 @@ async def test_client_disconnect(data_dir: Path) -> None:
     async def receive() -> Message:
         return messages.pop(0)
 
-    settings = make_settings()
-    runner = await JobRunner.open(settings)
-    app = FastAPI()
-    app.state.settings = settings
-    scope = {"type": "http", "method": "POST", "headers": [(b"content-type", b"multipart/form-data; boundary=b")]}
-    scope["app"] = app
+    runner = await JobRunner.open(make_settings())
     try:
         with pytest.raises(UploadError, match="client disconnected"):
-            await receive_upload(Request(scope, receive), runner)
+            await receive_upload(asgi_request(receive), runner)
     finally:
         await runner.close()
     assert runner.state.failed_stage == Stage.UPLOADING
@@ -421,6 +454,10 @@ async def test_client_disconnect(data_dir: Path) -> None:
         (b'<owl:Ontology xmlns:owl="http://www.w3.org/2002/07/owl#" ontologyIRI="x">', "OWL/XML"),
         (OFN, "OWL Functional Syntax"),
         (b"# comment\nOntology (<http://example.org/onto>)", "OWL Functional Syntax"),
+        (b'<!DOCTYPE Ontology SYSTEM "o.dtd">\n<Ontology ontologyIRI="[x]">', "OWL/XML"),
+        (b'<!DOCTYPE rdf:RDF [<!ENTITY a "b">]>\n<?pi x?>\n<!-- c -->\n<Ontology>', "OWL/XML"),
+        (b'<!DOCTYPE rdf:RDF [<!ENTITY a "b">]', "RDF/XML"),
+        (b"<!-- unclosed", "RDF/XML"),
         (b"PK\x03\x04", "compressed"),
         (b"", None),
     ],
@@ -428,6 +465,30 @@ async def test_client_disconnect(data_dir: Path) -> None:
 def test_sniff_syntax(sample: bytes, syntax: str | None) -> None:
     """Check the syntax the start of a file is taken to be."""
     assert sniff_syntax(sample) == syntax
+
+
+@pytest.mark.parametrize(
+    "sample",
+    [
+        b'<?xml version="1.0"?><!DOCTYPE' + b"[]" * 24,  # ~1 s with the old regex; more pairs would hang it, not fail
+        b"<!--" * SNIFF_BYTES,
+        b"<?" * SNIFF_BYTES,
+        b"<!DOCTYPE" * SNIFF_BYTES,
+        b"<!DOCTYPE[" + b"]" * SNIFF_BYTES,
+        b"#\n" * SNIFF_BYTES,
+        b"<" + b"a" * SNIFF_BYTES,
+    ],
+    ids=["doctype-subsets", "comments", "pis", "doctypes", "subset-ends", "comment-lines", "long-tag"],
+)
+def test_sniff_syntax_fast(sample: bytes) -> None:
+    """Check that no sample makes the check slow: it runs on the event loop, before any job is claimed.
+
+    A backtracking regex once took time exponential in the first sample's `[]` pairs, so a 100-byte upload froze the
+    server.
+    """
+    started = time.perf_counter()
+    sniff_syntax(sample[:SNIFF_BYTES])
+    assert time.perf_counter() - started < 0.05
 
 
 @pytest.mark.parametrize(("sample", "suffix"), [(b"ex:a a ex:B .", ".ttl"), (RDFXML, ".rdf"), (OFN, ".ofn")])
