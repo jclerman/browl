@@ -6,6 +6,7 @@ at the time limit or if the job is cancelled. A failure's reason says which limi
 """
 
 import asyncio
+import codecs
 import logging
 import os
 import re
@@ -40,6 +41,9 @@ TERM_GRACE_S = 5.0
 
 TAIL_LINES = 20
 """How many of ROBOT's last output lines a failure's reason quotes."""
+
+READ_BYTES = 65536
+"""How much of ROBOT's output is read at a time."""
 
 MAX_LINE_CHARS = 2000
 """The longest output line kept; a longer one is cut short."""
@@ -171,14 +175,15 @@ async def run_robot(args: Sequence[str], settings: Settings) -> None:
 async def _read(process: asyncio.subprocess.Process, output: RobotOutput) -> None:
     """Keep and log ROBOT's output lines, in chunks, so no line is too long to read."""
     assert process.stdout is not None
-    partial = ""
-    while chunk := await process.stdout.read(65536):
-        lines = (partial + chunk.decode(errors="replace")).split("\n")
-        partial = lines.pop()[: MAX_LINE_CHARS + 1]
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")  # keeps a character split between reads whole
+    rest = ""
+    while chunk := await process.stdout.read(READ_BYTES):
+        lines = (rest + decoder.decode(chunk)).split("\n")
+        rest = lines.pop()[: MAX_LINE_CHARS + 1]
         for line in lines:
             _keep(line, output)
-    if partial:
-        _keep(partial, output)
+    if rest := rest + decoder.decode(b"", final=True):
+        _keep(rest, output)
 
 
 def _keep(line: str, output: RobotOutput) -> None:

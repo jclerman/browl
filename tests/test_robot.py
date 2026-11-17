@@ -177,6 +177,14 @@ async def test_output_handling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, 
         await run_robot([], settings)
 
 
+async def test_output_split_characters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
+    """Check that a multi-byte character split between reads is decoded whole."""
+    fake_java(tmp_path, monkeypatch, f"printf 'There are 1 unsatisfiable classes\\nunsatisfiable: {NS}Bär→'; exit 1")
+    monkeypatch.setattr(browl.robot, "READ_BYTES", 1)
+    with pytest.raises(StageError, match=f"^1 unsatisfiable classes: {NS}Bär→$"):
+        await run_robot([], settings)
+
+
 async def test_stops_group_on_cancel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
     """Check that a cancelled run stops ROBOT's whole process group, with SIGKILL if SIGTERM is ignored."""
     pid_file = tmp_path / "pid"
