@@ -35,8 +35,16 @@ async def job_status(request: Request) -> HTMLResponse:
 
 @router.get("/openapi.json", include_in_schema=False)
 async def openapi(request: Request) -> JSONResponse:
-    """Return the OpenAPI schema of the app's API."""
-    return JSONResponse(request.app.openapi())
+    """Return the OpenAPI schema of the app's API, with the root path as its server, as FastAPI's own route does.
+
+    Without it, Swagger UI's "Try it out" would call paths missing the root path when the app is served under one.
+    """
+    schema = request.app.openapi()
+    root_path = request.scope.get("root_path", "").rstrip("/")
+    servers = schema.get("servers", [])
+    if root_path and root_path not in {server.get("url") for server in servers}:
+        schema = {**schema, "servers": [{"url": root_path}, *servers]}
+    return JSONResponse(schema)
 
 
 @router.get("/docs", include_in_schema=False)

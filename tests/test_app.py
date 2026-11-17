@@ -146,6 +146,14 @@ def test_api_docs_show_title_and_version(client: TestClient) -> None:
     assert info["version"] == browl.__version__ == pyproject["project"]["version"]
 
 
+@pytest.mark.parametrize(("root_path", "servers"), [("", None), ("/site", [{"url": "/site"}])])
+def test_api_docs_servers(root_path: str, servers: list[dict[str, str]] | None) -> None:
+    """Check that the schema names the root path as its server, so "Try it out" calls paths under it."""
+    with TestClient(make_app(), root_path=root_path) as client:
+        schema = client.get(f"{root_path}/_browl/admin/openapi.json").json()
+    assert schema.get("servers") == servers
+
+
 @pytest.mark.parametrize("prefix", ["_browl", "_site"])
 def test_api_docs_are_under_admin(prefix: str) -> None:
     """Check that the API docs are admin routes, using a pinned Swagger UI, and nothing is at FastAPI's default paths.
