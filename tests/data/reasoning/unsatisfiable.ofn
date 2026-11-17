@@ -1,0 +1,11 @@
+Prefix(:=<http://example.org/s2/>)
+Prefix(owl:=<http://www.w3.org/2002/07/owl#>)
+
+Ontology(<http://example.org/s2/unsatisfiable>
+  Declaration(Class(:Plant))
+  Declaration(Class(:Animal))
+  Declaration(Class(:Chimera))
+  DisjointClasses(:Plant :Animal)
+  SubClassOf(:Chimera :Plant)
+  SubClassOf(:Chimera :Animal)
+)

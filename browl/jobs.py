@@ -343,6 +343,7 @@ class JobContext:
         reasoner: The reasoner the admin chose.
         upload: The uploaded file, its suffix naming its format (`browl.upload.FORMATS`); None until it's stored.
         upload_bytes: How much of the file has arrived.
+        reasoned: The reasoned ontology, once the reasoning stage has made it; None if it didn't run.
     """
 
     generation: int
@@ -350,6 +351,12 @@ class JobContext:
     reasoner: Reasoner = Reasoner.NONE
     upload: Path | None = None
     upload_bytes: int | None = None
+    reasoned: Path | None = None
+
+    @property
+    def ontology(self) -> Path | None:
+        """Return the ontology to serve: the reasoned one if reasoning ran, else the upload."""
+        return self.reasoned or self.upload
 
 
 StageFunction = Callable[[JobContext], Awaitable[None]]

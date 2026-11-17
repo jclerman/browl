@@ -62,8 +62,9 @@ class Settings(BaseSettings):
         language_ranking: Language tags, best first, lowercased; `UNTAGGED` is appended when not listed (O-5).
         extra_prefixes: CURIE prefix → namespace, overriding the ontology's own and the built-in ones (O-11).
         page_cache_size: Rendered pages kept in memory; 0 turns the cache off (O-10).
-        reasoner_timeout_s: Reasoner time limit in seconds; placeholder until spike S-2 (O-8).
-        reasoner_max_heap: Reasoner heap limit; placeholder until spike S-2 (O-8).
+        reasoner_timeout_s: Reasoner time limit in seconds, for the whole ROBOT run (O-8).
+        reasoner_max_heap: Reasoner heap limit (O-8).
+        materialize_properties: Object property IRIs whose inferred `SubClassOf(P some C)` axioms reasoning adds.
         app_jvm_max_heap: Heap for the app's JVM, which only renders per-page fragments; to be confirmed in P-4.
         fuseki_url: Fuseki's address.
         robot_jar: Path to `robot.jar`, where the app image installs it.
@@ -89,6 +90,7 @@ class Settings(BaseSettings):
     page_cache_size: int = Field(default=100, ge=0)
     reasoner_timeout_s: int = Field(default=3600, gt=0)
     reasoner_max_heap: str = "8g"
+    materialize_properties: list[str] = []
     app_jvm_max_heap: str = "1g"
     fuseki_url: HttpUrl = HttpUrl("http://fuseki:3030")
     robot_jar: Path = Path("/opt/robot/robot.jar")
@@ -115,6 +117,15 @@ class Settings(BaseSettings):
         if not _JAVA_HEAP.fullmatch(value):
             raise ValueError("must be a Java heap size, such as 512m or 8g")
         return value
+
+    @field_validator("materialize_properties")
+    @classmethod
+    def check_materialize_properties(cls, value: list[str]) -> list[str]:
+        """Require unique absolute IRIs, which ROBOT takes as they are."""
+        relative = [iri for iri in value if not _IRI_SCHEME.match(iri)]
+        if relative:
+            raise ValueError(f"not absolute IRIs: {', '.join(relative)}")
+        return confirm_unique(value)
 
     @field_validator("name_properties")
     @classmethod

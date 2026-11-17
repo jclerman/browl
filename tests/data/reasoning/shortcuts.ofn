@@ -1,0 +1,34 @@
+Prefix(:=<http://example.org/s/>)
+Prefix(owl:=<http://www.w3.org/2002/07/owl#>)
+
+Ontology(<http://example.org/s>
+  Declaration(ObjectProperty(:part_of))
+  Declaration(ObjectProperty(:has_part))
+  TransitiveObjectProperty(:part_of)
+  # A shortcut to a named class: removed.
+  SubClassOf(:A :B)
+  SubClassOf(:B :C)
+  SubClassOf(:A :C)
+  # A restriction the parent already has: removed.
+  SubClassOf(:D :E)
+  SubClassOf(:E ObjectSomeValuesFrom(:part_of :F))
+  SubClassOf(:D ObjectSomeValuesFrom(:part_of :F))
+  # A transitive part_of shortcut: removed.
+  SubClassOf(:G ObjectSomeValuesFrom(:part_of :H))
+  SubClassOf(:H ObjectSomeValuesFrom(:part_of :I))
+  SubClassOf(:G ObjectSomeValuesFrom(:part_of :I))
+  # Not shortcuts: J part_of some K and K ⊑ L don't give J ⊑ L; has_part isn't transitive; X's only parent stays.
+  SubClassOf(:J ObjectSomeValuesFrom(:part_of :K))
+  SubClassOf(:K :L)
+  SubClassOf(:J :L)
+  SubClassOf(:M ObjectSomeValuesFrom(:has_part :N))
+  SubClassOf(:N ObjectSomeValuesFrom(:has_part :O))
+  SubClassOf(:M ObjectSomeValuesFrom(:has_part :O))
+  SubClassOf(:T ObjectSomeValuesFrom(:part_of :T))
+  SubClassOf(:X ObjectSomeValuesFrom(:part_of :T))
+  # Materialized from the definition: Q ⊑ part_of some R.
+  EquivalentClasses(:Q ObjectIntersectionOf(:P ObjectSomeValuesFrom(:part_of :R)))
+  # A cycle: kept as an equivalence.
+  SubClassOf(:U :V)
+  SubClassOf(:V :U)
+)

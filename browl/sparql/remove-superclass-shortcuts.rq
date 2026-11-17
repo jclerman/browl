@@ -1,0 +1,20 @@
+PREFIX owl: <http://www.w3.org/2002/07/owl#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+# Delete shortcut rdfs:subClassOf links: X ⊑ Z where another parent Y of X already gives Z, as
+#  1. Y ⊑ Z, or Y ⊑ Z2 where Z2 is the same `p some T` restriction as Z; or
+#  2. for transitive p: Y is `p some W` and W ⊑ Z2 as above (finger part_of hand, hand part_of body).
+# Assumes no rdfs:subClassOf cycles, as after `robot reason`, which removes them; else a cycle's shortcuts all go.
+DELETE { ?sub rdfs:subClassOf ?super }
+WHERE {
+  ?sub rdfs:subClassOf ?super, ?mid .
+  FILTER (?mid NOT IN (?sub, ?super))
+  { ?mid rdfs:subClassOf ?super2 }
+  UNION
+  { ?mid owl:onProperty ?p ; owl:someValuesFrom/rdfs:subClassOf ?super2 .
+    ?p a owl:TransitiveProperty .
+    ?super2 owl:onProperty ?p }
+  FILTER (?super2 = ?super || EXISTS {
+    ?super owl:onProperty ?q ; owl:someValuesFrom ?t .
+    ?super2 owl:onProperty ?q ; owl:someValuesFrom ?t })
+}

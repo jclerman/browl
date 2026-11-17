@@ -11,9 +11,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import browl
-from browl import admin, owlapi
+from browl import admin, owlapi, robot
 from browl.fuseki import FusekiClient
-from browl.jobs import JobRunner
+from browl.jobs import JobRunner, Stage
 from browl.pages import STATIC_DIR, SiteGate
 from browl.settings import Settings, load_settings
 
@@ -61,7 +61,8 @@ def create_app(
     """Build the application, loading the settings from the environment unless given.
 
     On startup the app starts the JVM (DESIGN.md §2.1), on the main thread, where Uvicorn runs the startup (a test
-    client doesn't, so tests start it first); it opens its Fuseki client and the load job runner (`app.state.jobs`).
+    client doesn't, so tests start it first); it opens its Fuseki client and the load job runner (`app.state.jobs`),
+    with the stages built so far.
     On shutdown a running load job is cancelled. Pages are gated on the job state (`SiteGate`, §2.13).
 
     Args:
@@ -82,7 +83,7 @@ def create_app(
         async with httpx2.AsyncClient(base_url=str(settings.fuseki_url), transport=fuseki_transport) as client:
             app.state.fuseki_http = client
             app.state.sparql = FusekiClient(client)
-            app.state.jobs = await JobRunner.open(settings)
+            app.state.jobs = await JobRunner.open(settings, {Stage.REASONING: robot.reasoning_stage})
             try:
                 yield
             finally:
