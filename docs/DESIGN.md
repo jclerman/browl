@@ -275,9 +275,23 @@ Uberon goes from upload file to ready in 7 s without reasoning, measured end to 
 
 **Reasoner limits** _(Q7)_:
 
-- Time: the ROBOT subprocess runs with a timeout and is killed when it's reached; the job records "time limit".
-- Memory: the JVM heap is capped (`-Xmx`, set via `ROBOT_JAVA_ARGS`), and the job records "memory limit" when it finds
-  `OutOfMemoryError` in ROBOT's output. To be confirmed by spike S-2.
+- ROBOT runs as `java -Xmx{REASONER_MAX_HEAP} -XX:+ExitOnOutOfMemoryError -jar robot.jar -vv reason …`, in its own
+  process group. It is a single JVM, so there is no wrapper process to outlive it.
+- Time: when `REASONER_TIMEOUT_S` is reached, the process group gets SIGTERM, then SIGKILL after a few seconds; the
+  JVM exits on SIGTERM and leaves nothing behind. The job records "time limit".
+- Memory: `-XX:+ExitOnOutOfMemoryError` makes any thread's `OutOfMemoryError` end the JVM with status 3 and the line
+  `Terminating due to java.lang.OutOfMemoryError`; the job records "memory limit". Without the flag, an ELK worker's
+  breach shows only as a generic failure.
+- Other failures are told apart by ROBOT's log lines, checked in this order: `StackOverflowError` ("stack overflow"),
+  `The ontology is inconsistent` ("inconsistent ontology"), `There are N unsatisfiable classes` ("unsatisfiable
+  classes", with the classes it lists), `INVALID ONTOLOGY FILE ERROR` ("parse error"); anything else is "reasoner
+  failed" with ROBOT's last lines.
+- ROBOT writes its output only after reasoning succeeds; the build script still writes it to a temporary path and
+  renames it.
+
+Measured in S-2 ([findings](../research/S-2/README.md)): ELK classifies Uberon in 13 s within 1 GB, and NCBITaxon in
+about 6.5 min, needing a 16 GB heap. HermiT can't classify Uberon: it ran out of 16 GB after 8 minutes (and HermiT
+with individual reuse, the change in a pending ROBOT PR, hit a 1-hour limit), so the limits are what stop it.
 
 On failure the job records the stage and reason (A-6), and the site stays on a "not available" page until an admin
 uploads again. Downtime during a replace is accepted. _(Q14a)_ A timeout's reason names what timed out and the limit
@@ -638,7 +652,7 @@ validated at startup (`browl/settings.py`). Lists and mappings are given as JSON
 | `LANGUAGE_RANKING` | `[en]` | Untagged is the reserved entry `none`, added at the end if not listed; O-5 |
 | `EXTRA_PREFIXES` | `{}` | O-11 |
 | `PAGE_CACHE_SIZE` | `100` | `0` turns the cache off; O-10 |
-| `REASONER_TIMEOUT_S`, `REASONER_MAX_HEAP` | `3600`, `8g`: placeholders until spike S-2 | O-8 |
+| `REASONER_TIMEOUT_S`, `REASONER_MAX_HEAP` | `3600`, `8g` (S-2) | O-8; ELK needs 1 GB for Uberon and 16 GB for NCBITaxon |
 | `APP_JVM_MAX_HEAP` | `1g`, confirmed in P-4 (2.4) | heap for the app's in-process JVM, which only renders per-page fragments (S-4) |
 | `FUSEKI_URL` | `http://fuseki:3030` | Fuseki's address on the Compose network |
 | `ROBOT_JAR` | `/opt/robot/robot.jar`, where the app image installs it | used both on the app's classpath and for reasoning subprocesses |
@@ -682,7 +696,7 @@ Pages link to the service's own routes by root-relative paths, never by URLs bui
 | A Fuseki response that fails partway returns a truncated result with HTTP 200 | Seen in P-3 and S-6: once Fuseki has sent the status, it appends the error as plain text and ends the response normally. It sends it as soon as a SPARQL JSON or TSV result is cut short (the writer flushes what it has), and once any other response outgrows the 2 MB output buffer (2.4). So browl treats any status other than 2xx as a failed query, and never discards the HTTP client's error for a body that ends early (Fuseki exiting or restarting mid-response drops the connection before the last chunk). It parses every Fuseki response strictly, as SPARQL JSON results or N-Triples, and parses each TSV cell as an RDF term, so the appended error text can't pass as a one-column row. N-Triples results may hold only triples, since Jena writes no comments or blank lines and the appended text can start with `#`, which N-Triples reads as a comment (P-4); a parse error is a failed query, never a short result. P-8 checks that each bulk result is complete (e.g. a final count or sentinel), which also catches a result that breaks off cleanly at a row boundary, or an error with no text appended. |
 | Fuseki pauses for full garbage collections under page load | Resolved by S-6: the `System.gc()` calls P-3 saw came from Fuseki 6.2.0 allocating an unpooled 5 MB direct output buffer per response (Jena GH-4084). Fuseki's `jetty.xml` pools a 2 MB buffer instead, which removed them; pages went from 302 to 528 a second at 1 client, and from 573 to 769 at 16 (2.4). |
 | JPype quirks: thread safety of concurrent OWLAPI calls; Python–Java call overhead | Resolved by S-1: concurrent calls were safe but gave no extra throughput, so OWLAPI calls run on one thread (2.1). Call overhead is small ([S-1 findings](../research/S-1/README.md)). P-4 found three more, each handled: the JVM must start on the main thread, its signal handlers bypassed Uvicorn's graceful shutdown (`-Xrs`), and the OWLAPI fetched a fragment's `owl:imports` from their IRIs, web or `file:`, so the bridge refuses every document load but the fragment's own (2.1). |
-| Memory limit can't be reported reliably | Spike S-2; at worst report "reasoner failed" with ROBOT's output. |
+| Memory limit can't be reported reliably | Resolved by S-2: with `-XX:+ExitOnOutOfMemoryError`, a heap breach in any thread exits with status 3 and a fixed message; each other failure kind has its own ROBOT log line (2.4). |
 | Descendant counts too slow or memory-hungry at millions of classes | Resolved by S-3: roaring bitmaps, 4.2 s for NCBITaxon ([S-3 findings](../research/S-3/README.md)). |
 | Loading a very large ontology takes minutes | Accepted for uploads (Q14a), shown on the status page. Restarts don't reload (2.4). NCBITaxon: about 5 minutes, estimated; Uberon: 7 s, measured ([S-4 findings](../research/S-4/README.md)). P-24 checks whether extracting the dictionary and edges by streaming the upload file, in parallel with the TDB2 load, is worth it. |
 | Fragment rendering misses axioms a full-ontology render would show | 300 of 300 Uberon classes matched (S-4); P-15 adds n-ary disjointness and general class axioms, and tests against full-ontology rendering. |
@@ -705,7 +719,7 @@ go into this document.
 | ID | Work item | Delivers | Depends on | Status | Tracking |
 | --- | --- | --- | --- | --- | --- |
 | S-1 | OWLAPI via JPype: start the JVM with `robot.jar`, load an ontology, render axioms in Manchester syntax with link tokens, list referencing axioms; measure per-entity render time, including concurrent requests. Briefly compare py-horned-owl's load time, memory and Manchester output. | de-risks U-3, U-26, N-3 | | Done | [#8](https://github.com/jclerman/browl/issues/8) |
-| S-2 | ROBOT reasoning with time and heap limits: confirm a memory breach can be detected and told apart from other failures | de-risks A-6, O-8 | | To do | [#12](https://github.com/jclerman/browl/issues/12) |
+| S-2 | ROBOT reasoning with time and heap limits: confirm a memory breach can be detected and told apart from other failures | de-risks A-6, O-8 | | Done | [#12](https://github.com/jclerman/browl/issues/12) |
 | S-3 | Scale test with a large ontology (e.g. NCBITaxon or ChEBI): OWLAPI load time and heap; descendant-count computation time and memory; `usage` table build time and size; derived database size | de-risks N-1–N-4 | S-1 | Done | [#13](https://github.com/jclerman/browl/issues/13) |
 | S-4 | Serving without an in-process OWLAPI: Fuseki/TDB2 queried on demand (aggregates fetched up front with single SPARQL queries), or pre-rendered SQLite. Measure bulk load, restart readiness, page-query latency, Manchester rendering. | de-risks N-1–N-4, U-16 | S-3 | Done | [#47](https://github.com/jclerman/browl/issues/47) |
 | S-5 | Compare browl with OLS4 on Uberon and NCBITaxon: load time, store size, memory, page speed, and how each shows an entity's usage and relation trees. S-5a: best effort now, browl's figures as lower bounds; S-5b: like for like once browl renders pages. | informs positioning and the Later requirements U-34–U-40 | P-3 | In progress (S-5a done) | [#54](https://github.com/jclerman/browl/issues/54) (S-5a [#55](https://github.com/jclerman/browl/issues/55), S-5b [#56](https://github.com/jclerman/browl/issues/56)) |
