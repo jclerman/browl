@@ -1,0 +1,37 @@
+# tbls config for the state database (docs/SCHEMA.md); `make schema-docs` regenerates docs/schema/state/ from it.
+# The database is the one scripts/schema_dbs.py builds by running browl.jobs.MIGRATIONS on an empty file.
+name: state
+dsn: sqlite://.cache/schema-dbs/state.sqlite3
+docPath: docs/schema/state
+er:
+  format: mermaid
+format:
+  adjust: true
+lint:
+  requireTableComment:
+    enabled: true
+  requireColumnComment:
+    enabled: true
+comments:
+  - table: job
+    tableComment: >-
+      The latest load job (browl.jobs.JobState), at most one row: each job replaces the previous one's. Times are ISO
+      8601 with a time zone.
+    columnComments:
+      id: Always 1, so the table has at most one row.
+      generation: The job's generation number, one more than the previous job's.
+      stage: The stage the job is in, or reached (ready), or failed in (browl.jobs.Stage).
+      started_at: When the job started.
+      finished_at: When it reached ready or failed; NULL while it runs.
+      failed_stage: The stage it failed in; NULL unless it failed.
+      reason: Why it failed, cut to MAX_REASON_CHARS; NULL unless it failed.
+      ready_generation: >-
+        The generation of the latest job that reached ready, this one or an earlier one; NULL if none has.
+      reasoner: The reasoner the admin chose (browl.jobs.Reasoner); 'none' skips the reasoning stage.
+      upload_name: The uploaded file's name, as the admin's browser gave it; NULL if none.
+      upload_syntax: The file's syntax, e.g. 'RDF/XML'.
+      upload_bytes: The file's size; while uploading, or after a failed upload, how much arrived.
+      imports: >-
+        The ontology's imports, direct and indirect, as a JSON list of browl.jobs.ImportResult; '[]' until the
+        imports stage lists them.
+      triples: How many triples the store's default graph holds once loaded, the ontology without its imports.

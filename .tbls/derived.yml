@@ -1,0 +1,126 @@
+# tbls config for the derived database (docs/SCHEMA.md); `make schema-docs` regenerates docs/schema/derived/ from it.
+# The database is the one scripts/schema_dbs.py builds from browl.derived.SCHEMA and INDEXES.
+name: derived
+dsn: sqlite://.cache/schema-dbs/derived.sqlite3
+docPath: docs/schema/derived
+er:
+  format: mermaid
+format:
+  adjust: true
+lint:
+  requireTableComment:
+    enabled: true
+  requireColumnComment:
+    enabled: true
+# The tables refer to entities by entity.id, with no foreign keys: the build fills each table whole and never updates
+# it, so SQLite needn't check them.
+relations:
+  - table: name_value
+    columns: [entity]
+    parentTable: entity
+    parentColumns: [id]
+    def: name_value.entity references entity.id
+    cardinality: zero_or_more
+    parentCardinality: exactly_one
+  - table: edge
+    columns: [parent]
+    parentTable: entity
+    parentColumns: [id]
+    def: edge.parent references entity.id
+    cardinality: zero_or_more
+    parentCardinality: exactly_one
+  - table: edge
+    columns: [child]
+    parentTable: entity
+    parentColumns: [id]
+    def: edge.child references entity.id
+    cardinality: zero_or_more
+    parentCardinality: exactly_one
+  - table: equiv_group
+    columns: [entity]
+    parentTable: entity
+    parentColumns: [id]
+    def: equiv_group.entity references entity.id
+    cardinality: zero_or_one
+    parentCardinality: exactly_one
+  - table: equiv_group
+    columns: [representative]
+    parentTable: entity
+    parentColumns: [id]
+    def: equiv_group.representative references entity.id
+    cardinality: zero_or_more
+    parentCardinality: exactly_one
+  - table: counts
+    columns: [node]
+    parentTable: entity
+    parentColumns: [id]
+    def: counts.node references entity.id
+    cardinality: zero_or_more
+    parentCardinality: exactly_one
+comments:
+  - table: meta
+    tableComment: >-
+      What the database was built from (browl.derived.Meta), one row. Read from a file of any schema version, so
+      schema_version and generation keep their names.
+    columnComments:
+      id: Always 1, so the table has one row.
+      schema_version: The browl.derived.SCHEMA_VERSION the file was built with; a file of another version isn't current.
+      generation: The load job's generation number; the file is current only for that generation.
+      ontology_iri: The ontology's IRI, from its own graph; NULL if it has none.
+      version_iri: Its owl:versionIRI; NULL if it has none.
+      title: Its title (dcterms:title, dc:title, then NAME_PROPERTIES); NULL if it has none, and pages show the IRI.
+      version_info: Its owl:versionInfo; NULL if it has none.
+      reasoner: The reasoner the load ran (browl.jobs.Reasoner).
+      loaded_at: When the load job started, ISO 8601 with a time zone; a rebuild after a restart keeps it.
+  - table: entity
+    tableComment: >-
+      Every declared entity, with the URL its IRI implies (DESIGN.md 2.3). An IRI declared with several types
+      (punning) has a row for each.
+    columnComments:
+      id: The entity's number, dense, by which the other tables refer to it.
+      iri: The entity's IRI, as the ontology has it.
+      type: The entity's type.
+      path: The URL path its IRI implies.
+      fragment: The fragment of a hash IRI's URL; NULL for any other.
+      display_name: Its display name (DESIGN.md 2.7).
+      curie: Its CURIE, if a prefix in the prefix table covers it.
+  - table: name_value
+    tableComment: >-
+      Each entity's values of the name properties (NAME_PROPERTIES), for display names and search: one row per direct
+      value, and one per value entailed through rdfs:subPropertyOf.
+    columnComments:
+      entity: The entity (entity.id).
+      property: The name property's IRI.
+      value: The value's lexical form.
+      normalized: The value normalized for search.
+      language: The value's language tag, lowercased; NULL if it has none.
+      direct: 1 if the entity has the value under this property itself, 0 if under one of its sub-properties.
+  - table: edge
+    tableComment: >-
+      The hierarchies' named direct parent-child edges, between equivalence-group representatives, stored in key
+      order.
+    columnComments:
+      hierarchy: Which hierarchy, the classes' or a property type's.
+      parent: The parent (entity.id).
+      child: The child (entity.id).
+  - table: equiv_group
+    tableComment: Equivalence groups of named classes, from owl:equivalentClass (union-find).
+    columnComments:
+      entity: A class in a group (entity.id).
+      representative: The group's representative (entity.id), which stands for the group in edge and counts.
+  - table: counts
+    tableComment: Each hierarchy node's numbers of children and of distinct descendants (DESIGN.md 2.5).
+    columnComments:
+      hierarchy: Which hierarchy, as in edge.hierarchy.
+      node: The node (entity.id).
+      children: How many immediate children it has.
+      descendants: How many distinct descendants it has, each counted once however many paths lead to it.
+  - table: hash_prefix
+    tableComment: Every distinct URL path that has hash entities under it, for the hash-IRI script (U-13).
+    columnComments:
+      path: The URL path, as in entity.path.
+  - table: prefix
+    tableComment: CURIE prefixes, for entity.curie (the ontology's own, built-ins, and EXTRA_PREFIXES overrides).
+    columnComments:
+      prefix: The prefix name; empty for the default prefix.
+      namespace: The namespace IRI it stands for.

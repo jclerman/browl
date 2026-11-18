@@ -1,0 +1,123 @@
+{
+  "name": "state",
+  "tables": [
+    {
+      "name": "job",
+      "type": "table",
+      "comment": "The latest load job (browl.jobs.JobState), at most one row: each job replaces the previous one's. Times are ISO 8601 with a time zone.",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "nullable": true,
+          "comment": "Always 1, so the table has at most one row."
+        },
+        {
+          "name": "generation",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "The job's generation number, one more than the previous job's."
+        },
+        {
+          "name": "stage",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "The stage the job is in, or reached (ready), or failed in (browl.jobs.Stage)."
+        },
+        {
+          "name": "started_at",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "When the job started."
+        },
+        {
+          "name": "finished_at",
+          "type": "TEXT",
+          "nullable": true,
+          "comment": "When it reached ready or failed; NULL while it runs."
+        },
+        {
+          "name": "failed_stage",
+          "type": "TEXT",
+          "nullable": true,
+          "comment": "The stage it failed in; NULL unless it failed."
+        },
+        {
+          "name": "reason",
+          "type": "TEXT",
+          "nullable": true,
+          "comment": "Why it failed, cut to MAX_REASON_CHARS; NULL unless it failed."
+        },
+        {
+          "name": "ready_generation",
+          "type": "INTEGER",
+          "nullable": true,
+          "comment": "The generation of the latest job that reached ready, this one or an earlier one; NULL if none has."
+        },
+        {
+          "name": "reasoner",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "'none'",
+          "comment": "The reasoner the admin chose (browl.jobs.Reasoner); 'none' skips the reasoning stage."
+        },
+        {
+          "name": "upload_name",
+          "type": "TEXT",
+          "nullable": true,
+          "comment": "The uploaded file's name, as the admin's browser gave it; NULL if none."
+        },
+        {
+          "name": "upload_syntax",
+          "type": "TEXT",
+          "nullable": true,
+          "comment": "The file's syntax, e.g. 'RDF/XML'."
+        },
+        {
+          "name": "upload_bytes",
+          "type": "INTEGER",
+          "nullable": true,
+          "comment": "The file's size; while uploading, or after a failed upload, how much arrived."
+        },
+        {
+          "name": "imports",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "'[]'",
+          "comment": "The ontology's imports, direct and indirect, as a JSON list of browl.jobs.ImportResult; '[]' until the imports stage lists them."
+        },
+        {
+          "name": "triples",
+          "type": "INTEGER",
+          "nullable": true,
+          "comment": "How many triples the store's default graph holds once loaded, the ontology without its imports."
+        }
+      ],
+      "constraints": [
+        {
+          "name": "id",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (id)",
+          "table": "job",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "-",
+          "type": "CHECK",
+          "def": "CHECK (id = 1)",
+          "table": "job",
+          "columns": [
+            "id"
+          ]
+        }
+      ],
+      "def": "CREATE TABLE job (\n        id INTEGER PRIMARY KEY CHECK (id = 1),\n        generation INTEGER NOT NULL,\n        stage TEXT NOT NULL,\n        started_at TEXT NOT NULL,\n        finished_at TEXT,\n        failed_stage TEXT,\n        reason TEXT,\n        ready_generation INTEGER\n    , reasoner TEXT NOT NULL DEFAULT 'none', upload_name TEXT, upload_syntax TEXT, upload_bytes INTEGER, imports TEXT NOT NULL DEFAULT '[]', triples INTEGER)"
+    }
+  ],
+  "driver": {
+    "name": "sqlite",
+    "database_version": "3.53.4"
+  }
+}

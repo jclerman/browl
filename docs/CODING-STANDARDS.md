@@ -12,8 +12,10 @@ instructions specific to coding agents. Requirements and architecture are in [`D
 - **Layout:** the package is `browl/` at the repo root, not a `src/` layout. Tests are in `tests/`.
 - **Spike code** lives in `research/S-n/`. It is linted and formatted, but needs no docstrings, type checking or
   tests, and may `print`.
-- **Make targets:** `make install`, `make doctor` (checks the tools development needs), `make lint`, `make test`, and
-  `make ci` (lint then test, as CI runs them). [`CONTRIBUTING.md`](../CONTRIBUTING.md) lists the tools.
+- **Make targets:** `make install`, `make doctor` (checks the tools development needs), `make lint`, `make test`,
+  `make schema-docs` (regenerates the SQLite schema docs, [`SCHEMA.md`](SCHEMA.md)), `make check-schema-docs` (fails if
+  they're out of date), and `make ci` (lint, the schema docs check, then test, as CI runs them).
+  [`CONTRIBUTING.md`](../CONTRIBUTING.md) lists the tools.
 - **Reuse before writing.** Use the standard library or a well-maintained package where one does the job. Write your
   own only for a good reason (e.g. performance, quality, trustworthiness), and say why in the PR.
 
@@ -68,7 +70,8 @@ instructions specific to coding agents. Requirements and architecture are in [`D
   Fuseki is called with an async HTTP client.
 - **SQL:** the standard library's `sqlite3` with hand-written SQL; no ORM. The derived database is rebuilt on every
   load and needs no migrations. The persistent database (job state, admins) records a schema version and migrates
-  forward from it.
+  forward from it. Every table and column is described in `.tbls/`, from which `make schema-docs`
+  generates `docs/schema/` ([`SCHEMA.md`](SCHEMA.md)).
 
 ## Front end
 

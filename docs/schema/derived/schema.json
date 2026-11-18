@@ -1,0 +1,615 @@
+{
+  "name": "derived",
+  "tables": [
+    {
+      "name": "meta",
+      "type": "table",
+      "comment": "What the database was built from (browl.derived.Meta), one row. Read from a file of any schema version, so schema_version and generation keep their names.",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "nullable": true,
+          "comment": "Always 1, so the table has one row."
+        },
+        {
+          "name": "schema_version",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "The browl.derived.SCHEMA_VERSION the file was built with; a file of another version isn't current."
+        },
+        {
+          "name": "generation",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "The load job's generation number; the file is current only for that generation."
+        },
+        {
+          "name": "ontology_iri",
+          "type": "TEXT",
+          "nullable": true,
+          "comment": "The ontology's IRI, from its own graph; NULL if it has none."
+        },
+        {
+          "name": "version_iri",
+          "type": "TEXT",
+          "nullable": true,
+          "comment": "Its owl:versionIRI; NULL if it has none."
+        },
+        {
+          "name": "title",
+          "type": "TEXT",
+          "nullable": true,
+          "comment": "Its title (dcterms:title, dc:title, then NAME_PROPERTIES); NULL if it has none, and pages show the IRI."
+        },
+        {
+          "name": "version_info",
+          "type": "TEXT",
+          "nullable": true,
+          "comment": "Its owl:versionInfo; NULL if it has none."
+        },
+        {
+          "name": "reasoner",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "The reasoner the load ran (browl.jobs.Reasoner)."
+        },
+        {
+          "name": "loaded_at",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "When the load job started, ISO 8601 with a time zone; a rebuild after a restart keeps it."
+        }
+      ],
+      "constraints": [
+        {
+          "name": "id",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (id)",
+          "table": "meta",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "-",
+          "type": "CHECK",
+          "def": "CHECK (id = 1)",
+          "table": "meta",
+          "columns": [
+            "id"
+          ]
+        }
+      ],
+      "def": "CREATE TABLE meta (\n    id INTEGER PRIMARY KEY CHECK (id = 1),\n    schema_version INTEGER NOT NULL,\n    generation INTEGER NOT NULL,\n    ontology_iri TEXT,\n    version_iri TEXT,\n    title TEXT,\n    version_info TEXT,\n    reasoner TEXT NOT NULL,\n    loaded_at TEXT NOT NULL\n)"
+    },
+    {
+      "name": "entity",
+      "type": "table",
+      "comment": "Every declared entity, with the URL its IRI implies (DESIGN.md 2.3). An IRI declared with several types (punning) has a row for each.",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "nullable": true,
+          "comment": "The entity's number, dense, by which the other tables refer to it."
+        },
+        {
+          "name": "iri",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "The entity's IRI, as the ontology has it."
+        },
+        {
+          "name": "type",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "The entity's type."
+        },
+        {
+          "name": "path",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "The URL path its IRI implies."
+        },
+        {
+          "name": "fragment",
+          "type": "TEXT",
+          "nullable": true,
+          "comment": "The fragment of a hash IRI's URL; NULL for any other."
+        },
+        {
+          "name": "display_name",
+          "type": "TEXT",
+          "nullable": true,
+          "comment": "Its display name (DESIGN.md 2.7)."
+        },
+        {
+          "name": "curie",
+          "type": "TEXT",
+          "nullable": true,
+          "comment": "Its CURIE, if a prefix in the prefix table covers it."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "entity_path",
+          "def": "CREATE INDEX entity_path ON entity (path, fragment)",
+          "table": "entity",
+          "columns": [
+            "path",
+            "fragment"
+          ]
+        },
+        {
+          "name": "entity_iri_type",
+          "def": "CREATE UNIQUE INDEX entity_iri_type ON entity (iri, type)",
+          "table": "entity",
+          "columns": [
+            "iri",
+            "type"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "id",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (id)",
+          "table": "entity",
+          "columns": [
+            "id"
+          ]
+        }
+      ],
+      "def": "CREATE TABLE entity (\n    id INTEGER PRIMARY KEY,\n    iri TEXT NOT NULL,\n    type TEXT NOT NULL,\n    path TEXT NOT NULL,\n    fragment TEXT,\n    display_name TEXT,\n    curie TEXT\n)"
+    },
+    {
+      "name": "name_value",
+      "type": "table",
+      "comment": "Each entity's values of the name properties (NAME_PROPERTIES), for display names and search: one row per direct value, and one per value entailed through rdfs:subPropertyOf.",
+      "columns": [
+        {
+          "name": "entity",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "The entity (entity.id)."
+        },
+        {
+          "name": "property",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "The name property's IRI."
+        },
+        {
+          "name": "value",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "The value's lexical form."
+        },
+        {
+          "name": "normalized",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "The value normalized for search."
+        },
+        {
+          "name": "language",
+          "type": "TEXT",
+          "nullable": true,
+          "comment": "The value's language tag, lowercased; NULL if it has none."
+        },
+        {
+          "name": "direct",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "1 if the entity has the value under this property itself, 0 if under one of its sub-properties."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "name_value_normalized",
+          "def": "CREATE INDEX name_value_normalized ON name_value (normalized)",
+          "table": "name_value",
+          "columns": [
+            "normalized"
+          ]
+        },
+        {
+          "name": "name_value_entity",
+          "def": "CREATE INDEX name_value_entity ON name_value (entity)",
+          "table": "name_value",
+          "columns": [
+            "entity"
+          ]
+        }
+      ],
+      "def": "CREATE TABLE name_value (\n    entity INTEGER NOT NULL,\n    property TEXT NOT NULL,\n    value TEXT NOT NULL,\n    normalized TEXT NOT NULL,\n    language TEXT,\n    direct INTEGER NOT NULL\n)"
+    },
+    {
+      "name": "edge",
+      "type": "table",
+      "comment": "The hierarchies' named direct parent-child edges, between equivalence-group representatives, stored in key order.",
+      "columns": [
+        {
+          "name": "hierarchy",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "Which hierarchy, the classes' or a property type's."
+        },
+        {
+          "name": "parent",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "The parent (entity.id)."
+        },
+        {
+          "name": "child",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "The child (entity.id)."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "edge_child",
+          "def": "CREATE INDEX edge_child ON edge (hierarchy, child)",
+          "table": "edge",
+          "columns": [
+            "hierarchy",
+            "child"
+          ]
+        },
+        {
+          "name": "sqlite_autoindex_edge_1",
+          "def": "PRIMARY KEY (hierarchy, parent, child)",
+          "table": "edge",
+          "columns": [
+            "hierarchy",
+            "parent",
+            "child"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "hierarchy",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (hierarchy)",
+          "table": "edge",
+          "columns": [
+            "hierarchy"
+          ]
+        },
+        {
+          "name": "parent",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (parent)",
+          "table": "edge",
+          "columns": [
+            "parent"
+          ]
+        },
+        {
+          "name": "child",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (child)",
+          "table": "edge",
+          "columns": [
+            "child"
+          ]
+        },
+        {
+          "name": "sqlite_autoindex_edge_1",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (hierarchy, parent, child)",
+          "table": "edge",
+          "columns": [
+            "hierarchy",
+            "parent",
+            "child"
+          ]
+        }
+      ],
+      "def": "CREATE TABLE edge (\n    hierarchy TEXT NOT NULL,\n    parent INTEGER NOT NULL,\n    child INTEGER NOT NULL,\n    PRIMARY KEY (hierarchy, parent, child)\n) WITHOUT ROWID"
+    },
+    {
+      "name": "equiv_group",
+      "type": "table",
+      "comment": "Equivalence groups of named classes, from owl:equivalentClass (union-find).",
+      "columns": [
+        {
+          "name": "entity",
+          "type": "INTEGER",
+          "nullable": true,
+          "comment": "A class in a group (entity.id)."
+        },
+        {
+          "name": "representative",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "The group's representative (entity.id), which stands for the group in edge and counts."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "equiv_group_representative",
+          "def": "CREATE INDEX equiv_group_representative ON equiv_group (representative)",
+          "table": "equiv_group",
+          "columns": [
+            "representative"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "entity",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (entity)",
+          "table": "equiv_group",
+          "columns": [
+            "entity"
+          ]
+        }
+      ],
+      "def": "CREATE TABLE equiv_group (\n    entity INTEGER PRIMARY KEY,\n    representative INTEGER NOT NULL\n)"
+    },
+    {
+      "name": "counts",
+      "type": "table",
+      "comment": "Each hierarchy node's numbers of children and of distinct descendants (DESIGN.md 2.5).",
+      "columns": [
+        {
+          "name": "hierarchy",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "Which hierarchy, as in edge.hierarchy."
+        },
+        {
+          "name": "node",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "The node (entity.id)."
+        },
+        {
+          "name": "children",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "How many immediate children it has."
+        },
+        {
+          "name": "descendants",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "How many distinct descendants it has, each counted once however many paths lead to it."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "sqlite_autoindex_counts_1",
+          "def": "PRIMARY KEY (hierarchy, node)",
+          "table": "counts",
+          "columns": [
+            "hierarchy",
+            "node"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "hierarchy",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (hierarchy)",
+          "table": "counts",
+          "columns": [
+            "hierarchy"
+          ]
+        },
+        {
+          "name": "node",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (node)",
+          "table": "counts",
+          "columns": [
+            "node"
+          ]
+        },
+        {
+          "name": "sqlite_autoindex_counts_1",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (hierarchy, node)",
+          "table": "counts",
+          "columns": [
+            "hierarchy",
+            "node"
+          ]
+        }
+      ],
+      "def": "CREATE TABLE counts (\n    hierarchy TEXT NOT NULL,\n    node INTEGER NOT NULL,\n    children INTEGER NOT NULL,\n    descendants INTEGER NOT NULL,\n    PRIMARY KEY (hierarchy, node)\n) WITHOUT ROWID"
+    },
+    {
+      "name": "hash_prefix",
+      "type": "table",
+      "comment": "Every distinct URL path that has hash entities under it, for the hash-IRI script (U-13).",
+      "columns": [
+        {
+          "name": "path",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "The URL path, as in entity.path."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "sqlite_autoindex_hash_prefix_1",
+          "def": "PRIMARY KEY (path)",
+          "table": "hash_prefix",
+          "columns": [
+            "path"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "path",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (path)",
+          "table": "hash_prefix",
+          "columns": [
+            "path"
+          ]
+        },
+        {
+          "name": "sqlite_autoindex_hash_prefix_1",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (path)",
+          "table": "hash_prefix",
+          "columns": [
+            "path"
+          ]
+        }
+      ],
+      "def": "CREATE TABLE hash_prefix (\n    path TEXT PRIMARY KEY\n) WITHOUT ROWID"
+    },
+    {
+      "name": "prefix",
+      "type": "table",
+      "comment": "CURIE prefixes, for entity.curie (the ontology's own, built-ins, and EXTRA_PREFIXES overrides).",
+      "columns": [
+        {
+          "name": "prefix",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "The prefix name; empty for the default prefix."
+        },
+        {
+          "name": "namespace",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "The namespace IRI it stands for."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "sqlite_autoindex_prefix_1",
+          "def": "PRIMARY KEY (prefix)",
+          "table": "prefix",
+          "columns": [
+            "prefix"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "prefix",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (prefix)",
+          "table": "prefix",
+          "columns": [
+            "prefix"
+          ]
+        },
+        {
+          "name": "sqlite_autoindex_prefix_1",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (prefix)",
+          "table": "prefix",
+          "columns": [
+            "prefix"
+          ]
+        }
+      ],
+      "def": "CREATE TABLE prefix (\n    prefix TEXT PRIMARY KEY,\n    namespace TEXT NOT NULL\n) WITHOUT ROWID"
+    }
+  ],
+  "relations": [
+    {
+      "table": "name_value",
+      "columns": [
+        "entity"
+      ],
+      "cardinality": "zero_or_more",
+      "parent_table": "entity",
+      "parent_columns": [
+        "id"
+      ],
+      "parent_cardinality": "exactly_one",
+      "def": "name_value.entity references entity.id",
+      "virtual": true
+    },
+    {
+      "table": "edge",
+      "columns": [
+        "parent"
+      ],
+      "cardinality": "zero_or_more",
+      "parent_table": "entity",
+      "parent_columns": [
+        "id"
+      ],
+      "parent_cardinality": "exactly_one",
+      "def": "edge.parent references entity.id",
+      "virtual": true
+    },
+    {
+      "table": "edge",
+      "columns": [
+        "child"
+      ],
+      "cardinality": "zero_or_more",
+      "parent_table": "entity",
+      "parent_columns": [
+        "id"
+      ],
+      "parent_cardinality": "exactly_one",
+      "def": "edge.child references entity.id",
+      "virtual": true
+    },
+    {
+      "table": "equiv_group",
+      "columns": [
+        "entity"
+      ],
+      "cardinality": "zero_or_one",
+      "parent_table": "entity",
+      "parent_columns": [
+        "id"
+      ],
+      "parent_cardinality": "exactly_one",
+      "def": "equiv_group.entity references entity.id",
+      "virtual": true
+    },
+    {
+      "table": "equiv_group",
+      "columns": [
+        "representative"
+      ],
+      "cardinality": "zero_or_more",
+      "parent_table": "entity",
+      "parent_columns": [
+        "id"
+      ],
+      "parent_cardinality": "exactly_one",
+      "def": "equiv_group.representative references entity.id",
+      "virtual": true
+    },
+    {
+      "table": "counts",
+      "columns": [
+        "node"
+      ],
+      "cardinality": "zero_or_more",
+      "parent_table": "entity",
+      "parent_columns": [
+        "id"
+      ],
+      "parent_cardinality": "exactly_one",
+      "def": "counts.node references entity.id",
+      "virtual": true
+    }
+  ],
+  "driver": {
+    "name": "sqlite",
+    "database_version": "3.53.4"
+  }
+}

@@ -1,6 +1,7 @@
 """Tests for the derived database: its schema, atomic swap, cleanup and readers."""
 
 import asyncio
+import hashlib
 import sqlite3
 import sys
 import threading
@@ -13,6 +14,7 @@ import pytest
 import browl.derived
 from browl.derived import (
     DERIVED_DIR,
+    SCHEMA,
     SCHEMA_VERSION,
     DerivedReader,
     Meta,
@@ -25,6 +27,7 @@ from browl.derived import (
     read_meta,
     remove_others,
 )
+from browl.derived import INDEXES as INDEX_SQL
 from browl.jobs import Reasoner
 
 COLUMNS = {
@@ -77,6 +80,33 @@ INDEXES = {
     "edge_child",
     "equiv_group_representative",
 }
+
+
+SCHEMA_HASHES = {
+    2: "2ff3dcbf357551eb37ea18eaef713ea8fb794f46718ded8b1fdf35011ca32b1f",
+}
+"""The SHA-256 of the derived schema's SQL (`schema_hash`) at each `SCHEMA_VERSION`, so a schema change can't keep the
+version: a file built by the old schema would pass as current."""
+
+
+def schema_hash() -> str:
+    """Return the SHA-256 of the derived schema's SQL: `SCHEMA`, then every statement in `INDEXES`."""
+    text = SCHEMA + "".join(f"{statement};\n" for statements in INDEX_SQL.values() for statement in statements)
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def test_schema_version_raised() -> None:
+    """The derived schema's SQL is the one recorded for its `SCHEMA_VERSION`: changing it means raising the version."""
+    current = schema_hash()
+    recorded = SCHEMA_HASHES.get(SCHEMA_VERSION)
+    if recorded is None:
+        pytest.fail(f"Record SCHEMA_VERSION {SCHEMA_VERSION}'s schema in SCHEMA_HASHES: {SCHEMA_VERSION}: {current!r}")
+    if recorded != current:
+        pytest.fail(
+            f"The derived schema (SCHEMA or INDEXES) changed, but SCHEMA_VERSION is still {SCHEMA_VERSION}. Raise it to"
+            f" {SCHEMA_VERSION + 1}, record the new schema in SCHEMA_HASHES as {SCHEMA_VERSION + 1}: {current!r},"
+            " update COLUMNS and INDEXES here, and run `make schema-docs`."
+        )
 
 
 def index_names(connection: sqlite3.Connection) -> set[str]:

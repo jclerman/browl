@@ -60,7 +60,61 @@ $(JENA_STAMP): Dockerfile
 	touch $@
 
 .PHONY: ci
-ci: lint test  ## Run the CI checks locally (lint, then test)
+ci: lint check-schema-docs test  ## Run the CI checks locally (lint, the schema docs, then test)
+
+################################################################################
+# SCHEMA DOCS
+################################################################################
+
+# tbls (https://github.com/k1LoW/tbls) documents the SQLite databases in docs/schema/ (docs/SCHEMA.md), from empty
+# databases scripts/schema_dbs.py builds from the schemas in code, with one config per database in .tbls/. The release
+# and the checksums of its macOS and Linux builds are pinned here, from the release's checksums-darwin.txt and
+# checksums-linux.txt. It's installed in a directory named for its version, so bumping TBLS_VERSION gets the new
+# release, with no need to compare file times. The archive is downloaded and unpacked in a .part directory first,
+# renamed once complete. tar reads both the .tar.gz and, as bsdtar on macOS, the .zip.
+TBLS_VERSION := 1.96.1
+TBLS_SHA256_darwin_amd64 := c744731de4f96517acac234d65175eb9084968abd1a77268d75007b0443a4241
+TBLS_SHA256_darwin_arm64 := 99d1d53b02e06635d4d94e2823fecc78b3249e996b1785a199ba1868f9f28a8f
+TBLS_SHA256_linux_amd64 := 18285eef0ba7d917214e8bd7dd6a22afe5fea021eed52e7149100a3d10a2af95
+TBLS_SHA256_linux_arm64 := f5da6e28b787ca934326870f7b69812c76e097d35a8ae612533108060f76850a
+TBLS_OS := $(shell uname -s | tr '[:upper:]' '[:lower:]')
+TBLS_ARCH := $(shell uname -m | sed -e 's/^x86_64$$/amd64/' -e 's/^aarch64$$/arm64/')
+TBLS_SHA256 := $(TBLS_SHA256_$(TBLS_OS)_$(TBLS_ARCH))
+TBLS_ARCHIVE := tbls_v$(TBLS_VERSION)_$(TBLS_OS)_$(TBLS_ARCH).$(if $(filter darwin,$(TBLS_OS)),zip,tar.gz)
+TBLS := .cache/tbls/$(TBLS_VERSION)/tbls
+
+# The databases tbls reads; .tbls/*.yml name them.
+SCHEMA_DBS := .cache/schema-dbs
+SCHEMA_DOCS := derived state
+
+.PHONY: tbls
+tbls: $(TBLS)  ## Download the pinned tbls for the schema docs, unless already present
+
+$(TBLS):
+	@test -n "$(TBLS_SHA256)" || { echo "tbls: no pinned build for $(TBLS_OS) $(TBLS_ARCH)" >&2; exit 1; }
+	rm -rf .cache/tbls .cache/tbls.part
+	mkdir -p .cache/tbls.part
+	curl -fsSL -o .cache/tbls.part/$(TBLS_ARCHIVE) \
+		"https://github.com/k1LoW/tbls/releases/download/v$(TBLS_VERSION)/$(TBLS_ARCHIVE)"
+	echo "$(TBLS_SHA256)  .cache/tbls.part/$(TBLS_ARCHIVE)" | shasum -a 256 -c -
+	tar -xf .cache/tbls.part/$(TBLS_ARCHIVE) -C .cache/tbls.part tbls
+	rm .cache/tbls.part/$(TBLS_ARCHIVE)
+	mkdir -p .cache/tbls
+	mv .cache/tbls.part $(@D)
+
+.PHONY: schema-dbs
+schema-dbs:
+	poetry run python scripts/schema_dbs.py $(SCHEMA_DBS)
+
+.PHONY: schema-docs
+schema-docs: $(TBLS) schema-dbs  ## Regenerate docs/schema/ from the SQLite schemas in code
+	for db in $(SCHEMA_DOCS); do $(TBLS) doc --rm-dist --config .tbls/$$db.yml || exit 1; done
+
+.PHONY: check-schema-docs
+check-schema-docs: $(TBLS) schema-dbs  ## Check that docs/schema/ matches the code, and describes every table and column
+	for db in $(SCHEMA_DOCS); do \
+		$(TBLS) lint --config .tbls/$$db.yml && $(TBLS) diff --config .tbls/$$db.yml || exit 1; \
+	done
 
 ################################################################################
 # UTILS

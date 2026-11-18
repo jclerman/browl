@@ -281,11 +281,12 @@ reach a lookup (P-5).
 
 One background job at a time, run in the app process. Its state (stage, start time, error) is stored in SQLite, so every
 server worker reports it consistently. _(Q7b, Q14a)_ It's kept in `DATA_DIR/state.sqlite3`, a persistent database
-separate from the derived one, which records its schema version and migrates forward from it; the `admin` table
-([2.11](#211-authentication-and-admins)) goes there too. Each job gets the next generation number, and the database
-also records the generation of the last job that reached ready. No job survives a restart: at startup, a job recorded
-as running is marked failed ("interrupted by restart"). The upload handler starts the job and streams the file within
-the uploading stage; the remaining stages then run in the background (P-5).
+separate from the derived one, which records its schema version and migrates forward from it (its tables are in
+[`SCHEMA.md`](SCHEMA.md)); the `admin` table ([2.11](#211-authentication-and-admins)) goes there too. Each job gets the
+next generation number, and the database also records the generation of the last job that reached ready. No job
+survives a restart: at startup, a job recorded as running is marked failed ("interrupted by restart"). The upload
+handler starts the job and streams the file within the uploading stage; the remaining stages then run in the
+background (P-5).
 
 The database is the job state's source of truth, so nothing here ties browl to one worker (P-5):
 
@@ -549,18 +550,19 @@ queries but saved nothing.
 
 Built once per load from bulk SPARQL queries, one per kind of data, and stored in the derived SQLite database. Bulk
 results stream from Fuseki at about 100 K rows per second whatever the query looks like, so pre-caching NCBITaxon takes
-about a minute ([S-4 findings](../research/S-4/README.md)). The tables (`browl.derived.SCHEMA`, P-9):
+about a minute ([S-4 findings](../research/S-4/README.md)). The tables (`browl.derived.SCHEMA`, P-9), whose columns
+are documented in [`SCHEMA.md`](SCHEMA.md):
 
-| Table | Contents |
-| --- | --- |
-| `entity` | IRI, entity type, URL path, fragment, display name, CURIE. From an entity-list query (every declared entity with its type), not yet measured. |
-| `name_value` | entity, annotation property, value, normalized value, language, `direct` flag (one row per direct and per RDFS-entailed property). From the dictionary query: 41–48 s on NCBITaxon, 3.56 M rows. |
-| `edge` | parent → child per hierarchy (classes; each property type), between equivalence-group representatives. From the edges query: 18–19 s on NCBITaxon. |
-| `equiv_group` | entity → group ID (union-find over `owl:equivalentClass` between named classes) |
-| `counts` | per node: number of immediate children, number of distinct descendants |
-| `hash_prefix` | distinct URL paths that have hash entities under them |
-| `prefix` | CURIE prefix → namespace (ontology's own, built-ins, configured overrides) |
-| `meta` | ontology IRI, version IRI, title, `owl:versionInfo`, reasoner used, load time (the job's start), generation number, schema version |
+| Table | Holds | Filled from |
+| --- | --- | --- |
+| `entity` | Every declared entity: its IRI, type, URL path and fragment, display name and CURIE | The entity-list query (every declared entity with its type), not yet measured |
+| `name_value` | Name-property values, one row per direct and per RDFS-entailed property | The dictionary query: 41–48 s on NCBITaxon, 3.56 M rows |
+| `edge` | Parent → child per hierarchy (classes; each property type), between equivalence-group representatives | The edges query: 18–19 s on NCBITaxon |
+| `equiv_group` | Entity → group representative | Union-find over `owl:equivalentClass` between named classes |
+| `counts` | Per node: immediate children, distinct descendants | `edge`, in Python (below) |
+| `hash_prefix` | Distinct URL paths that have hash entities under them | `entity` |
+| `prefix` | CURIE prefix → namespace | The ontology's own, built-ins, configured overrides |
+| `meta` | Ontology IRI, version IRI, title, `owl:versionInfo`, reasoner used, load time (the job's start), generation number, schema version | The ontology header query (below) and the job |
 
 Entities are referred to by `entity.id`, a dense integer (e.g. for descendant bitmaps); an IRI declared with several
 types (punning) has a row for each. Each table's secondary indexes are created once it's filled (below). The database is
