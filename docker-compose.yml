@@ -88,8 +88,10 @@ services:
     volumes:
       - jobs:/data/uploads
       - sandbox:/sandbox
+    # Connects, as a socket a killed runner left would pass `test -S`; the runner ignores a connection with no request.
     healthcheck:
-      test: ["CMD", "test", "-S", "/sandbox/runner.sock"]
+      test: ["CMD", "python", "-c", "import socket, sys; socket.socket(socket.AF_UNIX).connect(sys.argv[1])",
+             "/sandbox/runner.sock"]
       <<: *healthcheck-timing
     restart: unless-stopped
 

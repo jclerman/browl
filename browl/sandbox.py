@@ -50,6 +50,8 @@ class Runner:
     async def _run(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             line = await reader.readline()
+            if not line:
+                return  # a connection with no request, as the health check makes
             if not line.endswith(b"\n"):
                 raise ValueError("the connection closed before the request ended")
             request = Request.model_validate_json(line)

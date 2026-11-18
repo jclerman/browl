@@ -125,7 +125,6 @@ jobs:
       # `!` alone doesn't fail a step, hence `|| exit 1`.
       - name: Check the sandbox's isolation
         run: |
-          docker compose exec -T sandbox test -S /sandbox/runner.sock
           docker compose exec -T sandbox python -c '
           import socket
           try:

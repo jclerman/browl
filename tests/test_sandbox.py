@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import signal
+import socket as socket_
 import subprocess
 import sys
 import tempfile
@@ -188,6 +189,16 @@ async def test_bad_request(short_dir: Path, request_: bytes) -> None:
     assert list(json.loads(reply)) == ["error"]
 
 
+async def test_empty_connection(short_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Check that a connection with no request, as the health check makes, is closed without a word."""
+    async with runner(short_dir) as socket:
+        reader, writer = await asyncio.open_unix_connection(socket)
+        writer.write_eof()
+        assert await reader.read() == b""
+        writer.close()
+    assert caplog.records == []
+
+
 async def test_refused_run_fails(short_dir: Path) -> None:
     """Check that a run the sandbox refuses fails, saying why."""
     async with runner(short_dir) as socket:
@@ -243,16 +254,27 @@ async def test_malformed_reply(short_dir: Path, reply: bytes) -> None:
 
 @pytest.fixture
 def runner_process(short_dir: Path) -> Iterator[tuple[subprocess.Popen[bytes], Path]]:
-    """Start the runner as the sandbox does, `python -m browl.sandbox`, with an environment of its own."""
+    """Start the runner as the sandbox does, `python -m browl.sandbox`, with an environment of its own.
+
+    It starts over a socket left by a runner that was killed, and is ready once it accepts a connection, as the
+    sandbox's health check finds.
+    """
     socket = short_dir / "socket"
+    with socket_.socket(socket_.AF_UNIX) as stale:
+        stale.bind(str(socket))
     env = {**os.environ, "LANG": "runner-lang", "BROWL_SECRET": "runner-secret"}
     process = subprocess.Popen([sys.executable, "-m", "browl.sandbox", str(socket)], env=env)
     try:
         deadline = time.monotonic() + STARTUP_S
-        while not socket.exists():
-            assert process.poll() is None, "the runner exited"
-            assert time.monotonic() < deadline, "the runner didn't start"
-            time.sleep(0.02)
+        while True:
+            try:
+                with socket_.socket(socket_.AF_UNIX) as client:
+                    client.connect(str(socket))
+                break
+            except OSError:
+                assert process.poll() is None, "the runner exited"
+                assert time.monotonic() < deadline, "the runner didn't start"
+                time.sleep(0.02)
         yield process, socket
     finally:
         process.terminate()
