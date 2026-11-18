@@ -24,6 +24,6 @@ Key decisions, detailed in the design doc:
 
 ## Agent-specific instructions
 
-- Agent shells may lack the Poetry venv, so run tools and commits via `poetry run` (e.g. `poetry run git commit`); the
-  local mypy pre-commit hook needs `mypy` on PATH.
+- Agent shells may lack the Poetry venv, so run tools via `poetry run` (e.g. `poetry run pytest`). `make doctor` checks
+  the tools development needs.
 - Don't add attribution or co-author lines (e.g. `Co-Authored-By:`) for the agent to commit messages.

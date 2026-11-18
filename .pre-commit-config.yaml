@@ -11,9 +11,10 @@ repos:
 
   - repo: local
     hooks:
+      # Through Poetry, so the git hook finds the venv's mypy in a shell without the venv on PATH.
       - id: mypy
         name: mypy
-        entry: mypy
+        entry: poetry run mypy
         language: system
         types_or: [python, pyi]
         exclude: '^(tests|research)/'

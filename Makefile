@@ -6,8 +6,13 @@
 ################################################################################
 
 .PHONY: install
-install:  ## Install dependencies into the Poetry venv, matching poetry.lock
+install:  ## Install dependencies into the Poetry venv, matching poetry.lock, and the pre-commit git hook
 	poetry sync
+	poetry run pre-commit install
+
+.PHONY: doctor
+doctor:  ## Check the tools development needs, and say what's missing (CONTRIBUTING.md)
+	@scripts/doctor.sh
 
 .PHONY: lint
 lint:  ## Run all pre-commit hooks on all files
