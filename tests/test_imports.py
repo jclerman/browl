@@ -4,8 +4,10 @@ import ipaddress
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
+import rdflib
 from fastapi.testclient import TestClient
 
 import browl.imports
@@ -106,7 +108,7 @@ async def test_rdf_parse_error(settings: Settings, tmp_path: Path) -> None:
     """Check that a document Jena can't parse fails, quoting Jena's error."""
     path = tmp_path / "o.ttl"
     path.write_text("<a> <b> .\n")
-    with pytest.raises(StageError, match=r"^parse error: Jena couldn't read o.ttl as Turtle:\n.*"):
+    with pytest.raises(StageError, match=r"^parse error: Jena couldn't read o.ttl as Turtle:\n(.|\n)*ERROR riot"):
         await list_rdf_imports(path, Syntax.TURTLE, settings)
 
 
@@ -389,6 +391,81 @@ async def test_ofn_upload_resolves_no_import(
     assert (context.reasoned is not None) == (reasoner is not Reasoner.NONE)
     assert context.ontology == (context.reasoned or context.converted)
     assert requested == []
+
+
+SUBCLASS = "http://www.w3.org/2000/01/rdf-schema#subClassOf"
+OWL = "http://www.w3.org/2002/07/owl#"
+
+
+@pytest.mark.jvm
+@pytest.mark.usefixtures("jvm")
+async def test_robot_reasons_with_fetched_import(site: StaticServer, settings: Settings, data_dir: Path) -> None:
+    """Check that ROBOT reasons with an import's content, from the fetched file, fetching nothing itself.
+
+    The import defines `A ≡ p some D`, the upload says `C ⊑ p some D`: only with the import is `C ⊑ A` inferred.
+    """
+    some_d = f"[ a <{OWL}Restriction> ; <{OWL}onProperty> <{EX}p> ; <{OWL}someValuesFrom> <{EX}D> ]"
+    declared = f"<{EX}p> a <{OWL}ObjectProperty> . <{EX}A> a <{OWL}Class> . <{EX}C> a <{OWL}Class> . "
+    imported = site.page(
+        "/a.ttl", turtle(site.url + "/a.ttl", extra=f"{declared}<{EX}A> <{OWL}equivalentClass> {some_d} .")
+    )
+    upload = store_upload(data_dir, turtle(f"{EX}o", imported, extra=f"{declared}<{EX}C> <{SUBCLASS}> {some_d} ."))
+    context = JobContext(1, settings, Reasoner.ELK, upload)
+    await imports_stage(context, allow_all)
+    await reasoning_stage(context)
+    assert context.reasoned is not None
+    graph = rdflib.Graph().parse(context.reasoned)
+    assert (rdflib.URIRef(f"{EX}C"), rdflib.URIRef(SUBCLASS), rdflib.URIRef(f"{EX}A")) in graph
+    assert site.requested == ["/a.ttl"]
+
+
+@pytest.mark.jvm
+@pytest.mark.usefixtures("jvm")
+@pytest.mark.parametrize("suffix", [".ttl", ".rdf"])
+async def test_rdf_upload_resolves_no_import(
+    site: StaticServer, settings: Settings, data_dir: Path, tmp_path: Path, suffix: str
+) -> None:
+    """Check that ROBOT, reasoning over an RDF upload, reads neither a relative import nor a `file:` one.
+
+    Both are dropped, and the catalog maps each, in the spelling ROBOT requests, to an empty ontology. The local file
+    imports a page of the server, which would be requested if it were read.
+    """
+    secret = tmp_path / "secret.ttl"
+    secret.write_text(turtle(f"{EX}secret", f"{site.url}/from-secret"))
+    if suffix == ".ttl":
+        content = turtle(f"{EX}o", "relative.owl", secret.as_uri())
+    else:
+        imports = "".join(f'<owl:imports rdf:resource="{iri}"/>' for iri in ("relative.owl", secret.as_uri()))
+        content = (
+            '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" '
+            'xmlns:owl="http://www.w3.org/2002/07/owl#">'
+            f'<owl:Ontology rdf:about="{EX}o">{imports}</owl:Ontology></rdf:RDF>'
+        )
+    context = JobContext(1, settings, Reasoner.ELK, store_upload(data_dir, content, suffix))
+    await imports_stage(context)
+    assert len(context.imports) == 2
+    assert all(result.dropped for result in context.imports)
+    await reasoning_stage(context)
+    assert context.reasoned is not None
+    assert site.requested == []
+
+
+@pytest.mark.jvm
+@pytest.mark.usefixtures("jvm")
+async def test_unreadable_ofn_import(site: StaticServer, settings: Settings, data_dir: Path) -> None:
+    """Check that an OFN import the OWLAPI can't read is dropped, mapped to an empty ontology, and reasoning goes on."""
+    bad = site.page("/bad.ofn", f"Ontology(<{site.url}/bad.ofn>\nSubClassOf(\n", "text/owl-functional")
+    context = JobContext(1, settings, Reasoner.ELK, store_upload(data_dir, turtle(f"{EX}o", bad)))
+    await imports_stage(context, allow_all)
+    [result] = context.imports
+    assert result.reason is not None
+    assert result.reason.startswith("parse error: the OWLAPI couldn't read it as OWL Functional Syntax")
+    assert context.import_files == {}
+    assert context.catalog is not None
+    target = Path(urlparse(catalog_map(context.catalog)[bad]).path)
+    assert target.read_text() == f"Ontology(<{bad}>)\n"
+    await reasoning_stage(context)
+    assert context.reasoned is not None
 
 
 def test_status_shows_dropped_imports(data_dir: Path) -> None:
