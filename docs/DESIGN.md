@@ -569,7 +569,7 @@ are documented in [`SCHEMA.md`](SCHEMA.md):
 
 | Table | Holds | Filled from |
 | --- | --- | --- |
-| `entity` | The ontology and every declared class and property: its IRI, type, URL path and fragment (2.3), display name and CURIE | The entity-list query (every declared class and property with its type; the ontology's IRI comes from the header query): 22–29 s on NCBITaxon, 3.03 M rows. The whole hook, which computes the URLs as the result streams, takes 25–26 s, and the table and its indexes 530–650 MiB (P-10) |
+| `entity` | The ontology and every declared class and property: its IRI, type, URL path and fragment (2.3), display name and CURIE | The entity-list query (every declared class and property with its type; the ontology's IRI comes from the header query): 22–29 s on NCBITaxon, 3.03 M rows. The whole hook, which computes each batch's URLs and inserts it before reading the next, takes 25–26 s, and the table and its indexes 530–650 MiB (P-10) |
 | `name_value` | Name-property values, one row per direct and per RDFS-entailed property | The dictionary query: 41–48 s on NCBITaxon, 3.56 M rows |
 | `edge` | Parent → child per hierarchy (classes; each property type), between equivalence-group representatives | The edges query: 18–19 s on NCBITaxon |
 | `equiv_group` | Entity → group representative | Union-find over `owl:equivalentClass` between named classes |
