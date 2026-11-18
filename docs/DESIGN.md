@@ -40,7 +40,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 
 | Requirement | Priority |
 | --- | --- |
-| **U-1** · The ontology home page shows the ontology's metadata: ontology IRI, version IRI, annotations, imports, entity and triple counts, and whether a reasoner was applied and which one. Imports that couldn't be loaded are listed in a prominent warning (in red), with why. _(Q7c; P-8)_ | v1 |
+| **U-1** · The ontology home page shows the ontology's metadata: title, ontology IRI, version (IRI, else `owl:versionInfo`), annotations, imports, entity and triple counts, and whether a reasoner was applied and which one. Imports that couldn't be loaded are listed in a prominent warning (in red), with why. _(Q7c; P-8)_ | v1 |
 | **U-2** · Every declared entity has a page at a URL implied by its IRI (see [2.3](#23-iri--url-mapping)). The ontology itself counts as a declared entity, and its page is the home page. No other entity-specific pages exist. _(Q1, Q2a)_ | v1 |
 | **U-3** · An entity page shows its immediate parents, its annotation values, and its logical axioms in Manchester syntax. | v1 |
 | **U-4** · Every entity mentioned on any page is a link to that entity's page. | v1 |
@@ -270,8 +270,8 @@ The database is the job state's source of truth, so nothing here ties browl to o
 | **imports** | Imported ontologies are fetched, and a catalog written for ROBOT (see Imports, below). An `.ofn` upload, which the TDB2 loader can't read (it reads only RDF formats), is converted to Turtle here, as `converted.ttl`, by the same OWLAPI parse that lists its imports; the Turtle stands in for it from then on. |
 | **reasoning** (optional) | One ROBOT run (see Reasoning, below) classifies the upload with ELK or HermiT. Its output, `reasoned.ttl` beside the upload, replaces the uploaded file as the ontology that gets served; the upload is kept (P-7). (Later requirements U-39 and U-40 need the asserted axioms kept too; see [Later](#later).) It reasons over the upload, or over `converted.ttl` for an `.ofn` upload. Without reasoning, the upload, or `converted.ttl`, is loaded as it is. Of the RDF syntaxes ROBOT writes, Turtle and RDF/XML load equally fast, and Turtle is the smaller file, a quarter smaller on NCBITaxon (P-8, [findings](../research/P-8/README.md)). _(Q7a)_ |
 | **loading** | Jena's `tdb2.tdbloader` builds a new store from the built ontology, in the default graph, and loads each fetched import into a named graph, in a new directory on the Fuseki volume. The store's triples are counted with `tdb2.tdbquery`; Fuseki is then switched to it, the triples counted again through Fuseki, which must match, and the previous store deleted. The counts are kept with the job, for the status and the home page. Uberon loads in about 5 s, NCBITaxon in about 65 s ([P-8 findings](../research/P-8/README.md)). _(Q15)_ |
-| **pre-caching** | A few bulk SPARQL queries fetch the whole-ontology data, and the derived SQLite database is built from them ([2.5](#25-derived-data-pre-caching)), as a new file then swapped in atomically. |
-| **ready** | The new generation number is recorded; pages are served again. |
+| **pre-caching** | A few bulk SPARQL queries fetch the whole-ontology data, and the derived SQLite database is built from them ([2.5](#25-derived-data-pre-caching)). Each generation has its own file, `DATA_DIR/derived/{generation}.sqlite3`, written as a temporary file beside it and renamed into place once complete (after an `fsync`), so a file at its final name is always whole and never written again, and readers never see one change. If pre-caching fails, the temporary file is deleted and the previous generation's file stays (P-9). |
+| **ready** | The new generation number is recorded; pages are served again. Then, still under the job lock, every other generation's derived file, and any temporary file a build left, is deleted (P-9). |
 
 Uberon goes from upload file to ready in 7 s without reasoning, measured end to end; NCBITaxon is estimated at about
 5 minutes ([S-4 findings](../research/S-4/README.md)).
@@ -326,8 +326,32 @@ shutdown", any other cancellation "cancelled". A job that stops without recordin
 site never stays on "loading" (P-5).
 
 **App restart:** the store and the derived database stay on the data volume. Fuseki reopens the store in under a
-second, and the app reuses the derived database when its generation number matches, skipping pre-caching. Restarting
-either container doesn't reload the ontology.
+second, and the app reuses the derived database when it's current, built for the ready generation by this browl's
+schema version (its `meta` row, [2.5](#25-derived-data-pre-caching)), skipping pre-caching. Restarting either container
+doesn't reload the ontology. Otherwise, e.g. when the file was lost or an upgrade changed its schema, the app rebuilds it
+in the background from the same store (`gen-N`) by re-running the ready job's pre-caching stage (P-9):
+
+- Only when the latest job is the ready one. After a failed job the site isn't available anyway, and the next upload
+  builds a new file.
+- A job, a load or a rebuild, that failed in pre-caching but whose file is current anyway, as when it failed after the
+  swap (e.g. a shutdown or crash during the build's end), is recorded ready instead, and the after-ready cleanup runs. A
+  cancellation during the build's end waits for it, so the job lock is never released while the build still writes.
+- The worker that takes the job lock, without waiting, checks the file again under it, records the job as running in
+  the pre-caching stage, with its own generation and start time, and holds the lock until the end is stored, as for
+  any job. So every worker serves "loading" meanwhile, no upload can start, and no new generation or store is made. A
+  worker that can't take the lock does nothing: another worker is rebuilding, or a job runs.
+- The rebuild first waits up to 2 minutes for Fuseki to answer its ping (`/$/ping`), pausing 0.5 s, doubling to 5 s,
+  between tries, since Fuseki may be starting too; Compose also starts the app only once Fuseki is healthy. If it
+  doesn't answer, the rebuild fails in the usual way, and the next start tries again.
+- A worker that read the state just before another worker's rebuild started may let a page through for up to a second
+  (the state's TTL); a page that finds the derived database not current serves "loading" (`NotCurrentError`).
+- The job ends ready again, or failed in pre-caching with a reason that starts "rebuilding after a restart", however it
+  failed, so the site is "not available" and admins see why. A shutdown cancels it as it would a job. The next start
+  tries again, unless a restart found the rebuild running ("rebuilding after a restart: interrupted by restart"): the
+  app died during it, perhaps out of memory, and retrying would crash-loop under the container's restart policy, with
+  uploads refused meanwhile. The site then stays "not available" until an upload replaces the ontology.
+- The `meta` row's load time is the job's start, for a load and a rebuild alike, so a rebuild doesn't change the load
+  time the home page shows; the job's finish time becomes the rebuild's.
 
 **Choosing the loader** (P-8): `tdb2.tdbloader` loaded NCBITaxon in 66 s in the app container (an 8 GB Docker VM, 2 GB
 heap), against 150 s for `tdb2.xloader`, and Uberon in 5 against 11 s, so browl uses it for every load. Its store is
@@ -489,7 +513,7 @@ queries but saved nothing.
 
 Built once per load from bulk SPARQL queries, one per kind of data, and stored in the derived SQLite database. Bulk
 results stream from Fuseki at about 100 K rows per second whatever the query looks like, so pre-caching NCBITaxon takes
-about a minute ([S-4 findings](../research/S-4/README.md)). Proposed tables:
+about a minute ([S-4 findings](../research/S-4/README.md)). The tables (`browl.derived.SCHEMA`, P-9):
 
 | Table | Contents |
 | --- | --- |
@@ -500,7 +524,40 @@ about a minute ([S-4 findings](../research/S-4/README.md)). Proposed tables:
 | `counts` | per node: number of immediate children, number of distinct descendants |
 | `hash_prefix` | distinct URL paths that have hash entities under them |
 | `prefix` | CURIE prefix → namespace (ontology's own, built-ins, configured overrides) |
-| `meta` | ontology IRI, version IRI, reasoner used, load time, generation number |
+| `meta` | ontology IRI, version IRI, title, `owl:versionInfo`, reasoner used, load time (the job's start), generation number, schema version |
+
+Entities are referred to by `entity.id`, a dense integer (e.g. for descendant bitmaps); an IRI declared with several
+types (punning) has a row for each. Each table's secondary indexes are created once it's filled (below). The database is
+rebuilt on every load, so it has no migrations: a file of another schema version (`SCHEMA_VERSION`, raised with any
+schema change) or generation isn't current, and is rebuilt ([2.4](#24-load-pipeline), App restart). Pages read it, never
+Fuseki, for whole-ontology data (N-4), through `browl.pages.read_derived`: the file is opened read-only and immutable,
+so reads take no locks, in the thread pool, from a pool of connections. Once a newer generation is read, the older
+one's connections are closed, so none keeps a deleted file's space in use; the app closes them all at shutdown.
+
+**Pre-caching hooks** (P-9). The stage reads the ontology's header (below), starts the file with its `meta` row, then
+runs the hooks in `browl.precache.HOOKS` in order, so a hook may read tables an earlier one filled: P-10 (entities),
+P-11 (names), P-12 (hierarchies), P-19 (search), and P-27 if it keeps a `usage` table. Each gets the Fuseki client, the
+generation's dataset, the dataset clause that merges in the imports if any were loaded, and a writer. A SQLite
+connection must stay on one thread while the queries stream on the event loop, so the build runs on a single-thread
+executor that owns the connection, and hooks hand it rows in batches (`browl.precache.batched`). Every bulk query goes
+through `PreCacheContext.bulk_select`, which checks that it's complete ([2.14](#214-risks)); hooks get the plain client
+too, for small queries, but nothing stops one using it for a bulk query, so review checks they don't. Any hook's failure
+fails the stage. A hook creates the indexes of each table it fills when it's done (`DerivedWriter.create_indexes`),
+which is faster than keeping them up to date while filling, so later hooks can use them (e.g. P-11 maps IRIs to
+`entity.id`); the build creates any left, then runs `ANALYZE`. Where it can, a hook inserts into a `WITHOUT ROWID` table
+in its key's order. The build runs with no journal or syncing until the end, a 256 MiB page cache (SQLite's default 2 MB
+thrashes on these inserts and spills the index sorts early), and up to 4 helper threads to sort.
+
+**The ontology's IRI** comes from the default graph only, the ontology without its imports: an `owl:Ontology` IRI that
+nothing there imports, since an OFN upload's converted Turtle may declare the ontologies it imports. If several remain,
+the alphabetically first is taken, so the choice is stable, and a warning logged; likewise for several version IRIs.
+The result is read as it streams, keeping only that ontology's values, and one of more than `HEADER_MAX_ROWS` rows
+fails pre-caching, so an upload that declares millions of ontologies can't hold the job lock while they're all read.
+The same query reads that ontology's title and `owl:versionInfo`, literals only. The title is the first property's
+value among `dcterms:title`, `dc:title`, then `NAME_PROPERTIES`, chosen by language ranking ([2.7](#27-display-names))
+then lexical order, with a warning if several tie; without one, pages show the IRI. Several `owl:versionInfo` values are
+chosen the same way, with a warning. The version shown is the version IRI, else the version info (`Meta.version`). The
+rest of the ontology's annotations aren't stored: the home page (P-17) queries Fuseki for them.
 
 An earlier design also had a `usage` table, because the OWLAPI can't find annotation assertions by value. Fuseki can
 (`?s ?p <entity>`), so P-27 decides whether any part of it is still needed ([2.8](#28-entity-pages)).
@@ -827,7 +884,7 @@ To settle when it's built:
 | Risk | Mitigation |
 | --- | --- |
 | Fuseki needs too much memory while serving the largest ontologies | Measured by P-3 and S-6: NCBITaxon needs about 500 MiB of heap; the default is 1 GB, and the container needs the heap plus about 0.5 GiB once Fuseki's output buffers are pooled through a `jetty.xml` (2.4). |
-| A Fuseki response that fails partway returns a truncated result with HTTP 200 | Seen in P-3 and S-6: once Fuseki has sent the status, it appends the error as plain text and ends the response normally. It sends it as soon as a SPARQL JSON or TSV result is cut short (the writer flushes what it has), and once any other response outgrows the 2 MB output buffer (2.4). So browl treats any status other than 2xx as a failed query, and never discards the HTTP client's error for a body that ends early (Fuseki exiting or restarting mid-response drops the connection before the last chunk). It parses every Fuseki response strictly, as SPARQL JSON results or N-Triples, and parses each TSV cell as an RDF term, so the appended error text can't pass as a one-column row. N-Triples results may hold only triples, since Jena writes no comments or blank lines and the appended text can start with `#`, which N-Triples reads as a comment (P-4); a parse error is a failed query, never a short result. P-9, which runs the first bulk queries, checks that each bulk result is complete (e.g. a final count or sentinel), which also catches a result that breaks off cleanly at a row boundary, or an error with no text appended. The loading stage already checks that Fuseki serves as many triples as the store holds (P-8). |
+| A Fuseki response that fails partway returns a truncated result with HTTP 200 | Seen in P-3 and S-6: once Fuseki has sent the status, it appends the error as plain text and ends the response normally. It sends it as soon as a SPARQL JSON or TSV result is cut short (the writer flushes what it has), and once any other response outgrows the 2 MB output buffer (2.4). So browl treats any status other than 2xx as a failed query, and never discards the HTTP client's error for a body that ends early (Fuseki exiting or restarting mid-response drops the connection before the last chunk). It parses every Fuseki response strictly, as SPARQL JSON results or N-Triples, and parses each TSV cell as an RDF term, so the appended error text can't pass as a one-column row. N-Triples results may hold only triples, since Jena writes no comments or blank lines and the appended text can start with `#`, which N-Triples reads as a comment (P-4); a parse error is a failed query, never a short result. Every bulk query (P-9) goes through `FusekiClient.bulk_select`, which also catches a result that breaks off cleanly at a row boundary, or an error with no text appended: it runs the query as `{ { query } } UNION { BIND(true AS ?browl_end) }`, and fails a result whose last row isn't that end marker, or that binds `browl_end` on any other row; bulk queries mustn't use the variable. ARQ evaluates a `UNION`'s branches in order, streaming the first's rows before the second's, so the marker comes last: on Fuseki 6.2.0, in memory and on TDB2, after a result of over 20,000 rows, and after ordered, distinct and grouped ones. It costs nothing, unlike a second query that counts the rows, which would double each bulk query's time. The loading stage already checks that Fuseki serves as many triples as the store holds (P-8). |
 | Fuseki pauses for full garbage collections under page load | Resolved by S-6: the `System.gc()` calls P-3 saw came from Fuseki 6.2.0 allocating an unpooled 5 MB direct output buffer per response (Jena GH-4084). Fuseki's `jetty.xml` pools a 2 MB buffer instead, which removed them; pages went from 302 to 528 a second at 1 client, and from 573 to 769 at 16 (2.4). |
 | JPype quirks: thread safety of concurrent OWLAPI calls; Python–Java call overhead | Resolved by S-1: concurrent calls were safe but gave no extra throughput, so OWLAPI calls run on one thread (2.1). Call overhead is small ([S-1 findings](../research/S-1/README.md)). P-4 found three more, each handled: the JVM must start on the main thread, its signal handlers bypassed Uvicorn's graceful shutdown (`-Xrs`), and the OWLAPI fetched a fragment's `owl:imports` from their IRIs, web or `file:`, so the bridge refuses every document load but the fragment's own (2.1). |
 | An upload's `owl:imports` make ROBOT read local files (`file:`) or send requests from the app container (`http:`), and its errors can quote what it read | Found in P-7's review; narrowed by P-8: browl lists every import, fetches only `http` and `https` from public addresses, and gives ROBOT a catalog covering every import (2.4). Tested with a `file:` import and one at a local address. P-8's review showed that a crafted file can get an import past the listing; P-30 runs ROBOT and the OFN lister in a sandbox with no network and nothing secret, so such an import fails the job (2.4, [load flow](LOAD-FLOW.md)), checked in CI. Not deployed before P-22 protects the upload. |
@@ -885,9 +942,9 @@ go into this document.
 
 | ID | Work item | Delivers | Depends on | Status | Tracking |
 | --- | --- | --- | --- | --- | --- |
-| P-9 | Derived database schema; atomic swap; generation number; reuse on restart when current; completeness check for bulk query results (2.14) | N-4 | P-8 | To do | [#21](https://github.com/jclerman/browl/issues/21) |
+| P-9 | Derived database schema; atomic swap; generation number; reuse on restart when current; completeness check for bulk query results (2.14) | N-4 | P-8 | Done | [#21](https://github.com/jclerman/browl/issues/21) |
 | P-10 | Entities (entity-list query), IRI → URL mapping, hash prefixes, collision warnings | U-2, U-13, U-15, O-3 | P-9 | To do | [#22](https://github.com/jclerman/browl/issues/22) |
-| P-11 | Name values, direct and entailed through sub-properties (first decide: property path or Fuseki-configured RDFS), display names, CURIE prefixes | U-6, O-4, O-5, O-11 | P-10 | To do | [#23](https://github.com/jclerman/browl/issues/23) |
+| P-11 | Name values, direct and entailed through sub-properties (first decide: property path or Fuseki-configured RDFS), display names, CURIE prefixes; measure whether reading the next batch while the last is inserted pays | U-6, O-4, O-5, O-11 | P-10 | To do | [#23](https://github.com/jclerman/browl/issues/23) |
 | P-12 | Hierarchies (edges query), equivalence groups, distinct descendant counts | U-7, U-8, U-9 | P-10, S-3 | To do | [#24](https://github.com/jclerman/browl/issues/24) |
 
 ### Phase 4: Browsing
@@ -898,7 +955,7 @@ go into this document.
 | P-14 | Base templates and page frame: navigation bar, page header, tab component, stylesheet and themes; links rendered from display names; IRI `<details>` | U-4, U-5, U-6, U-17, U-27, U-28, U-29 | P-11, P-13 | To do | [#27](https://github.com/jclerman/browl/issues/27) (sub-issues [#28](https://github.com/jclerman/browl/issues/28), [#33](https://github.com/jclerman/browl/issues/33), [#34](https://github.com/jclerman/browl/issues/34)) |
 | P-15 | Manchester rendering via the OWLAPI from fetched fragments, including n-ary disjointness and general class axioms; link substitution and keyword styling, in the template layer, not the renderer (2.8) | U-3 | S-1, S-4, P-14 | To do | [#36](https://github.com/jclerman/browl/issues/36) |
 | P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout; panel data built apart from its HTML (2.8) | U-3, U-9, U-30, U-31, U-32 | P-12, P-15 | To do | [#37](https://github.com/jclerman/browl/issues/37) (sub-issues [#29](https://github.com/jclerman/browl/issues/29), [#38](https://github.com/jclerman/browl/issues/38), [#39](https://github.com/jclerman/browl/issues/39)) |
-| P-17 | Ontology home page, with the dropped-imports warning and the triple counts the job state keeps (P-8) | U-1 | P-14 | To do | [#30](https://github.com/jclerman/browl/issues/30) |
+| P-17 | Ontology home page, with the dropped-imports warning and the triple counts the job state keeps (P-8); link the ontology and version IRIs only if `http` or `https` (`browl.derived.Meta`) | U-1 | P-14 | To do | [#30](https://github.com/jclerman/browl/issues/30) |
 | P-18 | Hierarchy trees with lazy loading (htmx) and keyboard support | U-7, U-17 | P-12, P-14 | To do | [#31](https://github.com/jclerman/browl/issues/31) |
 | P-27 | Usage tab on entity pages, from Fuseki, with paging (first decide: references inside class expressions; counts on first view or up front; any `usage` table) | U-26 | P-9, P-16, S-4 | To do | [#41](https://github.com/jclerman/browl/issues/41) |
 
@@ -910,7 +967,7 @@ go into this document.
 | P-20 | Autocomplete UI (accessible combobox) with type and property filters | U-10, U-17 | P-19, P-14 | To do | [#32](https://github.com/jclerman/browl/issues/32) |
 | P-33 | JSON API over the pages' data: routes under `api/` returning the models the pages render (2.8, 2.13) | U-42 | P-16, P-17, P-18, P-19, P-27 | To do | [#76](https://github.com/jclerman/browl/issues/76) |
 | P-21 | Page cache keyed by generation | O-10, N-3 | P-16 | To do | [#40](https://github.com/jclerman/browl/issues/40) |
-| P-22 | Google sign-in, admin-route protection, dev no-auth mode | A-1, O-6, O-7 | P-6 | To do | [#17](https://github.com/jclerman/browl/issues/17) |
+| P-22 | Google sign-in, admin-route protection, dev no-auth mode; then consider an admin action that cancels a running job or rebuild, and a time limit on pre-caching | A-1, O-6, O-7 | P-6 | To do | [#17](https://github.com/jclerman/browl/issues/17) |
 | P-23 | Admin list management page and persistence | A-7 | P-22 | To do | [#19](https://github.com/jclerman/browl/issues/19) |
 
 ### Phase 6: Hardening

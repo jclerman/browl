@@ -5,6 +5,7 @@ A job starts with `JobRunner.upload`, which the upload handler (`browl.upload`) 
 
 import asyncio
 import fcntl
+import functools
 import json
 import logging
 import sqlite3
@@ -36,8 +37,11 @@ UPLOAD_PROGRESS_S = 1.0
 """How often a running upload's size so far is recorded, for the status to show it growing."""
 
 INTERRUPTED_BY_RESTART = "interrupted by restart"
+REBUILDING = "rebuilding after a restart"
 INTERRUPTED_BY_SHUTDOWN = "interrupted by shutdown"
 CANCELLED = "cancelled"
+REBUILD_INTERRUPTED_BY_RESTART = f"{REBUILDING}: {INTERRUPTED_BY_RESTART}"
+"""A rebuild's reason when a restart found it running (`_recover`): it may have crashed the app, so isn't retried."""
 STOPPED_UNRECORDED = "internal error: the job stopped without recording why"
 
 MAX_REASON_CHARS = 2000
@@ -198,7 +202,15 @@ class JobState:
         return Site.AVAILABLE
 
     def failed(self, reason: str) -> Self:
-        """Return this state with the job failed in its current stage."""
+        """Return this state with the running job failed in its current stage.
+
+        A rebuild's reason (`JobRunner.rebuild`, a job running under the ready generation) starts with `REBUILDING`,
+        however it failed. A reason longer than `MAX_REASON_CHARS` is cut short.
+        """
+        if self.generation is not None and self.generation == self.ready_generation:
+            reason = f"{REBUILDING}: {reason}"
+        if len(reason) > MAX_REASON_CHARS:
+            reason = f"{reason[:MAX_REASON_CHARS]}… (cut short; the app's log has it all)"
         return replace(self, failed_stage=self.stage, reason=reason, finished_at=_now())
 
 
@@ -402,6 +414,7 @@ class JobContext:
         imports: The imports, direct and indirect, listed by the imports stage.
         import_files: The RDF file to load for each import that was fetched, by its IRI.
         triples: How many triples the store's default graph holds, once loaded.
+        started_at: When the job started.
     """
 
     generation: int
@@ -415,6 +428,7 @@ class JobContext:
     imports: list[ImportResult] = field(default_factory=list)
     import_files: dict[str, Path] = field(default_factory=dict)
     triples: int | None = None
+    started_at: datetime = field(default_factory=_now)
 
     @property
     def ontology(self) -> Path | None:
@@ -424,6 +438,10 @@ class JobContext:
 
 StageFunction = Callable[[JobContext], Awaitable[None]]
 """A stage's work. It runs on the event loop, so it runs blocking work in a thread or subprocess."""
+
+ReadyFunction = Callable[[JobContext], Awaitable[None]]
+"""Work after a job is recorded ready, while the job lock is still held, e.g. deleting the previous generation's files.
+Its failure is logged; the job stays ready."""
 
 
 class JobRunningError(RuntimeError):
@@ -490,6 +508,7 @@ class JobRunner:
         settings: The app's settings, given to the stage functions.
         state: The state read from the store.
         stages: Stage functions for the background stages; more can be registered later.
+        on_ready: Run after each job is recorded ready, before the job lock is released.
     """
 
     def __init__(
@@ -499,8 +518,10 @@ class JobRunner:
         settings: Settings,
         state: JobState,
         stages: Mapping[Stage, StageFunction] | None = None,
+        on_ready: ReadyFunction | None = None,
     ) -> None:
         """Make a runner with no job running."""
+        self._on_ready = on_ready
         self._store = store
         self._lock = lock
         self._settings = settings
@@ -519,7 +540,12 @@ class JobRunner:
         self._set(state)
 
     @classmethod
-    async def open(cls, settings: Settings, stages: Mapping[Stage, StageFunction] | None = None) -> Self:
+    async def open(
+        cls,
+        settings: Settings,
+        stages: Mapping[Stage, StageFunction] | None = None,
+        on_ready: ReadyFunction | None = None,
+    ) -> Self:
         """Open the persistent database and job lock in `DATA_DIR`, mark failed an interrupted job, and return a runner.
 
         A job recorded as running is interrupted unless another process holds the job lock, as another server
@@ -531,7 +557,7 @@ class JobRunner:
         store = await asyncio.to_thread(JobStore, settings.data_dir / STATE_DB)
         lock = JobLock(settings.data_dir / JOB_LOCK)
         state = await asyncio.to_thread(_recover, store, lock)
-        return cls(store, lock, settings, state, stages)
+        return cls(store, lock, settings, state, stages, on_ready)
 
     @property
     def state(self) -> JobState:
@@ -589,8 +615,10 @@ class JobRunner:
         if self._busy:
             raise JobRunningError(f"load job {self._state.generation} is running, in stage {self._state.stage}")
         self._busy = True  # set before any await, so a concurrent call is refused
-        await self._claim(reasoner, name, syntax)
-        context = JobContext(self._state.generation or 0, self._settings, reasoner)
+        await self._claim(functools.partial(self._claim_in_thread, _now(), reasoner, name, syntax))
+        context = JobContext(
+            self._state.generation or 0, self._settings, reasoner, started_at=self._state.started_at or _now()
+        )
         logger.info("Load job %d started", context.generation)
         self._progress_at = time.monotonic()
         try:
@@ -614,6 +642,63 @@ class JobRunner:
         """
         async with self.upload(reasoner) as context:
             return context
+
+    async def rebuild(self, function: StageFunction, current: Callable[[int], bool]) -> bool:
+        """At startup, bring the latest job's derived data up to date, as DESIGN.md §2.4 (App restart) describes.
+
+        Only in the server worker that takes the job lock, which it holds as a job's runner does: a job that failed in
+        pre-caching but whose output is current is recorded ready, and the after-ready work runs (`_restart_state`);
+        the ready job whose output isn't current has its pre-caching stage re-run in the background, recorded as
+        running under its own generation, then ready or failed (`JobState.failed` marks the reason as the rebuild's).
+
+        Args:
+            function: The pre-caching stage's work, run with a context made from the stored job state.
+            current: Whether a generation's pre-caching output is current; called in a thread, under the job lock.
+
+        Returns:
+            Whether the rebuild started.
+        """
+        if self._busy or self._closing:
+            return False
+        self._busy = True
+        state = await self._claim(functools.partial(self._claim_rebuild, current))
+        if state is None:
+            return False
+        assert state.generation is not None and state.started_at is not None  # a stored job has them
+        context = JobContext(
+            state.generation,
+            self._settings,
+            state.reasoner,
+            imports=list(state.imports),
+            triples=state.triples,
+            started_at=state.started_at,
+        )
+        if not state.running:  # recorded ready
+            try:
+                await self._after_ready(context)
+            finally:
+                self._unlock()
+            return False
+        logger.warning("Load job %d's derived data isn't current; %s", context.generation, REBUILDING)
+        self._task = asyncio.create_task(
+            self._run(context, {Stage.PRE_CACHING: function}), name=f"rebuild of load job {context.generation}"
+        )
+        return True
+
+    def _claim_rebuild(self, current: Callable[[int], bool]) -> JobState | None:
+        """Take the job lock and record the state `_restart_state` gives, keeping the lock; else return None."""
+        if not self._lock.acquire():
+            return None  # a job, or another worker's rebuild, is running
+        try:
+            state = _restart_state(self._store.read(), current)
+            if state is None:
+                self._lock.release()
+            else:
+                self._store.write(state)
+        except BaseException:
+            self._lock.release()
+            raise
+        return state
 
     async def wait(self) -> None:
         """Wait for the running job, if any, to finish."""
@@ -654,23 +739,27 @@ class JobRunner:
         self._read_at = time.monotonic()
         self._changes += 1
 
-    async def _claim(self, reasoner: Reasoner, name: str | None, syntax: str | None) -> None:
-        """Take the job lock and record the job's start, in a thread that runs to its end even if this is cancelled.
+    async def _claim(self, claim_in_thread: Callable[[], JobState | None]) -> JobState | None:
+        """Run a claim, which takes the job lock and records a job's start, in a thread that runs to its end.
 
-        A job claimed after this was cancelled is failed as cancelled, so it doesn't hold the lock for good.
-
-        Raises:
-            JobRunningError: Another process holds the job lock.
+        The caller has set `_busy`. The claim returns the state it recorded, holding the lock, which becomes this
+        runner's; or None, having claimed nothing, which frees the runner, as does an exception, which propagates. If
+        this is cancelled, a job claimed afterwards is failed as cancelled, so it doesn't hold the lock for good.
         """
-        claim = asyncio.ensure_future(asyncio.to_thread(self._claim_in_thread, _now(), reasoner, name, syntax))
+        claim = asyncio.ensure_future(asyncio.to_thread(claim_in_thread))
         try:
-            self._set(await asyncio.shield(claim))
+            state = await asyncio.shield(claim)
         except asyncio.CancelledError:
             claim.add_done_callback(self._abandon_claim)
             raise
         except BaseException:
             self._busy = False
             raise
+        if state is None:
+            self._busy = False
+        else:
+            self._set(state)
+        return state
 
     def _claim_in_thread(
         self, started_at: datetime, reasoner: Reasoner, name: str | None, syntax: str | None
@@ -683,11 +772,12 @@ class JobRunner:
             self._lock.release()
             raise
 
-    def _abandon_claim(self, claim: asyncio.Future[JobState]) -> None:
-        if claim.cancelled() or claim.exception() is not None:
+    def _abandon_claim(self, claim: asyncio.Future[JobState | None]) -> None:
+        state = None if claim.cancelled() or claim.exception() is not None else claim.result()
+        if state is None:
             self._busy = False
             return
-        self._set(claim.result())
+        self._set(state)
         self._record_end(self._state.failed(CANCELLED))
 
     async def _record(self, state: JobState) -> None:
@@ -707,8 +797,6 @@ class JobRunner:
                 reason,
                 exc_info=not isinstance(error, StageError),
             )
-        if len(reason) > MAX_REASON_CHARS:
-            reason = f"{reason[:MAX_REASON_CHARS]}… (cut short; the app's log has it all)"
         # Shielded: a second cancellation, e.g. from an anyio cancel scope, mustn't stop the failure being stored.
         await asyncio.shield(self._record_end(self._state.failed(reason)))
 
@@ -751,11 +839,16 @@ class JobRunner:
         """Return the state with what the stages have found so far: the imports and the triples loaded."""
         return replace(self._state, imports=tuple(context.imports), triples=context.triples)
 
-    async def _run(self, context: JobContext) -> None:
+    async def _run(self, context: JobContext, stages: Mapping[Stage, StageFunction] | None = None) -> None:
+        """Run the job's background stages, from `stages` if given, else the registered functions, then record it ready.
+
+        `stages` gives a rebuild its only stage.
+        """
+        order, functions = (BACKGROUND_STAGES, self._stages) if stages is None else (tuple(stages), stages)
         try:
-            for stage in BACKGROUND_STAGES:
+            for stage in order:
                 await self._record(replace(self._with_results(context), stage=stage))
-                if function := self._stages.get(stage):
+                if function := functions.get(stage):
                     logger.info("Load job %d: %s", context.generation, stage)
                     try:
                         await function(context)
@@ -764,15 +857,66 @@ class JobRunner:
             await self._record(
                 replace(self._state, stage=Stage.READY, finished_at=_now(), ready_generation=context.generation)
             )
-            self._unlock()
-            logger.info("Load job %d is ready", context.generation)
         except asyncio.CancelledError as error:
             await self._fail(error)
             raise
         except Exception as error:  # noqa: BLE001  # any stage failure fails the job; _fail logs it
             await self._fail(error)
+            return
         finally:
             self._settle()
+        logger.info("Load job %d is ready", context.generation)
+        try:
+            await self._after_ready(context)
+        finally:
+            self._unlock()
+
+    async def _after_ready(self, context: JobContext) -> None:
+        """Run `on_ready`, logging its failure: the job stays ready.
+
+        A cancellation waits for it to finish, so it never runs once the job lock is released, when the next job may
+        be writing what it cleans up.
+        """
+        if self._on_ready is None:
+            return
+        task = asyncio.ensure_future(self._on_ready(context))
+        task.add_done_callback(functools.partial(_log_ready_failure, context.generation))
+        try:
+            with suppress(Exception):  # the callback logs it
+                await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await asyncio.wait({task})
+            raise
+
+
+def _log_ready_failure(generation: int, task: asyncio.Future[None]) -> None:
+    if not task.cancelled() and (error := task.exception()) is not None:
+        logger.error("Load job %d is ready, but its after-ready work failed", generation, exc_info=error)
+
+
+def _restart_state(state: JobState, current: Callable[[int], bool]) -> JobState | None:
+    """Return the state a restart records for the latest job (`JobRunner.rebuild`): ready, or rebuilding; or None."""
+    generation = state.generation
+    if generation is None or state.running:
+        return None
+    failed_pre_caching = state.failed_stage == Stage.PRE_CACHING
+    if not failed_pre_caching and (state.failed_stage is not None or generation != state.ready_generation):
+        return None  # it failed before pre-caching; the next upload builds a new generation
+    if current(generation):
+        if not failed_pre_caching:
+            return None  # ready, and current
+        logger.warning(
+            "Load job %d failed in pre-caching (%s), but its output is current: ready", generation, state.reason
+        )
+        return replace(
+            state, stage=Stage.READY, finished_at=_now(), failed_stage=None, reason=None, ready_generation=generation
+        )
+    if generation != state.ready_generation:
+        return None  # a load's own pre-caching failed; the next upload builds a new generation
+    if state.reason == REBUILD_INTERRUPTED_BY_RESTART:
+        logger.warning("Load job %d's rebuild was interrupted by a restart, so it isn't tried again", generation)
+        return None
+    return replace(state, stage=Stage.PRE_CACHING, finished_at=None, failed_stage=None, reason=None)
 
 
 def _recover(store: JobStore, lock: JobLock) -> JobState:

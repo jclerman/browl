@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 import browl.imports
 import browl.loading
+import browl.precache
 import browl.process
 import browl.robot
 from browl.imports import imports_stage, write_catalog
@@ -392,12 +393,13 @@ def test_app_runs_stage(
     async def no_imports(*args: object) -> Listing:
         return Listing([])
 
-    async def no_loading(*args: object, **kwargs: object) -> None:
+    async def skipped(*args: object, **kwargs: object) -> None:
         pass
 
-    # The other stages run Jena's tools, which would run the fake Java too.
+    # The other stages run Jena's tools, which would run the fake Java too, or need Fuseki.
     monkeypatch.setattr(browl.imports, "list_imports", no_imports)
-    monkeypatch.setattr(browl.loading, "loading_stage", no_loading)
+    monkeypatch.setattr(browl.loading, "loading_stage", skipped)
+    monkeypatch.setattr(browl.precache, "pre_caching_stage", skipped)
     app = make_app(real_stages=True)
     with TestClient(app) as client:
         files = {"ontology": ("o.ttl", b"@prefix ex: <http://example.org/> .\nex:a a ex:B .\n")}

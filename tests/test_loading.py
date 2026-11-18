@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
+from contextlib import closing
 from pathlib import Path
 
 import httpx2
@@ -11,6 +12,8 @@ from fastapi.testclient import TestClient
 import browl.fuseki
 import browl.imports
 import browl.loading
+from browl import derived
+from browl.derived import read_meta
 from browl.fuseki import UNION_FROM, FusekiAdmin, FusekiAdminError, FusekiClient, SparqlError, dataset_clause
 from browl.jobs import ImportResult, JobContext, Site, Stage, StageError
 from browl.loading import count_store, dataset_name, loading_stage, store_path
@@ -326,7 +329,7 @@ def test_app_loads_and_restarts(
 ) -> None:
     """Check an upload end to end, with nested imports and one that can't be fetched, then a restart.
 
-    The restarted app serves the same store, without loading anything.
+    The restarted app serves the same store, and reuses the derived database, without loading or building anything.
     """
     monkeypatch.setattr(browl.imports, "is_public", lambda address: True)  # the imports are on the local server
     nested = site.page("/n.ttl", turtle(site.url + "/n.ttl", extra=f"<{EX}n> <{EX}p> <{EX}n> ."))
@@ -349,6 +352,8 @@ def test_app_loads_and_restarts(
         ]
         generation = state.ready_generation
         assert "couldn't be loaded" in client.get("/_browl/admin/status").text
+        with closing(derived.connect(settings.data_dir, generation)) as connection:
+            assert read_meta(connection).ontology_iri == f"{EX}o"
 
         async def datasets() -> list[str]:
             async with httpx2.AsyncClient(base_url=fuseki_url) as http:
@@ -357,6 +362,7 @@ def test_app_loads_and_restarts(
         before = client.portal.call(datasets)
     store = store_path(settings, generation)
     modified = store.stat().st_mtime_ns
+    built = derived.derived_path(settings.data_dir, generation).stat().st_mtime_ns
 
     restarted = make_app(real_stages=True, **overrides)
     with TestClient(restarted) as client:
@@ -365,6 +371,7 @@ def test_app_loads_and_restarts(
         assert client.portal is not None
         assert client.portal.call(datasets) == before == [dataset_name(generation)]
         assert store.stat().st_mtime_ns == modified
+        assert derived.derived_path(settings.data_dir, generation).stat().st_mtime_ns == built  # reused, not rebuilt
 
         async def served() -> int:
             async with httpx2.AsyncClient(base_url=fuseki_url) as http:
@@ -396,9 +403,17 @@ def test_app_loads_and_restarts(
     ],
 )
 def test_app_loads_each_syntax(
-    settings: Settings, fuseki_url: str, fuseki_base: Path, name: str, content: str, triples: int
+    request: pytest.FixtureRequest,
+    settings: Settings,
+    fuseki_url: str,
+    fuseki_base: Path,
+    name: str,
+    content: str,
+    triples: int,
 ) -> None:
     """Check that an OFN upload (converted to Turtle) and an RDF/XML one each load without a reasoner."""
+    if request.node.get_closest_marker("jvm"):
+        request.getfixturevalue("jvm")  # the OFN lister's JVM needs Java 21 (`JAVA_HOME`), as the fixture finds it
     overrides = {
         "FUSEKI_URL": fuseki_url,
         "FUSEKI_BASE": str(fuseki_base),

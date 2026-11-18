@@ -3,8 +3,9 @@
 Every response is checked strictly, because a query that fails after Fuseki has sent HTTP 200 still ends normally,
 with the error appended as text (DESIGN.md §2.14). A query fails, raising `SparqlError`, when Fuseki answers with any
 status other than 2xx, when the connection fails or the body ends early, when it doesn't answer in time, and when the
-result doesn't parse. A failed query never looks like a short result. Bulk results that may break off cleanly at a row
-boundary need their own completeness check (P-9).
+result doesn't parse. A failed query never looks like a short result. A result that breaks off cleanly at a row
+boundary, or fails with no error text appended, still looks whole to that parsing, so bulk queries go through
+`FusekiClient.bulk_select`, which checks that the result reached its end (P-9).
 """
 
 import asyncio
@@ -16,7 +17,7 @@ from dataclasses import dataclass
 
 import httpx2
 
-from browl.rdf import RDFSyntaxError, Term, check_ntriples_triple, parse_tsv_header, parse_tsv_row
+from browl.rdf import XSD, Literal, RDFSyntaxError, Term, check_ntriples_triple, parse_tsv_header, parse_tsv_row
 
 QUERY_TIMEOUT_S = 30.0
 """Time limit for a whole buffered query (`select`, `construct`): ample for a page's queries (2–4 ms each, S-4)."""
@@ -90,9 +91,63 @@ class SelectStream:
                 yield row
 
 
+END_VARIABLE = "browl_end"
+"""The variable that marks a bulk result's last row (`FusekiClient.bulk_select`); bulk queries mustn't use it."""
+
+_END = Literal("true", f"{XSD}boolean")
+
+
+class BulkSelectStream:
+    """A bulk SELECT result read as it arrives and checked to be whole: iterate it for the rows, in column order.
+
+    The query's result ends in a marker row, which binds only `END_VARIABLE`; every other row leaves it unbound. The
+    marker isn't yielded, and the column is left out of `variables` and the rows.
+
+    Attributes:
+        variables: The result's variables, without '?', in column order; the column order is Fuseki's, so look columns
+            up by name.
+    """
+
+    def __init__(self, stream: SelectStream) -> None:
+        """Wrap a stream whose query was wrapped by `bulk_select`.
+
+        Raises:
+            SparqlError: The result hasn't exactly one `END_VARIABLE` column.
+        """
+        if (columns := stream.variables.count(END_VARIABLE)) != 1:
+            raise SparqlError(f"a bulk SELECT result has {columns} {END_VARIABLE} columns, not 1: {stream.variables}")
+        self._end = stream.variables.index(END_VARIABLE)
+        self.variables = stream.variables[: self._end] + stream.variables[self._end + 1 :]
+        self._stream = stream
+
+    async def __aiter__(self) -> AsyncIterator[tuple[Term | None, ...]]:
+        """Yield each row but the end marker.
+
+        Raises:
+            SparqlError: The rest of the result fails or doesn't parse, it has no end marker, or rows follow it.
+        """
+        end = self._end
+        last = end == len(self.variables)  # as Fuseki puts it, so the row needn't be put back together
+        ended = False
+        rows = 0
+        async for row in self._stream:
+            if ended:
+                raise SparqlError("the result has rows after its end marker")
+            marker = row[end]
+            if marker is None:
+                rows += 1
+                yield row[:end] if last else row[:end] + row[end + 1 :]
+            elif marker == _END and row.count(None) == len(row) - 1:
+                ended = True
+            else:
+                raise SparqlError(f"the result binds {END_VARIABLE} on a row that isn't its end marker")
+        if not ended:
+            raise SparqlError(f"the result is incomplete: it broke off after {rows:,} rows without its end marker")
+
+
 UNION_FROM = "FROM <urn:x-arq:DefaultGraph> FROM <urn:x-arq:UnionGraph>"
 """The dataset clause of a query that sees the ontology and its imports: the default graph merged with every named
-graph, as a set, so a triple both state counts once (DESIGN.md §2.4). Unused by app code until P-9's bulk queries."""
+graph, as a set, so a triple both state counts once (DESIGN.md §2.4)."""
 
 ADMIN_TIMEOUT_S = 120.0
 """Time limit for an admin protocol call: opening a store is quick, but removing one deletes its files."""
@@ -101,6 +156,21 @@ ADMIN_TIMEOUT_S = 120.0
 def dataset_clause(has_imports: bool) -> str:
     """Return the dataset clause for queries that should see the imports: `UNION_FROM` if there are any, else ""."""
     return UNION_FROM if has_imports else ""
+
+
+PING_TIMEOUT_S = 2.0
+"""Time limit for the whole of a ping (`ping`)."""
+
+
+async def ping(http: httpx2.AsyncClient, timeout_s: float = PING_TIMEOUT_S) -> bool:
+    """Return whether Fuseki answers its ping (`/$/ping`) with success within `timeout_s`, over a client for Fuseki."""
+    try:
+        # httpx2's own timeout limits each phase (connect, write, read) separately, not the whole call.
+        async with asyncio.timeout(timeout_s):
+            response = await http.get("/$/ping")
+    except (httpx2.HTTPError, TimeoutError):
+        return False
+    return response.is_success
 
 
 class FusekiAdminError(Exception):
@@ -223,6 +293,41 @@ class FusekiClient:
             except RDFSyntaxError as error:
                 raise SparqlError(f"malformed SELECT result: {error}") from error
             yield SelectStream(variables, _prepend(rows, batches))
+
+    @asynccontextmanager
+    async def bulk_select(
+        self, dataset: str, query: str, prologue: str = "", dataset_clause: str = ""
+    ) -> AsyncIterator[BulkSelectStream]:
+        """Run a SELECT query on a dataset, reading its result as it arrives, and check that the result is whole.
+
+        Use it for every bulk query: a result can break off cleanly at a row boundary, or fail with no error text
+        appended, and still parse. The query becomes a subquery, followed by a marker row, which `BulkSelectStream`
+        checks comes last (why that works and costs nothing: DESIGN.md §2.14, the truncated-result row):
+
+            {prologue} SELECT * {dataset_clause} WHERE { { {query} } UNION { BIND(true AS ?browl_end) } }
+
+        Each wait for data has a time limit (`STREAM_READ_TIMEOUT_S`), but the whole query has none.
+
+        Args:
+            dataset: The dataset's name.
+            query: A SELECT query without a prologue or dataset clause, which can't be in a subquery. Its solutions
+                come in no particular order, and its columns in Fuseki's (`BulkSelectStream.variables`).
+            prologue: The query's `PREFIX` and `BASE` declarations.
+            dataset_clause: Its `FROM` clauses (e.g. `dataset_clause`).
+
+        Raises:
+            ValueError: The query uses `END_VARIABLE`, or the dataset's name isn't letters, digits, '_' and '-'.
+            SparqlError: The query failed, or its result is malformed or incomplete (also while iterating).
+            SparqlTimeoutError: Fuseki sent no data for `STREAM_READ_TIMEOUT_S` (also while iterating).
+        """
+        if END_VARIABLE in query:
+            raise ValueError(f"a bulk query mustn't use the variable {END_VARIABLE}")
+        wrapped = (
+            f"{prologue}\nSELECT * {dataset_clause}\n"
+            f"WHERE {{\n{{\n{query}\n}}\nUNION\n{{ BIND(true AS ?{END_VARIABLE}) }}\n}}\n"
+        )
+        async with self.select_stream(dataset, wrapped) as stream:
+            yield BulkSelectStream(stream)
 
     @asynccontextmanager
     async def construct_stream(self, dataset: str, query: str) -> AsyncIterator[AsyncIterator[str]]:

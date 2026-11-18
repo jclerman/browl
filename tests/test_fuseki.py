@@ -8,8 +8,8 @@ import httpx2
 import pytest
 
 from browl import fuseki
-from browl.fuseki import NTRIPLES, TSV, FusekiClient, SelectResult, SparqlError, SparqlTimeoutError
-from browl.rdf import IRI, RDF_LANG_STRING, Literal
+from browl.fuseki import END_VARIABLE, NTRIPLES, TSV, FusekiClient, SelectResult, SparqlError, SparqlTimeoutError
+from browl.rdf import IRI, RDF_LANG_STRING, XSD, Literal
 
 pytestmark = pytest.mark.anyio
 
@@ -294,3 +294,75 @@ async def test_whole_query_time_limit(method: str, content_type: str, body: str)
 
     with pytest.raises(SparqlTimeoutError, match=r"longer than 0\.05 s"):
         await getattr(stub(handler), method)("ds", "QUERY", timeout_s=0.05)
+
+
+async def bulk_rows(client: FusekiClient, variables: tuple[str, ...] = ("s",)) -> list[tuple[object, ...]]:
+    """Run a bulk query, returning its rows, after checking its variables."""
+    async with client.bulk_select("ds", "SELECT ?s WHERE { ?s ?p ?o }") as stream:
+        assert stream.variables == variables
+        return [row async for row in stream]
+
+
+async def test_bulk_select_request() -> None:
+    """Check that a bulk query is sent as a subquery with its prologue and dataset clause, then the end marker."""
+    queries: list[str] = []
+
+    async def handler(request: httpx2.Request) -> httpx2.Response:
+        queries.append(urllib.parse.parse_qs(request.content.decode())["query"][0])
+        return httpx2.Response(200, headers={"Content-Type": TSV}, content=f"?s\t?{END_VARIABLE}\n\ttrue\n")
+
+    async with stub(handler).bulk_select("ds", "SELECT ?s { ?s ?p ?o }", "PREFIX : <x:>", "FROM <x:g>") as stream:
+        assert [row async for row in stream] == []
+    [query] = queries
+    assert query == (
+        f"PREFIX : <x:>\nSELECT * FROM <x:g>\nWHERE {{\n{{\nSELECT ?s {{ ?s ?p ?o }}\n}}\nUNION\n"
+        f"{{ BIND(true AS ?{END_VARIABLE}) }}\n}}\n"
+    )
+
+
+async def test_bulk_select() -> None:
+    """Check that a bulk result's rows come without the marker column, wherever Fuseki puts it: first, inside, last."""
+    client = answer([f"?{END_VARIABLE}\t?s\n".encode(), f"\t{A}\n\t{A}\n".encode(), b"true\t\n"])
+    assert await bulk_rows(client) == [(IRI("http://example.org/a"),)] * 2
+    client = answer(f"?s\t?{END_VARIABLE}\t?o\n{A}\t\t1\n\ttrue\t\n")
+    assert await bulk_rows(client, ("s", "o")) == [(IRI("http://example.org/a"), Literal("1", f"{XSD}integer"))]
+    client = answer(f"?s\t?{END_VARIABLE}\n{A}\t\n\ttrue\n")
+    assert await bulk_rows(client) == [(IRI("http://example.org/a"),)]
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        (f"?s\t?{END_VARIABLE}\n{A}\t\n{A}\t\n", "incomplete: it broke off after 2 rows without its end marker"),
+        (f"?s\t?{END_VARIABLE}\n", "incomplete: it broke off after 0 rows"),
+        (f"?s\t?{END_VARIABLE}\n{A}\t\n\t", "incomplete"),  # the marker row cut after its first cell
+        (f"?s\t?{END_VARIABLE}\n\ttrue\n{A}\t\n", "rows after its end marker"),
+        (f"?s\t?{END_VARIABLE}\n{A}\ttrue\n", "isn't its end marker"),
+        (f"?s\t?{END_VARIABLE}\n\tfalse\n", "isn't its end marker"),
+        (f'?s\t?{END_VARIABLE}\n\t"true"\n', "isn't its end marker"),
+        (f"?s\n{A}\n", "has 0 browl_end columns, not 1"),
+        (f"?{END_VARIABLE}\t?s\t?{END_VARIABLE}\n\t{A}\t\n", "has 2 browl_end columns, not 1"),
+    ],
+    ids=[
+        "row-boundary",
+        "no-rows",
+        "cut-marker",
+        "after-marker",
+        "marker-with-row",
+        "wrong-marker",
+        "string-marker",
+        "no-column",
+        "two-columns",
+    ],
+)
+async def test_bulk_select_incomplete(body: str, match: str) -> None:
+    """Check that a bulk result that ends cleanly but short, as at a row boundary, fails instead of looking whole."""
+    with pytest.raises(SparqlError, match=match):
+        await bulk_rows(answer(body))
+
+
+async def test_bulk_select_refuses_end_variable() -> None:
+    """Check that a bulk query can't use the marker's variable."""
+    with pytest.raises(ValueError, match=END_VARIABLE):
+        async with answer("").bulk_select("ds", f"SELECT ?{END_VARIABLE} {{}}"):
+            pass

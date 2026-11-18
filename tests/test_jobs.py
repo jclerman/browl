@@ -6,6 +6,7 @@ import sqlite3
 import threading
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import closing
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -19,10 +20,14 @@ from browl.jobs import (
     CANCELLED,
     INTERRUPTED_BY_RESTART,
     INTERRUPTED_BY_SHUTDOWN,
+    JOB_LOCK,
+    REBUILD_INTERRUPTED_BY_RESTART,
+    REBUILDING,
     STATE_DB,
     STOPPED_UNRECORDED,
     ImportResult,
     JobContext,
+    JobLock,
     JobRunner,
     JobRunningError,
     JobState,
@@ -775,3 +780,408 @@ async def test_upload_progress_write_before_end(data_dir: Path, monkeypatch: pyt
     await runner.close()
     stored = JobStore(data_dir / STATE_DB).read()
     assert (stored.failed_stage, stored.reason, stored.upload_bytes) == (Stage.UPLOADING, CANCELLED, 5)
+
+
+async def test_on_ready_runs_under_lock(data_dir: Path) -> None:
+    """Check that the after-ready work runs once the job is recorded ready, while the job lock is still held."""
+    seen: list[tuple[int, Stage | None, bool]] = []
+    runner: JobRunner
+
+    async def on_ready(context: JobContext) -> None:
+        other = JobLock(data_dir / JOB_LOCK)
+        seen.append((context.generation, JobStore(data_dir / STATE_DB).read().stage, other.acquire()))
+        other.release()
+
+    runner = await JobRunner.open(make_settings(), on_ready=on_ready)
+    state = await run_job(runner)
+    assert seen == [(1, Stage.READY, False)]
+    assert state.stage == Stage.READY
+    assert (await run_job(runner)).ready_generation == 2  # the lock was released
+
+
+async def test_on_ready_failure(data_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Check that failed after-ready work is logged, and the job stays ready."""
+
+    async def on_ready(context: JobContext) -> None:
+        raise OSError("can't delete")
+
+    runner = await JobRunner.open(make_settings(), on_ready=on_ready)
+    state = await run_job(runner)
+    assert (state.stage, state.ready_generation, state.failed_stage) == (Stage.READY, 1, None)
+    assert "Load job 1 is ready, but its after-ready work failed" in caplog.text
+    assert "can't delete" in caplog.text
+    assert (await run_job(runner)).ready_generation == 2
+
+
+async def test_on_ready_cancelled(data_dir: Path) -> None:
+    """Check that a shutdown during the after-ready work waits for it, and leaves the job ready."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    finished: list[int] = []
+
+    async def on_ready(context: JobContext) -> None:
+        started.set()
+        await asyncio.shield(release.wait())
+        finished.append(context.generation)
+
+    runner = await JobRunner.open(make_settings(), on_ready=on_ready)
+    await runner.start()
+    await started.wait()
+    closing_task = asyncio.create_task(runner.close())
+    await asyncio.sleep(0.01)
+    assert not closing_task.done()
+    release.set()
+    await closing_task
+    assert finished == [1]
+    assert JobStore(data_dir / STATE_DB).read().stage == Stage.READY
+    assert runner.state.stage == Stage.READY
+
+
+READY = JobState(
+    generation=3,
+    stage=Stage.READY,
+    started_at=STARTED,
+    finished_at=STARTED + timedelta(minutes=1),
+    ready_generation=3,
+    reasoner=Reasoner.ELK,
+    upload_name="o.ttl",
+    upload_syntax="Turtle",
+    upload_bytes=10,
+    imports=(ImportResult("http://example.org/i", triples=2),),
+    triples=5,
+)
+"""A job that reached ready, whose pre-caching a restart may re-run."""
+
+
+def not_current(generation: int) -> bool:
+    """Report every generation's pre-caching output as not current."""
+    return False
+
+
+async def test_upload_context_start(data_dir: Path) -> None:
+    """Check that a job's context has the start time the job state records."""
+    runner = await open_runner(data_dir)
+    context = await runner.start()
+    await runner.wait()
+    assert context.started_at == runner.state.started_at
+
+
+async def test_rebuild(data_dir: Path) -> None:
+    """Check that a rebuild re-runs the ready job's pre-caching, recorded as running under the job's own generation.
+
+    Meanwhile the site is "loading" in every worker, and no job can start; then the job is ready again, and the next
+    job gets the next generation.
+    """
+    JobStore(data_dir / STATE_DB).write(READY)
+    entered, release = asyncio.Event(), asyncio.Event()
+    contexts: list[JobContext] = []
+    checked: list[int] = []
+
+    async def pre_caching(context: JobContext) -> None:
+        contexts.append(context)
+        entered.set()
+        await release.wait()
+
+    def current(generation: int) -> bool:
+        checked.append(generation)
+        assert not JobLock(data_dir / JOB_LOCK).acquire()  # called under the job lock
+        return False
+
+    runner = await open_runner(data_dir)
+    assert await runner.rebuild(pre_caching, current)
+    async with asyncio.timeout(5):
+        await entered.wait()
+    assert checked == [3]
+    [context] = contexts
+    assert (context.generation, context.reasoner, context.imports, context.triples, context.started_at) == (
+        3,
+        Reasoner.ELK,
+        list(READY.imports),
+        5,
+        STARTED,
+    )
+    for state in runner.state, JobStore(data_dir / STATE_DB).read():
+        assert (state.generation, state.stage, state.started_at, state.ready_generation, state.site) == (
+            3,
+            Stage.PRE_CACHING,
+            STARTED,
+            3,
+            Site.LOADING,
+        )
+    with pytest.raises(JobRunningError, match="load job 3 is running, in stage pre-caching"):
+        await runner.start()
+    with pytest.raises(JobRunningError, match="another server worker"):
+        await (await open_runner(data_dir)).start()
+    assert not await runner.rebuild(pre_caching, current)
+    release.set()
+    await runner.wait()
+    state = runner.state
+    assert (state.generation, state.stage, state.ready_generation, state.failed_stage, state.site) == (
+        3,
+        Stage.READY,
+        3,
+        None,
+        Site.AVAILABLE,
+    )
+    assert (state.started_at, state.upload_name, state.imports, state.triples) == (STARTED, "o.ttl", READY.imports, 5)
+    assert JobStore(data_dir / STATE_DB).read() == state
+    assert (await run_job(runner)).ready_generation == 4
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        pytest.param(None, id="no job"),
+        pytest.param(replace(READY, stage=Stage.LOADING, finished_at=None), id="running"),
+        pytest.param(
+            replace(READY, generation=4, stage=Stage.REASONING, failed_stage=Stage.REASONING, reason="x"),
+            id="latest job failed",
+        ),
+    ],
+)
+async def test_rebuild_not_needed(data_dir: Path, state: JobState | None) -> None:
+    """Check that nothing is rebuilt without a ready job that is the latest, or when its output is current."""
+    if state is not None:
+        JobStore(data_dir / STATE_DB).write(state)
+    checked: list[int] = []
+
+    def current(generation: int) -> bool:
+        checked.append(generation)
+        return True
+
+    async def pre_caching(context: JobContext) -> None:
+        raise AssertionError("not rebuilt")
+
+    runner = await open_runner(data_dir)
+    if state is not None and state.stage == Stage.LOADING:
+        # a running job that its process left running is failed at startup; record it running again, as it would be
+        # while its end couldn't be stored
+        JobStore(data_dir / STATE_DB).write(state)
+    before = JobStore(data_dir / STATE_DB).read()
+    assert not await runner.rebuild(pre_caching, current)
+    assert checked == []
+    assert JobStore(data_dir / STATE_DB).read() == before
+    JobStore(data_dir / STATE_DB).write(READY)
+    assert not await runner.rebuild(pre_caching, current)  # current
+    assert checked == [3]
+    assert (await run_job(runner)).ready_generation == 4  # the lock was released
+
+
+async def test_rebuild_failure(data_dir: Path) -> None:
+    """Check that a failed rebuild leaves the site "not available", saying why, and the next start tries again."""
+    JobStore(data_dir / STATE_DB).write(READY)
+
+    async def failing(context: JobContext) -> None:
+        raise StageError("pre-caching query failed: boom")
+
+    runner = await open_runner(data_dir)
+    assert await runner.rebuild(failing, not_current)
+    await runner.wait()
+    state = runner.state
+    assert (state.generation, state.failed_stage, state.ready_generation, state.site) == (
+        3,
+        Stage.PRE_CACHING,
+        3,
+        Site.NOT_AVAILABLE,
+    )
+    assert state.reason == "rebuilding after a restart: pre-caching query failed: boom"
+    assert JobStore(data_dir / STATE_DB).read() == state
+
+    async def ok(context: JobContext) -> None:
+        pass
+
+    restarted = await open_runner(data_dir, {Stage.LOADING: failing})
+    assert await restarted.rebuild(ok, not_current)
+    await restarted.wait()
+    assert (restarted.state.stage, restarted.state.failed_stage, restarted.state.site) == (
+        Stage.READY,
+        None,
+        Site.AVAILABLE,
+    )
+    state = await run_job(restarted)  # a later job's failure isn't the rebuild's
+    assert (state.generation, state.reason) == (4, "pre-caching query failed: boom")
+
+
+async def test_rebuild_lock_held(data_dir: Path) -> None:
+    """Check that a worker that can't take the job lock, as while another worker rebuilds, rebuilds nothing."""
+    JobStore(data_dir / STATE_DB).write(READY)
+    runner = await open_runner(data_dir)
+    other = JobLock(data_dir / JOB_LOCK)
+    assert other.acquire()
+    try:
+        assert not await runner.rebuild(lambda context: asyncio.sleep(0), not_current)
+    finally:
+        other.release()
+    assert runner.state == JobStore(data_dir / STATE_DB).read() == READY
+    assert await runner.rebuild(lambda context: asyncio.sleep(0), not_current)  # it wasn't left busy
+    await runner.wait()
+
+
+async def test_rebuild_cancelled_at_close(data_dir: Path) -> None:
+    """Check that closing the runner cancels a rebuild, recording why, and the next start tries again."""
+    JobStore(data_dir / STATE_DB).write(READY)
+    entered = asyncio.Event()
+
+    async def forever(context: JobContext) -> None:
+        entered.set()
+        await asyncio.Event().wait()
+
+    runner = await open_runner(data_dir)
+    assert await runner.rebuild(forever, not_current)
+    async with asyncio.timeout(5):
+        await entered.wait()
+    await runner.close()
+    state = JobStore(data_dir / STATE_DB).read()
+    assert (state.failed_stage, state.reason) == (
+        Stage.PRE_CACHING,
+        f"{REBUILDING}: {INTERRUPTED_BY_SHUTDOWN}",
+    )
+    assert not await runner.rebuild(forever, not_current)  # closed
+    restarted = await open_runner(data_dir)
+    assert await restarted.rebuild(lambda context: asyncio.sleep(0), not_current)
+    await restarted.wait()
+    assert restarted.state.site == Site.AVAILABLE
+
+
+async def test_rebuild_claim_cancelled(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a rebuild cancelled while it claims the job fails it as a cancelled rebuild, releasing the lock."""
+    JobStore(data_dir / STATE_DB).write(READY)
+    runner = await open_runner(data_dir)
+    entered, release = threading.Event(), threading.Event()
+    claim = runner._claim_rebuild
+
+    def blocked(current: Callable[[int], bool]) -> JobState | None:
+        entered.set()
+        release.wait(timeout=5)
+        return claim(current)
+
+    monkeypatch.setattr(runner, "_claim_rebuild", blocked)
+    task = asyncio.create_task(runner.rebuild(lambda context: asyncio.sleep(0), not_current))
+    assert await asyncio.to_thread(entered.wait, 5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    release.set()
+    async with asyncio.timeout(5):
+        while runner._busy:
+            await asyncio.sleep(0.001)
+    state = JobStore(data_dir / STATE_DB).read()
+    assert (state.failed_stage, state.reason) == (Stage.PRE_CACHING, f"{REBUILDING}: {CANCELLED}")
+    assert (await run_job(await open_runner(data_dir))).ready_generation == 4
+
+
+async def test_restart_fails_running_rebuild(data_dir: Path) -> None:
+    """Check that a rebuild left running by a previous process is recorded as a rebuild interrupted by a restart."""
+    JobStore(data_dir / STATE_DB).write(replace(READY, stage=Stage.PRE_CACHING, finished_at=None))
+    state = (await open_runner(data_dir)).state
+    assert (state.failed_stage, state.reason, state.site) == (
+        Stage.PRE_CACHING,
+        f"{REBUILDING}: {INTERRUPTED_BY_RESTART}",
+        Site.NOT_AVAILABLE,
+    )
+
+
+@pytest.mark.parametrize(
+    ("ready_generation", "reason"),
+    [(3, f"{REBUILDING}: {STOPPED_UNRECORDED}"), (2, STOPPED_UNRECORDED), (None, STOPPED_UNRECORDED)],
+    ids=["rebuild", "load", "first load"],
+)
+def test_failed_reason(ready_generation: int | None, reason: str) -> None:
+    """Check that a rebuild's failure, and only a rebuild's, says it was the rebuild, however it failed."""
+    running = replace(READY, stage=Stage.PRE_CACHING, finished_at=None, ready_generation=ready_generation)
+    assert running.failed(STOPPED_UNRECORDED).reason == reason
+
+
+FAILED_REBUILD = replace(READY, stage=Stage.PRE_CACHING, failed_stage=Stage.PRE_CACHING)
+"""A rebuild of `READY` that failed; its reason is to be set."""
+
+FAILED_LOAD = replace(FAILED_REBUILD, generation=4, reason=INTERRUPTED_BY_SHUTDOWN)
+"""The job after `READY`, which failed in its pre-caching stage."""
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        pytest.param(
+            replace(FAILED_REBUILD, reason=f"{REBUILDING}: {INTERRUPTED_BY_SHUTDOWN}"), id="rebuild, shutdown"
+        ),
+        pytest.param(replace(FAILED_REBUILD, reason=REBUILD_INTERRUPTED_BY_RESTART), id="rebuild, restart"),
+        pytest.param(replace(FAILED_REBUILD, reason=f"{REBUILDING}: internal error: OSError"), id="rebuild, error"),
+        pytest.param(FAILED_LOAD, id="load"),
+    ],
+)
+async def test_restart_failed_but_current(data_dir: Path, state: JobState) -> None:
+    """Check that a job that failed in pre-caching, but whose output is current, is recorded ready at the next start.
+
+    So a failure after the output was swapped in, e.g. a shutdown during the build's end, doesn't leave the site "not
+    available". The after-ready work runs, under the job lock, and nothing is rebuilt.
+    """
+    JobStore(data_dir / STATE_DB).write(state)
+    assert state.generation is not None
+    ran: list[int] = []
+
+    async def on_ready(context: JobContext) -> None:
+        assert not JobLock(data_dir / JOB_LOCK).acquire()
+        ran.append(context.generation)
+
+    async def pre_caching(context: JobContext) -> None:
+        raise AssertionError("not rebuilt")
+
+    runner = await JobRunner.open(make_settings(), on_ready=on_ready)
+    assert runner.state.site == Site.NOT_AVAILABLE
+    assert not await runner.rebuild(pre_caching, lambda generation: generation == state.generation)
+    assert ran == [state.generation]
+    for stored in runner.state, JobStore(data_dir / STATE_DB).read():
+        assert (stored.stage, stored.failed_stage, stored.reason, stored.ready_generation, stored.site) == (
+            Stage.READY,
+            None,
+            None,
+            state.generation,
+            Site.AVAILABLE,
+        )
+        assert (stored.generation, stored.started_at) == (state.generation, state.started_at)
+    assert (await run_job(runner)).ready_generation == state.generation + 1  # the lock was released
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        pytest.param(replace(READY, stage=Stage.PRE_CACHING, finished_at=None), id="rebuild left running"),
+        pytest.param(FAILED_LOAD, id="load failed in pre-caching"),
+    ],
+)
+async def test_restart_not_rebuilt(data_dir: Path, state: JobState) -> None:
+    """Check that a restart doesn't rebuild a rebuild that a restart interrupted, nor a load whose pre-caching failed.
+
+    The first may have crashed the app, which would crash it again on every start. Either way the site stays "not
+    available", saying why, until an upload replaces the ontology.
+    """
+    JobStore(data_dir / STATE_DB).write(state)
+
+    async def pre_caching(context: JobContext) -> None:
+        raise AssertionError("not rebuilt")
+
+    runner = await open_runner(data_dir)
+    failed = runner.state
+    assert (failed.failed_stage, failed.site) == (Stage.PRE_CACHING, Site.NOT_AVAILABLE)
+    if state.running:
+        assert failed.reason == REBUILD_INTERRUPTED_BY_RESTART
+    for _ in range(2):  # nor at the start after
+        assert not await runner.rebuild(pre_caching, not_current)
+        assert runner.state == JobStore(data_dir / STATE_DB).read() == failed
+        runner = await open_runner(data_dir)
+    assert (await run_job(runner)).ready_generation == (failed.generation or 0) + 1
+
+
+async def test_rebuild_check_fails(data_dir: Path) -> None:
+    """Check that a failed check of the derived data fails the startup, releasing the lock and the runner."""
+    JobStore(data_dir / STATE_DB).write(READY)
+
+    def broken(generation: int) -> bool:
+        raise OSError("unreadable")
+
+    runner = await open_runner(data_dir)
+    with pytest.raises(OSError, match="unreadable"):
+        await runner.rebuild(lambda context: asyncio.sleep(0), broken)
+    assert JobStore(data_dir / STATE_DB).read() == READY
+    assert (await run_job(runner)).ready_generation == 4
