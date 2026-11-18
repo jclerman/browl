@@ -12,6 +12,7 @@ from browl.urls import URLMapper
 logger = logging.getLogger(__name__)
 
 _LOGGED_IRIS = 10  # the most reserved IRIs a warning lists
+_LOGGED_IRI_CHARS = 300  # the most characters of each it shows, so a huge IRI can't give a huge log line
 
 OWL = "http://www.w3.org/2002/07/owl#"
 
@@ -67,7 +68,7 @@ async def entities(context: PreCacheContext) -> None:
 
 @dataclass
 class _Reserved:
-    """The entity IRIs whose URLs would be under the reserved prefix: how many, and the first `_LOGGED_IRIS`."""
+    """The entity IRIs whose URLs would be under the reserved prefix: how many, and the first few, cut short."""
 
     count: int = 0
     iris: list[str] = field(default_factory=list)
@@ -83,6 +84,6 @@ def _insert_entities(
         if url.reserved:
             reserved.count += 1
             if len(reserved.iris) < _LOGGED_IRIS:
-                reserved.iris.append(iri)
+                reserved.iris.append(iri if len(iri) <= _LOGGED_IRI_CHARS else f"{iri[:_LOGGED_IRI_CHARS]}…")
         values.append((iri, str(kind), url.path, url.fragment))
     connection.executemany("INSERT INTO entity (iri, type, path, fragment) VALUES (?, ?, ?, ?)", values)

@@ -13,9 +13,12 @@ import importlib.metadata
 import importlib.util
 import json
 import sys
+import typing
 from collections.abc import Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+from pydantic import Secret, SecretBytes, SecretStr
 
 from browl import derived
 from browl.precache import header
@@ -111,11 +114,15 @@ def settings_values(settings: Settings, names: Collection[str]) -> dict[str, obj
     """Return the values of these `Settings` fields, as JSON.
 
     Raises:
-        ValueError: A name isn't a `Settings` field.
+        ValueError: A name isn't a `Settings` field, or is a secret one (`SecretStr`, `SecretBytes` or `Secret`): a
+            secret dumps masked, so a key would miss its changes, and the file would store a hash of it.
     """
     unknown = set(names) - Settings.model_fields.keys()
     if unknown:
         raise ValueError(f"not Settings fields: {sorted(unknown)}")
+    secret = {name for name in names if _is_secret(Settings.model_fields[name].annotation)}
+    if secret:
+        raise ValueError(f"secret Settings fields can't be in a build key: {sorted(secret)}")
     return settings.model_dump(mode="json", include=set(names))
 
 
@@ -142,6 +149,14 @@ def build_keys(settings: Settings, hooks: Sequence[Hook]) -> dict[str, str]:
             raise ValueError(f"two build key components are named {hook.name!r}")
         keys[hook.name] = component_key(hook.module, hook.settings, settings)
     return keys
+
+
+def _is_secret(annotation: object) -> bool:
+    """Return whether a type is, or has as an argument (e.g. `SecretStr | None`), one of Pydantic's secret types."""
+    origin = typing.get_origin(annotation) or annotation
+    if isinstance(origin, type) and issubclass(origin, SecretStr | SecretBytes | Secret):
+        return True
+    return any(_is_secret(argument) for argument in typing.get_args(annotation))
 
 
 def _source(module: str) -> tuple[Path, bool]:

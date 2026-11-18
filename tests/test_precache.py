@@ -1004,6 +1004,17 @@ async def test_entities_without_ontology_iri(settings: Settings, caplog: pytest.
     assert message.endswith("_browl/9'] …") and "/10'" not in message
 
 
+async def test_entities_warning_shortens_iris(settings: Settings, caplog: pytest.LogCaptureFixture) -> None:
+    """Check that the reserved-IRI warning shows only the start of a long IRI, so its line stays short."""
+    long = f"http://example.org/_browl/{'x' * 10_000}"
+    caplog.set_level(logging.WARNING, logger="browl.precache")
+    async with fuseki(HEADER + END, f"{ENTITY_HEADER}<{long}>\t<{OWL}Class>\t\n{ENTITY_END}") as http:
+        await pre_caching_stage(job(settings, 5), http, hooks=[entities])
+    [message] = caplog.messages
+    assert message.endswith(f"{[long[:300] + '…']!r}")
+    assert len(message) < 500
+
+
 @pytest.mark.fuseki
 async def test_entities_on_real_fuseki(fuseki_url: str, settings: Settings) -> None:
     """Check the entities hook on a real Fuseki: the ontology, and the classes and properties of it and its imports.

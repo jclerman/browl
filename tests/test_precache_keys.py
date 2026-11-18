@@ -7,6 +7,7 @@ files under `browl/` opened and the settings read, and check that the component'
 
 import importlib
 import json
+import operator
 import os
 import subprocess
 import sys
@@ -20,6 +21,7 @@ from types import CodeType
 from typing import Any
 
 import pytest
+from pydantic import Secret, SecretBytes, SecretStr
 
 import browl
 from browl.derived import Meta
@@ -287,6 +289,30 @@ def test_build_keys_rejects_unknown_setting(settings: Settings) -> None:
         build_keys(settings, [hook("base_url", "no_such_setting")(nothing)])
 
 
+def test_build_keys_rejects_secret(settings: Settings) -> None:
+    """Check that a hook can't declare a secret setting, which a key would miss the changes of, and expose."""
+    with pytest.raises(ValueError, match=r"secret Settings fields can't be in a build key: \['oidc_client_secret'\]"):
+        build_keys(settings, [hook("base_url", "oidc_client_secret")(nothing)])
+
+
+@pytest.mark.parametrize(
+    ("annotation", "secret"),
+    [
+        (SecretStr, True),
+        (SecretStr | None, True),
+        (SecretBytes, True),
+        (Secret[int], True),
+        (list[SecretStr], True),
+        (str, False),
+        (str | None, False),
+        (dict[str, str], False),
+    ],
+)
+def test_is_secret(annotation: object, secret: bool) -> None:
+    """Check that a secret type is found, alone, optional or as an argument."""
+    assert keys._is_secret(annotation) == secret
+
+
 @pytest.mark.parametrize("names", [["nothing", "nothing"], ["meta"]], ids=["two hooks", "hook named meta"])
 def test_build_keys_rejects_duplicate_names(settings: Settings, names: list[str]) -> None:
     """Check that components must have different names."""
@@ -310,22 +336,38 @@ def test_hook_name_and_module() -> None:
 
 
 class RecordingSettings:
-    """Settings that record which of their fields are read.
+    """Settings that record which of their fields are read, and any other use, which could read them all.
+
+    Anything but a field, such as `model_dump`, `__dict__` (it has slots, so `__dict__` goes through `__getattr__`) or
+    iteration, could read every field unrecorded, so it's recorded in `bulk` instead.
 
     Attributes:
         read: The names of the fields read.
+        bulk: The other attributes read, and `__iter__` if it was iterated.
     """
+
+    __slots__ = ("_settings", "bulk", "read")
 
     def __init__(self, settings: Settings) -> None:
         """Wrap the settings."""
         self._settings = settings
         self.read: set[str] = set()
+        self.bulk: set[str] = set()
 
     def __getattr__(self, name: str) -> object:
-        """Return a setting, recording that it was read."""
-        if name in Settings.model_fields:
-            self.read.add(name)
+        """Return a setting, recording that it was read, or any other attribute, recording it in `bulk`."""
+        (self.read if name in Settings.model_fields else self.bulk).add(name)
         return getattr(self._settings, name)
+
+    def __iter__(self) -> Iterator[tuple[str, object]]:
+        """Iterate over the fields and their values, recording it in `bulk`."""
+        self.bulk.add("__iter__")
+        return iter(self._settings)
+
+    def clear(self) -> None:
+        """Forget what was read."""
+        self.read.clear()
+        self.bulk.clear()
 
 
 @dataclass
@@ -377,7 +419,9 @@ def tracing() -> Iterator[Trace]:
         monitoring.free_tool_id(tool)
 
 
-def uncovered(component: str, module: str, declared: frozenset[str], trace: Trace, read: set[str]) -> list[str]:
+def uncovered(
+    component: str, module: str, declared: frozenset[str], trace: Trace, recording: RecordingSettings
+) -> list[str]:
     """Return what a component used that its key doesn't cover, each with what the developer should do."""
     covered = closure(module)
     sources = {path.resolve() for path in covered.modules.values()}
@@ -395,9 +439,14 @@ def uncovered(component: str, module: str, declared: frozenset[str], trace: Trac
                 f"{component} opened {opened}, which its key doesn't cover: load it through"
                 " browl.precache.core.sparql_file, with a string literal"
             )
-    for name in sorted(read - declared):
-        where = "in @hook(...)" if component != keys.META else "in browl.precache.header.SETTINGS"
+    where = "in @hook(...)" if component != keys.META else "in browl.precache.header.SETTINGS"
+    for name in sorted(recording.read - declared):
         problems.append(f"{component} read the setting {name!r}: declare it {where}, so its key covers its value")
+    if recording.bulk:
+        problems.append(
+            f"{component} used the settings other than by reading a field ({', '.join(sorted(recording.bulk))}),"
+            f" which its key can't cover: read each setting by name, and declare it {where}"
+        )
     return problems
 
 
@@ -423,7 +472,7 @@ async def test_meta_key_covers_header(settings: Settings) -> None:
             meta = await header.header_meta(job, FusekiClient(http), dataset)
     assert meta.title == "Onto"
     assert str(Path(header.__file__).resolve()) in {str(Path(name).resolve()) for name in trace.code}  # it traced
-    assert uncovered(keys.META, header.__name__, header.SETTINGS, trace, recording.read) == []
+    assert uncovered(keys.META, header.__name__, header.SETTINGS, trace, recording) == []
 
 
 @pytest.mark.parametrize("index", range(len(HOOKS)), ids=[hook.name for hook in HOOKS])
@@ -439,13 +488,13 @@ async def test_hook_key_covers_hook(settings: Settings, index: int) -> None:
         context = PreCacheContext(job, FusekiClient(http), dataset_name(1), db)
         for earlier in HOOKS[:index]:
             await earlier(context)
-        recording.read.clear()
+        recording.clear()
         with tracing() as trace:
             await traced(context)
     module = sys.modules[traced.module]
     assert module.__file__ is not None
     assert str(Path(module.__file__).resolve()) in {str(Path(name).resolve()) for name in trace.code}  # it traced
-    assert uncovered(traced.name, traced.module, traced.settings, trace, recording.read) == []
+    assert uncovered(traced.name, traced.module, traced.settings, trace, recording) == []
 
 
 def test_entities_reads_its_query(settings: Settings) -> None:
@@ -477,7 +526,7 @@ async def test_uncovered_reports(package: tuple[str, Path], settings: Settings) 
     job, recording = traced_job(settings)
     with tracing() as trace:
         await function(SimpleContext(job))
-    problems = uncovered("sneaky", f"{name}.sneaky", frozenset(), trace, recording.read)
+    problems = uncovered("sneaky", f"{name}.sneaky", frozenset(), trace, recording)
     assert len(problems) == 3
     assert "ran code in" in problems[0] and "names.py" in problems[0] and "import that module" in problems[0]
     assert "count-triples.rq" in problems[1] and "load it through browl.precache.core.sparql_file" in problems[1]
@@ -496,3 +545,27 @@ class SimpleContext:
     """
 
     job: JobContext
+
+
+@pytest.mark.parametrize(
+    ("use", "bulk"),
+    [
+        (lambda settings: settings.model_dump(), "model_dump"),
+        (lambda settings: settings.model_dump_json(), "model_dump_json"),
+        (lambda settings: settings.__dict__, "__dict__"),
+        (vars, "__dict__"),
+        (dict, "__iter__, keys"),
+        (lambda settings: [value for _, value in settings], "__iter__"),
+        (operator.methodcaller("model_copy"), "model_copy"),
+    ],
+    ids=["model_dump", "model_dump_json", "__dict__", "vars", "dict", "iteration", "methodcaller"],
+)
+def test_uncovered_reports_bulk_reads(settings: Settings, use: Callable[[Any], object], bulk: str) -> None:
+    """Check that using the settings other than by reading a field, which could read them all, is caught."""
+    job, recording = traced_job(settings)
+    use(job.settings)
+    [problem] = uncovered("bulk", header.__name__, frozenset(), Trace(), recording)
+    assert problem == (
+        f"bulk used the settings other than by reading a field ({bulk}), which its key can't cover: read each setting"
+        " by name, and declare it in @hook(...)"
+    )
