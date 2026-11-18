@@ -1,6 +1,14 @@
 # tbls config for the state database (docs/SCHEMA.md); `make schema-docs` regenerates docs/schema/state/ from it.
 # The database is the one scripts/schema_dbs.py builds by running browl.jobs.MIGRATIONS on an empty file.
-name: state
+name: browl state database
+desc: >
+  The schema of browl's **state database**, generated from the code by [tbls](https://github.com/k1LoW/tbls)
+  (`make schema-docs`; overview in [docs/SCHEMA.md](../../SCHEMA.md)). Edit `.tbls/state.yml`, not these pages.
+
+
+  browl keeps this SQLite file, `DATA_DIR/state.sqlite3`, for the load job's state (stage, generation numbers, errors),
+  shared by all the app's workers, and later the admins. It's authoritative and persistent, and migrates forward from
+  its recorded version when browl starts ([DESIGN.md 2.4](../../DESIGN.md#24-load-pipeline)).
 dsn: sqlite://.cache/schema-dbs/state.sqlite3
 docPath: docs/schema/state
 er:

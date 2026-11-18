@@ -1,4 +1,11 @@
-# derived
+# browl derived database
+
+## Description
+
+The schema of browl's **derived database**, generated from the code by [tbls](https://github.com/k1LoW/tbls) (`make schema-docs`; overview in [docs/SCHEMA.md](../../SCHEMA.md)). Edit `.tbls/derived.yml`, not these pages.  
+  
+browl builds one such SQLite file per load, `DATA_DIR/derived/{generation}.sqlite3`, from bulk SPARQL queries against the ontology in Fuseki. It holds whatever needs the whole ontology (entities and their URLs, names, hierarchies, counts, search), so pages never query Fuseki for it. It's a cache: rebuilt on every load, never migrated ([DESIGN.md 2.5](../../DESIGN.md#25-derived-data-pre-caching)).  
+
 
 ## Tables
 
