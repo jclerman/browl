@@ -15,6 +15,7 @@ import browl.process
 import browl.robot
 from browl.imports import imports_stage, write_catalog
 from browl.jobs import JobContext, Reasoner, Stage, StageError
+from browl.ofn import Listing
 from browl.process import TAIL_LINES, Completed
 from browl.robot import (
     OUT_OF_MEMORY,
@@ -348,8 +349,8 @@ def test_app_runs_stage(
     """Check that the app's uploads run the reasoning stage, and a failure is recorded with ROBOT's output (A-6)."""
     fake_java(tmp_path, monkeypatch, script)
 
-    async def no_imports(*args: object) -> list[str]:
-        return []
+    async def no_imports(*args: object) -> Listing:
+        return Listing([])
 
     async def no_loading(*args: object, **kwargs: object) -> None:
         pass

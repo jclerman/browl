@@ -23,7 +23,7 @@ IMPORTS STAGE: a breadth-first walk over the import closure, starting from the u
   │        OFN  →  OWLAPI with every load refused; the same parse writes Turtle,  [sandbox]
   │                which stands in for the OFN file from then on (the upload's: converted.ttl)
   │        can't be parsed ──► DROPPED  (the upload: the job FAILS)
-  │     for each new import IRI   (≤ 100 attempts; deadline for the whole stage)
+  │     for each new import IRI but the upload's own   (≤ 100 attempts; deadline for the whole stage)
   │        POLICY   http/https only; public address; no port browsers block;
   │                 checked again on each redirect ────────────────────── no ──► DROPPED
   │        FETCH    size and time limits ───────────────────────────── fails ──► DROPPED

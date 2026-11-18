@@ -77,6 +77,7 @@ def test_import_lines(size: int) -> None:
     for start in range(0, len(data), size):
         collect(data[start : start + size])
     assert list(found) == [f"{EX}a", f"{EX}b"]
+    assert collect.importers == {f"{EX}o"}
 
 
 def test_import_lines_skip_long_line(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -95,14 +96,15 @@ async def test_rdf_imports(settings: Settings, tmp_path: Path) -> None:
     """Check that `riot` lists the imports of Turtle and RDF/XML, with relative IRIs resolved."""
     ttl = tmp_path / "o.ttl"
     ttl.write_text(turtle(f"{EX}o", f"{EX}a", "rel.owl"))
-    found = await list_rdf_imports(ttl, Syntax.TURTLE, settings)
-    assert found == [f"{EX}a", (tmp_path / "rel.owl").as_uri()]
+    listing = await list_rdf_imports(ttl, Syntax.TURTLE, settings)
+    assert listing.imports == [f"{EX}a", (tmp_path / "rel.owl").as_uri()]
+    assert listing.names == {f"{EX}o"}
     rdf = tmp_path / "o.rdf"
     rdf.write_text(
         '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:owl="http://www.w3.org/2002/07/owl#">'
         f'<owl:Ontology rdf:about="{EX}o"><owl:imports rdf:resource="{EX}b"/></owl:Ontology></rdf:RDF>'
     )
-    assert await list_rdf_imports(rdf, Syntax.RDF_XML, settings) == [f"{EX}b"]
+    assert (await list_rdf_imports(rdf, Syntax.RDF_XML, settings)).imports == [f"{EX}b"]
 
 
 async def test_rdf_parse_error(settings: Settings, tmp_path: Path) -> None:
@@ -310,6 +312,18 @@ async def test_stage(site: StaticServer, settings: Settings, data_dir: Path) -> 
     assert entries[b] == (imports_dir / "3.rdf").resolve().as_uri()
     for dropped in (missing, "file:///etc/passwd", "file:/etc/passwd", "file://localhost/etc/passwd"):
         assert Path(entries[dropped].removeprefix("file://")).read_text().startswith("Ontology(")
+
+
+async def test_stage_cycle_to_upload(site: StaticServer, settings: Settings, data_dir: Path) -> None:
+    """Check that an import of the upload's own IRI, through a cycle, isn't fetched: its published version isn't it."""
+    own, a = site.url + "/o.ttl", site.url + "/a.ttl"
+    site.page("/o.ttl", turtle(own, extra=f"<{EX}old> <{EX}p> <{EX}old> ."))
+    site.page("/a.ttl", turtle(a, own))
+    context = JobContext(1, settings, Reasoner.NONE, store_upload(data_dir, turtle(own, a)))
+    await imports_stage(context, allow_all)
+    assert site.requested == ["/a.ttl"]
+    assert [result.iri for result in context.imports] == [a]
+    assert list(context.import_files) == [a]
 
 
 async def test_stage_parse_error(settings: Settings, data_dir: Path) -> None:

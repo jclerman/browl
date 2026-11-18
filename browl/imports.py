@@ -29,7 +29,7 @@ import httpx2
 
 import browl
 from browl.jobs import ImportResult, JobContext, StageError
-from browl.ofn import convert_ofn
+from browl.ofn import Listing, convert_ofn
 from browl.process import free_bytes, run_process
 from browl.settings import Settings
 from browl.upload import FREE_SPACE_MARGIN_BYTES, IDLE_S, SNIFF_BYTES, STORED_SUFFIXES, Syntax, sniff_syntax
@@ -81,18 +81,23 @@ SYNTAX_NAMES = {Syntax.TURTLE: "Turtle", Syntax.RDF_XML: "RDF/XML"}
 
 _IRI = r"[^\s<>\"{}|^`\\]*"
 _SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
-_NT_IMPORT = re.compile(rf"^(?:<{_IRI}>|_:\S+) <{re.escape(OWL_IMPORTS)}> <({_IRI})> \.$")
+_NT_IMPORT = re.compile(rf"^(?:<({_IRI})>|_:\S+) <{re.escape(OWL_IMPORTS)}> <({_IRI})> \.$")
 _NOT_XML = re.compile("[^\t\n\r\x20-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]")
 """A character XML 1.0 can't hold, even escaped, such as a control character."""
 
 
 class _ImportLines:
-    """Collect the `owl:imports` triples from N-Triples arriving in chunks, splitting only their lines out."""
+    """Collect the `owl:imports` triples from N-Triples arriving in chunks, splitting only their lines out.
+
+    Attributes:
+        importers: The IRIs that import something (at most `MAX_LISTED`): the document's own ontology.
+    """
 
     _NEEDLE = f"<{OWL_IMPORTS}>".encode()
 
     def __init__(self, found: dict[str, None]) -> None:
         self._found = found
+        self.importers: set[str] = set()
         self._pending: list[bytes] = []  # the current line's start, until its end arrives
         self._pending_bytes = 0
         self._skipping = False  # whether the current line is too long to read
@@ -126,26 +131,29 @@ class _ImportLines:
             line_start = data.rfind(b"\n", 0, start) + 1
             line_end = data.find(b"\n", start)
             if match := _NT_IMPORT.match(data[line_start:line_end].decode("utf-8", "replace")):
-                self._found[match[1]] = None
+                if match[1] is not None and len(self.importers) < MAX_LISTED:
+                    self.importers.add(match[1])
+                self._found[match[2]] = None
                 if len(self._found) > MAX_LISTED:  # enough to fail the load; keep no more
                     return
             start = data.find(self._NEEDLE, line_end, end)
 
 
-async def list_rdf_imports(path: Path, syntax: Syntax, settings: Settings) -> list[str]:
-    """Return the IRIs an RDF document imports, each once, parsing all of it with Jena's `riot`.
+async def list_rdf_imports(path: Path, syntax: Syntax, settings: Settings) -> Listing:
+    """Return what an RDF document imports, each once, parsing all of it with Jena's `riot`.
 
     Raises:
         StageError: `riot` couldn't parse it.
     """
     found: dict[str, None] = {}
     command = [str(settings.jena_home / "bin" / "riot"), f"--syntax={SYNTAX_NAMES[syntax]}", "--output=nt", str(path)]
-    completed = await run_process(command, timeout_s=SCAN_TIMEOUT_S, on_stdout=_ImportLines(found), name="riot")
+    lines = _ImportLines(found)
+    completed = await run_process(command, timeout_s=SCAN_TIMEOUT_S, on_stdout=lines, name="riot")
     if reason := completed.limit_reason("listing imports (riot)", f"{SCAN_TIMEOUT_S:g} s"):
         raise StageError(reason)
     if not completed.ok:
         raise StageError(f"parse error: Jena couldn't read {path.name} as {SYNTAX_NAMES[syntax]}:\n{completed.output}")
-    return list(found)
+    return Listing(list(found), frozenset(lines.importers))
 
 
 _EMBEDS_IPV4_LAST = tuple(
@@ -404,8 +412,8 @@ class _Document:
     iri: str | None  # None for the upload
 
 
-async def list_imports(document: _Document, settings: Settings) -> list[str]:
-    """Return the IRIs a document imports; an OFN document is converted to Turtle, which then stands in for it.
+async def list_imports(document: _Document, settings: Settings) -> Listing:
+    """Return what a document imports; an OFN document is converted to Turtle, which then stands in for it.
 
     Raises:
         StageError: It couldn't be parsed.
@@ -428,6 +436,7 @@ class _Closure:
         self.results: dict[str, ImportResult] = {}
         self.files: dict[str, _Document] = {}
         self.queue: deque[_Document] = deque()
+        self.own: frozenset[str] = frozenset()  # the upload's own IRIs, which an import cycle may lead back to
         self.attempts = 0
         self.budget = settings.max_upload_bytes  # left for all imports together
         self.deadline = asyncio.get_running_loop().time() + FETCH_ALL_TIMEOUT_S
@@ -442,7 +451,7 @@ class _Closure:
         while self.queue:
             document = self.queue.popleft()
             try:
-                found = await list_imports(document, self.settings)
+                listing = await list_imports(document, self.settings)
             except StageError as error:
                 if document.iri is None:
                     raise
@@ -450,8 +459,12 @@ class _Closure:
                 del self.files[document.iri]
                 await asyncio.to_thread(document.path.unlink, missing_ok=True)
                 continue
-            for iri in found:
-                if iri not in self.results:
+            if document.iri is None:
+                self.own = listing.names
+            for iri in listing.imports:
+                if iri in self.own:  # the ontology itself, which ROBOT already holds, and the store mustn't load twice
+                    logger.info("Not fetching %s, imported by %s: it's the ontology's own IRI", iri, document.iri)
+                elif iri not in self.results:
                     await self._add(iri, document.iri)
 
     async def _add(self, iri: str, imported_by: str | None) -> None:

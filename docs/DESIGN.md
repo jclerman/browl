@@ -375,6 +375,9 @@ without a reasoner, as revised in P-8's review (the OWLAPI lists OFN imports; RO
    be fetched or read, or isn't allowed, or is past a limit, is dropped, and its file deleted: its `owl:imports`
    declaration stays in the ontology as written, but nothing is loaded for it. A load whose documents list more than
    1000 distinct imports fails, since each needs a catalog entry and no real ontology has that many.
+   An import of the ontology's own IRI (or version IRI, for OFN), by a cycle back to it, isn't fetched: its published
+   version may differ from the upload, which ROBOT already holds. For RDF, the ontology's IRIs are taken to be those
+   of the subjects of its `owl:imports` triples, as only an ontology that imports something can be in a cycle.
 3. Write a catalog file mapping every import listed: to its fetched file, or to an empty ontology if it was dropped.
    An IRI with a character XML can't hold, such as a control character, is left out (it can't be fetched either), so
    it fails only a reasoning run that reaches it, not every load. ROBOT's catalog accepts only exact names, so for a

@@ -44,7 +44,7 @@ async def test_lists_what_the_owlapi_reads(site: StaticServer, settings: Setting
     )
     output = tmp_path / "o.ttl"
     found = await convert_ofn(source, output, settings)
-    assert sorted(found) == sorted(
+    assert sorted(found.imports) == sorted(
         [
             f"{url}/prefixdup",
             f"{url}/uni/unicode",
@@ -65,9 +65,11 @@ async def test_lists_what_the_owlapi_reads(site: StaticServer, settings: Setting
 async def test_relative_import_left_out(settings: Settings, tmp_path: Path) -> None:
     """Check that a relative import is listed but left out of the Turtle, whose base would resolve it differently."""
     source = tmp_path / "o.ofn"
-    source.write_text(f"Ontology(<{EX}o>\nImport(<rel.owl>)\nImport(<{EX}b>)\n)\n")
+    source.write_text(f"Ontology(<{EX}o> <{EX}o/1>\nImport(<rel.owl>)\nImport(<{EX}b>)\n)\n")
     output = tmp_path / "o.ttl"
-    assert sorted(await convert_ofn(source, output, settings)) == [f"{EX}b", "rel.owl"]
+    listing = await convert_ofn(source, output, settings)
+    assert sorted(listing.imports) == [f"{EX}b", "rel.owl"]
+    assert listing.names == {f"{EX}o", f"{EX}o/1"}
     text = output.read_text()
     assert "rel.owl" not in text
     assert f"{EX}b" in text

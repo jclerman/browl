@@ -12,6 +12,7 @@ time limit, like ROBOT's, never in the app's JVM.
 import asyncio
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from browl.jobs import StageError
@@ -22,8 +23,22 @@ from browl.settings import Settings
 OUT_OF_MEMORY = "OutOfMemoryError"
 
 
-async def convert_ofn(source: Path, output: Path, settings: Settings) -> list[str]:
-    """Convert an OFN document to Turtle at `output`, returning the IRIs it imports; on failure, nothing is left there.
+@dataclass(frozen=True)
+class Listing:
+    """What a document says about imports, as the parser that reads it next reads it.
+
+    Attributes:
+        imports: The IRIs it imports, each once.
+        names: IRIs it's known by, which an import of it may name: an OFN document's ontology and version IRIs; an RDF
+            document's ontologies that import something.
+    """
+
+    imports: list[str]
+    names: frozenset[str] = frozenset()
+
+
+async def convert_ofn(source: Path, output: Path, settings: Settings) -> Listing:
+    """Convert an OFN document to Turtle at `output`, returning its imports; on failure, nothing is left there.
 
     Runs within the reasoner limits (`REASONER_TIMEOUT_S`, `REASONER_MAX_HEAP`), as ROBOT's conversion did.
 
@@ -55,20 +70,21 @@ async def convert_ofn(source: Path, output: Path, settings: Settings) -> list[st
             )
         if not completed.ok:
             raise StageError(f"parse error: the OWLAPI couldn't read it as OWL Functional Syntax:\n{completed.output}")
-        found: list[str] = json.loads(await asyncio.to_thread(listed.read_text, encoding="utf-8"))
+        found = json.loads(await asyncio.to_thread(listed.read_text, encoding="utf-8"))
         await asyncio.to_thread(partial.replace, output)
     except BaseException:
         await asyncio.to_thread(partial.unlink, missing_ok=True)
         raise
     finally:
         await asyncio.to_thread(listed.unlink, missing_ok=True)
-    return found
+    return Listing(found["imports"], frozenset(found["names"]))
 
 
 def _main(robot_jar: str, max_heap: str, source: str, output: str, listed: str) -> int:
     """Parse `source`, refusing every other document, save it as Turtle at `output`, and its imports at `listed`.
 
-    The imports are written to a file, as a JSON list, since the OWLAPI logs to standard output.
+    The imports, and the ontology's IRI and version IRI, are written to a file, as JSON, since the OWLAPI logs to
+    standard output.
     """
     import jpype  # only the child process starts a JVM
 
@@ -101,7 +117,10 @@ def _main(robot_jar: str, max_heap: str, source: str, output: str, listed: str) 
         turtle.copyPrefixesFrom(parsed.asPrefixOWLOntologyFormat())
     target = jpype.JClass("org.semanticweb.owlapi.io.FileDocumentTarget")(file_class(output))
     manager.saveOntology(ontology, turtle, target)
-    Path(listed).write_text(json.dumps([str(declaration.getIRI()) for declaration in declarations]), encoding="utf-8")
+    ontology_id = ontology.getOntologyID()
+    names = [str(iri.get()) for iri in (ontology_id.getOntologyIRI(), ontology_id.getVersionIRI()) if iri.isPresent()]
+    found = {"imports": [str(declaration.getIRI()) for declaration in declarations], "names": names}
+    Path(listed).write_text(json.dumps(found), encoding="utf-8")
     return 0
 
 
