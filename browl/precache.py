@@ -106,20 +106,15 @@ class PreCacheContext:
         job: The load job.
         sparql: The Fuseki client.
         dataset: The Fuseki dataset that serves the new store (`browl.loading.dataset_name`).
-        has_imports: Whether any import was loaded, into a named graph of its own.
+        dataset_clause: The dataset clause of a query that should see the imports (`browl.fuseki.dataset_clause`).
         db: Writes to the new derived database.
     """
 
     job: JobContext
     sparql: FusekiClient
     dataset: str
-    has_imports: bool
+    dataset_clause: str
     db: DerivedWriter
-
-    @property
-    def dataset_clause(self) -> str:
-        """Return the dataset clause of a query that should see the imports (`browl.fuseki.dataset_clause`)."""
-        return dataset_clause(self.has_imports)
 
     def bulk_select(
         self, query: str, prologue: str = PREFIXES, imports: bool = True
@@ -203,7 +198,8 @@ async def pre_cache(context: JobContext, http: httpx2.AsyncClient, hooks: Sequen
             header.version_info,
         )
         async with build(context.settings.data_dir, meta) as db:
-            hook_context = PreCacheContext(context, sparql, dataset, has_loaded_imports(context.imports), db)
+            clause = dataset_clause(has_loaded_imports(context.imports))
+            hook_context = PreCacheContext(context, sparql, dataset, clause, db)
             for hook in hooks:
                 name = getattr(hook, "__qualname__", repr(hook))
                 logger.info("Load job %d: pre-caching hook %s", context.generation, name)

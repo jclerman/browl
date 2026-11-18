@@ -189,10 +189,15 @@ def test_remove_others(tmp_path: Path) -> None:
     directory = tmp_path / DERIVED_DIR
     (directory / "4.sqlite3.tmp").write_text("")
     (directory / "notes.txt").write_text("")
+    (directory / "1.sqlite3-journal").write_text("")
+    (directory / "x1.sqlite3").write_text("")
     remove_others(tmp_path, 2)
-    assert sorted(path.name for path in directory.iterdir()) == ["2.sqlite3", "notes.txt"]
-    remove_others(tmp_path, None)
-    assert sorted(path.name for path in directory.iterdir()) == ["notes.txt"]
+    assert sorted(path.name for path in directory.iterdir()) == [
+        "1.sqlite3-journal",
+        "2.sqlite3",
+        "notes.txt",
+        "x1.sqlite3",
+    ]
 
 
 def test_remove_others_without_directory(tmp_path: Path) -> None:

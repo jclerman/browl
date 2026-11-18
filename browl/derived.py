@@ -9,7 +9,6 @@ a file of another `SCHEMA_VERSION` isn't current (`is_current`), and is rebuilt.
 import asyncio
 import logging
 import os
-import re
 import sqlite3
 import threading
 from collections.abc import Callable, Iterable, Iterator
@@ -38,7 +37,6 @@ BUILD_THREADS = 4
 
 _SUFFIX = ".sqlite3"
 _TEMP_SUFFIX = ".tmp"
-_FILE_NAME = re.compile(r"(\d+)\.sqlite3")
 
 SCHEMA = """
 CREATE TABLE meta (
@@ -242,21 +240,21 @@ def _fsync(path: Path) -> None:
         os.close(descriptor)
 
 
-def remove_others(data_dir: Path, keep: int | None) -> None:
+def remove_others(data_dir: Path, keep: int) -> None:
     """Delete every derived database but `keep`'s, and every temporary file a build left.
 
     The caller holds the job lock, so no build is running.
 
     Args:
         data_dir: The data directory.
-        keep: The generation whose database stays; None to delete them all.
+        keep: The generation whose database stays.
     """
     directory = derived_dir(data_dir)
     if not directory.is_dir():
         return
     for path in directory.iterdir():
-        match = _FILE_NAME.fullmatch(path.name)
-        if path.name.endswith(_TEMP_SUFFIX) or (match is not None and int(match[1]) != keep):
+        generation = path.stem if path.suffix == _SUFFIX else ""
+        if path.suffix == _TEMP_SUFFIX or (generation.isascii() and generation.isdigit() and int(generation) != keep):
             logger.info("Deleting %s", path)
             path.unlink(missing_ok=True)
 

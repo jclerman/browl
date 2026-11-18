@@ -844,9 +844,9 @@ class JobRunner:
 
         `stages` gives a rebuild its only stage.
         """
-        functions = self._stages if stages is None else stages
+        order, functions = (BACKGROUND_STAGES, self._stages) if stages is None else (tuple(stages), stages)
         try:
-            for stage in BACKGROUND_STAGES if stages is None else tuple(stages):
+            for stage in order:
                 await self._record(replace(self._with_results(context), stage=stage))
                 if function := functions.get(stage):
                     logger.info("Load job %d: %s", context.generation, stage)

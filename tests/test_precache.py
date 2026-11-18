@@ -130,7 +130,7 @@ async def test_stage_builds_database(settings: Settings) -> None:
 
     async def first(context: PreCacheContext) -> None:
         seen.append("first")
-        assert (context.dataset, context.has_imports, context.dataset_clause) == ("gen-7", True, UNION_FROM)
+        assert (context.dataset, context.dataset_clause) == ("gen-7", UNION_FROM)
         assert context.job.generation == 7
         await context.db.insert(
             "INSERT INTO prefix VALUES (?, ?)", [("ex", EX), ("owl", "http://www.w3.org/2002/07/owl#")]

@@ -127,6 +127,7 @@ class BulkSelectStream:
             SparqlError: The rest of the result fails or doesn't parse, it has no end marker, or rows follow it.
         """
         end = self._end
+        last = end == len(self.variables)  # as Fuseki puts it, so the row needn't be put back together
         ended = False
         rows = 0
         async for row in self._stream:
@@ -135,7 +136,7 @@ class BulkSelectStream:
             marker = row[end]
             if marker is None:
                 rows += 1
-                yield row[:end] + row[end + 1 :]
+                yield row[:end] if last else row[:end] + row[end + 1 :]
             elif marker == _END and row.count(None) == len(row) - 1:
                 ended = True
             else:
