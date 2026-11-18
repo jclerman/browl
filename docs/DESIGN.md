@@ -758,8 +758,9 @@ shared with the sandbox), `fuseki` (Fuseki's base, shared with the app's loader)
 Compose reads a few variables of its own from `.env`, not browl settings: `BROWL_PORT`, the app's host port;
 `FUSEKI_HEAP` and `FUSEKI_MEM_LIMIT` (2.4); and `SANDBOX_MEM_LIMIT`, the sandbox's memory limit, none by default, which
 must hold `REASONER_MAX_HEAP` plus about 0.5 GiB. Upgrading a stack from before P-30 leaves its earlier uploads on the
-`data` volume, hidden under the `jobs` mount; remove them with `docker run --rm -v browl_data:/old browl-app rm -rf
-/old/uploads` (for the Compose project `browl`).
+`data` volume, hidden under the `jobs` mount; with the stack stopped (`docker compose stop`, as removing the mount point
+breaks a running app's mount), remove them with `docker run --rm -v browl_data:/old browl-app rm -rf /old/uploads` (for
+the Compose project `browl`).
 
 ### 2.13 URL space for the service's own pages
 
