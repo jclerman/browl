@@ -367,8 +367,9 @@ without a reasoner, as revised in P-8's review (the OWLAPI lists OFN imports; RO
    so ROBOT runs in a sandbox (P-30), and on its default, which fails the job on an import missing from the catalog,
    naming it. [LOAD-FLOW.md](LOAD-FLOW.md) charts this.
 2. Fetch each import, recursively, into `imports/` beside the upload. Only `http` and `https` IRIs are fetched, never
-   from loopback, private, link-local or other non-global addresses: the address is checked on each connection, so on
-   each redirect too, and the connection made to the very address checked. Each fetch is limited to an hour; all of
+   from loopback, private, link-local or other non-global addresses, nor from a port browsers block (the Fetch
+   Standard's bad ports, such as mail's): the address is checked on each connection, so on each redirect too, and the
+   connection made to the very address checked. Each fetch is limited to an hour; all of
    them together to `MAX_UPLOAD_BYTES` and two hours, and to 100 attempts, failed ones included. An import must be
    RDF/XML, Turtle or OWL Functional Syntax (an OFN import is converted to Turtle as it's listed). An import that can't
    be fetched or read, or isn't allowed, or is past a limit, is dropped, and its file deleted: its `owl:imports`

@@ -24,7 +24,8 @@ IMPORTS STAGE: a breadth-first walk over the import closure, starting from the u
   │                which stands in for the OFN file from then on (the upload's: converted.ttl)
   │        can't be parsed ──► DROPPED  (the upload: the job FAILS)
   │     for each new import IRI   (≤ 100 attempts; deadline for the whole stage)
-  │        POLICY   http/https only; public address; checked again on each redirect ── no ──► DROPPED
+  │        POLICY   http/https only; public address; no port browsers block;
+  │                 checked again on each redirect ────────────────────── no ──► DROPPED
   │        FETCH    size and time limits ───────────────────────────── fails ──► DROPPED
   │        SNIFF    RDF or OFN? ───────────────────────────────────── neither ──► DROPPED
   │        add to the queue

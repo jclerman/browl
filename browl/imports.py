@@ -177,15 +177,24 @@ def is_public(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return True
 
 
+BAD_PORTS = frozenset(
+    {0, 1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102, 103, 104, 109}
+    | {110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179, 389, 427, 465, 512, 513, 514, 515, 526, 530}
+    | {531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 4190}
+    | {5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080}
+)
+"""The ports browsers never send HTTP to (the Fetch Standard's bad ports), e.g. mail's; imports aren't fetched from them
+either. An allowlist (80, 443, …) would also drop imports served on other ports."""
+
 AddressCheck = Callable[[ipaddress.IPv4Address | ipaddress.IPv6Address], bool]
 
 
 class BlockedAddressError(httpcore2.ConnectError):
-    """A host resolved to no address that imports may be fetched from."""
+    """A host resolved to no address that imports may be fetched from, or its port is one of `BAD_PORTS`."""
 
 
 class GuardedBackend(httpcore2.AsyncNetworkBackend):
-    """A network backend that connects only to addresses the check allows, resolving each host itself.
+    """A network backend that connects only to addresses the check allows, and ports not in `BAD_PORTS`.
 
     It connects to the very address it checked, so a host can't pass the check with one address and then be reached
     at another (DNS rebinding). TLS still checks the certificate against the host's name.
@@ -207,6 +216,8 @@ class GuardedBackend(httpcore2.AsyncNetworkBackend):
         local_address: str | None = None,
         socket_options: Iterable[httpcore2.SOCKET_OPTION] | None = None,
     ) -> httpcore2.AsyncNetworkStream:
+        if port in BAD_PORTS:
+            raise BlockedAddressError(f"port {port} is blocked, as browsers block it")
         loop = asyncio.get_running_loop()
         try:
             async with asyncio.timeout(timeout):

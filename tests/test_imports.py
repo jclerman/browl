@@ -250,6 +250,13 @@ async def test_private_address_refused(site: StaticServer, tmp_path: Path, data_
     assert site.requested == []
 
 
+async def test_bad_port_refused(tmp_path: Path, data_dir: Path) -> None:
+    """Check that nothing is fetched from a port browsers block, such as SMTP's, whatever the address."""
+    async with fetch_client(allow_all) as client:
+        with pytest.raises(FetchError, match=r"^port 25 is blocked, as browsers block it$"):
+            await fetch(client, "http://127.0.0.1:25/a", tmp_path / "a", make_settings())
+
+
 async def test_redirect_checked(
     site: StaticServer, tmp_path: Path, data_dir: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
