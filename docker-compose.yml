@@ -1,7 +1,8 @@
-# browl's two services (DESIGN.md §2.1, O-1). Settings (§2.12) come from .env; see .env.example.
+# browl's services (DESIGN.md §2.1, O-1): the app, Fuseki, and the sandbox the app runs ROBOT in. Settings (§2.12)
+# come from .env; see .env.example.
 name: browl
 
-# Both services' health checks run on the same schedule.
+# Every service's health check runs on the same schedule.
 x-healthcheck-timing: &healthcheck-timing
   interval: 30s
   timeout: 5s
@@ -10,18 +11,26 @@ x-healthcheck-timing: &healthcheck-timing
 
 services:
   app:
-    build: .
+    build: &app-build .
     env_file:
       - path: .env
         required: false
+    environment:
+      SANDBOX_SOCKET: /sandbox/runner.sock
     ports:
       - "${BROWL_PORT:-8000}:8000"
     volumes:
       - data:/data
+      # Each job's files, on a volume of their own, which the sandbox shares (DATA_DIR/uploads).
+      - jobs:/data/uploads
+      - sandbox:/sandbox
       # The app's loader builds each new TDB2 store under /fuseki/databases, where Fuseki opens it (§2.4).
       - fuseki:/fuseki
     depends_on:
-      - fuseki
+      fuseki:
+        condition: service_started
+      sandbox:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8000/$${RESERVED_PREFIX:-_browl}/health"]
       <<: *healthcheck-timing
@@ -46,8 +55,43 @@ services:
       <<: *healthcheck-timing
     restart: unless-stopped
 
+  # Runs ROBOT and the OFN lister for the app (P-30; DESIGN.md §2.4): the app's image, with no network, a read-only
+  # file system, the jobs volume, and only the image's environment. The app sends the absolute paths of its jobs volume,
+  # so the volume is mounted at the same path in both. Both run as the image's user, the only one the socket admits.
+  sandbox:
+    build: *app-build
+    command: ["python", "-m", "browl.sandbox", "/sandbox/runner.sock"]
+    network_mode: none
+    read_only: true
+    # The JVM's perf data (/tmp/hsperfdata_*); the tools run here, so a JVM crash log lands here too.
+    tmpfs:
+      - /tmp
+    working_dir: /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Reaps the tools' orphaned processes.
+    init: true
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    # No memory limit unless SANDBOX_MEM_LIMIT is set (0 means none). A limit must hold REASONER_MAX_HEAP, which ROBOT
+    # runs with here, plus about 0.5 GiB, and be raised with it (DESIGN.md §2.12).
+    mem_limit: ${SANDBOX_MEM_LIMIT:-0}
+    volumes:
+      - jobs:/data/uploads
+      - sandbox:/sandbox
+    healthcheck:
+      test: ["CMD", "test", "-S", "/sandbox/runner.sock"]
+      <<: *healthcheck-timing
+    restart: unless-stopped
+
 volumes:
-  # DATA_DIR: uploads, the derived database, job state.
+  # DATA_DIR: the derived database, job state.
   data:
+  # DATA_DIR/uploads: the current job's upload, fetched imports, catalog and outputs; shared with the sandbox.
+  jobs:
+  # The sandbox's socket.
+  sandbox:
   # FUSEKI_BASE: the registered datasets and their TDB2 stores.
   fuseki:
