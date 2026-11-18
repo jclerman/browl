@@ -743,7 +743,7 @@ validated at startup (`browl/settings.py`). Lists and mappings are given as JSON
 | `MATERIALIZE_PROPERTIES` | `[]` | object property IRIs, or CURIEs with ROBOT's default prefixes (e.g. `obo:BFO_0000050`), for which reasoning materializes `SubClassOf(C, P some D)` (2.4) |
 | `APP_JVM_MAX_HEAP` | `1g`, confirmed in P-4 (2.4) | heap for the app's in-process JVM, which only renders per-page fragments (S-4) |
 | `FUSEKI_URL` | `http://fuseki:3030` | Fuseki's address on the Compose network |
-| `ROBOT_JAR` | `/opt/robot/robot.jar`, where the app image installs it | used both on the app's classpath and for reasoning subprocesses |
+| `ROBOT_JAR` | `/opt/robot/robot.jar`, where the app image installs it | used both on the app's classpath and for reasoning subprocesses. With `SANDBOX_SOCKET`, the sandbox runs the command the app builds, so this path, and `JAVA_HOME`'s Java, must exist in the sandbox's image too; the app's image has both |
 | `JENA_HOME` | `/opt/jena`, where the app image installs it | Jena's command-line tools: the TDB2 loader, and `riot` to list imports |
 | `FUSEKI_BASE` | `/fuseki`, where `docker-compose.yml` mounts Fuseki's volume in the app | the loader builds each store under its `databases/`, where Fuseki opens it (2.4) |
 | `DATA_DIR` | `/data` | mounted volume; O-9 |
