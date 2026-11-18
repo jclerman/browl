@@ -3,10 +3,12 @@
 import functools
 import logging
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from browl.derived import EntityType
 from browl.precache.core import PreCacheContext, batched, hook, sparql_file
+from browl.rdf import Term
 from browl.urls import URLMapper
 
 logger = logging.getLogger(__name__)
@@ -44,10 +46,9 @@ async def entities(context: PreCacheContext) -> None:
     if ontology is not None:
         await context.db.run(functools.partial(_insert_entities, [(ontology, EntityType.ONTOLOGY)], mapper, reserved))
     async with context.bulk_select(sparql_file("entity-list.rq")) as stream:
-        entity, kind = (stream.variables.index(name) for name in ("entity", "type"))
+        columns = tuple(stream.variables.index(name) for name in ("entity", "type"))
         async for batch in batched(stream):
-            rows = [(str(row[entity]), ENTITY_TYPES[str(row[kind])]) for row in batch]
-            await context.db.run(functools.partial(_insert_entities, rows, mapper, reserved))
+            await context.db.run(functools.partial(_insert_listed, batch, columns, mapper, reserved))
     await context.db.create_indexes("entity")
     # In key order, from the entity_path index.
     await context.db.run(
@@ -74,8 +75,23 @@ class _Reserved:
     iris: list[str] = field(default_factory=list)
 
 
+def _insert_listed(
+    batch: list[tuple[Term | None, ...]],
+    columns: tuple[int, ...],
+    mapper: URLMapper,
+    reserved: _Reserved,
+    connection: sqlite3.Connection,
+) -> None:
+    """Insert a batch of the entity list's rows (`_insert_entities`), given its entity and type columns.
+
+    Their terms are read as each row is inserted, on the database's thread rather than the event loop.
+    """
+    entity, kind = columns
+    _insert_entities(((str(row[entity]), ENTITY_TYPES[str(row[kind])]) for row in batch), mapper, reserved, connection)
+
+
 def _insert_entities(
-    rows: list[tuple[str, EntityType]], mapper: URLMapper, reserved: _Reserved, connection: sqlite3.Connection
+    rows: Iterable[tuple[str, EntityType]], mapper: URLMapper, reserved: _Reserved, connection: sqlite3.Connection
 ) -> None:
     """Insert entities with their URLs, counting in `reserved` those whose URLs would be under the reserved prefix."""
     values = []
@@ -85,5 +101,5 @@ def _insert_entities(
             reserved.count += 1
             if len(reserved.iris) < _LOGGED_IRIS:
                 reserved.iris.append(iri if len(iri) <= _LOGGED_IRI_CHARS else f"{iri[:_LOGGED_IRI_CHARS]}…")
-        values.append((iri, str(kind), url.path, url.fragment))
+        values.append((iri, kind, url.path, url.fragment))  # an EntityType is stored as TEXT, as a str is
     connection.executemany("INSERT INTO entity (iri, type, path, fragment) VALUES (?, ?, ?, ?)", values)

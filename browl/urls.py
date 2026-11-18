@@ -110,7 +110,10 @@ class URLMapper:
         host, port = _split_authority(authority, _DEFAULT_PORTS[scheme])
         if host is None or port == -1:
             return self._fallback(iri)
-        path = _to_uri(match["path"], _PATH_SAFE) or "/"
+        path = match["path"]
+        if not _PATH_AS_IS.fullmatch(path):  # most paths need no escaping, and this is quicker to check
+            path = _to_uri(path, _PATH_SAFE)
+        path = path or "/"
         if host == self._host and port == self._port and (path == self._path or path.startswith(self._path + "/")):
             url_path, rule = path[len(self._path) :] or "/", Rule.NATIVE
             if url_path.startswith("//"):  # a protocol-relative URL, to another host
@@ -119,7 +122,10 @@ class URLMapper:
             url_path, rule = f"/{host}{path}", Rule.PROXIED
         else:
             return self._fallback(iri)
-        if any(_DOT_SEGMENT.fullmatch(segment) for segment in url_path.split("/")):  # in the path, or the host
+        # In the path, or the host; a dot segment starts with `.` or `%` after a `/`, which most paths lack.
+        if ("/." in url_path or "/%" in url_path) and any(
+            _DOT_SEGMENT.fullmatch(segment) for segment in url_path.split("/")
+        ):
             return self._fallback(iri)
         if urllib.parse.unquote(url_path).split("/", 2)[1] == self.reserved_prefix:
             return self._fallback(iri, reserved=True)
@@ -168,6 +174,4 @@ def _normalize_host(host: str) -> str | None:
 
 def _to_uri(text: str, safe: str) -> str:
     """Return part of an IRI in URI form: control, non-ASCII and other characters not in `safe` percent-encoded."""
-    if safe is _PATH_SAFE and _PATH_AS_IS.fullmatch(text):  # most paths, quickly
-        return text
     return urllib.parse.quote(text, safe=safe)
