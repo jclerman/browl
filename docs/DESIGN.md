@@ -368,10 +368,12 @@ without a reasoner, as revised in P-8's review (the OWLAPI lists OFN imports; RO
    naming it. [LOAD-FLOW.md](LOAD-FLOW.md) charts this.
 2. Fetch each import, recursively, into `imports/` beside the upload. Only `http` and `https` IRIs are fetched, never
    from loopback, private, link-local or other non-global addresses: the address is checked on each connection, so on
-   each redirect too, and the connection made to the very address checked. Each fetch is limited to `MAX_UPLOAD_BYTES`
-   and an hour, at most 100 imports are fetched, and an import must be RDF/XML, Turtle or OWL Functional Syntax (an OFN
-   import is converted to Turtle as it's listed). An import that can't be fetched or read, or isn't allowed, is
-   dropped: its `owl:imports` declaration stays in the ontology as written, but nothing is loaded for it.
+   each redirect too, and the connection made to the very address checked. Each fetch is limited to an hour; all of
+   them together to `MAX_UPLOAD_BYTES` and two hours, and to 100 attempts, failed ones included. An import must be
+   RDF/XML, Turtle or OWL Functional Syntax (an OFN import is converted to Turtle as it's listed). An import that can't
+   be fetched or read, or isn't allowed, or is past a limit, is dropped, and its file deleted: its `owl:imports`
+   declaration stays in the ontology as written, but nothing is loaded for it. A load whose documents list more than
+   1000 distinct imports fails, since each needs a catalog entry and no real ontology has that many.
 3. Write a catalog file mapping every import listed: to its fetched file, or to an empty ontology if it was dropped.
    ROBOT's catalog accepts only exact names, so for a file IRI it lists every spelling the OWLAPI may request:
    `file:/…`, `file:///…` and `file://localhost/…` (the OWLAPI and Jena resolve a relative RDF import against the
