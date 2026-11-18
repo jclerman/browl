@@ -300,15 +300,10 @@ class FusekiClient:
         """Run a SELECT query on a dataset, reading its result as it arrives, and check that the result is whole.
 
         Use it for every bulk query: a result can break off cleanly at a row boundary, or fail with no error text
-        appended, and still parse (DESIGN.md §2.14). The query becomes a subquery, followed by a marker row:
+        appended, and still parse. The query becomes a subquery, followed by a marker row, which `BulkSelectStream`
+        checks comes last (why that works and costs nothing: DESIGN.md §2.14, the truncated-result row):
 
             {prologue} SELECT * {dataset_clause} WHERE { { {query} } UNION { BIND(true AS ?browl_end) } }
-
-        ARQ evaluates a `UNION` one branch after the other, streaming the first branch's rows before the second's, so
-        the marker comes last; `BulkSelectStream` fails a result that ends without it. This costs nothing on the
-        query, unlike a second query that counts the rows, which would double each bulk query's time (tens of seconds
-        on NCBITaxon) and has to repeat the pattern exactly. The triple counts the loading stage keeps check only a
-        query that returns every triple.
 
         Each wait for data has a time limit (`STREAM_READ_TIMEOUT_S`), but the whole query has none.
 

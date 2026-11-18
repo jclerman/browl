@@ -644,19 +644,12 @@ class JobRunner:
             return context
 
     async def rebuild(self, function: StageFunction, current: Callable[[int], bool]) -> bool:
-        """At startup, bring the latest job's derived data up to date (§2.4, App restart).
+        """At startup, bring the latest job's derived data up to date, as DESIGN.md §2.4 (App restart) describes.
 
-        It acts only in the server worker that takes the job lock, which it holds as a job's runner does, and only on:
-
-        - a job that failed in pre-caching but whose generation's output is current, as when it failed after the
-          output was swapped in (e.g. a shutdown or crash during the build's end): it's recorded ready, as it would
-          have been, and the after-ready work runs.
-        - the ready job, if its output isn't current: its pre-caching stage is re-run in the background. The job is
-          recorded as running in the pre-caching stage, under its own generation, so every worker serves "loading";
-          then ready again, or failed with a reason that says it was the rebuild (`JobState.failed`), so the site is
-          "not available" and the next start tries again. Its start time stays the job's. A rebuild interrupted by a
-          restart isn't tried again, as it may have crashed the app (e.g. out of memory), which would crash it on
-          every start; the site stays "not available" until an upload replaces the ontology.
+        Only in the server worker that takes the job lock, which it holds as a job's runner does: a job that failed in
+        pre-caching but whose output is current is recorded ready, and the after-ready work runs (`_restart_state`);
+        the ready job whose output isn't current has its pre-caching stage re-run in the background, recorded as
+        running under its own generation, then ready or failed (`JobState.failed` marks the reason as the rebuild's).
 
         Args:
             function: The pre-caching stage's work, run with a context made from the stored job state.

@@ -1,13 +1,9 @@
 """The derived SQLite database (DESIGN.md §2.5): whole-ontology data computed once per load.
 
-Each generation has its own file, `DATA_DIR/derived/{generation}.sqlite3`. `build` writes it to a temporary file beside
-it and renames it into place only once it's complete, so a file at the final name is always whole, and is never written
-again. A reader never sees a file change under it: a new load writes a new file. On Linux, deleting an old one
+Each generation has its own file, written whole by `build` and never again (DESIGN.md §2.4, the pre-caching stage);
+a file of another `SCHEMA_VERSION` isn't current (`is_current`), and is rebuilt. On Linux, deleting an old one
 (`remove_others`) leaves it readable to connections already open on it; macOS's SQLite may fail their reads instead
 (`SQLITE_IOERR_VNODE`).
-
-The database is rebuilt on every load, so it has no migrations: a browl whose `SCHEMA_VERSION` differs treats the file
-as not current (`is_current`), and the caller rebuilds it.
 """
 
 import asyncio

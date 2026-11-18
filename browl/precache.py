@@ -1,13 +1,7 @@
-"""The pre-caching stage (DESIGN.md §2.4, §2.5): build the derived database from bulk queries to the loaded store.
+"""The pre-caching stage: build the derived database from bulk queries to the loaded store (DESIGN.md §2.5).
 
-The stage reads the ontology's IRI, version IRI, title and version info (`ontology_header`), starts a new derived
-database (`browl.derived.build`) with its `meta` row, and runs the hooks in `HOOKS` in order; each fills tables from its
-own bulk queries (P-10 entities, P-11 names, P-12 hierarchy, P-19 search). The database is swapped in only once every
-hook has succeeded; if any fails, the stage fails and the previous database stays in place.
-
-A SQLite connection must stay on one thread, while the queries stream on the event loop. So the build runs on a
-single-thread executor that owns the connection (`DerivedWriter`): a hook reads its query's rows on the event loop and
-hands them over in batches (`batched`, `DerivedWriter.insert`), which keeps the event loop free.
+`ontology_header` gives the `meta` row; then the hooks in `HOOKS` run in order, each filling tables from its own bulk
+queries and writing through a `DerivedWriter`, on the build's own thread, so the queries can stream on the event loop.
 """
 
 import asyncio
