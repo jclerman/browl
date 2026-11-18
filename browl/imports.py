@@ -65,9 +65,6 @@ FETCH_TIMEOUT_S = 3600.0
 SCAN_TIMEOUT_S = 4 * 3600.0
 """The longest listing one document's imports may take: `riot` parses NCBITaxon (2 GB of RDF/XML) in about 25 s."""
 
-TAIL_LINES = 10
-"""How many of `riot`'s last lines a failure's reason quotes."""
-
 MAX_IMPORT_LINE_BYTES = 2**20
 """The longest N-Triples line read for an import; a longer one, e.g. a large literal, is skipped without being held."""
 
@@ -134,16 +131,12 @@ async def list_rdf_imports(path: Path, syntax: Syntax, settings: Settings) -> li
         StageError: `riot` couldn't parse it.
     """
     found: dict[str, None] = {}
-    tail: deque[str] = deque(maxlen=TAIL_LINES)
     command = [str(settings.jena_home / "bin" / "riot"), f"--syntax={SYNTAX_NAMES[syntax]}", "--output=nt", str(path)]
-    completed = await run_process(
-        command, tail.append, timeout_s=SCAN_TIMEOUT_S, on_stdout=_ImportLines(found), name="riot"
-    )
-    if completed.timed_out:
-        raise StageError(f"listing imports timed out after {SCAN_TIMEOUT_S:g} s")
+    completed = await run_process(command, timeout_s=SCAN_TIMEOUT_S, on_stdout=_ImportLines(found), name="riot")
+    if reason := completed.limit_reason("listing imports (riot)", f"{SCAN_TIMEOUT_S:g} s"):
+        raise StageError(reason)
     if not completed.ok:
-        lines = "\n".join(tail)
-        raise StageError(f"parse error: Jena couldn't read {path.name} as {SYNTAX_NAMES[syntax]}:\n{lines}")
+        raise StageError(f"parse error: Jena couldn't read {path.name} as {SYNTAX_NAMES[syntax]}:\n{completed.output}")
     return list(found)
 
 

@@ -9,15 +9,13 @@ failure's reason says which limit was hit, or what else went wrong, using the ou
 import asyncio
 import logging
 import re
-from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from browl.jobs import JobContext, Reasoner, StageError
-from browl.process import NO_NETWORK_JAVA_OPTIONS, java, run_process
+from browl.process import NO_NETWORK_JAVA_OPTIONS, Completed, java, run_process
 from browl.settings import Settings
-from browl.upload import FREE_SPACE_MARGIN_BYTES
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +34,6 @@ REASONED = "reasoned.ttl"
 PARTIAL = "reasoned.partial.ttl"
 """ROBOT's output while it's written, renamed to `REASONED` once complete; ROBOT picks the syntax by its suffix."""
 
-TAIL_LINES = 20
-"""How many of ROBOT's last output lines a failure's reason quotes."""
-
 UNSATISFIABLE_SHOWN = 10
 """How many unsatisfiable classes a failure's reason names."""
 
@@ -53,23 +48,20 @@ PARSE_ERROR = "INVALID ONTOLOGY FILE ERROR"
 
 @dataclass
 class RobotOutput:
-    """What browl keeps of ROBOT's output: its last lines and the lines that tell failures apart.
+    """What browl keeps of ROBOT's output besides its last lines: the lines that tell failures apart.
 
     Attributes:
-        tail: The last `TAIL_LINES` lines.
         unsatisfiable: The first `UNSATISFIABLE_SHOWN` unsatisfiable classes ROBOT listed.
         signals: The failure signatures seen (`OUT_OF_MEMORY`, `STACK_OVERFLOW`, `INCONSISTENT`, `PARSE_ERROR`).
         unsatisfiable_count: How many unsatisfiable classes ROBOT reported; None if it reported none.
     """
 
-    tail: deque[str] = field(default_factory=lambda: deque(maxlen=TAIL_LINES))
     unsatisfiable: list[str] = field(default_factory=list)
     signals: set[str] = field(default_factory=set)
     unsatisfiable_count: int | None = None
 
     def add(self, line: str) -> None:
-        """Keep a line of output."""
-        self.tail.append(line)
+        """Look at a line of output."""
         for signal_ in (OUT_OF_MEMORY, STACK_OVERFLOW, INCONSISTENT, PARSE_ERROR):
             if signal_ in line:
                 self.signals.add(signal_)
@@ -79,22 +71,17 @@ class RobotOutput:
             self.unsatisfiable.append(match[1])
 
 
-def failure_reason(
-    status: int | None, output: RobotOutput, timed_out: bool, settings: Settings, out_of_space: bool = False
-) -> str:
+def failure_reason(completed: Completed, output: RobotOutput, settings: Settings) -> str:
     """Return why a reasoning run failed, checking for each kind of failure in S-2's order (A-6).
 
     Args:
-        status: ROBOT's exit status; negative for a signal.
-        output: What was kept of its output.
-        timed_out: Whether it was stopped at the time limit.
+        completed: How ROBOT ended.
+        output: What was seen in its output.
         settings: The settings, for the limits.
-        out_of_space: Whether it was stopped because the data volume ran low on space.
     """
-    if timed_out:
-        return f"time limit: reasoning took longer than REASONER_TIMEOUT_S ({settings.reasoner_timeout_s} s)"
-    if out_of_space:
-        return f"disk space: the data volume fell below {FREE_SPACE_MARGIN_BYTES:,} bytes free while reasoning ran"
+    if reason := completed.limit_reason("reasoning", f"REASONER_TIMEOUT_S ({settings.reasoner_timeout_s} s)"):
+        return reason
+    status = completed.status
     if status == OUT_OF_MEMORY_STATUS and OUT_OF_MEMORY in output.signals:
         return f"memory limit: reasoning needed more than REASONER_MAX_HEAP ({settings.reasoner_max_heap})"
     if STACK_OVERFLOW in output.signals:
@@ -105,10 +92,9 @@ def failure_reason(
         shown = ", ".join(output.unsatisfiable)
         more = output.unsatisfiable_count - len(output.unsatisfiable)
         return f"{output.unsatisfiable_count} unsatisfiable classes: {shown}{f' and {more} more' if more > 0 else ''}"
-    tail = "\n".join(output.tail)
     if PARSE_ERROR in output.signals:
-        return f"parse error: ROBOT couldn't read the ontology:\n{tail}"
-    return f"reasoner failed (ROBOT exit status {status}):\n{tail}"
+        return f"parse error: ROBOT couldn't read the ontology:\n{completed.output}"
+    return f"reasoner failed (ROBOT exit status {status}):\n{completed.output}"
 
 
 def reason_args(reasoner: Reasoner, source: Path, output: Path, settings: Settings, catalog: Path) -> list[str]:
@@ -144,9 +130,7 @@ async def run_robot(args: Sequence[str], settings: Settings) -> None:
         command, output.add, timeout_s=settings.reasoner_timeout_s, watch=[settings.data_dir], name="ROBOT"
     )
     if not completed.ok:
-        raise StageError(
-            failure_reason(completed.status, output, completed.timed_out, settings, completed.out_of_space)
-        )
+        raise StageError(failure_reason(completed, output, settings))
 
 
 async def robot_to_file(args: Sequence[str], partial: Path, output: Path, settings: Settings) -> None:

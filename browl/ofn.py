@@ -12,12 +12,11 @@ time limit, like ROBOT's, never in the app's JVM.
 import asyncio
 import json
 import sys
-from collections import deque
 from pathlib import Path
 
 from browl.jobs import StageError
 from browl.process import NO_NETWORK_JAVA_OPTIONS, run_process
-from browl.robot import OUT_OF_MEMORY_STATUS, TAIL_LINES
+from browl.robot import OUT_OF_MEMORY_STATUS
 from browl.settings import Settings
 
 OUT_OF_MEMORY = "OutOfMemoryError"
@@ -33,7 +32,6 @@ async def convert_ofn(source: Path, output: Path, settings: Settings) -> list[st
     """
     partial = output.with_name(f"{output.stem}.partial{output.suffix}")
     listed = output.with_name(f"{output.stem}.imports.json")
-    tail: deque[str] = deque(maxlen=TAIL_LINES)
     command = [
         sys.executable,
         "-m",
@@ -46,25 +44,17 @@ async def convert_ofn(source: Path, output: Path, settings: Settings) -> list[st
     ]
     try:
         completed = await run_process(
-            command,
-            tail.append,
-            timeout_s=settings.reasoner_timeout_s,
-            watch=[settings.data_dir],
-            name="OFN conversion",
+            command, timeout_s=settings.reasoner_timeout_s, watch=[settings.data_dir], name="OFN conversion"
         )
-        if completed.timed_out:
+        limit = f"REASONER_TIMEOUT_S ({settings.reasoner_timeout_s} s)"
+        if reason := completed.limit_reason("the OFN conversion", limit):
+            raise StageError(reason)
+        if completed.status == OUT_OF_MEMORY_STATUS and any(OUT_OF_MEMORY in line for line in completed.tail):
             raise StageError(
-                f"time limit: converting took longer than REASONER_TIMEOUT_S ({settings.reasoner_timeout_s} s)"
-            )
-        if completed.out_of_space:
-            raise StageError("disk space: the data volume ran low on space while converting")
-        if completed.status == OUT_OF_MEMORY_STATUS and any(OUT_OF_MEMORY in line for line in tail):
-            raise StageError(
-                f"memory limit: converting needed more than REASONER_MAX_HEAP ({settings.reasoner_max_heap})"
+                f"memory limit: the OFN conversion needed more than REASONER_MAX_HEAP ({settings.reasoner_max_heap})"
             )
         if not completed.ok:
-            text = "\n".join(tail)
-            raise StageError(f"parse error: the OWLAPI couldn't read it as OWL Functional Syntax:\n{text}")
+            raise StageError(f"parse error: the OWLAPI couldn't read it as OWL Functional Syntax:\n{completed.output}")
         found: list[str] = json.loads(await asyncio.to_thread(listed.read_text, encoding="utf-8"))
         await asyncio.to_thread(partial.replace, output)
     except BaseException:

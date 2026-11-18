@@ -16,7 +16,6 @@ import asyncio
 import logging
 import re
 import shutil
-from collections import deque
 from dataclasses import replace
 from pathlib import Path
 
@@ -42,9 +41,6 @@ LOAD_TIMEOUT_S = 4 * 3600.0
 COUNT_TIMEOUT_S = 1800.0
 """Time limit for counting the triples through Fuseki."""
 
-TAIL_LINES = 10
-"""How many of a tool's last lines a failure's reason quotes."""
-
 COUNT_DEFAULT = "SELECT (COUNT(*) AS ?n) WHERE { ?s ?p ?o }"
 COUNT_GRAPHS = "SELECT ?g (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } } GROUP BY ?g"
 
@@ -63,13 +59,9 @@ def _jena(settings: Settings, tool: str) -> str:
     return str(settings.jena_home / "bin" / tool)
 
 
-def _failure(tool: str, completed: Completed, tail: deque[str]) -> StageError:
-    if completed.timed_out:
-        return StageError(f"{tool} timed out after {LOAD_TIMEOUT_S:g} s")
-    if completed.out_of_space:
-        return StageError(f"disk space: a volume fell below the free-space margin while {tool} ran")
-    lines = "\n".join(tail)
-    return StageError(f"{tool} failed (exit status {completed.status}):\n{lines}")
+def _failure(tool: str, completed: Completed) -> StageError:
+    reason = completed.limit_reason(tool, f"{LOAD_TIMEOUT_S:g} s")
+    return StageError(reason or f"{tool} failed (exit status {completed.status}):\n{completed.output}")
 
 
 async def load_file(settings: Settings, store: Path, file: Path, graph: str | None = None) -> None:
@@ -81,33 +73,29 @@ async def load_file(settings: Settings, store: Path, file: Path, graph: str | No
     command = [_jena(settings, "tdb2.tdbloader"), "--loc", str(store)]
     if graph is not None:
         command += ["--graph", graph]
-    tail: deque[str] = deque(maxlen=TAIL_LINES)
     completed = await run_process(
         [*command, str(file)],
-        tail.append,
         timeout_s=LOAD_TIMEOUT_S,
         watch=[settings.data_dir, settings.fuseki_base],
         env={"JVM_ARGS": f"-Xmx{LOADER_HEAP}"},
         name="tdb2.tdbloader",
     )
     if not completed.ok:
-        raise _failure("tdb2.tdbloader", completed, tail)
+        raise _failure("tdb2.tdbloader", completed)
 
 
 async def _query_store(settings: Settings, store: Path, query: str) -> list[tuple[Term | None, ...]]:
     """Run a SELECT query on a store Fuseki hasn't opened, returning its rows."""
     output = bytearray()
-    tail: deque[str] = deque(maxlen=TAIL_LINES)
     completed = await run_process(
         [_jena(settings, "tdb2.tdbquery"), "--loc", str(store), "--results=tsv", query],
-        tail.append,
         timeout_s=LOAD_TIMEOUT_S,
         on_stdout=output.extend,
         env={"JVM_ARGS": f"-Xmx{LOADER_HEAP}"},
         name="tdb2.tdbquery",
     )
     if not completed.ok:
-        raise _failure("tdb2.tdbquery", completed, tail)
+        raise _failure("tdb2.tdbquery", completed)
     header, *lines = output.decode().splitlines()
     try:
         width = len(parse_tsv_header(header))

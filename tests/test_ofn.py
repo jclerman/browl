@@ -90,6 +90,8 @@ async def test_time_limit(tmp_path: Path, data_dir: Path) -> None:
     settings = make_settings(ROBOT_JAR=str(find_robot_jar()), REASONER_TIMEOUT_S="1")
     source = tmp_path / "o.ofn"
     os.mkfifo(source)
-    with pytest.raises(StageError, match=r"^time limit: converting took longer than REASONER_TIMEOUT_S \(1 s\)"):
+    with pytest.raises(
+        StageError, match=r"^time limit: the OFN conversion took longer than REASONER_TIMEOUT_S \(1 s\)$"
+    ):
         await convert_ofn(source, tmp_path / "o.ttl", settings)
     assert sorted(path.name for path in tmp_path.iterdir()) == ["o.ofn"]

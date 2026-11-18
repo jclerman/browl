@@ -15,11 +15,11 @@ import browl.process
 import browl.robot
 from browl.imports import imports_stage, write_catalog
 from browl.jobs import JobContext, Reasoner, Stage, StageError
+from browl.process import TAIL_LINES, Completed
 from browl.robot import (
     OUT_OF_MEMORY,
     PARSE_ERROR,
     REASONED,
-    TAIL_LINES,
     UNSATISFIABLE_SHOWN,
     RobotOutput,
     failure_reason,
@@ -135,23 +135,28 @@ def running_in_group(pgid: int) -> list[str]:
 )
 def test_failure_reason(status: int, lines: list[str], timed_out: bool, expected: str, data_dir: Path) -> None:
     """Check that each kind of failure is told apart by S-2's signatures, in S-2's order."""
-    assert failure_reason(status, output_of(*lines), timed_out, make_settings()).startswith(expected)
+    completed = Completed(status, timed_out, tail=tuple(lines))
+    assert failure_reason(completed, output_of(*lines), make_settings()).startswith(expected)
 
 
 def test_unsatisfiable_reason(data_dir: Path) -> None:
     """Check that an unsatisfiable-classes failure names the first classes and counts the rest."""
     lines = [f"ERROR ReasonerHelper - There are {UNSATISFIABLE_SHOWN + 2} unsatisfiable classes in the ontology."]
     lines += [f"ERROR ReasonerHelper -     unsatisfiable: {NS}C{i}" for i in range(UNSATISFIABLE_SHOWN + 2)]
-    reason = failure_reason(1, output_of(*lines), False, make_settings())
+    reason = failure_reason(Completed(1, tail=tuple(lines)), output_of(*lines), make_settings())
     shown = ", ".join(f"{NS}C{i}" for i in range(UNSATISFIABLE_SHOWN))
     assert reason == f"{UNSATISFIABLE_SHOWN + 2} unsatisfiable classes: {shown} and 2 more"
 
 
-def test_tail() -> None:
-    """Check that only the last lines are kept."""
-    output = output_of(*(f"line {i}" for i in range(TAIL_LINES + 5)))
-    assert len(output.tail) == TAIL_LINES
-    assert output.tail[0] == "line 5"
+async def test_tail() -> None:
+    """Check that only a process's last lines are kept, and that its stdout, read as chunks, isn't among them."""
+    chunks: list[bytes] = []
+    script = f'echo out; i=0; while [ $i -lt {TAIL_LINES + 5} ]; do echo "line $i" >&2; i=$((i+1)); done'
+    completed = await browl.process.run_process(["sh", "-c", script], timeout_s=10, on_stdout=chunks.append)
+    assert b"".join(chunks) == b"out\n"
+    assert len(completed.tail) == TAIL_LINES
+    assert completed.tail[0] == "line 5"
+    assert completed.output.endswith(f"line {TAIL_LINES + 4}")
 
 
 async def test_tool_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -310,7 +315,9 @@ async def test_low_space_stops(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, 
     )
     monkeypatch.setattr(browl.process, "SPACE_CHECK_S", 0.05)
     context = job(make_settings(), Reasoner.ELK, upload(data_dir, "ok.ofn"))
-    with pytest.raises(StageError, match=r"^disk space: the data volume fell below 1,000,000,000 bytes free"):
+    with pytest.raises(
+        StageError, match=r"^disk space: a volume fell below 1,000,000,000 bytes free while reasoning ran$"
+    ):
         await reasoning_stage(context)
     assert running_in_group(int(pid_file.read_text())) == []
     assert stored_files(context) == ["ontology.ofn"]

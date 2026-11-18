@@ -10,6 +10,7 @@ import logging
 import os
 import shutil
 import signal
+from collections import deque
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
@@ -30,6 +31,9 @@ READ_BYTES = 65536
 
 MAX_LINE_CHARS = 2000
 """The longest output line kept; a longer one is cut short."""
+
+TAIL_LINES = 20
+"""How many of a process's last output lines are kept, for a failure's reason."""
 
 NO_NETWORK_JAVA_OPTIONS = (
     "-Dhttp.proxyHost=127.0.0.1",
@@ -59,16 +63,36 @@ class Completed:
         status: Its exit status; negative for a signal; None if it was stopped before it could be read.
         timed_out: Whether it was stopped at its time limit.
         out_of_space: Whether it was stopped because a watched volume ran low on space.
+        tail: Its last `TAIL_LINES` lines of output (of stderr, if its standard output was read as chunks).
     """
 
     status: int | None
     timed_out: bool = False
     out_of_space: bool = False
+    tail: tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
         """Whether it ran to the end and succeeded."""
         return self.status == 0 and not self.timed_out and not self.out_of_space
+
+    @property
+    def output(self) -> str:
+        """Its last lines, one string."""
+        return "\n".join(self.tail)
+
+    def limit_reason(self, activity: str, time_limit: str) -> str | None:
+        """Return why it was stopped at a limit, worded alike for every tool (A-6); None if it wasn't.
+
+        Args:
+            activity: What it did, as a noun, e.g. "reasoning" or "riot".
+            time_limit: Its time limit, e.g. "REASONER_TIMEOUT_S (3600 s)".
+        """
+        if self.timed_out:
+            return f"time limit: {activity} took longer than {time_limit}"
+        if self.out_of_space:
+            return f"disk space: a volume fell below {FREE_SPACE_MARGIN_BYTES:,} bytes free while {activity} ran"
+        return None
 
 
 def java() -> str:
@@ -84,7 +108,7 @@ def free_bytes(path: Path) -> int:
 
 async def run_process(
     command: Sequence[str],
-    on_line: Callable[[str], None],
+    on_line: Callable[[str], None] | None = None,
     *,
     timeout_s: float,
     watch: Sequence[Path] = (),
@@ -96,7 +120,8 @@ async def run_process(
 
     Args:
         command: The program and its arguments.
-        on_line: Called with each line of its output (each of stderr's, if `on_stdout` is given), logged too.
+        on_line: Called with each line of its output (each of stderr's, if `on_stdout` is given). Each line is logged,
+            and the last ones kept in `Completed.tail`.
         timeout_s: The time limit.
         watch: Directories whose volumes must keep `FREE_SPACE_MARGIN_BYTES` free while it runs.
         on_stdout: Called with each chunk of its standard output, which then isn't read as lines.
@@ -113,8 +138,12 @@ async def run_process(
         start_new_session=True,  # its own process group, so it and anything it starts can be stopped together
     )
 
+    tail: deque[str] = deque(maxlen=TAIL_LINES)
+
     def line(text: str) -> None:
-        on_line(text)
+        tail.append(text)
+        if on_line is not None:
+            on_line(text)
         logger.info("%s: %s", name, text)
 
     assert process.stdout is not None
@@ -133,7 +162,7 @@ async def run_process(
         run.cancel()
         # Shielded: a cancelled job still stops the process, even if cancelled again meanwhile.
         await asyncio.shield(_stop(process, name))
-    return Completed(process.returncode, timed_out, out_of_space)
+    return Completed(process.returncode, timed_out, out_of_space, tuple(tail))
 
 
 async def _finish(process: asyncio.subprocess.Process, reads: list[Coroutine[None, None, None]]) -> None:
