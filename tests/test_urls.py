@@ -143,6 +143,9 @@ def test_proxied(iri: str, expected: tuple[str, str | None]) -> None:
         "http://example.org/a/./b",
         "http://example.org/a/%2E%2e/b",
         "http://example.com/..",
+        "http://./x",  # a dot-segment host, which becomes the proxied path's first segment
+        "http://../x",
+        "http://%2e%2e/x",  # decoded as `..`
         "http://example.com//x",  # a native path a browser would read as another host (`//x`)
         "http://example.com//evil.com/x",
         "relative/x",

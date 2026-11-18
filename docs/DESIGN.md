@@ -246,10 +246,10 @@ For a declared entity IRI, in order (`browl.urls.URLMapper`, P-10):
    IP literal host). URL = `/{host}{path}`, e.g. `http://example.org/ONTO/x` → `/example.org/ONTO/x`. The scheme is
    dropped, and the host normalized as `BASE_URL`'s is (below). _(Q1a)_
 3. **Fallback:** anything else: `urn:`, `tag:`, query strings (even an empty one), ports, user info, an empty fragment
-   (`…/x#`, which a URL can't tell apart from none), a `.` or `..` path segment (a browser would resolve it away before
-   sending the request), a native URL path that starts with `//` (a browser would read `//evil.com/x` as another
-   host), a host that isn't valid, and IRIs whose native or proxied URL would hit the reserved prefix (below).
-   URL = `/{RESERVED_PREFIX}/iri?u={percent-encoded IRI}`. _(Q1b)_
+   (`…/x#`, which a URL can't tell apart from none), a `.` or `..` segment in the URL path, from the IRI's path or from
+   a host such as `..` (a browser would resolve it away before sending the request), a native URL path that starts with
+   `//` (a browser would read `//evil.com/x` as another host), a host that isn't valid, and IRIs whose native or proxied
+   URL would hit the reserved prefix (below). URL = `/{RESERVED_PREFIX}/iri?u={percent-encoded IRI}`. _(Q1b)_
 
 An empty path counts as `/`, so `http://example.org` and `http://example.org/` share `/example.org/`.
 
