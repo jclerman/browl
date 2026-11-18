@@ -69,11 +69,10 @@ instructions specific to coding agents. Requirements and architecture are in [`D
 - **Async:** request handlers never block the event loop. Java (OWLAPI) and SQLite calls run in the thread pool;
   Fuseki is called with an async HTTP client.
 - **SQL:** the standard library's `sqlite3` with hand-written SQL; no ORM. The derived database is rebuilt on every
-  load, and when its build keys change, so it needs no migrations ([`DESIGN.md`](DESIGN.md) §2.5, Build keys). A
-  pre-caching hook declares the settings it reads (`@hook(...)`) and loads data files only through `sparql_file`, with a
-  string literal; a test checks both. The persistent database (job state, admins) records a schema version and migrates
-  forward from it. Every table and column is described in `.tbls/`, from which `make schema-docs`
-  generates `docs/schema/` ([`SCHEMA.md`](SCHEMA.md)).
+  load, and when its build keys change, so it needs no migrations ([`DESIGN.md`](DESIGN.md) §2.5, Build keys);
+  pre-caching hooks follow [`SCHEMA.md`](SCHEMA.md)'s rules for the keys. The persistent database (job state, admins)
+  records a schema version and migrates forward from it. Every table and column is described in `.tbls/`, from which
+  `make schema-docs` generates `docs/schema/` ([`SCHEMA.md`](SCHEMA.md)).
 
 ## Front end
 

@@ -1,7 +1,6 @@
 """What pre-caching hooks share: their context, the writer, batching, the `Hook` type and `sparql_file`.
 
-A hook's module imports only what it uses, from here and elsewhere in browl: its build key covers its import closure
-(`browl.precache.keys`), so whatever it imports, editing it rebuilds the derived database.
+A hook's module imports only what it uses, for its build key (`browl.precache.keys`).
 """
 
 import asyncio

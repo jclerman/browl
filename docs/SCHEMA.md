@@ -12,10 +12,11 @@ persistence). Their tables and columns are documented in pages generated from th
 
 - **State:** append a migration to `MIGRATIONS`; never edit one that has shipped.
 - **Derived:** edit `SCHEMA` or `INDEXES`, or the pre-caching code, with no other step: the build keys
-  (`browl.precache.keys`) cover the schema's SQL and the code that fills it, so a file built by other code isn't taken
-  as current. A hook must declare the settings it reads (`@hook("base_url", …)`) and load data files, such as queries,
-  through `browl.precache.core.sparql_file`, with a string literal; `tests/test_precache_keys.py` traces each hook to
-  check both. Update `COLUMNS` in `tests/test_derived.py` with the schema.
+  (`browl.precache.keys`, [`DESIGN.md`](DESIGN.md) §2.5) cover the schema's SQL and the code that fills it, so a file
+  built by other code isn't taken as current. For that, a hook's module imports only what the hook uses, as its key
+  covers its import closure; the hook declares the settings it reads (`@hook("base_url", …)`); and it loads data files,
+  such as queries, only through `browl.precache.core.sparql_file`, with a string literal. `tests/test_precache_keys.py`
+  traces each hook to check the last two. Update `COLUMNS` in `tests/test_derived.py` with the schema.
 - Then describe any new table or column in [`.tbls/state.yml`](../.tbls/state.yml) or
   [`.tbls/derived.yml`](../.tbls/derived.yml), and run `make schema-docs` to regenerate `docs/schema/`.
 

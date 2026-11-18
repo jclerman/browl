@@ -6,7 +6,7 @@
 - `keys`: the build keys that decide whether a derived file is current.
 - `stage`: the stage itself, which runs the hooks in `HOOKS`, and the rebuild after a restart.
 
-A hook's module imports only what the hook uses, as its build key covers its import closure.
+A hook's module imports only what the hook uses, for its build key (`browl.precache.keys`).
 """
 
 from browl.precache.keys import build_keys

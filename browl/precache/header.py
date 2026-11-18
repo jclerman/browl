@@ -1,7 +1,6 @@
 """The ontology header, for the derived database's `meta` row (DESIGN.md §2.5, The ontology's IRI).
 
-The `meta` component of the derived database's build keys covers this module's import closure and `SETTINGS`
-(`browl.precache.keys`).
+Its build key is the `meta` component's, from this module and `SETTINGS` (`browl.precache.keys`).
 """
 
 import logging

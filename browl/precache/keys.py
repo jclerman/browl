@@ -1,14 +1,9 @@
 """The derived database's build keys: what decides whether a file is current (DESIGN.md §2.5, Build keys).
 
 A file stores a key per component: `schema` (`browl.derived.SCHEMA` and `INDEXES`), `meta` (the ontology header,
-`browl.precache.header`) and each hook, by name. It's current only if its components and keys are the ones the running
-code computes, so a change to any of them rebuilds it, with no version to raise by hand.
-
-The key of the header or a hook covers its code and the settings it reads: its module and every browl module it
-imports, directly or not (`closure`), as parsed, so comments, formatting and docstrings don't count; the files they load
-through `browl.precache.core.sparql_file`; the versions of the third-party distributions they import; Python's version;
-and the values of the `Settings` fields it declares. `tests/test_precache_keys.py` traces each as it runs to check that
-its key covers what it uses.
+`browl.precache.header`) and each hook, by name. The key of the header or a hook hashes its import closure within browl
+(`closure`, `code_digest`) and the `Settings` fields it declares (`settings_values`). DESIGN.md §2.5 gives the full
+rules and the reasons; `docs/SCHEMA.md` says what a contributor must do.
 """
 
 import ast
