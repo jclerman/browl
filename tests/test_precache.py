@@ -495,6 +495,35 @@ async def test_rebuild_fuseki_down(settings: Settings, monkeypatch: pytest.Monke
     assert derived_files(settings) == []
 
 
+@pytest.mark.fuseki
+async def test_ontology_iris_on_real_fuseki(fuseki_url: str) -> None:
+    """Check on a real Fuseki that the ontology's IRI comes only from its own graph, leaving out what it imports.
+
+    The default graph also declares an ontology it imports, as an OFN upload's converted Turtle may, and a blank-node
+    ontology; an import's named graph declares one more. Each would come first in order, so would be taken, if the
+    query let it through.
+    """
+    name = dataset_name(900_000 + uuid.uuid4().int % 100_000)
+    own = f"""@prefix owl: <http://www.w3.org/2002/07/owl#> .
+<{EX}main> a owl:Ontology ; owl:versionIRI <{EX}main/1> ; owl:imports <{EX}a-imported> .
+<{EX}a-imported> a owl:Ontology ; owl:versionIRI <{EX}a-imported/1> .
+[] a owl:Ontology ; owl:versionIRI <{EX}0-blank/1> .
+"""
+    imported = f"@prefix owl: <http://www.w3.org/2002/07/owl#> .\n<{EX}0-in-import> a owl:Ontology .\n"
+    async with httpx2.AsyncClient(base_url=fuseki_url, timeout=60) as http:
+        (await http.post("/$/datasets", data={"dbName": name, "dbType": "mem"})).raise_for_status()
+        try:
+            for graph, content in [(None, own), (f"{EX}a-imported", imported)]:
+                params = {} if graph is None else {"graph": graph}
+                response = await http.post(
+                    f"/{name}/data", params=params, content=content.encode(), headers={"Content-Type": "text/turtle"}
+                )
+                response.raise_for_status()
+            assert await ontology_iris(FusekiClient(http), name) == (f"{EX}main", f"{EX}main/1")
+        finally:
+            await http.delete(f"/$/datasets/{name}")
+
+
 async def test_build_fails_to_start(tmp_path: Path) -> None:
     """Check that a build that can't create its file fails with the error, and has nothing to clean up."""
     data_dir = tmp_path / "file"
