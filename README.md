@@ -34,15 +34,8 @@ implied by its IRI.
 
 ## Development
 
-Requires Python 3.12+ and Poetry 2.5.1+.
-
-```sh
-make install   # install dependencies
-make ci        # lint and test, as CI does
-make help      # list all targets
-```
-
-Contributors and coding agents: see [`AGENTS.md`](AGENTS.md).
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the tools you need and how to set up, and
+[`AGENTS.md`](AGENTS.md) for coding agents.
 
 ## License
 
