@@ -104,7 +104,8 @@ class PreCacheContext:
 
     Attributes:
         job: The load job.
-        sparql: The Fuseki client.
+        sparql: The Fuseki client, for small queries. A bulk query must go through `bulk_select`, which checks that its
+            result is complete; the client's own methods don't.
         dataset: The Fuseki dataset that serves the new store (`browl.loading.dataset_name`).
         dataset_clause: The dataset clause of a query that should see the imports (`browl.fuseki.dataset_clause`).
         db: Writes to the new derived database.
@@ -131,7 +132,8 @@ class PreCacheContext:
 
 
 Hook = Callable[[PreCacheContext], Awaitable[None]]
-"""A pre-caching hook: fills derived tables from bulk queries. A `SparqlError` it raises fails the stage, naming it."""
+"""A pre-caching hook: fills derived tables from bulk queries (`PreCacheContext.bulk_select`). A `SparqlError` it raises
+fails the stage, naming it."""
 
 HOOKS: tuple[Hook, ...] = ()
 """The hooks the app runs, in order: a hook may read tables an earlier one filled.

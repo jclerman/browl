@@ -539,13 +539,14 @@ runs the hooks in `browl.precache.HOOKS` in order, so a hook may read tables an 
 P-11 (names), P-12 (hierarchies), P-19 (search), and P-27 if it keeps a `usage` table. Each gets the Fuseki client, the
 generation's dataset, the dataset clause that merges in the imports if any were loaded, and a writer. A SQLite
 connection must stay on one thread while the queries stream on the event loop, so the build runs on a single-thread
-executor that owns the connection, and hooks hand it rows in batches (`browl.precache.batched`). Every bulk query is
-checked to be complete ([2.14](#214-risks)). Any hook's failure fails the stage. A hook creates the indexes of each
-table it fills when it's done (`DerivedWriter.create_indexes`), which is faster than keeping them up to date while
-filling, so later hooks can use them (e.g. P-11 maps IRIs to `entity.id`); the build creates any left, then runs
-`ANALYZE`. Where it can, a hook inserts into a `WITHOUT ROWID` table in its key's order. The build runs with no journal
-or syncing until the end, a 256 MiB page cache (SQLite's default 2 MB thrashes on these inserts and spills the index
-sorts early), and up to 4 helper threads to sort.
+executor that owns the connection, and hooks hand it rows in batches (`browl.precache.batched`). Every bulk query goes
+through `PreCacheContext.bulk_select`, which checks that it's complete ([2.14](#214-risks)); hooks get the plain client
+too, for small queries, but nothing stops one using it for a bulk query, so review checks they don't. Any hook's failure
+fails the stage. A hook creates the indexes of each table it fills when it's done (`DerivedWriter.create_indexes`),
+which is faster than keeping them up to date while filling, so later hooks can use them (e.g. P-11 maps IRIs to
+`entity.id`); the build creates any left, then runs `ANALYZE`. Where it can, a hook inserts into a `WITHOUT ROWID` table
+in its key's order. The build runs with no journal or syncing until the end, a 256 MiB page cache (SQLite's default 2 MB
+thrashes on these inserts and spills the index sorts early), and up to 4 helper threads to sort.
 
 **The ontology's IRI** comes from the default graph only, the ontology without its imports: an `owl:Ontology` IRI that
 nothing there imports, since an OFN upload's converted Turtle may declare the ontologies it imports. If several remain,
