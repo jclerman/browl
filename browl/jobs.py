@@ -199,8 +199,21 @@ class JobState:
             return Site.NOT_AVAILABLE
         return Site.AVAILABLE
 
+    @property
+    def rebuilding(self) -> bool:
+        """Whether the job is a rebuild after a restart (`JobRunner.rebuild`): it runs under the ready generation."""
+        return self.generation is not None and self.generation == self.ready_generation
+
     def failed(self, reason: str) -> Self:
-        """Return this state with the job failed in its current stage."""
+        """Return this state with the running job failed in its current stage.
+
+        A rebuild's reason starts with `REBUILDING`, however it failed. A reason longer than `MAX_REASON_CHARS` is cut
+        short.
+        """
+        if self.rebuilding:
+            reason = f"{REBUILDING}: {reason}"
+        if len(reason) > MAX_REASON_CHARS:
+            reason = f"{reason[:MAX_REASON_CHARS]}… (cut short; the app's log has it all)"
         return replace(self, failed_stage=self.stage, reason=reason, finished_at=_now())
 
 
@@ -520,7 +533,6 @@ class JobRunner:
             self.register(stage, function)
         self._busy = False  # this runner has a job, from claiming it until its end is stored
         self._closing = False
-        self._rebuilding = False  # this runner's job is a rebuild (`rebuild`)
         self._task: asyncio.Task[None] | None = None
         self._writes: set[asyncio.Task[None]] = set()
         self._unstored: JobState | None = None  # the end of this runner's last job, if it couldn't be stored
@@ -666,7 +678,6 @@ class JobRunner:
             started_at=state.started_at,
         )
         logger.warning("Load job %d's derived data isn't current; %s", context.generation, REBUILDING)
-        self._rebuilding = True
         self._task = asyncio.create_task(
             self._run(context, {Stage.PRE_CACHING: function}), name=f"rebuild of load job {context.generation}"
         )
@@ -786,10 +797,6 @@ class JobRunner:
                 reason,
                 exc_info=not isinstance(error, StageError),
             )
-        if self._rebuilding:
-            reason = f"{REBUILDING}: {reason}"
-        if len(reason) > MAX_REASON_CHARS:
-            reason = f"{reason[:MAX_REASON_CHARS]}… (cut short; the app's log has it all)"
         # Shielded: a second cancellation, e.g. from an anyio cancel scope, mustn't stop the failure being stored.
         await asyncio.shield(self._record_end(self._state.failed(reason)))
 
@@ -819,7 +826,6 @@ class JobRunner:
     def _unlock(self) -> None:
         self._lock.release()
         self._busy = False
-        self._rebuilding = False
 
     def _settle(self) -> None:
         """Fail a job that stopped while still recorded as running, so the site can't stay on "loading" for good."""

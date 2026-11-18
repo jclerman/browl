@@ -1043,7 +1043,7 @@ async def test_rebuild_cancelled_at_close(data_dir: Path) -> None:
 
 
 async def test_rebuild_claim_cancelled(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Check that a rebuild cancelled while it claims the job fails it as cancelled, releasing the lock."""
+    """Check that a rebuild cancelled while it claims the job fails it as a cancelled rebuild, releasing the lock."""
     JobStore(data_dir / STATE_DB).write(READY)
     runner = await open_runner(data_dir)
     entered, release = threading.Event(), threading.Event()
@@ -1065,8 +1065,30 @@ async def test_rebuild_claim_cancelled(data_dir: Path, monkeypatch: pytest.Monke
         while runner._busy:
             await asyncio.sleep(0.001)
     state = JobStore(data_dir / STATE_DB).read()
-    assert (state.failed_stage, state.reason) == (Stage.PRE_CACHING, CANCELLED)
+    assert (state.failed_stage, state.reason) == (Stage.PRE_CACHING, f"{REBUILDING}: {CANCELLED}")
     assert (await run_job(await open_runner(data_dir))).ready_generation == 4
+
+
+async def test_restart_fails_running_rebuild(data_dir: Path) -> None:
+    """Check that a rebuild left running by a previous process is recorded as a rebuild interrupted by a restart."""
+    JobStore(data_dir / STATE_DB).write(replace(READY, stage=Stage.PRE_CACHING, finished_at=None))
+    state = (await open_runner(data_dir)).state
+    assert (state.failed_stage, state.reason, state.site) == (
+        Stage.PRE_CACHING,
+        f"{REBUILDING}: {INTERRUPTED_BY_RESTART}",
+        Site.NOT_AVAILABLE,
+    )
+
+
+@pytest.mark.parametrize(
+    ("ready_generation", "reason"),
+    [(3, f"{REBUILDING}: {STOPPED_UNRECORDED}"), (2, STOPPED_UNRECORDED), (None, STOPPED_UNRECORDED)],
+    ids=["rebuild", "load", "first load"],
+)
+def test_failed_reason(ready_generation: int | None, reason: str) -> None:
+    """Check that a rebuild's failure, and only a rebuild's, says it was the rebuild, however it failed."""
+    running = replace(READY, stage=Stage.PRE_CACHING, finished_at=None, ready_generation=ready_generation)
+    assert running.failed(STOPPED_UNRECORDED).reason == reason
 
 
 async def test_rebuild_check_fails(data_dir: Path) -> None:
