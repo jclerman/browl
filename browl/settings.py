@@ -116,6 +116,12 @@ class Settings(BaseSettings):
             raise ValueError("must not have a query string or fragment")
         return value
 
+    @field_validator("sandbox_socket", mode="before")
+    @classmethod
+    def empty_is_unset(cls, value: object) -> object:
+        """Read an empty value, such as `SANDBOX_SOCKET=`, as unset, not as the current directory."""
+        return None if value == "" else value
+
     @field_validator("reasoner_max_heap", "app_jvm_max_heap")
     @classmethod
     def check_java_heap(cls, value: str) -> str:

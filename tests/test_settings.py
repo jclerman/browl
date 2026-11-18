@@ -176,12 +176,15 @@ def test_load_settings_no_warning_with_auth(settings_env: pytest.MonkeyPatch, ca
     assert caplog.text == ""
 
 
+@pytest.mark.parametrize("socket", [None, ""])
 def test_load_settings_warns_without_sandbox(
-    settings_env: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    settings_env: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, socket: str | None
 ) -> None:
-    """Check that a warning is logged when there's no tool sandbox (P-30)."""
+    """Check that a warning is logged when there's no tool sandbox, SANDBOX_SOCKET unset or empty (P-30)."""
+    if socket is not None:
+        settings_env.setenv("SANDBOX_SOCKET", socket)
     with caplog.at_level(logging.WARNING):
-        load_settings()
+        assert load_settings().sandbox_socket is None
     assert "SANDBOX_SOCKET is unset: ROBOT and the OFN lister run without a sandbox." in caplog.text
 
 
