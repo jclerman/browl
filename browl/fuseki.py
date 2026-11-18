@@ -145,7 +145,8 @@ class FusekiAdmin:
     async def _call(self, method: str, path: str, data: dict[str, str] | None = None) -> httpx2.Response:
         try:
             async with asyncio.timeout(ADMIN_TIMEOUT_S):
-                response = await self._http.request(method, path, data=data)
+                # The app's client has httpx's 5 s default, too short to delete or open a large store.
+                response = await self._http.request(method, path, data=data, timeout=ADMIN_TIMEOUT_S)
         except TimeoutError as error:
             raise FusekiAdminError(
                 f"Fuseki HTTP request {method} {path} timed out after {ADMIN_TIMEOUT_S:g} s"

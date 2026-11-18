@@ -1,5 +1,6 @@
 """Tests for the loading stage: a new TDB2 store per load, Fuseki switched to it, and its triples counted (A-4)."""
 
+import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -7,6 +8,7 @@ import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
+import browl.fuseki
 import browl.imports
 import browl.loading
 from browl.fuseki import UNION_FROM, FusekiAdmin, FusekiAdminError, FusekiClient, dataset_clause
@@ -158,6 +160,30 @@ async def test_admin_errors() -> None:
             await admin.add("gen-1")
         with pytest.raises(ValueError, match="not a dataset name"):
             await admin.remove("../x")
+
+
+async def test_admin_timeouts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that admin calls get `ADMIN_TIMEOUT_S` for each phase, not the client's default, and say how they fail."""
+    timeouts: list[dict[str, float]] = []
+
+    async def handler(request: httpx2.Request) -> httpx2.Response:
+        timeouts.append(request.extensions["timeout"])
+        if request.method == "DELETE":
+            raise httpx2.ConnectError("refused")
+        await asyncio.sleep(1)
+        return httpx2.Response(200)
+
+    monkeypatch.setattr(browl.fuseki, "ADMIN_TIMEOUT_S", 0.1)
+    transport = httpx2.MockTransport(handler)
+    async with httpx2.AsyncClient(base_url="http://fuseki", transport=transport, timeout=5.0) as client:
+        admin = FusekiAdmin(client)
+        with pytest.raises(FusekiAdminError, match=r"^Fuseki HTTP request POST /\$/datasets timed out after 0.1 s$"):
+            await admin.add("gen-1")
+        with pytest.raises(
+            FusekiAdminError, match=r"^Fuseki HTTP request DELETE /\$/datasets/gen-1 failed: ConnectError"
+        ):
+            await admin.remove("gen-1")
+    assert timeouts == [dict.fromkeys(("connect", "read", "write", "pool"), 0.1)] * 2
 
 
 def test_app_loads_and_restarts(
