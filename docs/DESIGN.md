@@ -134,28 +134,38 @@ Tooling and code conventions are in [`CODING-STANDARDS.md`](CODING-STANDARDS.md)
 ### 2.1 Architecture overview
 
 ```text
-           browser
-              │  HTML (Jinja) + htmx
-              ▼
-   ┌───────────────────────────────────────────────┐
-   │  browl app (FastAPI, one worker process)      │
-   │  - routing / IRI map     - load pipeline job  │
-   │  - page rendering        - search shim        │
-   │  - SPARQL client                              │
-   │                                               │
-   │  ┌─────────────────────────────────────────┐  │
-   │  │ in-process JVM (JPype, robot.jar)       │  │
-   │  │ OWLAPI: Manchester rendering of the     │  │
-   │  │ triples fetched for one page            │  │
-   │  └─────────────────────────────────────────┘  │
-   └──────┬───────────────┬───────────────┬────────┘
-          │ SPARQL (HTTP) │               │ subprocesses
-          ▼               ▼               ▼
-   Fuseki container   derived SQLite   ROBOT (reasoning),
-   TDB2 store: the    (aggregates,     Jena TDB2 loader
-   loaded ontology    search index)
-                      persistent SQLite
-                      (admins, job state)
+                             browser
+                                │  HTML (Jinja) + htmx
+                                ▼
+   ┌─ app container ────────────────────────────────────┐
+   │  browl app (FastAPI, one worker process)           │
+   │  - routing / IRI map     - load pipeline job       │
+   │  - page rendering        - search shim             │
+   │  - SPARQL client                                   │
+   │                                                    │
+   │  ┌──────────────────────────────────────────────┐  │
+   │  │ in-process JVM (JPype, robot.jar)            │  │
+   │  │ OWLAPI: Manchester rendering of the          │  │
+   │  │ triples fetched for one page                 │  │
+   │  └──────────────────────────────────────────────┘  │
+   │  subprocesses: Jena's TDB2 loader, riot            │
+   └──────┬───────────────────────┬─────────────────────┘
+          │ SPARQL and admin      │ tool runs over a Unix
+          │ protocol (HTTP)       │ socket (sandbox volume)
+          ▼                       ▼
+   ┌─ fuseki container ───┐  ┌─ sandbox container ──────┐
+   │ Fuseki, TDB2 store:  │  │ app's image, no network, │
+   │ the loaded ontology  │  │ read-only file system:   │
+   │                      │  │ ROBOT (reasoning),       │
+   │                      │  │ OFN lister               │
+   └──────────────────────┘  └──────────────────────────┘
+
+   named volume   holds                                            mounted by
+   data           DATA_DIR: job state, admins, derived SQLite      app
+                  (aggregates, search index)
+   jobs           DATA_DIR/uploads: the current job's files        app, sandbox
+   fuseki         FUSEKI_BASE: registered datasets, TDB2 stores    fuseki, app (the loader)
+   sandbox        the runner's socket                              app, sandbox
 ```
 
 - **Fuseki with a TDB2 store** holds the loaded ontology, in its own container. The store persists on disk, so after a
@@ -180,6 +190,31 @@ Tooling and code conventions are in [`CODING-STANDARDS.md`](CODING-STANDARDS.md)
   alternates Java and Python work, and Python's GIL serializes the Python part
   ([S-1 findings](../research/S-1/README.md)).
 - **Owlready2 is not used.** _(Q6)_
+
+#### Data and persistence
+
+In the Compose deployment everything browl keeps is on four named volumes (O-9), `browl_data`, `browl_jobs`,
+`browl_fuseki` and `browl_sandbox` for the Compose project `browl`. Named volumes survive `docker compose restart`,
+`down` and image rebuilds; `down -v` (or `docker volume rm`) deletes them. Nothing is kept in an image, and the
+containers' own file systems hold only what's lost harmlessly (last row).
+
+| Data | Path in the container | Held by | Mounted by | Authoritative? Losing it costs |
+| --- | --- | --- | --- | --- |
+| Job state: generation numbers, the latest job's stage, reason, imports and triple counts | `DATA_DIR/state.sqlite3` (`/data`) | `data` volume | app | Authoritative. Lost, the site shows no ontology until an admin uploads again; Fuseki's store is then orphaned, and replaced by the next load (2.4) |
+| Job lock (`flock`) | `DATA_DIR/job.lock` | `data` volume | app | No; recreated |
+| Derived database: whole-ontology data and the ontology's `meta` row ([2.5](#25-derived-data-pre-caching)) | `DATA_DIR/derived/{generation}.sqlite3` | `data` volume | app | No: rebuilt from Fuseki's store. Lost, the next start rebuilds it, with the site on "loading" meanwhile (2.4) |
+| The latest job's files: the upload, fetched imports, `catalog.xml`, converted and reasoned ontology | `DATA_DIR/uploads/{generation}/` | `jobs` volume | app, sandbox (both read-write) | No: nothing reads them once the job ends, and each upload deletes the previous job's. Lost, nothing changes |
+| Registered datasets and their TDB2 stores | `FUSEKI_BASE` (`/fuseki`): `configuration/`, `databases/gen-N` | `fuseki` volume | fuseki; app, whose loader builds each store there | The served ontology; rebuilt only by uploading the ontology again. Lost, pages fail until an admin does |
+| The sandbox runner's socket | `/sandbox/runner.sock` | `sandbox` volume | sandbox (creates it), app (connects) | No; recreated when the runner starts |
+| JVM perf data and crash logs, logs | sandbox: `/tmp`; app, fuseki: their writable layer; logs to stdout | sandbox: a 256 MB tmpfs; else the container | | No. The tmpfs is emptied on every restart; the rest, and Docker's logs, go when the container is removed (`down`, or recreated after a rebuild) |
+
+Nothing is written to the host's file system directly: the services have no bind mounts and the app never gets the
+Docker socket. The volumes live in Docker's data root (on Docker Desktop, inside its VM), so host backups don't cover
+them; Compose reads only `.env` from the host. Development and tests differ: `make test` downloads `robot.jar` and
+Jena's tools to `.cache/` in the checkout; tests point `DATA_DIR` at pytest's temporary directories, and the Fuseki the
+tests start bind-mounts one as its base, running as the tests' user. Run outside Compose, the app writes to `/data`
+and `/fuseki` unless `DATA_DIR` and `FUSEKI_BASE` are set, and without `SANDBOX_SOCKET`, ROBOT and the OFN lister run
+beside it, unsandboxed.
 
 ### 2.2 Libraries and components
 
@@ -325,11 +360,12 @@ uploads again. Downtime during a replace is accepted. _(Q14a)_ A timeout's reaso
 shutdown", any other cancellation "cancelled". A job that stops without recording why is still marked failed, so the
 site never stays on "loading" (P-5).
 
-**App restart:** the store and the derived database stay on the data volume. Fuseki reopens the store in under a
-second, and the app reuses the derived database when it's current, built for the ready generation by this browl's
-schema version (its `meta` row, [2.5](#25-derived-data-pre-caching)), skipping pre-caching. Restarting either container
-doesn't reload the ontology. Otherwise, e.g. when the file was lost or an upgrade changed its schema, the app rebuilds it
-in the background from the same store (`gen-N`) by re-running the ready job's pre-caching stage (P-9):
+**App restart:** the store stays on the Fuseki volume and the derived database on the data volume. Fuseki reopens
+the store in under a second, and the app reuses the derived database when it's current, built for the ready
+generation by this browl's schema version (its `meta` row, [2.5](#25-derived-data-pre-caching)), skipping
+pre-caching. Restarting either container doesn't reload the ontology. Otherwise, e.g. when the file was lost or an
+upgrade changed its schema, the app rebuilds it in the background from the same store (`gen-N`) by re-running the ready
+job's pre-caching stage (P-9):
 
 - Only when the latest job is the ready one. After a failed job the site isn't available anyway, and the next upload
   builds a new file.
@@ -812,7 +848,7 @@ validated at startup (`browl/settings.py`). Lists and mappings are given as JSON
 | `ROBOT_JAR` | `/opt/robot/robot.jar`, where the app image installs it | used both on the app's classpath and for reasoning subprocesses. With `SANDBOX_SOCKET`, the sandbox runs the command the app builds, so this path, and `JAVA_HOME`'s Java, must exist in the sandbox's image too; the app's image has both |
 | `JENA_HOME` | `/opt/jena`, where the app image installs it | Jena's command-line tools: the TDB2 loader, and `riot` to list imports |
 | `FUSEKI_BASE` | `/fuseki`, where `docker-compose.yml` mounts Fuseki's volume in the app | the loader builds each store under its `databases/`, where Fuseki opens it (2.4) |
-| `DATA_DIR` | `/data` | mounted volume; O-9 |
+| `DATA_DIR` | `/data` | mounted volume; O-9, [Data and persistence](#data-and-persistence) |
 | `MAX_UPLOAD_BYTES` | `20000000000` (20 GB) | the largest upload accepted; A-2 |
 | `SANDBOX_SOCKET` | none; the Compose deployment sets it | the tool sandbox's Unix socket (`browl.sandbox`), where ROBOT and the OFN lister run (P-30); unset, they run in the app container, and startup logs a warning |
 | `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `SEED_ADMINS` | none | required unless `AUTH_DISABLED`; O-6 |
@@ -820,7 +856,8 @@ validated at startup (`browl/settings.py`). Lists and mappings are given as JSON
 
 **The Compose deployment** (`docker-compose.yml`): three services, `app`, `fuseki` and `sandbox` (2.4), and four named
 volumes: `data` (`DATA_DIR`: job state, admins, derived database), `jobs` (`DATA_DIR/uploads`: the current job's files,
-shared with the sandbox), `fuseki` (Fuseki's base, shared with the app's loader) and `sandbox` (the runner's socket).
+shared with the sandbox), `fuseki` (Fuseki's base, shared with the app's loader) and `sandbox` (the runner's socket);
+what each holds and survives is in [Data and persistence](#data-and-persistence).
 Compose reads a few variables of its own from `.env`, not browl settings: `BROWL_PORT`, the app's host port;
 `FUSEKI_HEAP` and `FUSEKI_MEM_LIMIT` (2.4); and `SANDBOX_MEM_LIMIT`, the sandbox's memory limit, none by default, which
 must hold `REASONER_MAX_HEAP` plus about 0.5 GiB. Upgrading a stack from before P-30 leaves its earlier uploads on the
