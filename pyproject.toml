@@ -51,6 +51,8 @@ verbosity_assertions = 2
 [tool.coverage.run]
 # Measure the browl package, including modules no test imports.
 source = ["browl"]
+# Also measure Python subprocesses, such as `python -m browl.ofn`.
+patch = ["subprocess"]
 
 [tool.coverage.report]
 # Show coverage percentages to two decimal places.

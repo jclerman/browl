@@ -3,11 +3,13 @@
 Neither the TDB2 loader nor browl's queries follow `owl:imports`, and ROBOT would follow them itself, reading local
 files (`file:`) or sending requests from the app container. So browl lists every import, fetches only `http` and
 `https` IRIs from public addresses (checked on each connection, so on each redirect too), within a size limit, and
-writes a catalog mapping every import to its fetched file, or to an empty ontology if it was dropped. ROBOT then never
-resolves an import itself. A dropped import is a warning, not a failure (A-4).
+writes a catalog mapping every import to its fetched file, or to an empty ontology if it was dropped. A dropped import
+is a warning, not a failure (A-4). The flow is charted in docs/LOAD-FLOW.md.
 
-Imports are listed from the whole file, not just its header, since a crafted file can declare them anywhere: RDF
-documents through Jena's `riot`, which streams them as N-Triples; OWL Functional Syntax by scanning for `Import(…)`.
+Imports are listed by the parser that reads the document next. An RDF document's are listed by Jena's `riot`, which
+streams it as N-Triples, from the whole file. An OWL Functional Syntax (OFN) document is read only by the OWLAPI, which
+lists its imports and converts it to Turtle in one parse, with every other load refused (`browl.ofn`); from then on,
+the Turtle stands in for it.
 """
 
 import asyncio
@@ -19,17 +21,16 @@ import socket
 import xml.etree.ElementTree as ET
 from collections import deque
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import IO
 
 import httpcore2
 import httpx2
 
 import browl
 from browl.jobs import ImportResult, JobContext, StageError
+from browl.ofn import convert_ofn
 from browl.process import free_bytes, run_process
-from browl.robot import convert_args, robot_to_file
 from browl.settings import Settings
 from browl.upload import FREE_SPACE_MARGIN_BYTES, IDLE_S, SNIFF_BYTES, STORED_SUFFIXES, Syntax, sniff_syntax
 
@@ -42,6 +43,9 @@ IMPORTS_DIR = "imports"
 
 CATALOG = "catalog.xml"
 """The catalog's file name, beside the upload."""
+
+CONVERTED = "converted.ttl"
+"""An OFN upload converted to Turtle, beside the upload."""
 
 MAX_IMPORTS = 100
 """The most imports fetched for one ontology, directly or not; any more are dropped."""
@@ -65,34 +69,6 @@ SYNTAX_NAMES = {Syntax.TURTLE: "Turtle", Syntax.RDF_XML: "RDF/XML"}
 _IRI = r"[^\s<>\"{}|^`\\]*"
 _SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 _NT_IMPORT = re.compile(rf"^(?:<{_IRI}>|_:\S+) <{re.escape(OWL_IMPORTS)}> <({_IRI})> \.$")
-_OFN_PREFIX = re.compile(rf"Prefix\s*\(\s*([A-Za-z_][\w.-]*)?:\s*=\s*<({_IRI})>\s*\)")
-_OFN_IMPORT = re.compile(rf"Import\s*\(\s*(?:<({_IRI})>|([A-Za-z_][\w.-]*)?:([^\s()]*))\s*\)")
-_OFN_HEADER_TOKEN = re.compile(rf"\s+|#[^\n]*|Prefix\s*\([^)]*\)|Ontology\s*\(|<{_IRI}>|Import\s*\([^)]*\)")
-OFN_READ_CHARS = 1 << 20
-"""How much of an OWL Functional Syntax document is scanned for imports at a time."""
-
-OFN_OVERLAP_CHARS = 65536
-"""How much of each chunk is kept for the next, so an `Import(…)` split between them is still found."""
-_OFN_HEADER_CHARS = 16 * 2**20  # the longest header read for its prefixes and imports
-
-
-@dataclass
-class Imports:
-    """What a document declares.
-
-    Attributes:
-        imports: The IRIs it imports, in the order found, each once.
-        mentions: Every IRI that could be read as an import, including the imports: all must be in the catalog.
-    """
-
-    imports: list[str] = field(default_factory=list)
-    mentions: set[str] = field(default_factory=set)
-
-    def add(self, iri: str, imported: bool = True) -> None:
-        """Add an IRI found, as an import, or only as a mention."""
-        if imported and iri not in self.imports:
-            self.imports.append(iri)
-        self.mentions.add(iri)
 
 
 class _ImportLines:
@@ -100,7 +76,7 @@ class _ImportLines:
 
     _NEEDLE = f"<{OWL_IMPORTS}>".encode()
 
-    def __init__(self, found: Imports) -> None:
+    def __init__(self, found: dict[str, None]) -> None:
         self._found = found
         self._rest = b""
 
@@ -113,17 +89,17 @@ class _ImportLines:
             line_start = data.rfind(b"\n", 0, start) + 1
             line_end = data.find(b"\n", start)
             if match := _NT_IMPORT.match(data[line_start:line_end].decode("utf-8", "replace")):
-                self._found.add(match[1])
+                self._found[match[1]] = None
             start = data.find(self._NEEDLE, line_end, end)
 
 
-async def list_rdf_imports(path: Path, syntax: Syntax, settings: Settings) -> Imports:
-    """Return the IRIs an RDF document imports, parsing all of it with Jena's `riot`.
+async def list_rdf_imports(path: Path, syntax: Syntax, settings: Settings) -> list[str]:
+    """Return the IRIs an RDF document imports, each once, parsing all of it with Jena's `riot`.
 
     Raises:
         StageError: `riot` couldn't parse it.
     """
-    found = Imports()
+    found: dict[str, None] = {}
     tail: deque[str] = deque(maxlen=TAIL_LINES)
     command = [str(settings.jena_home / "bin" / "riot"), f"--syntax={SYNTAX_NAMES[syntax]}", "--output=nt", str(path)]
     completed = await run_process(
@@ -134,70 +110,7 @@ async def list_rdf_imports(path: Path, syntax: Syntax, settings: Settings) -> Im
     if not completed.ok:
         lines = "\n".join(tail)
         raise StageError(f"parse error: Jena couldn't read {path.name} as {SYNTAX_NAMES[syntax]}:\n{lines}")
-    return found
-
-
-def list_ofn_imports(path: Path) -> Imports:
-    """Return the IRIs an OWL Functional Syntax document imports.
-
-    Its imports are the `Import(…)`s in its header, which its grammar puts before any annotation or axiom. Any
-    `Import(…)` later in the file, even inside a literal, is also listed as a mention, for the catalog, in case a
-    parser accepted it there.
-    """
-    found = Imports()
-    with path.open(encoding="utf-8", errors="replace") as file:
-        prefixes = _ofn_header(file, found)
-        file.seek(0)
-        rest = ""
-        while chunk := file.read(OFN_READ_CHARS):
-            text = rest + chunk
-            cut = max(0, len(text) - OFN_OVERLAP_CHARS)
-            last = 0
-            for match in _OFN_IMPORT.finditer(text):
-                if match.start() >= cut:
-                    break
-                _ofn_mention(match, prefixes, found)
-                last = match.end()
-            rest = text[max(cut, last) :]
-        for match in _OFN_IMPORT.finditer(rest):
-            _ofn_mention(match, prefixes, found)
-    return found
-
-
-def _ofn_header(file: IO[str], found: Imports) -> dict[str, str]:
-    """Add the header's imports, and return its prefixes."""
-    text = file.read(_OFN_HEADER_CHARS).removeprefix("﻿")
-    prefixes = {match[1] or "": match[2] for match in _OFN_PREFIX.finditer(text)}
-    position = 0
-    while token := _OFN_HEADER_TOKEN.match(text, position):
-        match = _OFN_IMPORT.fullmatch(token[0])
-        if match and (iri := _ofn_iri(match, prefixes)) is not None:
-            found.add(iri)
-        position = token.end()
-    return prefixes
-
-
-def _ofn_iri(match: re.Match[str], prefixes: dict[str, str]) -> str | None:
-    if match[1] is not None:
-        return match[1]
-    namespace = prefixes.get(match[2] or "")
-    return None if namespace is None else namespace + match[3]
-
-
-def _ofn_mention(match: re.Match[str], prefixes: dict[str, str], found: Imports) -> None:
-    if (iri := _ofn_iri(match, prefixes)) is not None:
-        found.add(iri, imported=False)
-
-
-async def list_imports(path: Path, syntax: Syntax, settings: Settings) -> Imports:
-    """Return the IRIs a document imports.
-
-    Raises:
-        StageError: It couldn't be parsed.
-    """
-    if syntax == Syntax.OFN:
-        return await asyncio.to_thread(list_ofn_imports, path)
-    return await list_rdf_imports(path, syntax, settings)
+    return list(found)
 
 
 def is_public(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
@@ -359,11 +272,8 @@ def catalog_names(iri: str) -> list[str]:
     """Return the names an import may be requested by, for the catalog: the IRI, and other spellings of it.
 
     The OWLAPI writes a file IRI as `file:/path`, Jena as `file:///path`; a relative import in RDF, resolved against
-    the document's own file IRI, can come out either way. The OWLAPI reads a relative import in OWL Functional Syntax
-    as `urn:absolute:` followed by it.
+    the document's own file IRI, can come out either way.
     """
-    if not _SCHEME.match(iri):
-        return [iri, f"urn:absolute:{iri}"]
     if not iri.startswith("file:"):
         return [iri]
     path = re.sub(r"^file:(//(localhost)?)?", "", iri)
@@ -391,11 +301,25 @@ class _Document:
     iri: str | None  # None for the upload
 
 
+async def list_imports(document: _Document, settings: Settings) -> list[str]:
+    """Return the IRIs a document imports; an OFN document is converted to Turtle, which then stands in for it.
+
+    Raises:
+        StageError: It couldn't be parsed.
+    """
+    if document.syntax is not Syntax.OFN:
+        return await list_rdf_imports(document.path, document.syntax, settings)
+    converted = document.path.with_name(CONVERTED) if document.iri is None else document.path.with_suffix(".ttl")
+    found = await convert_ofn(document.path, converted, settings)
+    document.path, document.syntax = converted, Syntax.TURTLE
+    return found
+
+
 async def imports_stage(context: JobContext, allowed: AddressCheck | None = None) -> None:
     """Fetch the upload's imports, recursively, and write the catalog that maps every one of them to a local file.
 
-    Sets the context's `catalog`, `imports` and `import_files`. An import that can't be fetched or read is dropped,
-    and listed as such; one in OWL Functional Syntax is converted to Turtle, for the TDB2 loader.
+    Sets the context's `catalog`, `imports` and `import_files`, and `converted` for an OFN upload. An import that can't
+    be fetched or read is dropped, and listed as such.
 
     Args:
         context: The job.
@@ -411,23 +335,22 @@ async def imports_stage(context: JobContext, allowed: AddressCheck | None = None
     await asyncio.to_thread(shutil.rmtree, directory, ignore_errors=True)
     await asyncio.to_thread(directory.mkdir)
     syntax = next(syntax for syntax, suffix in STORED_SUFFIXES.items() if suffix == context.upload.suffix)
-    queue = deque([_Document(context.upload, syntax, None)])
+    upload = _Document(context.upload, syntax, None)
+    queue = deque([upload])
     results: dict[str, ImportResult] = {}
     files: dict[str, _Document] = {}
-    mentions: set[str] = set()
     async with fetch_client(allowed) as client:
         while queue:
             document = queue.popleft()
             try:
-                found = await list_imports(document.path, document.syntax, settings)
+                found = await list_imports(document, settings)
             except StageError as error:
                 if document.iri is None:
                     raise
                 results[document.iri] = ImportResult(document.iri, results[document.iri].imported_by, str(error))
                 del files[document.iri]
                 continue
-            mentions |= found.mentions
-            for iri in found.imports:
+            for iri in found:
                 if iri in results:
                     continue
                 if len(files) >= MAX_IMPORTS:
@@ -446,34 +369,18 @@ async def imports_stage(context: JobContext, allowed: AddressCheck | None = None
                 files[iri] = _Document(stored, fetched, iri)
                 queue.append(files[iri])
     catalog = context.upload.with_name(CATALOG)
-    entries = await asyncio.to_thread(_catalog_entries, directory, mentions, files)
+    entries = await asyncio.to_thread(_catalog_entries, directory, results, files)
     await asyncio.to_thread(write_catalog, catalog, entries)
     context.catalog = catalog
-    for iri, document in list(files.items()):
-        if document.syntax == Syntax.OFN:
-            converted = document.path.with_suffix(".ttl")
-            try:
-                await robot_to_file(
-                    convert_args(document.path, converted.with_suffix(".partial.ttl"), catalog),
-                    converted.with_suffix(".partial.ttl"),
-                    converted,
-                    settings,
-                )
-            except StageError as error:
-                results[iri] = ImportResult(iri, results[iri].imported_by, f"couldn't convert it: {error}")
-                del files[iri]
-                entries[iri] = await asyncio.to_thread(_write_empty, directory, iri, len(entries))
-                await asyncio.to_thread(write_catalog, catalog, entries)
-                continue
-            files[iri] = _Document(converted, Syntax.TURTLE, iri)
+    context.converted = upload.path if upload.path != context.upload else None
     context.imports = list(results.values())
     context.import_files = {iri: document.path for iri, document in files.items()}
 
 
-def _catalog_entries(directory: Path, mentions: set[str], files: dict[str, _Document]) -> dict[str, Path]:
-    """Map each fetched import to its file, and every other IRI that could be read as an import to an empty ontology."""
+def _catalog_entries(directory: Path, results: dict[str, ImportResult], files: dict[str, _Document]) -> dict[str, Path]:
+    """Map each fetched import to its file, and each dropped one to an empty ontology of its own."""
     entries = {iri: document.path for iri, document in files.items()}
-    for number, iri in enumerate(sorted(mentions - entries.keys())):
+    for number, iri in enumerate(iri for iri in results if iri not in files):
         entries[iri] = _write_empty(directory, iri, number)
     return entries
 

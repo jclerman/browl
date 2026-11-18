@@ -2,7 +2,8 @@
 
 How a load job takes an upload to a served dataset, for each input syntax, with and without a reasoner. This is the
 flow agreed in PR #70's review (P-8). It replaces the regex scan for OWL Functional Syntax (OFN) imports with the
-OWLAPI, and adds a sandbox for ROBOT (P-30). The reasons are in [DESIGN.md §2.4](DESIGN.md#24-load-pipeline) and §2.14.
+OWLAPI, which converts the file to Turtle in the same parse, and adds a sandbox for ROBOT (P-30). The reasons are in
+[DESIGN.md §2.4](DESIGN.md#24-load-pipeline) and §2.14.
 
 Steps marked **[sandbox]** run in the ROBOT container planned by P-30: no network, only the current job's files, an
 almost empty environment. Until P-30, they run in the app container, with ROBOT's network fetches refused (Java's proxy
@@ -19,7 +20,9 @@ IMPORTS STAGE: a breadth-first walk over the import closure, starting from the u
   │   for each document in the queue:
   │     LIST its imports
   │        RDF  →  riot, streaming (app container)
-  │        OFN  →  OWLAPI with every load refused  [sandbox]
+  │        OFN  →  OWLAPI with every load refused; the same parse writes Turtle,  [sandbox]
+  │                which stands in for the OFN file from then on (the upload's: converted.ttl)
+  │        can't be parsed ──► DROPPED  (the upload: the job FAILS)
   │     for each new import IRI   (≤ 100 attempts; deadline for the whole stage)
   │        POLICY   http/https only; public address; checked again on each redirect ── no ──► DROPPED
   │        FETCH    size and time limits ───────────────────────────── fails ──► DROPPED
@@ -27,16 +30,11 @@ IMPORTS STAGE: a breadth-first walk over the import closure, starting from the u
   │        add to the queue
   │
   │   WRITE CATALOG    fetched IRI → its file;  dropped IRI → an empty ontology
-  │   CONVERT each fetched OFN import → Turtle    ROBOT convert, with the catalog  [sandbox]
-  │                                               fails ──► DROPPED (catalog entry → empty)
   ▼
-Reasoner chosen? ── yes ──►  REASON   ROBOT reason, with the catalog  [sandbox]   ──► reasoned.ttl
-  │ no                       (writes Turtle, so it also does the conversion)
+Reasoner chosen? ── yes ──►  REASON   ROBOT reason over the upload or converted.ttl,  ──► reasoned.ttl
+  │ no                                with the catalog  [sandbox]
   ▼
-Upload is OFN? ──── yes ──►  CONVERT  ROBOT convert, with the catalog  [sandbox]  ──► converted.ttl
-  │ no
-  ▼
-the upload as it is
+the upload as it is, or converted.ttl for an OFN upload
   │
   ▼
 LOAD STAGE
@@ -59,13 +57,13 @@ In the sandbox it can't reach the network or anything worth reading.
 | --- | --- | --- | --- | --- |
 | Lists the upload's imports | riot | riot | OWLAPI [sandbox] | OWLAPI [sandbox] |
 | Lists fetched imports | riot for RDF, OWLAPI for OFN | same | same | same |
-| ROBOT run on the upload | none | reason | convert | reason |
+| ROBOT run on the upload | none | reason | none | reason, over `converted.ttl` |
 | Loaded into the default graph | the upload | `reasoned.ttl` | `converted.ttl` | `reasoned.ttl` |
-| What follows `owl:imports` | nothing; only browl's fetcher fetches | ROBOT, through the catalog | ROBOT | ROBOT |
-| A crafted listing mismatch | can't arise: riot and tdbloader are the same Jena parser | job fails, naming the import | can't arise: the same OWLAPI lists and parses | can't arise |
-| Whole ontology in memory | no¹ | ROBOT only | lister, then ROBOT² | lister, then ROBOT² |
+| What follows `owl:imports` | nothing; only browl's fetcher fetches | ROBOT, through the catalog | nothing | ROBOT |
+| A crafted listing mismatch | can't arise: riot and tdbloader are the same Jena parser | job fails, naming the import | can't arise: nothing follows imports | can't arise: ROBOT reads the Turtle the OWLAPI wrote |
+| Whole ontology in memory | no¹ | ROBOT only | the lister only | lister, then ROBOT² |
 
-1. Except a fetched OFN import, which is converted one at a time.
+1. Except a fetched OFN import, which the lister parses whole, one at a time.
 2. One after the other, not together, so the peak is the same as ROBOT's alone; the parse time doubles.
 
 ## Why it's safe
@@ -80,7 +78,8 @@ In the sandbox it can't reach the network or anything worth reading.
 - **The OFN lister is exact.** It's the OWLAPI from the same `robot.jar` that ROBOT runs, with every document load
   refused before anything is opened and before any parser runs. In P-8's review it listed every crafted case that got
   past the regex scan, and made no request and read no file; the OWLAPI's default, as ROBOT runs it, made seven
-  requests and read a local file.
+  requests and read a local file. ROBOT then reads the Turtle the lister wrote, not the OFN file. A relative import,
+  which can't be fetched, is left out of that Turtle, whose base would resolve it differently.
 - **A listing gap fails the job, naming the import, rather than leaking.** `riot` can't promise to list exactly what the
   OWLAPI will try for an RDF file crafted to differ. ROBOT is left on its default, which fails on an import it can't
   load. It reports only the first such import, and skipping silently would report none. In the sandbox, that attempt
@@ -93,9 +92,10 @@ In the sandbox it can't reach the network or anything worth reading.
   path with no reasoner.
 - **The recursion:** each fetched import is listed in turn, so the whole closure is followed.
 - **The catalog**, which gives ROBOT the fetched files and maps dropped imports to an empty ontology.
-- **Converting fetched OFN imports**, even without a reasoner, since `tdbloader` reads only RDF.
+- **Converting OFN to Turtle**, even without a reasoner, since `tdbloader` reads only RDF. The lister does it in the
+  same parse, for the upload and each fetched import.
 - **Count, switch and verify:** the triple counts are checked through Fuseki before the old store is removed.
 - **Pre-caching** (P-9).
 
-The converter is a separate step only for an OFN upload with no reasoner: when a reasoner runs, ROBOT's output is
-already Turtle.
+There's no separate conversion step: the OFN lister writes Turtle in the same parse, and ROBOT's reasoning output is
+Turtle.

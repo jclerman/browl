@@ -395,8 +395,9 @@ class JobContext:
         reasoner: The reasoner the admin chose.
         upload: The uploaded file, its suffix naming its format (`browl.upload.FORMATS`); None until it's stored.
         upload_bytes: How much of the file has arrived.
-        reasoned: The ontology the reasoning stage made: reasoned, or an OWL Functional Syntax upload converted to
-            RDF; None if it made none.
+        converted: An OWL Functional Syntax upload converted to Turtle by the imports stage, which stands in for it
+            from then on; None for any other upload.
+        reasoned: The reasoned ontology the reasoning stage made; None if it made none.
         catalog: The catalog that maps each import in the closure to a local file, written by the imports stage.
         imports: The imports, direct and indirect, listed by the imports stage.
         import_files: The RDF file to load for each import that was fetched, by its IRI.
@@ -408,6 +409,7 @@ class JobContext:
     reasoner: Reasoner = Reasoner.NONE
     upload: Path | None = None
     upload_bytes: int | None = None
+    converted: Path | None = None
     reasoned: Path | None = None
     catalog: Path | None = None
     imports: list[ImportResult] = field(default_factory=list)
@@ -416,8 +418,8 @@ class JobContext:
 
     @property
     def ontology(self) -> Path | None:
-        """Return the ontology to serve: the reasoning stage's if it made one, else the upload."""
-        return self.reasoned or self.upload
+        """Return the ontology to serve: the reasoned one if reasoning ran, else the upload, converted if it's OFN."""
+        return self.reasoned or self.converted or self.upload
 
 
 StageFunction = Callable[[JobContext], Awaitable[None]]

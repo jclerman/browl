@@ -1,8 +1,9 @@
 """The reasoning stage (DESIGN.md §2.4): ROBOT run as a subprocess, held to the reasoner time and heap limits (O-8).
 
-ROBOT runs as `java -Xmx… -XX:+ExitOnOutOfMemoryError -jar robot.jar -vv …` in its own process group, which is stopped
-at the time limit, if the data volume runs low on space, or if the job is cancelled. A failure's reason says which limit
-was hit, or what else went wrong, using the output signatures S-2 found (A-6, `failure_reason`).
+ROBOT runs as `java -Xmx… -XX:+ExitOnOutOfMemoryError <no-network options> -jar robot.jar -vv …` in its own process
+group, which is stopped at the time limit, if the data volume runs low on space, or if the job is cancelled. A
+failure's reason says which limit was hit, or what else went wrong, using the output signatures S-2 found (A-6,
+`failure_reason`).
 """
 
 import asyncio
@@ -14,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from browl.jobs import JobContext, Reasoner, StageError
-from browl.process import java, run_process
+from browl.process import NO_NETWORK_JAVA_OPTIONS, java, run_process
 from browl.settings import Settings
 from browl.upload import FREE_SPACE_MARGIN_BYTES
 
@@ -122,11 +123,6 @@ def reason_args(reasoner: Reasoner, source: Path, output: Path, settings: Settin
     return [*args, "query", "--update", str(SHORTCUTS_QUERY), "--output", str(output)]
 
 
-def convert_args(source: Path, output: Path, catalog: Path) -> list[str]:
-    """Return ROBOT's arguments for converting an ontology to the syntax its output's suffix names."""
-    return ["convert", "--catalog", str(catalog), "--input", str(source), "--output", str(output)]
-
-
 async def run_robot(args: Sequence[str], settings: Settings) -> None:
     """Run ROBOT with the arguments, within the reasoner limits, in a process group stopped however this ends.
 
@@ -137,6 +133,7 @@ async def run_robot(args: Sequence[str], settings: Settings) -> None:
         java(),
         f"-Xmx{settings.reasoner_max_heap}",
         "-XX:+ExitOnOutOfMemoryError",
+        *NO_NETWORK_JAVA_OPTIONS,
         "-jar",
         str(settings.robot_jar),
         "-vv",
@@ -167,23 +164,21 @@ async def robot_to_file(args: Sequence[str], partial: Path, output: Path, settin
 
 
 async def reasoning_stage(context: JobContext) -> None:
-    """Classify the upload with the chosen reasoner, setting the context's `reasoned` file.
+    """Classify the ontology with the chosen reasoner, if any, setting the context's `reasoned` file.
 
-    Without a reasoner, an OWL Functional Syntax upload, which the TDB2 loader can't read, is converted to an RDF
-    syntax instead, also set as `reasoned`; any other upload is left as it is. ROBOT resolves imports only through the
-    catalog the imports stage wrote (`browl.imports`), never from their IRIs.
+    It reasons over the upload, or the Turtle an OFN upload was converted to (`JobContext.converted`). ROBOT resolves
+    imports only through the catalog the imports stage wrote (`browl.imports`); one missing from it fails the run, and
+    with `NO_NETWORK_JAVA_OPTIONS` ROBOT can't fetch it from the web.
 
     Raises:
-        StageError: Reasoning or the conversion failed (`failure_reason`).
+        StageError: Reasoning failed (`failure_reason`).
     """
-    if context.upload is None or (context.reasoner is Reasoner.NONE and context.upload.suffix != ".ofn"):
+    source = context.converted or context.upload
+    if source is None or context.reasoner is Reasoner.NONE:
         return
     if context.catalog is None:
         raise StageError("internal error: the imports stage wrote no catalog")
-    partial, reasoned = context.upload.with_name(PARTIAL), context.upload.with_name(REASONED)
-    if context.reasoner is Reasoner.NONE:
-        args = convert_args(context.upload, partial, context.catalog)
-    else:
-        args = reason_args(context.reasoner, context.upload, partial, context.settings, context.catalog)
+    partial, reasoned = source.with_name(PARTIAL), source.with_name(REASONED)
+    args = reason_args(context.reasoner, source, partial, context.settings, context.catalog)
     await robot_to_file(args, partial, reasoned, context.settings)
     context.reasoned = reasoned

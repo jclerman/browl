@@ -264,8 +264,8 @@ The database is the job state's source of truth, so nothing here ties browl to o
 | Stage | What happens |
 | --- | --- |
 | **uploading** | The file is streamed to the data volume, at `DATA_DIR/uploads/{generation}/ontology.{ttl,rdf,ofn}`, the suffix naming its format (an `.owl` file is taken to be RDF/XML); earlier uploads are deleted. A failed upload (e.g. the disk is full, or the client disconnects) deletes its partial file. An upload larger than `MAX_UPLOAD_BYTES`, or than the free space less a margin (from `Content-Length`), is refused before the job starts; one that receives nothing for a minute fails. The form's reasoner choice is stored with the job, as are the file's name, syntax and size, recorded as it grows so the status shows progress. The site switches to the "loading" page (U-16) and the page cache is cleared (P-6). |
-| **imports** | Imported ontologies are fetched, and a catalog written for ROBOT (see Imports, below). |
-| **reasoning** (optional) | One ROBOT run (see Reasoning, below) classifies the upload with ELK or HermiT. Its output, `reasoned.ttl` beside the upload, replaces the uploaded file as the ontology that gets served; the upload is kept (P-7). (Later requirements U-39 and U-40 need the asserted axioms kept too; see [Later](#later).) Without reasoning, an `.ofn` upload, which the TDB2 loader can't read (it reads only RDF formats), is converted to Turtle by ROBOT, also as `reasoned.ttl`; RDF/XML and Turtle uploads load as they are. Of the RDF syntaxes ROBOT writes, Turtle and RDF/XML load equally fast, and Turtle is the smaller file, a quarter smaller on NCBITaxon (P-8, [findings](../research/P-8/README.md)). _(Q7a)_ |
+| **imports** | Imported ontologies are fetched, and a catalog written for ROBOT (see Imports, below). An `.ofn` upload, which the TDB2 loader can't read (it reads only RDF formats), is converted to Turtle here, as `converted.ttl`, by the same OWLAPI parse that lists its imports; the Turtle stands in for it from then on. |
+| **reasoning** (optional) | One ROBOT run (see Reasoning, below) classifies the upload with ELK or HermiT. Its output, `reasoned.ttl` beside the upload, replaces the uploaded file as the ontology that gets served; the upload is kept (P-7). (Later requirements U-39 and U-40 need the asserted axioms kept too; see [Later](#later).) It reasons over the upload, or over `converted.ttl` for an `.ofn` upload. Without reasoning, the upload, or `converted.ttl`, is loaded as it is. Of the RDF syntaxes ROBOT writes, Turtle and RDF/XML load equally fast, and Turtle is the smaller file, a quarter smaller on NCBITaxon (P-8, [findings](../research/P-8/README.md)). _(Q7a)_ |
 | **loading** | Jena's `tdb2.tdbloader` builds a new store from the built ontology, in the default graph, and loads each fetched import into a named graph, in a new directory on the Fuseki volume. The store's triples are counted with `tdb2.tdbquery`; Fuseki is then switched to it, the triples counted again through Fuseki, which must match, and the previous store deleted. The counts are kept with the job, for the status and the home page. Uberon loads in about 5 s, NCBITaxon in about 65 s ([P-8 findings](../research/P-8/README.md)). _(Q15)_ |
 | **pre-caching** | A few bulk SPARQL queries fetch the whole-ontology data, and the derived SQLite database is built from them ([2.5](#25-derived-data-pre-caching)), as a new file then swapped in atomically. |
 | **ready** | The new generation number is recorded; pages are served again. |
@@ -356,21 +356,27 @@ imports, and ROBOT would follow them itself, reading local files (`file:`) or se
 so the pipeline resolves them itself (P-8). [LOAD-FLOW.md](LOAD-FLOW.md) charts the flow for each syntax, with and
 without a reasoner, as revised in P-8's review (the OWLAPI lists OFN imports; ROBOT runs in a sandbox, P-30):
 
-1. List every import, from the whole document, since a crafted one can state them anywhere: RDF through Jena's `riot`,
-   which streams it as N-Triples (about 25 s for NCBITaxon's 2 GB, against 65 s to load it), keeping the objects of
-   `owl:imports` triples; OWL Functional Syntax by scanning for `Import(…)`, where the imports are those in the header,
-   before any annotation or axiom, as its grammar requires, and any later one is listed for the catalog only.
+1. List every import with the parser that reads the document next, so the list holds what that parser will try to
+   load. RDF goes through Jena's `riot`, which streams it as N-Triples (about 25 s for NCBITaxon's 2 GB, against 65 s
+   to load it), from the whole file, keeping the objects of `owl:imports` triples; the loader is Jena too. OWL
+   Functional Syntax is read only by the OWLAPI, so it lists the imports, in a separate process (`browl.ofn`) that
+   refuses every document load but the file's own and, in the same parse, converts the file to Turtle, which stands in
+   for it from then on. A relative import, which can't be fetched, is left out of that Turtle, whose base would
+   resolve it to another IRI. A regex scan of OFN was replaced after P-8's review, which found crafted files that the
+   OWLAPI read differently. RDF is still listed by `riot` when ROBOT will read it: a crafted RDF file can still differ,
+   so ROBOT runs in a sandbox (P-30), and on its default, which fails the job on an import missing from the catalog,
+   naming it. [LOAD-FLOW.md](LOAD-FLOW.md) charts this.
 2. Fetch each import, recursively, into `imports/` beside the upload. Only `http` and `https` IRIs are fetched, never
    from loopback, private, link-local or other non-global addresses: the address is checked on each connection, so on
    each redirect too, and the connection made to the very address checked. Each fetch is limited to `MAX_UPLOAD_BYTES`
    and an hour, at most 100 imports are fetched, and an import must be RDF/XML, Turtle or OWL Functional Syntax (an OFN
-   import is converted to Turtle for the loader). An import that can't be fetched or read, or isn't allowed, is dropped:
-   its `owl:imports` declaration stays in the ontology as written, but nothing is loaded for it.
+   import is converted to Turtle as it's listed). An import that can't be fetched or read, or isn't allowed, is
+   dropped: its `owl:imports` declaration stays in the ontology as written, but nothing is loaded for it.
 3. Write a catalog file mapping every import listed: to its fetched file, or to an empty ontology if it was dropped.
-   ROBOT's catalog accepts only exact names and the OWLAPI has no option to skip imports, so the catalog lists every
-   spelling the OWLAPI may request: `file:/…`, `file:///…` and `file://localhost/…` for a file IRI (the OWLAPI and Jena
-   resolve a relative RDF import against the document differently), and `urn:absolute:…` for a relative OFN one. ROBOT,
-   for reasoning or a conversion, never resolves an import itself.
+   ROBOT's catalog accepts only exact names, so for a file IRI it lists every spelling the OWLAPI may request:
+   `file:/…`, `file:///…` and `file://localhost/…` (the OWLAPI and Jena resolve a relative RDF import against the
+   document differently). Until P-30, ROBOT's JVM sends every HTTP(S) request to a closed port, so it fetches nothing
+   itself, and every tool gets only a few of the app's environment variables (`browl.process.ENVIRONMENT`).
 4. The loading stage loads the ontology into the store's default graph, and each fetched import into its own named
    graph, named by the IRI it's imported by. Each triple's source stays known, e.g. to mark imported entities; merging
    into one file first (ROBOT `merge`) would lose that.

@@ -31,6 +31,25 @@ READ_BYTES = 65536
 MAX_LINE_CHARS = 2000
 """The longest output line kept; a longer one is cut short."""
 
+NO_NETWORK_JAVA_OPTIONS = (
+    "-Dhttp.proxyHost=127.0.0.1",
+    "-Dhttp.proxyPort=1",
+    "-Dhttps.proxyHost=127.0.0.1",
+    "-Dhttps.proxyPort=1",
+    "-Dhttp.nonProxyHosts=",
+)
+"""JVM options that send every HTTP(S) request through a closed port, so the OWLAPI fetches nothing itself: defense in
+depth behind the catalog, until P-30's sandbox. They don't stop `file:` reads."""
+
+ENVIRONMENT = ("PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "JAVA_HOME", "JENA_HOME", "PYTHONPATH")
+"""The only variables of the app's environment a tool gets, besides coverage's (`COVERAGE_*`, so tests measure the
+Python ones), so a `file:///proc/self/environ` import can't read the app's settings."""
+
+
+def tool_environment() -> dict[str, str]:
+    """Return the environment a tool gets: the app's `ENVIRONMENT` variables, and any `COVERAGE_*` ones."""
+    return {key: value for key, value in os.environ.items() if key in ENVIRONMENT or key.startswith("COVERAGE_")}
+
 
 @dataclass(frozen=True)
 class Completed:
@@ -81,7 +100,7 @@ async def run_process(
         timeout_s: The time limit.
         watch: Directories whose volumes must keep `FREE_SPACE_MARGIN_BYTES` free while it runs.
         on_stdout: Called with each chunk of its standard output, which then isn't read as lines.
-        env: Variables added to the app's environment.
+        env: Variables it gets besides the app's `ENVIRONMENT` ones.
         name: What to call it in the log.
     """
     logger.info("Running %s", " ".join(command))
@@ -90,7 +109,7 @@ async def run_process(
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE if on_stdout else asyncio.subprocess.STDOUT,
-        env=None if env is None else {**os.environ, **env},
+        env={**tool_environment(), **(env or {})},
         start_new_session=True,  # its own process group, so it and anything it starts can be stopped together
     )
 

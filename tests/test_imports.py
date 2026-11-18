@@ -12,7 +12,6 @@ import browl.imports
 from browl.imports import (
     OWL_IMPORTS,
     FetchError,
-    Imports,
     _ImportLines,
     catalog_names,
     empty_ontology,
@@ -20,7 +19,6 @@ from browl.imports import (
     fetch_client,
     imports_stage,
     is_public,
-    list_ofn_imports,
     list_rdf_imports,
 )
 from browl.jobs import STATE_DB, ImportResult, JobContext, JobState, JobStore, Reasoner, Stage, StageError
@@ -60,33 +58,6 @@ def catalog_map(path: Path) -> dict[str, str]:
     return {entry.get("name", ""): entry.get("uri", "") for entry in ET.parse(path).getroot().iter(f"{namespace}uri")}
 
 
-def test_ofn_imports(tmp_path: Path) -> None:
-    """Check that the header's imports are listed, full or prefixed, and a later `Import(…)` only as a mention."""
-    path = tmp_path / "o.ofn"
-    path.write_text(
-        "# a comment\n"
-        f"Prefix(:=<{EX}>)\nPrefix(ex:=<{EX}x/>)\n"
-        f"Ontology(<{EX}o> <{EX}o/v1>\n"
-        f"Import(<{EX}a.owl>)\n# between\nImport( ex:b.owl )\nImport(:c.ttl)\n"
-        f'Annotation(rdfs:comment "Import(<{EX}in-literal>)")\n'
-        f"Declaration(Class(:A))\nImport(<{EX}late>)\n)\n"
-    )
-    found = list_ofn_imports(path)
-    assert found.imports == [f"{EX}a.owl", f"{EX}x/b.owl", f"{EX}c.ttl"]
-    assert found.mentions == {*found.imports, f"{EX}in-literal", f"{EX}late"}
-
-
-@pytest.mark.parametrize("chunk", [1, 7, 64])
-def test_ofn_imports_across_chunks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chunk: int) -> None:
-    """Check that an `Import(…)` split between the chunks read is still found."""
-    monkeypatch.setattr(browl.imports, "OFN_READ_CHARS", chunk)
-    monkeypatch.setattr(browl.imports, "OFN_OVERLAP_CHARS", 40)
-    path = tmp_path / "o.ofn"
-    body = "".join(f"Declaration(Class(<{EX}C{i}>))\n" for i in range(20))
-    path.write_text(f"Ontology(<{EX}o>\n{body}Import(<{EX}late>)\n{body})\n")
-    assert list_ofn_imports(path).mentions == {f"{EX}late"}
-
-
 @pytest.mark.parametrize("size", [1, 5, 100, 10_000])
 def test_import_lines(size: int) -> None:
     """Check that `owl:imports` triples are found in N-Triples however it's split, and only as the predicate."""
@@ -98,11 +69,11 @@ def test_import_lines(size: int) -> None:
         f"<{EX}o> <{OWL_IMPORTS}> <{EX}a> .",
     ]
     data = ("\n".join(lines) + "\n").encode()
-    found = Imports()
+    found: dict[str, None] = {}
     collect = _ImportLines(found)
     for start in range(0, len(data), size):
         collect(data[start : start + size])
-    assert found.imports == [f"{EX}a", f"{EX}b"]
+    assert list(found) == [f"{EX}a", f"{EX}b"]
 
 
 async def test_rdf_imports(settings: Settings, tmp_path: Path) -> None:
@@ -110,13 +81,13 @@ async def test_rdf_imports(settings: Settings, tmp_path: Path) -> None:
     ttl = tmp_path / "o.ttl"
     ttl.write_text(turtle(f"{EX}o", f"{EX}a", "rel.owl"))
     found = await list_rdf_imports(ttl, Syntax.TURTLE, settings)
-    assert found.imports == [f"{EX}a", (tmp_path / "rel.owl").as_uri()]
+    assert found == [f"{EX}a", (tmp_path / "rel.owl").as_uri()]
     rdf = tmp_path / "o.rdf"
     rdf.write_text(
         '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:owl="http://www.w3.org/2002/07/owl#">'
         f'<owl:Ontology rdf:about="{EX}o"><owl:imports rdf:resource="{EX}b"/></owl:Ontology></rdf:RDF>'
     )
-    assert (await list_rdf_imports(rdf, Syntax.RDF_XML, settings)).imports == [f"{EX}b"]
+    assert await list_rdf_imports(rdf, Syntax.RDF_XML, settings) == [f"{EX}b"]
 
 
 async def test_rdf_parse_error(settings: Settings, tmp_path: Path) -> None:
@@ -160,7 +131,7 @@ def test_is_public(address: str, public: bool) -> None:
         (f"{EX}a", [f"{EX}a"]),
         ("file:///x/y.owl", ["file:///x/y.owl", "file:/x/y.owl", "file://localhost/x/y.owl"]),
         ("file:/x/y.owl", ["file:/x/y.owl", "file:///x/y.owl", "file://localhost/x/y.owl"]),
-        ("y.owl", ["y.owl", "urn:absolute:y.owl"]),
+        ("y.owl", ["y.owl"]),
     ],
 )
 def test_catalog_names(iri: str, names: list[str]) -> None:
@@ -315,6 +286,7 @@ async def test_ofn_import_converted(site: Site, settings: Settings, data_dir: Pa
     context = JobContext(1, settings, upload=store_upload(data_dir, turtle(f"{EX}o", ofn)))
     await imports_stage(context, allow_all)
     assert [result.iri for result in context.imports] == [ofn, nested]
+    assert site.requested == ["/o.ofn", "/n.ttl"]
     converted = context.import_files[ofn]
     assert converted.suffix == ".ttl"
     assert f"<{EX}A>" in converted.read_text()
@@ -323,24 +295,28 @@ async def test_ofn_import_converted(site: Site, settings: Settings, data_dir: Pa
 @pytest.mark.jvm
 @pytest.mark.usefixtures("jvm")
 @pytest.mark.parametrize("reasoner", [Reasoner.ELK, Reasoner.NONE])
-async def test_robot_resolves_no_import(
+async def test_ofn_upload_resolves_no_import(
     http_server: tuple[str, list[str]], settings: Settings, data_dir: Path, tmp_path: Path, reasoner: Reasoner
 ) -> None:
-    """Check that ROBOT, given the catalog, neither fetches an import nor reads a local file one.
+    """Check that neither the OFN conversion nor ROBOT, given the catalog, fetches an import or reads a local one.
 
-    The local file isn't an ontology, so reading it would fail the run; the upload is in OWL Functional Syntax, so
-    ROBOT converts it even without a reasoner.
+    The local file imports a page of the local server, which would be requested if it were read. The relative import
+    can't be fetched, and is left out of the converted Turtle, so ROBOT doesn't resolve it against the Turtle's base.
     """
     url, requested = http_server
-    secret = tmp_path / "secret.owl"
-    secret.write_text("not an ontology")
+    secret = tmp_path / "secret.ttl"
+    secret.write_text(turtle(f"{EX}secret", f"{url}/from-secret"))
     imports = "".join(f"Import(<{iri}>)\n" for iri in (f"{url}/a.owl", secret.as_uri(), "relative.owl"))
     upload = store_upload(data_dir, f"Ontology(<{EX}o>\n{imports}Declaration(Class(<{EX}A>))\n)\n", ".ofn")
     context = JobContext(1, settings, reasoner, upload)
     await imports_stage(context)  # the default check refuses the local server
+    assert sorted(result.iri for result in context.imports) == sorted([f"{url}/a.owl", secret.as_uri(), "relative.owl"])
     assert all(result.dropped for result in context.imports)
+    assert context.converted == upload.with_name(browl.imports.CONVERTED)
+    assert "relative.owl" not in context.converted.read_text()
     await reasoning_stage(context)
-    assert context.reasoned is not None
+    assert (context.reasoned is not None) == (reasoner is not Reasoner.NONE)
+    assert context.ontology == (context.reasoned or context.converted)
     assert requested == []
 
 

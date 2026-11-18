@@ -13,7 +13,7 @@ import browl.imports
 import browl.loading
 import browl.process
 import browl.robot
-from browl.imports import Imports, write_catalog
+from browl.imports import imports_stage, write_catalog
 from browl.jobs import JobContext, Reasoner, Stage, StageError
 from browl.robot import (
     OUT_OF_MEMORY,
@@ -152,6 +152,34 @@ def test_tail() -> None:
     output = output_of(*(f"line {i}" for i in range(TAIL_LINES + 5)))
     assert len(output.tail) == TAIL_LINES
     assert output.tail[0] == "line 5"
+
+
+async def test_tool_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a tool gets only the app's `ENVIRONMENT` variables, and those the caller adds."""
+    monkeypatch.setenv("BROWL_SECRET", "s3cret")
+    monkeypatch.setenv("LANG", "C")
+    lines: list[str] = []
+    command = ["sh", "-c", 'echo "secret=$BROWL_SECRET lang=$LANG added=$ADDED"']
+    completed = await browl.process.run_process(command, lines.append, timeout_s=10, env={"ADDED": "yes"})
+    assert completed.ok
+    assert lines == ["secret= lang=C added=yes"]
+
+
+@pytest.mark.jvm
+@pytest.mark.usefixtures("jvm")
+async def test_robot_fetches_nothing(http_server: tuple[str, list[str]], settings: Settings, data_dir: Path) -> None:
+    """Check that ROBOT fails on an import missing from the catalog, naming it, and never requests it."""
+    url, requested = http_server
+    path = data_dir / "uploads" / "1" / "ontology.ttl"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+        f"<http://example.org/o> a owl:Ontology ; owl:imports <{url}/missing> .\n"
+    )
+    context = job(settings, Reasoner.ELK, path)
+    with pytest.raises(StageError, match=f"Could not load imported ontology: <{url}/missing>"):
+        await reasoning_stage(context)
+    assert requested == []
 
 
 async def test_long_lines_cut(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
@@ -313,8 +341,8 @@ def test_app_runs_stage(
     """Check that the app's uploads run the reasoning stage, and a failure is recorded with ROBOT's output (A-6)."""
     fake_java(tmp_path, monkeypatch, script)
 
-    async def no_imports(*args: object) -> Imports:
-        return Imports()
+    async def no_imports(*args: object) -> list[str]:
+        return []
 
     async def no_loading(*args: object, **kwargs: object) -> None:
         pass
@@ -420,12 +448,15 @@ async def test_logical_failures(
 
 @pytest.mark.jvm
 @pytest.mark.usefixtures("jvm")
-async def test_ofn_converted(settings: Settings, data_dir: Path, tmp_path: Path) -> None:
-    """Check that without reasoning, an OWL Functional Syntax upload is converted to Turtle, which is then served."""
-    context = await reason(settings, data_dir, "ok.ofn", Reasoner.NONE)
-    assert context.reasoned == context.ontology == context.upload.with_name(REASONED)
-    assert context.reasoned.read_text().startswith("@prefix")
-    assert "SubClassOf(Dog Pet)" not in await axioms(context.reasoned, "http://example.org/s2/", settings, tmp_path)
+async def test_reasons_over_converted(settings: Settings, data_dir: Path, tmp_path: Path) -> None:
+    """Check that an OWL Functional Syntax upload is reasoned over as the Turtle the imports stage converted it to."""
+    context = JobContext(1, settings, Reasoner.ELK, upload(data_dir, "ok.ofn"))
+    await imports_stage(context)
+    assert context.converted is not None
+    context.upload.unlink()  # only the converted file is read from here on
+    await reasoning_stage(context)
+    assert context.reasoned == context.ontology
+    assert "SubClassOf(Dog Pet)" in await axioms(context.reasoned, "http://example.org/s2/", settings, tmp_path)
 
 
 @pytest.mark.jvm
