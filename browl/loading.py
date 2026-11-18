@@ -41,8 +41,8 @@ LOAD_TIMEOUT_S = 4 * 3600.0
 COUNT_TIMEOUT_S = 1800.0
 """Time limit for counting the triples through Fuseki."""
 
-COUNT_DEFAULT = "SELECT (COUNT(*) AS ?n) WHERE { ?s ?p ?o }"
-COUNT_GRAPHS = "SELECT ?g (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } } GROUP BY ?g"
+COUNT_TRIPLES = (Path(__file__).parent / "sparql" / "count-triples.rq").read_text(encoding="utf-8")
+"""The query that counts each graph's triples, in one pass over the store."""
 
 
 def dataset_name(generation: int) -> str:
@@ -105,13 +105,12 @@ async def _query_store(settings: Settings, store: Path, query: str) -> list[tupl
 
 
 def _counts(rows: list[tuple[Term | None, ...]]) -> dict[str | None, int]:
-    """Return the triples in each graph, by its IRI (None for the default graph), from the count queries' rows."""
+    """Return the triples in each graph, by its IRI (None for the default graph), from `COUNT_TRIPLES`' rows."""
     counts: dict[str | None, int] = {}
-    for row in rows:
-        *graph, count = row
+    for graph, count in rows:
         if not isinstance(count, Literal) or not count.value.isdigit():
             raise StageError(f"a triple count isn't a number: {count!r}")
-        counts[str(graph[0]) if graph else None] = int(count.value)
+        counts[None if graph is None else str(graph)] = int(count.value)
     return counts
 
 
@@ -121,9 +120,7 @@ async def count_store(settings: Settings, store: Path) -> dict[str | None, int]:
     Raises:
         StageError: The query failed.
     """
-    default = await _query_store(settings, store, COUNT_DEFAULT)
-    named = await _query_store(settings, store, COUNT_GRAPHS)
-    return _counts(default) | _counts(named)
+    return _counts(await _query_store(settings, store, COUNT_TRIPLES))
 
 
 async def count_fuseki(sparql: FusekiClient, dataset: str) -> dict[str | None, int]:
@@ -132,9 +129,7 @@ async def count_fuseki(sparql: FusekiClient, dataset: str) -> dict[str | None, i
     Raises:
         SparqlError: A query failed.
     """
-    default = await sparql.select(dataset, COUNT_DEFAULT, COUNT_TIMEOUT_S)
-    named = await sparql.select(dataset, COUNT_GRAPHS, COUNT_TIMEOUT_S)
-    return _counts(default.rows) | _counts(named.rows)
+    return _counts((await sparql.select(dataset, COUNT_TRIPLES, COUNT_TIMEOUT_S)).rows)
 
 
 async def remove_stale_stores(settings: Settings, admin: FusekiAdmin, name: str) -> None:

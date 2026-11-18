@@ -1,0 +1,9 @@
+# Count the triples in each graph of a dataset: each named graph's on the row binding ?g to its IRI, and the default
+# graph's on the row leaving ?g unbound. A graph with no triples has no row.
+SELECT ?g (COUNT(*) AS ?n)
+WHERE {
+  { ?s ?p ?o }
+  UNION
+  { GRAPH ?g { ?s ?p ?o } }
+}
+GROUP BY ?g
