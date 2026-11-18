@@ -54,6 +54,12 @@ MAX_LISTED = 1000
 """The most distinct imports one load's documents may list. More fails the load: each needs a catalog entry, and an
 ontology with that many is crafted."""
 
+WRITE_BYTES = 2**20
+"""How much of a fetched import is gathered before each write, which runs in a thread."""
+
+SPACE_CHECK_BYTES = 64 * 2**20
+"""How often, in bytes fetched, free space is checked during a fetch."""
+
 FETCH_ALL_TIMEOUT_S = 2 * 3600.0
 """The longest fetching all of one load's imports may take; imports not fetched by then are dropped."""
 
@@ -283,7 +289,9 @@ async def _fetch(client: httpx2.AsyncClient, iri: str, path: Path, settings: Set
             if not response.is_success:
                 raise FetchError(f"HTTP {response.status_code} from {response.url}")
             content_type = response.headers.get("Content-Type", "").partition(";")[0].strip().lower()
-            with path.open("wb") as file:
+            file = await asyncio.to_thread(path.open, "wb")
+            try:
+                buffer = bytearray()
                 async for chunk in response.aiter_bytes():
                     size += len(chunk)
                     if size > limit:
@@ -292,13 +300,19 @@ async def _fetch(client: httpx2.AsyncClient, iri: str, path: Path, settings: Set
                             if limit == settings.max_upload_bytes
                             else f"larger than the {limit:,} bytes left of MAX_UPLOAD_BYTES for all imports together"
                         )
-                    if size - checked_at > 64 * 2**20 or not checked_at:
+                    if size - checked_at > SPACE_CHECK_BYTES or not checked_at:
                         checked_at = size
                         if await asyncio.to_thread(free_bytes, path.parent) < FREE_SPACE_MARGIN_BYTES:
                             raise FetchError("the data volume is low on space")
                     if len(sample) < SNIFF_BYTES:
                         sample += chunk[: SNIFF_BYTES - len(sample)]
-                    await asyncio.to_thread(file.write, chunk)
+                    buffer += chunk
+                    if len(buffer) >= WRITE_BYTES:
+                        await asyncio.to_thread(file.write, buffer)
+                        buffer.clear()
+                await asyncio.to_thread(file.write, buffer)
+            finally:
+                await asyncio.to_thread(file.close)
     except httpx2.TooManyRedirects as error:
         raise FetchError(f"more than {MAX_REDIRECTS} redirects") from error
     except httpx2.UnsupportedProtocol as error:

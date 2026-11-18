@@ -168,6 +168,23 @@ async def test_fetch(site: Site, tmp_path: Path, data_dir: Path) -> None:
         assert await fetch(client, url, tmp_path / "b", settings) == Syntax.TURTLE
         site.pages["/r"] = (302, {"Location": "/a"}, b"")
         assert await fetch(client, site.url + "/r", tmp_path / "r", settings) == Syntax.RDF_XML
+        large = b"<urn:a> <urn:b> <urn:c> .\n" * 120_000  # about 3 MB: written in several buffered writes
+        url = site.page("/large", large, "text/turtle")
+        assert await fetch(client, url, tmp_path / "large", settings) == Syntax.TURTLE
+        assert (tmp_path / "large").read_bytes() == large
+
+
+@pytest.mark.parametrize(
+    ("location", "match"),
+    [("file:///etc/passwd", "^redirected to an unsupported scheme: "), ("/loop", "^more than 10 redirects$")],
+)
+async def test_redirect_refused(site: Site, tmp_path: Path, data_dir: Path, location: str, match: str) -> None:
+    """Check that a redirect to another scheme, or round in a loop, fails, leaving no file."""
+    site.pages["/loop"] = (302, {"Location": location}, b"")
+    async with fetch_client(allow_all) as client:
+        with pytest.raises(FetchError, match=match):
+            await fetch(client, site.url + "/loop", tmp_path / "f", make_settings())
+    assert not (tmp_path / "f").exists()
 
 
 @pytest.mark.parametrize(
