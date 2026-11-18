@@ -1,11 +1,16 @@
 """Tests for the imports stage: listing imports, fetching them only from public addresses, and the catalog (A-4)."""
 
+import asyncio
 import ipaddress
+import socket
 import xml.etree.ElementTree as ET
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
+import httpcore2
 import pytest
 import rdflib
 from fastapi.testclient import TestClient
@@ -25,6 +30,7 @@ from browl.imports import (
     write_catalog,
 )
 from browl.jobs import STATE_DB, ImportResult, JobContext, JobState, JobStore, Reasoner, Stage, StageError
+from browl.process import Completed
 from browl.robot import reasoning_stage
 from browl.settings import Settings
 from browl.upload import Syntax
@@ -113,6 +119,26 @@ async def test_rdf_parse_error(settings: Settings, tmp_path: Path) -> None:
     path.write_text("<a> <b> .\n")
     with pytest.raises(StageError, match=r"^parse error: Jena couldn't read o.ttl as Turtle:\n(.|\n)*ERROR riot"):
         await list_rdf_imports(path, Syntax.TURTLE, settings)
+
+
+@pytest.mark.parametrize(
+    ("completed", "match"),
+    [
+        (Completed(None, timed_out=True), r"^time limit: listing imports \(riot\) took longer than 14400 s$"),
+        (Completed(None, out_of_space=True), r"^disk space: .* while listing imports \(riot\) ran$"),
+    ],
+)
+async def test_riot_limits(
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, completed: Completed, match: str
+) -> None:
+    """Check that `riot` stopped at a limit fails the stage, saying which."""
+
+    async def run_process(*args: object, **kwargs: object) -> Completed:
+        return completed
+
+    monkeypatch.setattr(browl.imports, "run_process", run_process)
+    with pytest.raises(StageError, match=match):
+        await list_rdf_imports(tmp_path / "o.ttl", Syntax.TURTLE, settings)
 
 
 @pytest.mark.parametrize(
@@ -257,6 +283,125 @@ async def test_bad_port_refused(tmp_path: Path, data_dir: Path) -> None:
     async with fetch_client(allow_all) as client:
         with pytest.raises(FetchError, match=r"^port 25 is blocked, as browsers block it$"):
             await fetch(client, "http://127.0.0.1:25/a", tmp_path / "a", make_settings())
+
+
+@pytest.mark.parametrize(
+    ("dribble", "idle_s", "timeout_s", "match"),
+    [(True, 60.0, 0.3, r"^fetching took longer than 0.3 s$"), (False, 0.2, 60.0, r"^timed out \(ReadTimeout\)$")],
+)
+async def test_fetch_timeouts(
+    tmp_path: Path,
+    data_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dribble: bool,
+    idle_s: float,
+    timeout_s: float,
+    match: str,
+) -> None:
+    """Check that a fetch fails, leaving no file, if it takes too long in all or waits too long for data."""
+    writers: list[asyncio.StreamWriter] = []
+
+    async def respond(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        writers.append(writer)
+        await reader.readuntil(b"\r\n\r\n")
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/turtle\r\nContent-Length: 1000000\r\n\r\n#")
+        while not writer.is_closing():
+            if dribble:
+                writer.write(b"#")
+            await asyncio.sleep(0.05)
+
+    monkeypatch.setattr(browl.imports, "IDLE_S", idle_s)
+    server = await asyncio.start_server(respond, "127.0.0.1", 0)
+    try:
+        url = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}/a"
+        async with fetch_client(allow_all) as client:
+            with pytest.raises(FetchError, match=match):
+                await fetch(client, url, tmp_path / "a", make_settings(), timeout_s=timeout_s)
+    finally:
+        for writer in writers:
+            writer.close()
+        server.close()
+    assert not (tmp_path / "a").exists()
+
+
+async def test_fetch_low_space(
+    site: StaticServer, tmp_path: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Check that a fetch fails, leaving no file, if the data volume runs low on space."""
+    url = site.page("/a", "ex:a ex:b ex:c .")
+    monkeypatch.setattr(browl.imports, "free_bytes", lambda path: 0)
+    async with fetch_client(allow_all) as client:
+        with pytest.raises(FetchError, match=r"^the data volume is low on space$"):
+            await fetch(client, url, tmp_path / "a", make_settings())
+    assert not (tmp_path / "a").exists()
+
+
+async def fake_dns(monkeypatch: pytest.MonkeyPatch, resolve: Callable[[str], Awaitable[list[str]]]) -> None:
+    """Make the running loop resolve a host name to the addresses `resolve` returns."""
+
+    async def getaddrinfo(host: str, port: int, **kwargs: object) -> list[tuple[object, ...]]:
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port)) for address in await resolve(host)]
+
+    monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", getaddrinfo)
+
+
+async def no_such_host(host: str) -> list[str]:
+    """Fail to resolve the host, as when it doesn't exist."""
+    raise socket.gaierror(socket.EAI_NONAME, "no such host")
+
+
+async def slow_dns(host: str) -> list[str]:
+    """Take longer to resolve the host than any test waits."""
+    await asyncio.sleep(60)
+    return []
+
+
+@pytest.mark.parametrize(
+    ("resolve", "match"),
+    [
+        (no_such_host, r"^couldn't resolve ontology\.test: .*no such host$"),
+        (slow_dns, r"^couldn't resolve ontology\.test: $"),
+    ],
+)
+async def test_dns_failure(
+    tmp_path: Path,
+    data_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    resolve: Callable[[str], Awaitable[list[str]]],
+    match: str,
+) -> None:
+    """Check that a host name that doesn't resolve, or not in time, fails the fetch, saying so."""
+    await fake_dns(monkeypatch, resolve)
+    monkeypatch.setattr(browl.imports, "CONNECT_TIMEOUT_S", 0.1)
+    async with fetch_client(allow_all) as client:
+        with pytest.raises(FetchError, match=match):
+            await fetch(client, "http://ontology.test/a", tmp_path / "a", make_settings())
+
+
+async def test_next_address_tried(
+    site: StaticServer, tmp_path: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Check that a fetch skips addresses that aren't allowed, and tries the next allowed one if connecting fails."""
+    port = int(urlparse(site.url).port or 0)
+    site.page("/a", "ex:a ex:b ex:c .")
+
+    async def resolve(host: str) -> list[str]:
+        return ["10.0.0.1", "192.0.2.1", "127.0.0.1"]
+
+    await fake_dns(monkeypatch, resolve)
+    tried: list[str] = []
+    connect_tcp = httpcore2.AnyIOBackend.connect_tcp
+
+    async def connect(self: httpcore2.AnyIOBackend, host: str, *args: Any) -> httpcore2.AsyncNetworkStream:
+        tried.append(host)
+        if host == "192.0.2.1":
+            raise httpcore2.ConnectError("refused")
+        return await connect_tcp(self, host, *args)
+
+    monkeypatch.setattr(httpcore2.AnyIOBackend, "connect_tcp", connect)
+    async with fetch_client(lambda address: str(address) != "10.0.0.1") as client:
+        assert await fetch(client, f"http://ontology.test:{port}/a", tmp_path / "a", make_settings()) == Syntax.TURTLE
+    assert tried == ["192.0.2.1", "127.0.0.1"]
 
 
 async def test_redirect_checked(
