@@ -122,6 +122,9 @@ INDEXES: dict[str, tuple[str, ...]] = {
 class Meta:
     """What the derived database was built from.
 
+    The IRIs, title and version info are the upload's, unchecked: a page may link an IRI only if it's `http` or
+    `https`, since autoescaping doesn't stop a `javascript:` IRI in an `href` (P-17).
+
     Attributes:
         generation: The load job's generation number.
         reasoner: The reasoner the load ran.
