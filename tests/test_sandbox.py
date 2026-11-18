@@ -62,7 +62,7 @@ async def test_output_and_status(short_dir: Path) -> None:
     "script",
     [
         "echo $$ > {pid}; sleep 60 &",  # the shell exits; the sleep it started holds the output open
-        "trap '' TERM; sleep 60 & echo $$ > {pid}; wait",  # the shell ignores SIGTERM, so gets SIGKILL
+        "echo $$ > {pid}; trap '' TERM; sleep 60 & wait",  # the shell ignores SIGTERM, so gets SIGKILL
     ],
 )
 async def test_time_limit_stops_group(short_dir: Path, monkeypatch: pytest.MonkeyPatch, script: str) -> None:
@@ -70,7 +70,10 @@ async def test_time_limit_stops_group(short_dir: Path, monkeypatch: pytest.Monke
     monkeypatch.setattr(browl.process, "TERM_GRACE_S", 0.2)
     pid = short_dir / "pid"
     async with serve_runs(short_dir) as socket:
-        completed, _ = await sandboxed(socket, script.format(pid=pid), timeout_s=0.5)
+        for timeout_s in (0.2, 1, 5):  # longer if the shell was too slow to start, as on a loaded machine
+            completed, _ = await sandboxed(socket, script.format(pid=pid), timeout_s=timeout_s)
+            if pid.exists() and pid.read_text():
+                break
     assert completed.timed_out
     assert completed.status is not None
     assert running_in_group(int(pid.read_text())) == []
@@ -154,14 +157,17 @@ async def test_no_status(short_dir: Path, monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(browl.process, "TERM_GRACE_S", 0.1)
     monkeypatch.setattr(browl.process, "SANDBOX_STOP_EXTRA_S", 0.1)
 
+    released = asyncio.Event()
+
     async def silent(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        await asyncio.sleep(60)
+        await released.wait()
 
     socket = short_dir / "socket"
     server = await asyncio.start_unix_server(silent, socket)
     try:
         completed, _ = await sandboxed(socket, "true", timeout_s=0.2)
     finally:
+        released.set()
         server.close()
     assert completed.timed_out
     assert completed.status is None
