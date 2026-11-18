@@ -1,8 +1,8 @@
-# browl state database
+# Database schema: `state`
 
 ## Description
 
-The schema of browl's **state database**, generated from the code by [tbls](https://github.com/k1LoW/tbls) (`make schema-docs`; overview in [docs/SCHEMA.md](../../SCHEMA.md)). Edit `.tbls/state.yml`, not these pages.  
+The schema of the SQLite database browl calls `state`, which holds the app's own persistent state. These pages are generated from the code by [tbls](https://github.com/k1LoW/tbls) (`make schema-docs`; overview in [docs/SCHEMA.md](../../SCHEMA.md)): edit `.tbls/state.yml`, not them.  
   
 browl keeps this SQLite file, `DATA_DIR/state.sqlite3`, for the load job's state (stage, generation numbers, errors), shared by all the app's workers, and later the admins. It's authoritative and persistent, and migrates forward from its recorded version when browl starts ([DESIGN.md 2.4](../../DESIGN.md#24-load-pipeline)).  
 

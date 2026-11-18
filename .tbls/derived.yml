@@ -1,9 +1,10 @@
 # tbls config for the derived database (docs/SCHEMA.md); `make schema-docs` regenerates docs/schema/derived/ from it.
 # The database is the one scripts/schema_dbs.py builds from browl.derived.SCHEMA and INDEXES.
-name: browl derived database
+name: 'Database schema: `derived`'
 desc: >
-  The schema of browl's **derived database**, generated from the code by [tbls](https://github.com/k1LoW/tbls)
-  (`make schema-docs`; overview in [docs/SCHEMA.md](../../SCHEMA.md)). Edit `.tbls/derived.yml`, not these pages.
+  The schema of the SQLite database browl calls `derived`, which holds data derived from the loaded ontology. These
+  pages are generated from the code by [tbls](https://github.com/k1LoW/tbls) (`make schema-docs`; overview in
+  [docs/SCHEMA.md](../../SCHEMA.md)): edit `.tbls/derived.yml`, not them.
 
 
   browl builds one such SQLite file per load, `DATA_DIR/derived/{generation}.sqlite3`, from bulk SPARQL queries against
