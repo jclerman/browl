@@ -15,15 +15,16 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import closing, contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from pathlib import Path
 
 from browl.jobs import Reasoner
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
-"""The derived database's schema version; raise it whenever the SQL in `SCHEMA` or `INDEXES` changes, forcing a
-rebuild."""
+SCHEMA_VERSION = 3
+"""The derived database's schema version; raise it whenever the SQL in `SCHEMA` or `INDEXES` changes, or what the
+pre-caching hooks store does, forcing a rebuild. (3: P-10 fills `entity` and `hash_prefix`.)"""
 
 DERIVED_DIR = "derived"
 """The directory in `DATA_DIR` that holds the derived databases."""
@@ -141,6 +142,54 @@ class Meta:
     def version(self) -> str | None:
         """Return the version to show: the version IRI if there is one, else the version info, else None."""
         return self.version_iri if self.version_iri is not None else self.version_info
+
+
+class EntityType(StrEnum):
+    """An entity's type, as `entity.type` stores it."""
+
+    ONTOLOGY = "ontology"
+    CLASS = "class"
+    OBJECT_PROPERTY = "object_property"
+    DATA_PROPERTY = "data_property"
+    ANNOTATION_PROPERTY = "annotation_property"
+
+
+@dataclass(frozen=True)
+class Entity:
+    """A row of the `entity` table.
+
+    Attributes:
+        id: The entity's number, by which the other tables refer to it.
+        iri: Its IRI.
+        type: Its type; an IRI declared with several types has an `Entity` for each.
+        path: The path of its URL (`browl.urls.EntityURL`).
+        fragment: The fragment of a hash IRI's URL; None for any other.
+        display_name: Its display name; None until P-11.
+        curie: Its CURIE; None if it has none, and until P-11.
+    """
+
+    id: int
+    iri: str
+    type: EntityType
+    path: str
+    fragment: str | None
+    display_name: str | None = None
+    curie: str | None = None
+
+
+def entities_at(connection: sqlite3.Connection, path: str, fragment: str | None = None) -> list[Entity]:
+    """Return the entities whose URL has this path and fragment, by IRI then type (the `entity_path` index).
+
+    Several IRIs can share a URL: the `http` and `https` forms of an IRI always do, and so can IRIs that differ only in
+    their host's case, or whose native and proxied URLs coincide (`browl.urls.URLMapper`). The page for such a URL lets
+    the visitor choose (U-15). An IRI with several types (punning) has an entity for each.
+    """
+    rows = connection.execute(
+        "SELECT id, iri, type, path, fragment, display_name, curie FROM entity WHERE path = ? AND fragment IS ?"
+        " ORDER BY iri, type",
+        (path, fragment),
+    )
+    return [Entity(number, iri, EntityType(kind), *rest) for number, iri, kind, *rest in rows]
 
 
 class NotCurrentError(Exception):

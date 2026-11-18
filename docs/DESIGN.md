@@ -238,39 +238,52 @@ beside it, unsandboxed.
 
 Settings: `BASE_URL` and `RESERVED_PREFIX` (default `_browl`). _(Q1, Q1c, Q1d)_
 
-For a declared entity IRI, in order:
+For a declared entity IRI, in order (`browl.urls.URLMapper`, P-10):
 
-1. **Native:** the IRI starts with `BASE_URL`, ignoring `http` vs `https`, and its remaining path does not start with
-   `/{RESERVED_PREFIX}`. URL = the IRI's path, e.g. `http://example.com/onto/Foo` → `/onto/Foo`.
-2. **Proxied:** the IRI is a plain `http(s)` IRI (no query string, no port, no user info). URL = `/{host}{path}`, e.g.
-   `http://example.org/ONTO/x` → `/example.org/ONTO/x`. The scheme is dropped. _(Q1a)_
-3. **Fallback:** anything else (`urn:`, `tag:`, query strings, ports, IRIs whose native path would hit the reserved
-   prefix). URL = `/{RESERVED_PREFIX}/iri?u={percent-encoded IRI}`. _(Q1b)_
+1. **Native:** an `http` or `https` IRI with `BASE_URL`'s host and port, ignoring `http` vs `https`, whose path is under
+   `BASE_URL`'s. URL = the IRI's path less `BASE_URL`'s, e.g. `http://example.com/onto/Foo` → `/onto/Foo`.
+2. **Proxied:** any other plain `http(s)` IRI (no query string, no port but the scheme's default, no user info, not an
+   IP literal host). URL = `/{host}{path}`, e.g. `http://example.org/ONTO/x` → `/example.org/ONTO/x`. The scheme is
+   dropped, and the host normalized as `BASE_URL`'s is (below). _(Q1a)_
+3. **Fallback:** anything else: `urn:`, `tag:`, query strings (even an empty one), ports, user info, an empty fragment
+   (`…/x#`, which a URL can't tell apart from none), a `.` or `..` path segment (a browser would resolve it away before
+   sending the request), a host that isn't valid, and IRIs whose native or proxied URL would hit the reserved prefix
+   (below). URL = `/{RESERVED_PREFIX}/iri?u={percent-encoded IRI}`. _(Q1b)_
+
+An empty path counts as `/`, so `http://example.org` and `http://example.org/` share `/example.org/`.
 
 **Comparing IRIs with `BASE_URL`:** `BASE_URL` is stored as a normalized URL (scheme and host lowercased, default port
 dropped, a non-ASCII host in its ASCII "punycode" form, non-ASCII path characters percent-encoded). IRIs, which RDF
 compares as plain strings, can contain Unicode. So each IRI is mapped to its URL form first (RFC 3987 §3.1), then
-compared with `BASE_URL`: scheme and host case-insensitively, the path exactly.
+compared with `BASE_URL`: scheme and host case-insensitively, the path exactly. The IRI's host is normalized by the same
+WHATWG host parsing Pydantic gave `BASE_URL`'s; its path and fragment are percent-encoded as UTF-8 where they have
+non-ASCII characters, or ASCII ones a browser escapes (space, `"`, `<`, `>`, `` ` ``, `{`, `}`, and `\` in a path),
+keeping existing percent-escapes as they are. Paths and fragments are stored in that URI form, as a link's `href` and a
+request's raw path have them.
 
 For a hash IRI, the rules apply to the part before `#`, and the fragment is kept on the URL:
-`http://example.org/onto#Foo` → `/example.org/onto#Foo`.
+`http://example.org/onto#Foo` → `/example.org/onto#Foo`. A fallback URL carries the whole IRI, fragment included, in its
+query, so it has no fragment of its own.
 
 **Why this can't clash with the service's own pages:** all of them live under `/{RESERVED_PREFIX}/`. Proxied URLs start
-with a hostname, and hostnames can't contain `_`, hence the leading-`_` rule on the prefix (checked at startup). Native
-IRIs that would collide get the fallback, and the pre-caching stage logs a warning listing them.
+with a hostname, and DNS hostnames can't contain `_`, hence the leading-`_` rule on the prefix (checked at startup). An
+IRI's host can, though (`http://_browl/x`), so any native or proxied URL whose first path segment, percent-decoded as the
+router decodes it, is `RESERVED_PREFIX` gets the fallback instead, and the pre-caching stage logs a warning with how many
+there are and the first 10 (O-3).
 
-**Lookup:** pre-caching stores, for every declared entity, its URL path and fragment. A request is resolved by looking
-up the path:
+**Lookup:** pre-caching stores, for every declared entity, its URL path and fragment (`entity`, indexed by path and
+fragment). A request is resolved by looking up the path (`browl.derived.entities_at`):
 
 | The path matches… | Response |
 | --- | --- |
 | the ontology IRI | Home page. If hash entities share this path, the page also includes the hash script below. |
-| one entity (non-hash) | That entity's page. |
-| two entities (only `http` vs `https` differs) | Disambiguation page. _(Q1a)_ |
+| one entity (non-hash) | That entity's page. An IRI declared with several types (punning) has a row for each, but is one entity here. |
+| several IRIs | Disambiguation page. _(Q1a)_ Mostly the `http` and `https` forms of an IRI (U-15); also IRIs whose hosts differ only in case, or that differ only in a default port or an empty path, and a native IRI whose URL is a proxied one's (`BASE_URL`/`example.org/x` and `http://example.org/x`). |
 | a hash prefix only | A small page with a script that reads the fragment and loads that entity, or shows "not found" when there is no fragment or no such entity. HTTP status 200, since the server can't see the fragment. _(Q2a)_ |
 | nothing | HTTP 404. |
 
 A path can be both an ordinary entity and a hash prefix; then the entity page is served with the hash script included.
+Hash entities that share a path and fragment are found the same way, with the fragment.
 
 **Reserved paths:** the lookup route (P-13) answers 404 for any path under `/{RESERVED_PREFIX}/`, and a test checks it.
 The site gate ([2.13](#213-url-space-for-the-services-own-pages)) exempts paths by prefix without normalizing them, so
@@ -555,7 +568,7 @@ are documented in [`SCHEMA.md`](SCHEMA.md):
 
 | Table | Holds | Filled from |
 | --- | --- | --- |
-| `entity` | Every declared entity: its IRI, type, URL path and fragment, display name and CURIE | The entity-list query (every declared entity with its type), not yet measured |
+| `entity` | The ontology and every declared class and property: its IRI, type, URL path and fragment (2.3), display name and CURIE | The entity-list query (every declared class and property with its type; the ontology's IRI comes from the header query): 22–29 s on NCBITaxon, 3.03 M rows. The whole hook, which computes the URLs as the result streams, takes 25–26 s, and the table and its indexes 530–650 MiB (P-10) |
 | `name_value` | Name-property values, one row per direct and per RDFS-entailed property | The dictionary query: 41–48 s on NCBITaxon, 3.56 M rows |
 | `edge` | Parent → child per hierarchy (classes; each property type), between equivalence-group representatives | The edges query: 18–19 s on NCBITaxon |
 | `equiv_group` | Entity → group representative | Union-find over `owl:equivalentClass` between named classes |
@@ -567,10 +580,11 @@ are documented in [`SCHEMA.md`](SCHEMA.md):
 Entities are referred to by `entity.id`, a dense integer (e.g. for descendant bitmaps); an IRI declared with several
 types (punning) has a row for each. Each table's secondary indexes are created once it's filled (below). The database is
 rebuilt on every load, so it has no migrations: a file of another schema version (`SCHEMA_VERSION`, raised with any
-schema change) or generation isn't current, and is rebuilt ([2.4](#24-load-pipeline), App restart). Pages read it, never
-Fuseki, for whole-ontology data (N-4), through `browl.pages.read_derived`: the file is opened read-only and immutable,
-so reads take no locks, in the thread pool, from a pool of connections. Once a newer generation is read, the older
-one's connections are closed, so none keeps a deleted file's space in use; the app closes them all at shutdown.
+change to the schema or to what the hooks store; a test checks the first) or generation isn't current, and is rebuilt
+([2.4](#24-load-pipeline), App restart). Pages read it, never Fuseki, for whole-ontology data (N-4), through
+`browl.pages.read_derived`: the file is opened read-only and immutable, so reads take no locks, in the thread pool, from
+a pool of connections. Once a newer generation is read, the older one's connections are closed, so none keeps a deleted
+file's space in use; the app closes them all at shutdown.
 
 **Pre-caching hooks** (P-9). The stage reads the ontology's header (below), starts the file with its `meta` row, then
 runs the hooks in `browl.precache.HOOKS` in order, so a hook may read tables an earlier one filled: P-10 (entities),
@@ -982,7 +996,7 @@ go into this document.
 | ID | Work item | Delivers | Depends on | Status | Tracking |
 | --- | --- | --- | --- | --- | --- |
 | P-9 | Derived database schema; atomic swap; generation number; reuse on restart when current; completeness check for bulk query results (2.14) | N-4 | P-8 | Done | [#21](https://github.com/jclerman/browl/issues/21) |
-| P-10 | Entities (entity-list query), IRI → URL mapping, hash prefixes, collision warnings | U-2, U-13, U-15, O-3 | P-9 | To do | [#22](https://github.com/jclerman/browl/issues/22) |
+| P-10 | Entities (entity-list query), IRI → URL mapping, hash prefixes, collision warnings | U-2, U-13, U-15, O-3 | P-9 | Done | [#22](https://github.com/jclerman/browl/issues/22) |
 | P-11 | Name values, direct and entailed through sub-properties (first decide: property path or Fuseki-configured RDFS), display names, CURIE prefixes; measure whether reading the next batch while the last is inserted pays | U-6, O-4, O-5, O-11 | P-10 | To do | [#23](https://github.com/jclerman/browl/issues/23) |
 | P-12 | Hierarchies (edges query), equivalence groups, distinct descendant counts | U-7, U-8, U-9 | P-10, S-3 | To do | [#24](https://github.com/jclerman/browl/issues/24) |
 

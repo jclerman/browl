@@ -70,7 +70,7 @@ COLUMNS = {
     ],
     "prefix": [("prefix", "TEXT", 1, 1), ("namespace", "TEXT", 1, 0)],
 }
-"""Each table's columns, as (name, type, not null, place in the primary key), for `SCHEMA_VERSION` 2. A change to them
+"""Each table's columns, as (name, type, not null, place in the primary key), for `SCHEMA_VERSION` 3. A change to them
 must raise `SCHEMA_VERSION`, and update this."""
 INDEXES = {
     "entity_iri_type",
@@ -84,6 +84,7 @@ INDEXES = {
 
 SCHEMA_HASHES = {
     2: "2ff3dcbf357551eb37ea18eaef713ea8fb794f46718ded8b1fdf35011ca32b1f",
+    3: "2ff3dcbf357551eb37ea18eaef713ea8fb794f46718ded8b1fdf35011ca32b1f",  # the same SQL; P-10 fills entity
 }
 """The SHA-256 of the derived schema's SQL (`schema_hash`) at each `SCHEMA_VERSION`, so a schema change can't keep the
 version: a file built by the old schema would pass as current."""
@@ -150,7 +151,7 @@ def test_build_creates_schema_and_meta(tmp_path: Path) -> None:
         query = "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
         tables = [row[0] for row in connection.execute(query)]
         columns = {table: connection.execute(f"PRAGMA table_info({table})").fetchall() for table in tables}
-        assert SCHEMA_VERSION == 2
+        assert SCHEMA_VERSION == 3
         assert {table: [(n, t, nn, pk) for _, n, t, nn, _, pk in rows] for table, rows in columns.items()} == COLUMNS
         assert index_names(connection) == INDEXES
         assert read_meta(connection) == meta(3)

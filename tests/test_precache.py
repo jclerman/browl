@@ -21,7 +21,7 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from browl import derived, precache
-from browl.derived import Meta, NotCurrentError, derived_path, read_meta
+from browl.derived import EntityType, Meta, NotCurrentError, derived_path, entities_at, read_meta
 from browl.fuseki import END_VARIABLE, TSV, UNION_FROM, FusekiClient, SparqlError
 from browl.jobs import (
     INTERRUPTED_BY_SHUTDOWN,
@@ -83,19 +83,31 @@ ONTOLOGY_RESULT = (
     f'<{ONTOLOGY}>\t{DCTERMS_TITLE}\t"Onto"@en\t\n<{ONTOLOGY}>\t{VERSION_INFO}\t"1.0"\t\n{END}'
 )
 LOADED_AT = datetime(2026, 11, 17, tzinfo=UTC)
+ENTITY_HEADER = f"?entity\t?type\t?{END_VARIABLE}\n"
+ENTITY_END = "\t\ttrue\n"
+ENTITY_RESULT = f"{ENTITY_HEADER}<{EX}onto#A>\t<{OWL}Class>\t\n{ENTITY_END}"
+
+
+def answer(query: str) -> str:
+    """Return a stubbed Fuseki's answer to a query: `ENTITY_RESULT` to the entity list, else `ONTOLOGY_RESULT`."""
+    return ENTITY_RESULT if "?entity ?type" in query else ONTOLOGY_RESULT
 
 
 def fuseki(*bodies: str, queries: list[str] | None = None) -> httpx2.AsyncClient:
     """Return an HTTP client whose stubbed Fuseki answers the queries with these TSV bodies in turn, recording them.
 
-    Without bodies, every query gets `ONTOLOGY_RESULT`; the last body answers the rest of the queries.
+    Without bodies, each query gets its `answer`; the last body answers the rest of the queries.
     """
-    answers = list(bodies or [ONTOLOGY_RESULT])
+    answers = list(bodies)
 
     async def handler(request: httpx2.Request) -> httpx2.Response:
+        query = urllib.parse.parse_qs(request.content.decode())["query"][0]
         if queries is not None:
-            queries.append(urllib.parse.parse_qs(request.content.decode())["query"][0])
-        body = answers.pop(0) if len(answers) > 1 else answers[0]
+            queries.append(query)
+        if not answers:
+            body = answer(query)
+        else:
+            body = answers.pop(0) if len(answers) > 1 else answers[0]
         return httpx2.Response(200, headers={"Content-Type": TSV}, content=body)
 
     return httpx2.AsyncClient(base_url="http://fuseki:3030", transport=httpx2.MockTransport(handler))
@@ -693,7 +705,7 @@ READY = JobState(
 
 
 class StubFuseki:
-    """A stubbed Fuseki that answers every query with `ONTOLOGY_RESULT`, or `status`, once released, recording them.
+    """A stubbed Fuseki that answers every query with its `answer`, or `status`, once released, recording them.
 
     It answers a ping at once.
 
@@ -721,7 +733,8 @@ class StubFuseki:
             await asyncio.sleep(0.01)
         if self.status != 200:
             return httpx2.Response(self.status, text="boom")
-        return httpx2.Response(200, headers={"Content-Type": TSV}, content=ONTOLOGY_RESULT)
+        query = urllib.parse.parse_qs(request.content.decode())["query"][0]
+        return httpx2.Response(200, headers={"Content-Type": TSV}, content=answer(query))
 
 
 def restart(fuseki: StubFuseki) -> FastAPI:
@@ -791,7 +804,7 @@ def test_restart_rebuilds(settings: Settings, prepare: Callable[[Settings], obje
         state = app.state.jobs.state
         assert (state.generation, state.stage, state.ready_generation, state.started_at) == (2, Stage.READY, 2, STARTED)
         assert client.get("/probe").json() == 2
-    assert fuseki.requests == ["/$/ping", f"/{dataset_name(2)}/sparql"]
+    assert fuseki.requests == ["/$/ping", f"/{dataset_name(2)}/sparql", f"/{dataset_name(2)}/sparql"]
     assert derived_files(settings) == ["2.sqlite3"]
     with closing(derived.connect(settings.data_dir, 2)) as connection:
         assert read_meta(connection) == Meta(2, Reasoner.ELK, STARTED, ONTOLOGY, VERSION, "Onto", "1.0")
@@ -906,3 +919,123 @@ async def test_read_derived_without_ready_generation() -> None:
     request = Request({"type": "http", "app": SimpleNamespace(state=SimpleNamespace(jobs=Jobs()))})
     with pytest.raises(NotCurrentError, match="no generation is ready"):
         await read_derived(request, read_meta)
+
+
+def entity_rows(settings: Settings, generation: int) -> list[tuple[str, str, str, str | None]]:
+    """Return a generation's `entity` rows, as (IRI, type, path, fragment), in id order."""
+    with closing(derived.connect(settings.data_dir, generation)) as connection:
+        return connection.execute("SELECT iri, type, path, fragment FROM entity ORDER BY id").fetchall()
+
+
+def hash_prefixes(settings: Settings, generation: int) -> list[str]:
+    """Return a generation's `hash_prefix` paths, in stored order."""
+    with closing(derived.connect(settings.data_dir, generation)) as connection:
+        return [row[0] for row in connection.execute("SELECT path FROM hash_prefix")]
+
+
+async def test_entities(settings: Settings, caplog: pytest.LogCaptureFixture) -> None:
+    """Check that the entities hook lists the ontology and each declared entity with its URL, and the hash prefixes.
+
+    IRIs that would be under the reserved prefix get fallback URLs, with a warning listing them (O-3); the `http` and
+    `https` forms of an IRI share a URL, and both are found there (U-15).
+    """
+    base = "http://example.org"  # make_settings's BASE_URL
+    assert str(settings.base_url) == f"{base}/"
+    entities = [
+        (f"{base}/onto#A", "Class"),
+        (f"{base}/onto#A", "ObjectProperty"),  # punning
+        (f"{base}/onto#p", "DatatypeProperty"),
+        (f"{base}/onto/B", "AnnotationProperty"),
+        ("http://example.net/x", "Class"),
+        ("https://example.net/x", "Class"),
+        ("http://example.net/other#C", "Class"),
+        (f"{base}/_browl/admin", "Class"),
+        ("urn:x:y", "Class"),
+    ]
+    rows = "".join(f"<{iri}>\t<{OWL}{kind}>\t\n" for iri, kind in entities)
+    queries: list[str] = []
+    caplog.set_level(logging.WARNING, logger="browl.precache")
+    ontology = f"{HEADER}<{base}/onto>\t\t\t\n{END}"
+    async with fuseki(ontology, f"{ENTITY_HEADER}{rows}{ENTITY_END}", queries=queries) as http:
+        await pre_caching_stage(job(settings, 2, [ImportResult(f"{EX}i", triples=1)]), http, hooks=[precache.entities])
+    assert UNION_FROM in queries[1]  # the imports' entities too
+    assert entity_rows(settings, 2) == [
+        (f"{base}/onto", "ontology", "/onto", None),
+        (f"{base}/onto#A", "class", "/onto", "A"),
+        (f"{base}/onto#A", "object_property", "/onto", "A"),
+        (f"{base}/onto#p", "data_property", "/onto", "p"),
+        (f"{base}/onto/B", "annotation_property", "/onto/B", None),
+        ("http://example.net/x", "class", "/example.net/x", None),
+        ("https://example.net/x", "class", "/example.net/x", None),
+        ("http://example.net/other#C", "class", "/example.net/other", "C"),
+        (f"{base}/_browl/admin", "class", "/_browl/iri?u=http%3A%2F%2Fexample.org%2F_browl%2Fadmin", None),
+        ("urn:x:y", "class", "/_browl/iri?u=urn%3Ax%3Ay", None),
+    ]
+    assert hash_prefixes(settings, 2) == ["/example.net/other", "/onto"]
+    warning = "1 entity IRIs would have URLs under the reserved prefix /_browl, so they get fallback URLs:"
+    assert caplog.messages == [f"{warning} ['{base}/_browl/admin']"]
+    with closing(derived.connect(settings.data_dir, 2)) as connection:
+        shared = entities_at(connection, "/example.net/x")
+        assert [(entity.iri, entity.type) for entity in shared] == [
+            ("http://example.net/x", EntityType.CLASS),
+            ("https://example.net/x", EntityType.CLASS),
+        ]
+        assert [entity.type for entity in entities_at(connection, "/onto", "A")] == ["class", "object_property"]
+        assert [entity.iri for entity in entities_at(connection, "/onto")] == [f"{base}/onto"]
+        assert entities_at(connection, "/nothing") == []
+
+
+async def test_entities_without_ontology_iri(settings: Settings, caplog: pytest.LogCaptureFixture) -> None:
+    """Check that an ontology without an IRI has no row, and that a warning lists only the first reserved IRIs."""
+    rows = "".join(f"<http://example.org/_browl/{n}>\t<{OWL}Class>\t\n" for n in range(12))
+    caplog.set_level(logging.WARNING, logger="browl.precache")
+    async with fuseki(HEADER + END, f"{ENTITY_HEADER}{rows}{ENTITY_END}") as http:
+        await pre_caching_stage(job(settings, 3), http, hooks=[precache.entities])
+    assert len(entity_rows(settings, 3)) == 12
+    assert hash_prefixes(settings, 3) == []
+    [message] = caplog.messages
+    assert message.startswith("12 entity IRIs would have URLs under the reserved prefix /_browl")
+    assert message.endswith("_browl/9'] …") and "/10'" not in message
+
+
+@pytest.mark.fuseki
+async def test_entities_on_real_fuseki(fuseki_url: str, settings: Settings) -> None:
+    """Check the entities hook on a real Fuseki: the ontology, and the classes and properties of it and its imports.
+
+    Blank-node classes and named individuals are left out. The ontology is under `BASE_URL`, so its URLs are native.
+    """
+    generation = 900_000 + uuid.uuid4().int % 100_000
+    name = dataset_name(generation)
+    family = "http://example.org/family"
+    imported = (
+        f"<{family}#age> a <{OWL}DatatypeProperty> .\n<{family}#alice> a <{OWL}NamedIndividual>, <{family}#Person> .\n"
+        f"<https://example.org/family#Person> a <{OWL}Class> .\n"
+    )
+    async with httpx2.AsyncClient(base_url=fuseki_url, timeout=60) as http:
+        (await http.post("/$/datasets", data={"dbName": name, "dbType": "mem"})).raise_for_status()
+        try:
+            for graph, content in [(None, (DATA / "family.ttl").read_bytes()), (f"{EX}imported", imported.encode())]:
+                response = await http.post(
+                    f"/{name}/data",
+                    params={} if graph is None else {"graph": graph},
+                    content=content,
+                    headers={"Content-Type": "text/turtle"},
+                )
+                response.raise_for_status()
+            await pre_caching_stage(job(settings, generation, [ImportResult(f"{EX}imported", triples=4)]), http)
+        finally:
+            await http.delete(f"/$/datasets/{name}")
+    rows = entity_rows(settings, generation)
+    assert rows[0] == (family, "ontology", "/family", None)
+    assert sorted(rows[1:]) == [
+        (f"{family}#Female", "class", "/family", "Female"),
+        (f"{family}#Male", "class", "/family", "Male"),
+        (f"{family}#Mother", "class", "/family", "Mother"),
+        (f"{family}#Parent", "class", "/family", "Parent"),
+        (f"{family}#Person", "class", "/family", "Person"),
+        (f"{family}#age", "data_property", "/family", "age"),
+        (f"{family}#hasChild", "object_property", "/family", "hasChild"),
+        (f"{family}#rank", "annotation_property", "/family", "rank"),
+        ("https://example.org/family#Person", "class", "/family", "Person"),
+    ]
+    assert hash_prefixes(settings, generation) == ["/family"]

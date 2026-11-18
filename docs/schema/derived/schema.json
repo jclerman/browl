@@ -86,13 +86,13 @@
     {
       "name": "entity",
       "type": "table",
-      "comment": "Every declared entity, with the URL its IRI implies (DESIGN.md 2.3). An IRI declared with several types (punning) has a row for each.",
+      "comment": "The ontology itself and every declared class and property, with the URL its IRI implies (DESIGN.md 2.3, browl.urls), filled by the entities pre-caching hook. An IRI declared with several types (punning) has a row for each. Several IRIs can share a URL, e.g. the http and https forms of one (U-15).",
       "columns": [
         {
           "name": "id",
           "type": "INTEGER",
           "nullable": true,
-          "comment": "The entity's number, dense, by which the other tables refer to it."
+          "comment": "The entity's number, dense, in the order the entity list returned it; the other tables refer to it."
         },
         {
           "name": "iri",
@@ -104,31 +104,31 @@
           "name": "type",
           "type": "TEXT",
           "nullable": false,
-          "comment": "The entity's type."
+          "comment": "\"Its type (browl.derived.EntityType): ontology, class, object_property, data_property or annotation_property.\""
         },
         {
           "name": "path",
           "type": "TEXT",
           "nullable": false,
-          "comment": "The URL path its IRI implies."
+          "comment": "Its URL's path from the site's root (BASE_URL), in URI form (non-ASCII percent-encoded as UTF-8). For a fallback URL, the path and query string, /{RESERVED_PREFIX}/iri?u={the percent-encoded IRI}."
         },
         {
           "name": "fragment",
           "type": "TEXT",
           "nullable": true,
-          "comment": "The fragment of a hash IRI's URL; NULL for any other."
+          "comment": "The fragment of a hash IRI's URL, in URI form; NULL for any other, and for every fallback URL."
         },
         {
           "name": "display_name",
           "type": "TEXT",
           "nullable": true,
-          "comment": "Its display name (DESIGN.md 2.7)."
+          "comment": "Its display name (DESIGN.md 2.7); NULL until P-11 fills it."
         },
         {
           "name": "curie",
           "type": "TEXT",
           "nullable": true,
-          "comment": "Its CURIE, if a prefix in the prefix table covers it."
+          "comment": "Its CURIE, if a prefix in the prefix table covers it; NULL until P-11 fills it."
         }
       ],
       "indexes": [
@@ -430,7 +430,7 @@
     {
       "name": "hash_prefix",
       "type": "table",
-      "comment": "Every distinct URL path that has hash entities under it, for the hash-IRI script (U-13).",
+      "comment": "Every distinct URL path that has hash entities (entity.fragment not NULL) under it, for the hash-IRI script (U-13), stored in key order.",
       "columns": [
         {
           "name": "path",

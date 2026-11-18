@@ -5,25 +5,27 @@ queries and writing through a `DerivedWriter`, on the build's own thread, so the
 """
 
 import asyncio
+import functools
 import logging
 import sqlite3
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractAsyncContextManager, AbstractContextManager, asynccontextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import httpx2
 
 from browl import derived
-from browl.derived import Meta
+from browl.derived import EntityType, Meta
 from browl.fuseki import BulkSelectStream, FusekiClient, SparqlError, dataset_clause, ping
 from browl.jobs import ImportResult, JobContext, StageError
 from browl.loading import dataset_name
 from browl.names import BUILTIN_PREFIXES, best_values, expand_curie
 from browl.rdf import IRI, Literal, RDFSyntaxError, Term
 from browl.settings import Settings
+from browl.urls import URLMapper
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +137,90 @@ Hook = Callable[[PreCacheContext], Awaitable[None]]
 """A pre-caching hook: fills derived tables from bulk queries (`PreCacheContext.bulk_select`). A `SparqlError` it raises
 fails the stage, naming it."""
 
-HOOKS: tuple[Hook, ...] = ()
+OWL = "http://www.w3.org/2002/07/owl#"
+
+ENTITY_TYPES = {
+    f"{OWL}Class": EntityType.CLASS,
+    f"{OWL}ObjectProperty": EntityType.OBJECT_PROPERTY,
+    f"{OWL}DatatypeProperty": EntityType.DATA_PROPERTY,
+    f"{OWL}AnnotationProperty": EntityType.ANNOTATION_PROPERTY,
+}
+"""The entity types the entity list has, by their OWL classes; the ontology itself comes from the header (`entities`).
+Named individuals come later (U-18)."""
+
+ENTITY_LIST = """SELECT ?entity ?type
+WHERE {
+  VALUES ?type { owl:Class owl:ObjectProperty owl:DatatypeProperty owl:AnnotationProperty }
+  ?entity rdf:type ?type .
+  FILTER isIRI(?entity)
+}"""
+"""Every declared class and property, with its type (`ENTITY_TYPES`), from the ontology and its imports. The merge of
+their graphs is a set, so each (entity, type) comes once."""
+
+
+async def entities(context: PreCacheContext) -> None:
+    """Fill `entity`, with each entity's URL path and fragment (`browl.urls.URLMapper`), and `hash_prefix`.
+
+    The entities are the ontology itself, whose IRI the `meta` row holds, and every declared class and property, from
+    one bulk query (`ENTITY_LIST`). The URLs are computed on the database's thread, off the event loop. IRIs whose
+    native or proxied URL would be under the reserved prefix get the fallback URL, and a warning lists them (O-3).
+    `display_name` and `curie` are left NULL, for P-11.
+    """
+    settings = context.job.settings
+    mapper = URLMapper(settings.base_url, settings.reserved_prefix)
+    reserved = _Reserved()
+    ontology = await context.db.run(
+        lambda connection: connection.execute("SELECT ontology_iri FROM meta").fetchone()[0]
+    )
+    if ontology is not None:
+        await context.db.run(functools.partial(_insert_entities, [(ontology, EntityType.ONTOLOGY)], mapper, reserved))
+    async with context.bulk_select(ENTITY_LIST) as stream:
+        entity, kind = (stream.variables.index(name) for name in ("entity", "type"))
+        async for batch in batched(stream):
+            rows = [(str(row[entity]), ENTITY_TYPES[str(row[kind])]) for row in batch]
+            await context.db.run(functools.partial(_insert_entities, rows, mapper, reserved))
+    await context.db.create_indexes("entity")
+    # In key order, from the entity_path index.
+    await context.db.run(
+        lambda connection: connection.execute(
+            "INSERT INTO hash_prefix SELECT DISTINCT path FROM entity WHERE fragment IS NOT NULL ORDER BY path"
+        )
+    )
+    await context.db.create_indexes("hash_prefix")
+    if reserved.count:
+        logger.warning(
+            "%d entity IRIs would have URLs under the reserved prefix /%s, so they get fallback URLs: %r%s",
+            reserved.count,
+            settings.reserved_prefix,
+            reserved.iris,
+            " …" if reserved.count > len(reserved.iris) else "",
+        )
+
+
+@dataclass
+class _Reserved:
+    """The entity IRIs whose URLs would be under the reserved prefix: how many, and the first `_LOGGED_IRIS`."""
+
+    count: int = 0
+    iris: list[str] = field(default_factory=list)
+
+
+def _insert_entities(
+    rows: list[tuple[str, EntityType]], mapper: URLMapper, reserved: _Reserved, connection: sqlite3.Connection
+) -> None:
+    """Insert entities with their URLs, counting in `reserved` those whose URLs would be under the reserved prefix."""
+    values = []
+    for iri, kind in rows:
+        url = mapper(iri)
+        if url.reserved:
+            reserved.count += 1
+            if len(reserved.iris) < _LOGGED_IRIS:
+                reserved.iris.append(iri)
+        values.append((iri, str(kind), url.path, url.fragment))
+    connection.executemany("INSERT INTO entity (iri, type, path, fragment) VALUES (?, ?, ?, ?)", values)
+
+
+HOOKS: tuple[Hook, ...] = (entities,)
 """The hooks the app runs, in order: a hook may read tables an earlier one filled.
 
 A hook creates the indexes of each table it fills once it's done (`DerivedWriter.create_indexes`), so later hooks can

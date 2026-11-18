@@ -2,7 +2,7 @@
 
 ## Description
 
-Every distinct URL path that has hash entities under it, for the hash-IRI script (U-13).
+Every distinct URL path that has hash entities (entity.fragment not NULL) under it, for the hash-IRI script (U-13), stored in key order.
 
 <details>
 <summary><strong>Table Definition</strong></summary>
