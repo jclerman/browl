@@ -606,7 +606,7 @@ class JobRunner:
         if self._busy:
             raise JobRunningError(f"load job {self._state.generation} is running, in stage {self._state.stage}")
         self._busy = True  # set before any await, so a concurrent call is refused
-        await self._claim(reasoner, name, syntax)
+        await self._claim(functools.partial(self._claim_in_thread, _now(), reasoner, name, syntax))
         context = JobContext(
             self._state.generation or 0, self._settings, reasoner, started_at=self._state.started_at or _now()
         )
@@ -653,19 +653,9 @@ class JobRunner:
         if self._busy or self._closing:
             return False
         self._busy = True
-        claim = asyncio.ensure_future(asyncio.to_thread(self._claim_rebuild, current))
-        try:
-            state = await asyncio.shield(claim)
-        except asyncio.CancelledError:
-            claim.add_done_callback(self._abandon_claim)
-            raise
-        except BaseException:
-            self._busy = False
-            raise
+        state = await self._claim(functools.partial(self._claim_rebuild, current))
         if state is None:
-            self._busy = False
             return False
-        self._set(state)
         assert state.generation is not None and state.started_at is not None  # a stored job has them
         context = JobContext(
             state.generation,
@@ -738,23 +728,27 @@ class JobRunner:
         self._read_at = time.monotonic()
         self._changes += 1
 
-    async def _claim(self, reasoner: Reasoner, name: str | None, syntax: str | None) -> None:
-        """Take the job lock and record the job's start, in a thread that runs to its end even if this is cancelled.
+    async def _claim(self, claim_in_thread: Callable[[], JobState | None]) -> JobState | None:
+        """Run a claim, which takes the job lock and records a job's start, in a thread that runs to its end.
 
-        A job claimed after this was cancelled is failed as cancelled, so it doesn't hold the lock for good.
-
-        Raises:
-            JobRunningError: Another process holds the job lock.
+        The caller has set `_busy`. The claim returns the state it recorded, holding the lock, which becomes this
+        runner's; or None, having claimed nothing, which frees the runner, as does an exception, which propagates. If
+        this is cancelled, a job claimed afterwards is failed as cancelled, so it doesn't hold the lock for good.
         """
-        claim = asyncio.ensure_future(asyncio.to_thread(self._claim_in_thread, _now(), reasoner, name, syntax))
+        claim = asyncio.ensure_future(asyncio.to_thread(claim_in_thread))
         try:
-            self._set(await asyncio.shield(claim))
+            state = await asyncio.shield(claim)
         except asyncio.CancelledError:
             claim.add_done_callback(self._abandon_claim)
             raise
         except BaseException:
             self._busy = False
             raise
+        if state is None:
+            self._busy = False
+        else:
+            self._set(state)
+        return state
 
     def _claim_in_thread(
         self, started_at: datetime, reasoner: Reasoner, name: str | None, syntax: str | None
@@ -767,7 +761,7 @@ class JobRunner:
             self._lock.release()
             raise
 
-    def _abandon_claim(self, claim: asyncio.Future[JobState] | asyncio.Future[JobState | None]) -> None:
+    def _abandon_claim(self, claim: asyncio.Future[JobState | None]) -> None:
         state = None if claim.cancelled() or claim.exception() is not None else claim.result()
         if state is None:
             self._busy = False
