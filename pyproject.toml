@@ -40,7 +40,7 @@ rdflib = "^7.6.0"
 # An xfail test that unexpectedly passes is a failure, not a silent pass.
 xfail_strict = true
 # When run with --cov, record which test covered each line; no effect otherwise.
-addopts = ["--cov-context=test", "--strict-markers"]
+addopts = ["--cov-context=test", "--strict-markers", "--durations=15"]
 markers = [
     "jvm: needs a JVM and robot.jar; skipped when Java is not available (fails in CI)",
     "fuseki: needs Fuseki, from BROWL_TEST_FUSEKI_URL or started with Docker; skipped when neither is available (fails in CI)",
