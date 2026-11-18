@@ -24,7 +24,7 @@ import httpx2
 
 from browl import derived
 from browl.derived import Meta
-from browl.fuseki import BulkSelectStream, FusekiClient, SparqlError, dataset_clause
+from browl.fuseki import BulkSelectStream, FusekiClient, SparqlError, dataset_clause, ping
 from browl.jobs import ImportResult, JobContext, StageError
 from browl.loading import dataset_name
 
@@ -48,6 +48,13 @@ WHERE {
 }"""
 """The ontology's IRI and version IRI, from its own (default) graph; an ontology it imports, as an OFN upload's
 converted Turtle may declare, is left out."""
+
+
+FUSEKI_WAIT_S = 120.0
+"""How long a rebuild after a restart waits for Fuseki to answer, as it may be starting too (`wait_for_fuseki`)."""
+
+FUSEKI_RETRY_S = (0.5, 5.0)
+"""The first and the longest wait between pings while waiting for Fuseki; each wait doubles the last."""
 
 
 class DerivedWriter:
@@ -149,9 +156,9 @@ async def pre_caching_stage(context: JobContext, http: httpx2.AsyncClient, hooks
 async def pre_cache(context: JobContext, http: httpx2.AsyncClient, hooks: Sequence[Hook] = HOOKS) -> None:
     """Build a job's derived database from the store Fuseki serves for its generation, and swap it in.
 
-    The pre-caching stage runs it, and so does a rebuild after a restart (`JobRunner.rebuild`), with a context made from
-    the stored job state: it uses only the generation, reasoner, start time (the `meta` table's load time, the same
-    for both) and imports.
+    The pre-caching stage runs it, and so does a rebuild after a restart (`rebuild`), with a context made from the
+    stored job state: it uses only the generation, reasoner, start time (the `meta` table's load time, the same for
+    both) and imports.
 
     Args:
         context: The job.
@@ -177,6 +184,39 @@ async def pre_cache(context: JobContext, http: httpx2.AsyncClient, hooks: Sequen
                     raise StageError(f"pre-caching query failed ({name}): {error}") from error
     except SparqlError as error:
         raise StageError(f"pre-caching query failed: {error}") from error
+
+
+async def rebuild(context: JobContext, http: httpx2.AsyncClient, hooks: Sequence[Hook] = HOOKS) -> None:
+    """Rebuild a job's derived database after a restart (`JobRunner.rebuild`), once Fuseki answers (`pre_cache`).
+
+    Raises:
+        StageError: Fuseki didn't answer in time, or a query failed or returned an incomplete result.
+    """
+    await wait_for_fuseki(http)
+    await pre_cache(context, http, hooks)
+
+
+async def wait_for_fuseki(http: httpx2.AsyncClient, limit_s: float | None = None) -> None:
+    """Wait until Fuseki answers its ping, pinging with a growing pause between tries (`FUSEKI_RETRY_S`).
+
+    Args:
+        http: The HTTP client for Fuseki.
+        limit_s: How long to keep trying; `FUSEKI_WAIT_S` if not given.
+
+    Raises:
+        StageError: Fuseki didn't answer within the limit.
+    """
+    limit_s = FUSEKI_WAIT_S if limit_s is None else limit_s
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + limit_s
+    pause, longest = FUSEKI_RETRY_S
+    while not await ping(http):
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise StageError(f"Fuseki didn't answer its ping within {limit_s:g} s")
+        logger.info("Waiting for Fuseki to answer its ping")
+        await asyncio.sleep(min(pause, remaining))
+        pause = min(pause * 2, longest)
 
 
 async def ontology_iris(sparql: FusekiClient, dataset: str) -> tuple[str | None, str | None]:

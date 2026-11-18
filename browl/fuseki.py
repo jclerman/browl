@@ -157,6 +157,21 @@ def dataset_clause(has_imports: bool) -> str:
     return UNION_FROM if has_imports else ""
 
 
+PING_TIMEOUT_S = 2.0
+"""Time limit for the whole of a ping (`ping`)."""
+
+
+async def ping(http: httpx2.AsyncClient, timeout_s: float = PING_TIMEOUT_S) -> bool:
+    """Return whether Fuseki answers its ping (`/$/ping`) with success within `timeout_s`, over a client for Fuseki."""
+    try:
+        # httpx2's own timeout limits each phase (connect, write, read) separately, not the whole call.
+        async with asyncio.timeout(timeout_s):
+            response = await http.get("/$/ping")
+    except (httpx2.HTTPError, TimeoutError):
+        return False
+    return response.is_success
+
+
 class FusekiAdminError(Exception):
     """A call to Fuseki's admin protocol failed."""
 

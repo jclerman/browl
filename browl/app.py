@@ -1,6 +1,5 @@
 """The FastAPI application. Run it with one worker: `uvicorn browl.app:create_app --factory --workers 1`."""
 
-import asyncio
 import functools
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
@@ -14,7 +13,7 @@ from pydantic import BaseModel
 import browl
 from browl import admin, derived, imports, loading, owlapi, precache, robot
 from browl.derived import DerivedReader, NotCurrentError
-from browl.fuseki import FusekiClient
+from browl.fuseki import FusekiClient, ping
 from browl.jobs import JobRunner, Stage, StageFunction
 from browl.pages import STATIC_DIR, SiteGate, derived_not_current
 from browl.settings import Settings, load_settings
@@ -46,13 +45,7 @@ async def health(request: Request) -> Health:
     container has its own health check.
     """
     client: httpx2.AsyncClient = request.app.state.fuseki_http
-    try:
-        # httpx2's own timeout limits each phase (connect, write, read) separately, not the whole call.
-        async with asyncio.timeout(FUSEKI_TIMEOUT_S):
-            response = await client.get("/$/ping")
-    except (httpx2.HTTPError, TimeoutError):
-        return Health(fuseki="down")
-    return Health(fuseki="up" if response.is_success else "down")
+    return Health(fuseki="up" if await ping(client, FUSEKI_TIMEOUT_S) else "down")
 
 
 def create_app(
@@ -105,7 +98,7 @@ def create_app(
             try:
                 if stages is None:
                     await app.state.jobs.rebuild(
-                        functools.partial(precache.pre_cache, http=client),
+                        functools.partial(precache.rebuild, http=client),
                         functools.partial(derived.is_current, settings.data_dir),
                     )
                 yield

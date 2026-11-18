@@ -2,6 +2,7 @@
 
 import asyncio
 import functools
+import itertools
 import logging
 import sqlite3
 import threading
@@ -19,7 +20,7 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from browl import derived
+from browl import derived, precache
 from browl.derived import Meta, NotCurrentError, derived_path, read_meta
 from browl.fuseki import END_VARIABLE, TSV, UNION_FROM, FusekiClient, SparqlError
 from browl.jobs import (
@@ -48,6 +49,7 @@ from browl.precache import (
     ontology_iris,
     pre_cache,
     pre_caching_stage,
+    rebuild,
     remove_previous,
 )
 from browl.settings import Settings
@@ -438,6 +440,50 @@ async def test_stage_on_real_fuseki(settings: Settings, loaded: tuple[httpx2.Asy
     assert (stored.ontology_iri, stored.version_iri) == ("http://example.org/family", None)
 
 
+def pinged_fuseki(pings: list[float], *statuses: int) -> httpx2.AsyncClient:
+    """Return an HTTP client whose stubbed Fuseki answers pings with these statuses in turn, then 200, recording when.
+
+    It answers a query with `ONTOLOGY_RESULT`; one before a ping succeeds fails the test.
+    """
+    answers = list(statuses)
+
+    async def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/$/ping":
+            pings.append(time.monotonic())
+            status = answers.pop(0) if answers else 200
+            if status == 0:
+                raise httpx2.ConnectError("refused", request=request)
+            return httpx2.Response(status)
+        assert not answers, "queried before Fuseki answered"
+        return httpx2.Response(200, headers={"Content-Type": TSV}, content=ONTOLOGY_RESULT)
+
+    return httpx2.AsyncClient(base_url="http://fuseki:3030", transport=httpx2.MockTransport(handler))
+
+
+async def test_rebuild_waits_for_fuseki(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a rebuild after a restart waits for Fuseki to answer its ping, pausing longer each time."""
+    monkeypatch.setattr(precache, "FUSEKI_RETRY_S", (0.02, 0.04))
+    pings: list[float] = []
+    async with pinged_fuseki(pings, 0, 503, 0, 0) as http:
+        await rebuild(job(settings, 3), http, hooks=[])
+    assert len(pings) == 5
+    pauses = [later - earlier for earlier, later in itertools.pairwise(pings)]
+    assert pauses[0] >= 0.02 and pauses[1] >= 0.04 and pauses[3] >= 0.04
+    assert derived.is_current(settings.data_dir, 3)
+
+
+async def test_rebuild_fuseki_down(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a rebuild fails, sending no query, if Fuseki doesn't answer its ping in time."""
+    monkeypatch.setattr(precache, "FUSEKI_WAIT_S", 0.1)
+    monkeypatch.setattr(precache, "FUSEKI_RETRY_S", (0.02, 0.02))
+    pings: list[float] = []
+    async with pinged_fuseki(pings, *[0] * 1000) as http:
+        with pytest.raises(StageError, match=r"^Fuseki didn't answer its ping within 0.1 s$"):
+            await rebuild(job(settings, 3), http, hooks=[])
+    assert len(pings) > 2
+    assert derived_files(settings) == []
+
+
 async def test_build_fails_to_start(tmp_path: Path) -> None:
     """Check that a build that can't create its file fails with the error, and has nothing to clean up."""
     data_dir = tmp_path / "file"
@@ -463,6 +509,8 @@ READY = JobState(
 class StubFuseki:
     """A stubbed Fuseki that answers every query with `ONTOLOGY_RESULT`, or `status`, once released, recording them.
 
+    It answers a ping at once.
+
     Attributes:
         requests: The paths requested.
         released: Set to let answers through.
@@ -479,8 +527,10 @@ class StubFuseki:
         self.transport = httpx2.MockTransport(self.handle)
 
     async def handle(self, request: httpx2.Request) -> httpx2.Response:
-        """Answer a request once released."""
+        """Answer a request once released; a ping at once."""
         self.requests.append(request.url.path)
+        if request.url.path == "/$/ping":
+            return httpx2.Response(200)
         while not self.released.is_set():
             await asyncio.sleep(0.01)
         if self.status != 200:
@@ -549,7 +599,7 @@ def test_restart_rebuilds(settings: Settings, prepare: Callable[[Settings], obje
         state = app.state.jobs.state
         assert (state.generation, state.stage, state.ready_generation, state.started_at) == (2, Stage.READY, 2, STARTED)
         assert client.get("/probe").json() == 2
-    assert fuseki.requests == [f"/{dataset_name(2)}/sparql"]
+    assert fuseki.requests == ["/$/ping", f"/{dataset_name(2)}/sparql"]
     assert derived_files(settings) == ["2.sqlite3"]
     with closing(derived.connect(settings.data_dir, 2)) as connection:
         assert read_meta(connection) == Meta(2, Reasoner.ELK, STARTED, ONTOLOGY, VERSION)
@@ -575,7 +625,7 @@ def test_restart_rebuild_shutdown(settings: Settings) -> None:
     JobStore(settings.data_dir / STATE_DB).write(READY)
     fuseki = StubFuseki(released=False)
     with TestClient(restart(fuseki)):
-        wait_until(lambda: bool(fuseki.requests))
+        wait_until(lambda: len(fuseki.requests) == 2)  # the ping, then the query
     state = JobStore(settings.data_dir / STATE_DB).read()
     assert (state.failed_stage, state.reason) == (
         Stage.PRE_CACHING,

@@ -30,8 +30,9 @@ services:
       # The app's loader builds each new TDB2 store under /fuseki/databases, where Fuseki opens it (§2.4).
       - fuseki:/fuseki
     depends_on:
+      # Healthy, so a rebuild at startup finds it answering (DESIGN.md §2.4, App restart).
       fuseki:
-        condition: service_started
+        condition: service_healthy
       sandbox:
         condition: service_healthy
     healthcheck:

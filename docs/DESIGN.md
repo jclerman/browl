@@ -340,6 +340,9 @@ in the background from the same store (`gen-N`) by re-running the ready job's pr
   the pre-caching stage, with its own generation and start time, and holds the lock until the end is stored, as for
   any job. So every worker serves "loading" meanwhile, no upload can start, and no new generation or store is made. A
   worker that can't take the lock does nothing: another worker is rebuilding, or a job runs.
+- The rebuild first waits up to 2 minutes for Fuseki to answer its ping (`/$/ping`), pausing 0.5 s, doubling to 5 s,
+  between tries, since Fuseki may be starting too; Compose also starts the app only once Fuseki is healthy. If it
+  doesn't answer, the rebuild fails in the usual way, and the next start tries again.
 - A worker that read the state just before another worker's rebuild started may let a page through for up to a second
   (the state's TTL); a page that finds the derived database not current serves "loading" (`NotCurrentError`).
 - The job ends ready again, or failed in pre-caching with a reason that starts "rebuilding after a restart", however it
