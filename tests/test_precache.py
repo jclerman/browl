@@ -5,6 +5,7 @@ import functools
 import itertools
 import logging
 import sqlite3
+import sys
 import threading
 import time
 import urllib.parse
@@ -789,6 +790,9 @@ def stale_schema(settings: Settings) -> None:
         pytest.param(lambda settings: None, id="missing"),
         pytest.param(stale_schema, id="stale schema"),
         pytest.param(lambda settings: make_previous(settings, 1), id="other generation"),
+        pytest.param(
+            lambda settings: make_previous(make_settings(BASE_URL="http://example.com/"), 2), id="other base url"
+        ),
     ],
 )
 def test_restart_rebuilds(settings: Settings, prepare: Callable[[Settings], object]) -> None:
@@ -1002,6 +1006,32 @@ async def test_entities_without_ontology_iri(settings: Settings, caplog: pytest.
     [message] = caplog.messages
     assert message.startswith("12 entity IRIs would have URLs under the reserved prefix /_browl")
     assert message.endswith("_browl/9'] …") and "/10'" not in message
+
+
+async def test_entities_in_batches(
+    settings: Settings, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Check that entities in several batches are all stored, and reserved IRIs counted across them and the ontology."""
+    sizes: list[int] = []
+
+    async def small_batches(rows: AsyncIterator[object]) -> AsyncIterator[list[object]]:
+        async for batch in batched(rows, size=2):
+            sizes.append(len(batch))
+            yield batch
+
+    monkeypatch.setattr(sys.modules[entities.module], "batched", small_batches)
+    reserved = "http://example.org/_browl/"
+    iris = [f"{reserved}a", f"{EX}b", f"{EX}c", f"{reserved}d", f"{reserved}e"]
+    rows = "".join(f"<{iri}>\t<{OWL}Class>\t\n" for iri in iris)
+    caplog.set_level(logging.WARNING, logger="browl.precache")
+    async with fuseki(f"{HEADER}<{reserved}onto>\t\t\t\n{END}", f"{ENTITY_HEADER}{rows}{ENTITY_END}") as http:
+        await pre_caching_stage(job(settings, 4), http, hooks=[entities])
+    assert sizes == [2, 2, 1]
+    assert [row[0] for row in entity_rows(settings, 4)] == [f"{reserved}onto", *iris]
+    reserved_iris = [f"{reserved}onto", f"{reserved}a", f"{reserved}d", f"{reserved}e"]
+    assert caplog.messages == [
+        f"4 entity IRIs would have URLs under the reserved prefix /_browl, so they get fallback URLs: {reserved_iris!r}"
+    ]
 
 
 async def test_entities_warning_shortens_iris(settings: Settings, caplog: pytest.LogCaptureFixture) -> None:

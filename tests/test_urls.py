@@ -38,6 +38,8 @@ def fallback(iri: str, prefix: str = PREFIX, reserved: bool = False) -> EntityUR
         ("http://example.com/Rés#Ünï", ("/R%C3%A9s", "%C3%9Cn%C3%AF")),  # non-ASCII path and fragment, in URI form
         ("http://example.com/a b|c", ("/a%20b|c", None)),  # ASCII a browser escapes in a path is escaped
         ("http://example.com/a#b c", ("/a", "b%20c")),
+        ("http://example.com/a\nb#c\nd", ("/a%0Ab", "c%0Ad")),  # a newline, in the path and the fragment
+        ("http://example.com/a#b#c", ("/a", "b#c")),  # a `#` in the fragment, which a browser leaves as it is
         ("http://example.com/_browlish", ("/_browlish", None)),  # not the reserved segment
         ("http://example.com/x/_browl", ("/x/_browl", None)),
     ],
@@ -112,6 +114,21 @@ def test_proxied(iri: str, expected: tuple[str, str | None]) -> None:
 
 
 @pytest.mark.parametrize(
+    "iris",
+    [
+        ("http://example.com/example.org/x", "http://example.org/x"),  # native and proxied
+        ("http://example.org/x", "http://EXAMPLE.org/x", "https://Example.Org/x"),  # host case, and scheme
+        ("http://example.com/onto#a", "http://EXAMPLE.com/onto#a", "https://example.com:443/onto#a"),
+        ("http://example.org", "http://example.org/", "http://example.org:80/"),  # empty path, default port
+    ],
+    ids=["native and proxied", "host case", "native host case", "empty path and port"],
+)
+def test_shared_urls(iris: tuple[str, ...]) -> None:
+    """Different IRIs can share a URL, for a disambiguation page to tell apart (DESIGN.md §2.3, Lookup)."""
+    assert len({url(iri) for iri in iris}) == 1
+
+
+@pytest.mark.parametrize(
     "iri",
     [
         "urn:uuid:6e8bc430-9c3a-11d9-9669-0800200c9a66",
@@ -180,6 +197,7 @@ def test_fallback_encoding() -> None:
         ("http://example.com/sub/_browl/x", HttpUrl("http://example.com/sub/")),  # under BASE_URL's path
         ("http://_browl/x", BASE),  # proxied: a host that starts with the prefix
         ("http://_BROWL/x", BASE),
+        ("http://example.com/_browl%2Fx", BASE),  # a router decodes `%2F` to `/`
     ],
 )
 def test_reserved_prefix(iri: str, base: HttpUrl) -> None:

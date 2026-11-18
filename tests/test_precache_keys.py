@@ -5,6 +5,7 @@ now: they run the header and each hook in `HOOKS` against a stubbed Fuseki, trac
 files under `browl/` opened and the settings read, and check that the component's key covers them all.
 """
 
+import dataclasses
 import importlib
 import json
 import operator
@@ -17,13 +18,14 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import CodeType
+from types import CodeType, SimpleNamespace
 from typing import Any
 
 import pytest
 from pydantic import Secret, SecretBytes, SecretStr
 
 import browl
+from browl import derived
 from browl.derived import Meta
 from browl.fuseki import FusekiClient
 from browl.jobs import JobContext
@@ -31,7 +33,7 @@ from browl.jobtypes import ImportResult, Reasoner
 from browl.loading import dataset_name
 from browl.precache import header, keys
 from browl.precache.core import Hook, PreCacheContext, hook
-from browl.precache.keys import build_keys, closure, code_digest
+from browl.precache.keys import Closure, build_keys, closure, code_digest
 from browl.precache.stage import HOOKS, build
 from browl.settings import Settings
 from tests.helpers import make_settings
@@ -196,6 +198,39 @@ def test_digest_changes_with_file(scanned: tuple[str, Path, Path]) -> None:
     assert digest(scanned) != before
 
 
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda found: dataclasses.replace(found, distributions={**found.distributions, "httpx2": "0.0.1"}),
+        lambda found: dataclasses.replace(found, distributions={**found.distributions, "other": None}),
+    ],
+    ids=["distribution version", "another distribution"],
+)
+def test_digest_changes_with_distributions(
+    scanned: tuple[str, Path, Path], change: Callable[[Closure], Closure]
+) -> None:
+    """Check that the digest changes with the versions of the distributions the closure imports."""
+    name, _, sparql = scanned
+    found = closure(f"{name}.main", root=name, sparql_dir=sparql)
+    assert code_digest(change(found)) != code_digest(found)
+
+
+def test_digest_changes_with_python(scanned: tuple[str, Path, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that the digest changes with Python's minor version, but not its micro version."""
+    name, _, sparql = scanned
+    found = closure(f"{name}.main", root=name, sparql_dir=sparql)
+    before = code_digest(found)
+    major, minor, micro = sys.version_info[:3]
+    monkeypatch.setattr(
+        keys, "sys", SimpleNamespace(version_info=SimpleNamespace(major=major, minor=minor, micro=micro + 1))
+    )
+    assert code_digest(found) == before
+    monkeypatch.setattr(
+        keys, "sys", SimpleNamespace(version_info=SimpleNamespace(major=major, minor=minor + 1, micro=0))
+    )
+    assert code_digest(found) != before
+
+
 @pytest.mark.parametrize("call", ["sparql_file(NAME)", "sparql_file('a.rq', 'b.rq')", "core.sparql_file(name='a.rq')"])
 def test_closure_needs_literal(package: tuple[str, Path], call: str) -> None:
     """Check that a `sparql_file` call with anything but one string literal fails, as its file can't be found."""
@@ -222,6 +257,28 @@ def test_build_keys(settings: Settings) -> None:
     built = build_keys(settings, HOOKS)
     assert list(built) == ["schema", "meta", *(hook.name for hook in HOOKS)]
     assert build_keys(make_settings(), HOOKS) == built  # computed the same each time
+
+
+@pytest.mark.parametrize(
+    ("name", "change"),
+    [
+        ("SCHEMA", lambda schema: schema + "CREATE TABLE extra (x INTEGER);\n"),
+        ("INDEXES", lambda indexes: {**indexes, "entity": (*indexes["entity"], "CREATE INDEX extra ON entity (type)")}),
+    ],
+)
+def test_schema_key_follows_schema(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch, name: str, change: Callable[[Any], Any]
+) -> None:
+    """Check that a change to `browl.derived.SCHEMA` or `INDEXES` changes the schema's key, and only it."""
+    before = build_keys(settings, HOOKS)
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(derived, name, change(getattr(derived, name)))
+            keys.schema_key.cache_clear()
+            after = build_keys(settings, HOOKS)
+    finally:
+        keys.schema_key.cache_clear()
+    assert {component for component in before if before[component] != after[component]} == {keys.SCHEMA}
 
 
 # Prints the build keys for the settings given as JSON, run where `browl` is importable but `tests` may not be.
