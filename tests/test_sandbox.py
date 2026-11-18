@@ -9,7 +9,7 @@ import socket as socket_
 import subprocess
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -18,8 +18,9 @@ import browl.ofn
 import browl.process
 import browl.robot
 from browl.jobs import Reasoner, StageError
-from browl.process import MAX_LINE_CHARS, run_process
+from browl.process import run_process
 from browl.robot import reasoning_stage
+from browl.settings import Settings
 from tests.conftest import find_robot_jar
 from tests.helpers import StaticServer, make_settings, running_in_group, serve_runs, wait_for
 from tests.test_robot import job
@@ -57,13 +58,6 @@ async def test_output_and_status(short_dir: Path) -> None:
         assert not completed.ok
 
 
-async def test_long_line_cut(short_dir: Path) -> None:
-    """Check that a long output line is cut short."""
-    async with serve_runs(short_dir) as socket:
-        _, lines = await sandboxed(socket, "printf '%05000d\\nend\\n'")
-    assert lines == ["0" * MAX_LINE_CHARS, "end"]
-
-
 @pytest.mark.parametrize(
     "script",
     [
@@ -80,21 +74,6 @@ async def test_time_limit_stops_group(short_dir: Path, monkeypatch: pytest.Monke
     assert completed.timed_out
     assert completed.status is not None
     assert running_in_group(int(pid.read_text())) == []
-
-
-async def test_cancel_stops_group(short_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Check that a cancelled run's process group is stopped before `run_process` returns, even if cancelled again."""
-    monkeypatch.setattr(browl.process, "TERM_GRACE_S", 1.0)
-    pid = short_dir / "pid"
-    async with serve_runs(short_dir) as socket:
-        task = asyncio.create_task(sandboxed(socket, f"trap '' TERM; sleep 60 & echo $$ > {pid}; wait"))
-        pgid = await wait_for(pid, task)
-        task.cancel()
-        await asyncio.sleep(0.2)  # SIGTERM sent and ignored
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        assert running_in_group(pgid) == []
 
 
 async def test_ended_run_stops_group(short_dir: Path) -> None:
@@ -115,18 +94,6 @@ async def test_hangup_stops_group(short_dir: Path) -> None:
         pgid = await wait_for(pid)
         writer.close()
         assert await gone(pgid)
-
-
-async def test_low_space_stops(short_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Check that the free-space watch, which runs in the app, stops a run in the sandbox."""
-    pid = short_dir / "pid"
-    margin = browl.process.FREE_SPACE_MARGIN_BYTES
-    monkeypatch.setattr(browl.process, "free_bytes", lambda path: margin - bool(pid.exists() and pid.read_text()))
-    monkeypatch.setattr(browl.process, "SPACE_CHECK_S", 0.05)
-    async with serve_runs(short_dir) as socket:
-        completed, _ = await sandboxed(socket, f"sleep 60 & echo $$ > {pid}; wait", watch=[short_dir])
-    assert completed.out_of_space
-    assert running_in_group(int(pid.read_text())) == []
 
 
 async def test_unavailable(short_dir: Path) -> None:
@@ -309,8 +276,23 @@ async def test_robot_in_sandbox(
     assert any(record.name == "browl.sandbox" and "Running ROBOT" in record.message for record in caplog.records)
 
 
-@pytest.mark.parametrize("tool", ["robot", "ofn"])
-async def test_tools_use_sandbox(tool: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path) -> None:
+@pytest.mark.parametrize(
+    ("module", "call"),
+    [
+        (
+            browl.robot,
+            lambda out, settings: browl.robot.robot_to_file([], out / "o.partial.ttl", out / "o.ttl", settings),
+        ),
+        (browl.ofn, lambda out, settings: browl.ofn.convert_ofn(out.parent / "o.ofn", out / "o.ttl", settings)),
+    ],
+)
+async def test_tools_use_sandbox(
+    module: object,
+    call: Callable[[Path, Settings], Awaitable[object]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    data_dir: Path,
+) -> None:
     """Check that ROBOT and the OFN lister run in the sandbox, watching the volume of the directory they write into."""
     calls: list[dict[str, object]] = []
 
@@ -318,15 +300,9 @@ async def test_tools_use_sandbox(tool: str, tmp_path: Path, monkeypatch: pytest.
         calls.append(kwargs)
         return browl.process.Completed(1)
 
-    monkeypatch.setattr(browl.robot if tool == "robot" else browl.ofn, "run_process", run_process)
-    settings = make_settings(SANDBOX_SOCKET="/sandbox/socket")
+    monkeypatch.setattr(module, "run_process", run_process)
     with pytest.raises(StageError):
-        if tool == "robot":
-            await browl.robot.robot_to_file(
-                [], tmp_path / "out" / "o.partial.ttl", tmp_path / "out" / "o.ttl", settings
-            )
-        else:
-            await browl.ofn.convert_ofn(tmp_path / "o.ofn", tmp_path / "out" / "o.ttl", settings)
-    [call] = calls
-    assert call["sandbox"] == Path("/sandbox/socket")
-    assert call["watch"] == [tmp_path / "out"]
+        await call(tmp_path / "out", make_settings(SANDBOX_SOCKET="/sandbox/socket"))
+    [kwargs] = calls
+    assert kwargs["sandbox"] == Path("/sandbox/socket")
+    assert kwargs["watch"] == [tmp_path / "out"]

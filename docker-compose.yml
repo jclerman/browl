@@ -2,6 +2,9 @@
 # come from .env; see .env.example.
 name: browl
 
+# The sandbox's socket, on the `sandbox` volume.
+x-sandbox-socket: &sandbox-socket /sandbox/runner.sock
+
 # Every service's health check runs on the same schedule.
 x-healthcheck-timing: &healthcheck-timing
   interval: 30s
@@ -16,7 +19,7 @@ services:
       - path: .env
         required: false
     environment:
-      SANDBOX_SOCKET: /sandbox/runner.sock
+      SANDBOX_SOCKET: *sandbox-socket
     ports:
       - "${BROWL_PORT:-8000}:8000"
     volumes:
@@ -60,7 +63,7 @@ services:
   # so the volume is mounted at the same path in both. Both run as the image's user, the only one the socket admits.
   sandbox:
     build: *app-build
-    command: ["python", "-m", "browl.sandbox", "/sandbox/runner.sock"]
+    command: ["python", "-m", "browl.sandbox", *sandbox-socket]
     network_mode: none
     # The image's user, set here too so a change to the image can't make the sandbox root.
     user: "10001:10001"
@@ -91,7 +94,7 @@ services:
     # Connects, as a socket a killed runner left would pass `test -S`; the runner ignores a connection with no request.
     healthcheck:
       test: ["CMD", "python", "-c", "import socket, sys; socket.socket(socket.AF_UNIX).connect(sys.argv[1])",
-             "/sandbox/runner.sock"]
+             *sandbox-socket]
       <<: *healthcheck-timing
     restart: unless-stopped
 

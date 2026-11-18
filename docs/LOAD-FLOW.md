@@ -5,12 +5,8 @@ flow agreed in PR #70's review (P-8). It replaces the regex scan for OWL Functio
 OWLAPI, which converts the file to Turtle in the same parse, and adds a sandbox for ROBOT (P-30). The reasons are in
 [DESIGN.md §2.4](DESIGN.md#24-load-pipeline) and §2.14.
 
-Steps marked **[sandbox]** run in the Compose deployment's `sandbox` container (P-30,
-[DESIGN.md §2.4](DESIGN.md#24-load-pipeline)): the app's image with no network (no DNS either), a read-only file system,
-and of the app's files only the jobs volume, which holds the current job's upload, fetched imports, catalog and outputs.
-Its environment holds only what the tools need. The app sends each command to a runner there over a Unix socket, and
-keeps the time limit, the free-space watch and cancellation. ROBOT's JVM also sends every HTTP(S) request to a closed
-port. Without `SANDBOX_SOCKET` (tests, development), these steps run in the app's container.
+Steps marked **[sandbox]** run in the Compose deployment's `sandbox` container, which has no network and of the app's
+files only the current job's ([DESIGN.md §2.4](DESIGN.md#24-load-pipeline), "The sandbox").
 
 ## Flow
 
