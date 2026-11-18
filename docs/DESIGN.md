@@ -81,7 +81,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **U-39** · Where a reasoner ran, inferred parents and axioms are marked as inferred, on entity pages, in the Usage tab and in the trees. | Later |
 | **U-40** · An inferred parent or axiom has a "Why?" link that shows its explanation: the asserted axioms that entail it, in Manchester syntax. | Later |
 | **U-41** · Each class page can list similar classes, ranked by similarity computed from the ontology's structure (graph embeddings of its axioms and hierarchies), at least as an option alongside any similarity from label text. | Later |
-| **U-42** · The main content of the pages is also available as JSON from a read-only API: an entity's header, annotations, logical axioms, direct parents and children, and Usage, plus search and the ontology's metadata. It returns the same data the pages show, from the same functions (see [2.13](#213-url-space-for-the-services-own-pages)). | Later |
+| **U-42** · The main content of the pages is also available as JSON from a read-only API: an entity's header, annotations, logical axioms, direct parents and children, and Usage, plus search and the ontology's metadata. It returns the same data the pages show, from the same functions (see [2.13](#213-url-space-for-the-services-own-pages)). | v1 |
 | **U-43** · Ontology diff: show how two versions of an ontology differ, with each change in its local graph context. A new area of work, with its own requirements and open questions in [ONTOLOGY-DIFF.md](ONTOLOGY-DIFF.md). | Later |
 
 ### 1.3 Admin requirements
@@ -785,7 +785,7 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | `admin/upload` | The upload form (A-2, A-3) and the load job's status. The form is parsed as it streams in, the file written straight to the jobs volume, never held whole in memory or spooled to a temporary file; its reasoner field must come before its file. The job is claimed only once the file's name has been checked and its first 8 KiB found to look like the syntax the name says, so a malformed request or a mislabelled, OWL/XML or compressed file leaves the served ontology alone. A post a browser sent from another site's page (by `Sec-Fetch-Site`) is refused, against CSRF (P-6) |
 | `admin/status` | The load job's stage, start time, uploaded file (name, syntax, size), and failed stage and reason (A-5, A-6): an HTML fragment for htmx requests (`HX-Request`), which polls itself while a job runs, else a page, which polls the same way, or refreshes itself while a job runs if JS is off (P-5) |
 | `admin/docs`, `admin/openapi.json` | FastAPI's API docs (Swagger UI only, no ReDoc), as admin routes, so admin sign-in covers them; moved from FastAPI's default root paths, where they would shadow ontology entities. Swagger UI loads its assets from a CDN at an exact pinned version: an accepted exception to the no-CDN rule ([2.2](#22-libraries-and-components)), for admin pages only (P-5) |
-| `api/…` | JSON API (U-42; Later), below |
+| `api/…` | JSON API (U-42, P-33), below |
 | `health` | Liveness check for the container; also reports whether Fuseki answers |
 
 While a load job runs, every other URL (the ontology's pages, the other routes above, and paths nothing serves) gets
@@ -798,9 +798,9 @@ Neither page says why the site is unavailable; the failure reason is shown only 
 Pages link to the service's own routes by root-relative paths, never by URLs built from the request's scheme and
 `Host`, which a proxy may change and a client may forge (P-5).
 
-**JSON API** (U-42; Later, tentative). Read-only routes that return, as JSON, the same data the HTML pages show,
+**JSON API** (U-42, P-33). Read-only routes that return, as JSON, the same data the HTML pages show,
 from the same functions ([2.8](#28-entity-pages), "Panel data apart from its HTML"). An entity is named by its IRI in
-the query string, as in `iri?u=…`, so hash IRIs and IRIs that share a URL need no special handling. A first set:
+the query string, as in `iri?u=…`, so hash IRIs and IRIs that share a URL need no special handling. The routes, tentatively:
 
 | Path | Returns |
 | --- | --- |
@@ -896,8 +896,8 @@ go into this document.
 | --- | --- | --- | --- | --- | --- |
 | P-13 | Routing: path lookup, 404, disambiguation page, hash-prefix page and script | U-2, U-13, U-14, U-15 | P-10 | To do | [#25](https://github.com/jclerman/browl/issues/25) |
 | P-14 | Base templates and page frame: navigation bar, page header, tab component, stylesheet and themes; links rendered from display names; IRI `<details>` | U-4, U-5, U-6, U-17, U-27, U-28, U-29 | P-11, P-13 | To do | [#27](https://github.com/jclerman/browl/issues/27) (sub-issues [#28](https://github.com/jclerman/browl/issues/28), [#33](https://github.com/jclerman/browl/issues/33), [#34](https://github.com/jclerman/browl/issues/34)) |
-| P-15 | Manchester rendering via the OWLAPI from fetched fragments, including n-ary disjointness and general class axioms; link substitution and keyword styling | U-3 | S-1, S-4, P-14 | To do | [#36](https://github.com/jclerman/browl/issues/36) |
-| P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout | U-3, U-9, U-30, U-31, U-32 | P-12, P-15 | To do | [#37](https://github.com/jclerman/browl/issues/37) (sub-issues [#29](https://github.com/jclerman/browl/issues/29), [#38](https://github.com/jclerman/browl/issues/38), [#39](https://github.com/jclerman/browl/issues/39)) |
+| P-15 | Manchester rendering via the OWLAPI from fetched fragments, including n-ary disjointness and general class axioms; link substitution and keyword styling, in the template layer, not the renderer (2.8) | U-3 | S-1, S-4, P-14 | To do | [#36](https://github.com/jclerman/browl/issues/36) |
+| P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout; panel data built apart from its HTML (2.8) | U-3, U-9, U-30, U-31, U-32 | P-12, P-15 | To do | [#37](https://github.com/jclerman/browl/issues/37) (sub-issues [#29](https://github.com/jclerman/browl/issues/29), [#38](https://github.com/jclerman/browl/issues/38), [#39](https://github.com/jclerman/browl/issues/39)) |
 | P-17 | Ontology home page, with the dropped-imports warning and the triple counts the job state keeps (P-8) | U-1 | P-14 | To do | [#30](https://github.com/jclerman/browl/issues/30) |
 | P-18 | Hierarchy trees with lazy loading (htmx) and keyboard support | U-7, U-17 | P-12, P-14 | To do | [#31](https://github.com/jclerman/browl/issues/31) |
 | P-27 | Usage tab on entity pages, from Fuseki, with paging (first decide: references inside class expressions; counts on first view or up front; any `usage` table) | U-26 | P-9, P-16, S-4 | To do | [#41](https://github.com/jclerman/browl/issues/41) |
@@ -908,6 +908,7 @@ go into this document.
 | --- | --- | --- | --- | --- | --- |
 | P-19 | `SearchBackend` interface and SQLite implementation; ranking | U-10, U-11, U-12, N-5 | P-11 | To do | [#26](https://github.com/jclerman/browl/issues/26) |
 | P-20 | Autocomplete UI (accessible combobox) with type and property filters | U-10, U-17 | P-19, P-14 | To do | [#32](https://github.com/jclerman/browl/issues/32) |
+| P-33 | JSON API over the pages' data: routes under `api/` returning the models the pages render (2.8, 2.13) | U-42 | P-16, P-17, P-18, P-19, P-27 | To do | [#76](https://github.com/jclerman/browl/issues/76) |
 | P-21 | Page cache keyed by generation | O-10, N-3 | P-16 | To do | [#40](https://github.com/jclerman/browl/issues/40) |
 | P-22 | Google sign-in, admin-route protection, dev no-auth mode | A-1, O-6, O-7 | P-6 | To do | [#17](https://github.com/jclerman/browl/issues/17) |
 | P-23 | Admin list management page and persistence | A-7 | P-22 | To do | [#19](https://github.com/jclerman/browl/issues/19) |
@@ -925,7 +926,7 @@ go into this document.
 
 ### Later
 
-Requirements marked **Later** (U-18–U-25, U-33–U-43, A-8, A-9, O-12) are not yet broken into work items.
+Requirements marked **Later** (U-18–U-25, U-33–U-41, U-43, A-8, A-9, O-12) are not yet broken into work items.
 
 **Novel features** _(post-log)_. EBI's [OLS4](https://github.com/EBISPOT/ols4) already offers much of v1 for many
 ontologies at once. It shows hierarchies along configured properties, but it does no reasoning, and its "Related from"
@@ -941,9 +942,6 @@ the load pipeline, and serving one ontology at a time. In rough priority order:
 6. Similar classes by ontology structure (U-41). OLS4 offers similarity from text embeddings of labels and synonyms
    (S-5); U-41 uses the ontology's graph instead.
 7. Ontology diff (U-43), shown in graph context: a new area of work, in [ONTOLOGY-DIFF.md](ONTOLOGY-DIFF.md).
-
-The JSON API (U-42) isn't on this list, since OLS4 has a REST API too. Its cost is kept low by building the v1 pages'
-data apart from their HTML ([2.8](#28-entity-pages)).
 
 **Relation-tree edges from equivalence definitions** (for U-38). `EquivalentClasses(C, A and (P some D))` gives `C` the
 parent `D` in the tree for `P`. Tentatively, the edges query (P-12) finds these itself: it walks the `owl:intersectionOf`
