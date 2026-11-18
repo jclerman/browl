@@ -1,7 +1,8 @@
 """The reasoning stage (DESIGN.md §2.4): ROBOT run as a subprocess, held to the reasoner time and heap limits (O-8).
 
 ROBOT runs as `java -Xmx… -XX:+ExitOnOutOfMemoryError <no-network options> -jar robot.jar -vv …` in its own process
-group, which is stopped at the time limit, if the data volume runs low on space, or if the job is cancelled. A
+group, in the sandbox if there is one (P-30), which is stopped at the time limit, if the job's volume runs low on
+space, or if the job is cancelled. A
 failure's reason says which limit was hit, or what else went wrong, using the output signatures S-2 found (A-6,
 `failure_reason`).
 """
@@ -109,8 +110,11 @@ def reason_args(reasoner: Reasoner, source: Path, output: Path, settings: Settin
     return [*args, "query", "--update", str(SHORTCUTS_QUERY), "--output", str(output)]
 
 
-async def run_robot(args: Sequence[str], settings: Settings) -> None:
+async def run_robot(args: Sequence[str], directory: Path, settings: Settings) -> None:
     """Run ROBOT with the arguments, within the reasoner limits, in a process group stopped however this ends.
+
+    It runs in the sandbox, if there is one (`SANDBOX_SOCKET`), and is stopped if `directory`, which it writes into,
+    runs low on space.
 
     Raises:
         StageError: ROBOT failed; the reason says how (`failure_reason`).
@@ -127,7 +131,12 @@ async def run_robot(args: Sequence[str], settings: Settings) -> None:
     ]
     output = RobotOutput()
     completed = await run_process(
-        command, output.add, timeout_s=settings.reasoner_timeout_s, watch=[settings.data_dir], name="ROBOT"
+        command,
+        output.add,
+        timeout_s=settings.reasoner_timeout_s,
+        watch=[directory],
+        name="ROBOT",
+        sandbox=settings.sandbox_socket,
     )
     if not completed.ok:
         raise StageError(failure_reason(completed, output, settings))
@@ -140,7 +149,7 @@ async def robot_to_file(args: Sequence[str], partial: Path, output: Path, settin
         StageError: ROBOT failed.
     """
     try:
-        await run_robot(args, settings)
+        await run_robot(args, output.parent, settings)
         await asyncio.to_thread(partial.replace, output)
     except BaseException:
         await asyncio.to_thread(partial.unlink, missing_ok=True)

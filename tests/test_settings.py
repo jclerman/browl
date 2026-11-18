@@ -37,6 +37,7 @@ DEFAULTS = [
     ("fuseki_base", Path("/fuseki")),
     ("data_dir", Path("/data")),
     ("max_upload_bytes", 20 * 10**9),
+    ("sandbox_socket", None),
     ("oidc_client_id", None),
     ("oidc_client_secret", None),
     ("seed_admins", []),
@@ -168,10 +169,20 @@ def test_load_settings_warns_when_auth_disabled(
 
 
 def test_load_settings_no_warning_with_auth(settings_env: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    """Check that nothing is logged when authentication is on."""
+    """Check that nothing is logged when authentication is on and there's a sandbox."""
+    with caplog.at_level(logging.WARNING):
+        s = settings_with(settings_env, SANDBOX_SOCKET="/run/sandbox/socket")
+    assert s.sandbox_socket == Path("/run/sandbox/socket")
+    assert caplog.text == ""
+
+
+def test_load_settings_warns_without_sandbox(
+    settings_env: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Check that a warning is logged when there's no tool sandbox (P-30)."""
     with caplog.at_level(logging.WARNING):
         load_settings()
-    assert caplog.text == ""
+    assert "SANDBOX_SOCKET is unset: ROBOT and the OFN lister run without a sandbox." in caplog.text
 
 
 @pytest.mark.parametrize(

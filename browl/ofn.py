@@ -40,7 +40,8 @@ class Listing:
 async def convert_ofn(source: Path, output: Path, settings: Settings) -> Listing:
     """Convert an OFN document to Turtle at `output`, returning its imports; on failure, nothing is left there.
 
-    Runs within the reasoner limits (`REASONER_TIMEOUT_S`, `REASONER_MAX_HEAP`), as ROBOT's conversion did.
+    Runs within the reasoner limits (`REASONER_TIMEOUT_S`, `REASONER_MAX_HEAP`), as ROBOT's conversion did, and in the
+    sandbox, if there is one (`SANDBOX_SOCKET`).
 
     Raises:
         StageError: The OWLAPI couldn't read it, or a limit was hit.
@@ -59,7 +60,11 @@ async def convert_ofn(source: Path, output: Path, settings: Settings) -> Listing
     ]
     try:
         completed = await run_process(
-            command, timeout_s=settings.reasoner_timeout_s, watch=[settings.data_dir], name="OFN conversion"
+            command,
+            timeout_s=settings.reasoner_timeout_s,
+            watch=[output.parent],
+            name="OFN conversion",
+            sandbox=settings.sandbox_socket,
         )
         limit = f"REASONER_TIMEOUT_S ({settings.reasoner_timeout_s} s)"
         if reason := completed.limit_reason("the OFN conversion", limit):

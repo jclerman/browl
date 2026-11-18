@@ -724,6 +724,7 @@ validated at startup (`browl/settings.py`). Lists and mappings are given as JSON
 | `FUSEKI_BASE` | `/fuseki`, where `docker-compose.yml` mounts Fuseki's volume in the app | the loader builds each store under its `databases/`, where Fuseki opens it (2.4) |
 | `DATA_DIR` | `/data` | mounted volume; O-9 |
 | `MAX_UPLOAD_BYTES` | `20000000000` (20 GB) | the largest upload accepted; A-2 |
+| `SANDBOX_SOCKET` | none; the Compose deployment sets it | the tool sandbox's Unix socket (`browl.sandbox`), where ROBOT and the OFN lister run (P-30); unset, they run in the app container, and startup logs a warning |
 | `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `SEED_ADMINS` | none | required unless `AUTH_DISABLED`; O-6 |
 | `AUTH_DISABLED` | `false` | O-7 |
 

@@ -3,7 +3,6 @@
 import asyncio
 import shutil
 import stat
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -30,7 +29,7 @@ from browl.robot import (
 )
 from browl.settings import Settings
 from tests.conftest import DATA, find_robot_jar
-from tests.helpers import StaticServer, make_app, make_settings
+from tests.helpers import StaticServer, make_app, make_settings, running_in_group
 
 pytestmark = pytest.mark.anyio
 
@@ -85,7 +84,7 @@ async def reason(settings: Settings, data_dir: Path, fixture: str, reasoner: Rea
 async def axioms(ontology: Path, namespace: str, settings: Settings, tmp_path: Path) -> set[str]:
     """Return an ontology's SubClassOf and EquivalentClasses axioms, but those with owl:Thing, minus the namespace."""
     ofn = tmp_path / "axioms.ofn"
-    await run_robot(["convert", "--input", str(ontology), "--output", str(ofn)], settings)
+    await run_robot(["convert", "--input", str(ontology), "--output", str(ofn)], tmp_path, settings)
     return {
         line.replace(f"<{namespace}", "").replace(">", "")
         for line in ofn.read_text().splitlines()
@@ -110,16 +109,6 @@ def fake_java(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, script: str) -> N
     java.write_text(f"#!/bin/sh\n{script}\n")
     java.chmod(java.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setenv("JAVA_HOME", str(java.parent.parent))
-
-
-def running_in_group(pgid: int) -> list[str]:
-    """Return the `ps` lines of the processes still running in the process group, ignoring zombies.
-
-    A zombie has exited, but stays in its group until its parent reaps it: here a child of the killed shell, which is
-    reparented to a process that may never reap it (as on GitHub's runners), so `os.killpg(pgid, 0)` still succeeds.
-    """
-    ps = subprocess.run(["ps", "-A", "-o", "pgid=,stat=,pid=,command="], check=True, capture_output=True, text=True)
-    return [line for line in ps.stdout.splitlines() if int(line.split()[0]) == pgid and line.split()[1][0] != "Z"]
 
 
 @pytest.mark.parametrize(
@@ -192,7 +181,7 @@ async def test_long_lines_cut(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, s
     """Check that a long output line is cut short."""
     fake_java(tmp_path, monkeypatch, "printf '%010000d\n'; exit 1")
     with pytest.raises(StageError) as raised:
-        await run_robot([], settings)
+        await run_robot([], tmp_path, settings)
     assert str(raised.value).endswith("\n" + "0" * browl.process.MAX_LINE_CHARS)
 
 
@@ -244,7 +233,7 @@ async def test_output_handling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, 
         f"printf 'start\\n%0100000d\\nThere are 1 unsatisfiable classes\\nunsatisfiable: {NS}A'; exit 1",
     )
     with pytest.raises(StageError, match=f"^1 unsatisfiable classes: {NS}A$"):
-        await run_robot([], settings)
+        await run_robot([], tmp_path, settings)
 
 
 async def test_output_split_characters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
@@ -252,7 +241,7 @@ async def test_output_split_characters(tmp_path: Path, monkeypatch: pytest.Monke
     fake_java(tmp_path, monkeypatch, f"printf 'There are 1 unsatisfiable classes\\nunsatisfiable: {NS}Bär→'; exit 1")
     monkeypatch.setattr(browl.process, "READ_BYTES", 1)
     with pytest.raises(StageError, match=f"^1 unsatisfiable classes: {NS}Bär→$"):
-        await run_robot([], settings)
+        await run_robot([], tmp_path, settings)
 
 
 async def test_stops_group_on_cancel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
@@ -260,7 +249,7 @@ async def test_stops_group_on_cancel(tmp_path: Path, monkeypatch: pytest.MonkeyP
     pid_file = tmp_path / "pid"
     fake_java(tmp_path, monkeypatch, f"trap '' TERM; sleep 60 & echo $$ > {pid_file}; wait")
     monkeypatch.setattr(browl.process, "TERM_GRACE_S", 0.2)
-    task = asyncio.create_task(run_robot([], settings))
+    task = asyncio.create_task(run_robot([], tmp_path, settings))
     while not pid_file.exists() or not pid_file.read_text():
         await asyncio.sleep(0.05)
     task.cancel()
@@ -276,7 +265,7 @@ async def test_stops_group_on_second_cancel(
     pid_file = tmp_path / "pid"
     fake_java(tmp_path, monkeypatch, f"trap '' TERM; sleep 60 & echo $$ > {pid_file}; wait")
     monkeypatch.setattr(browl.process, "TERM_GRACE_S", 1.0)
-    task = asyncio.create_task(run_robot([], settings))
+    task = asyncio.create_task(run_robot([], tmp_path, settings))
     while not pid_file.exists() or not pid_file.read_text():
         await asyncio.sleep(0.05)
     task.cancel()
@@ -319,7 +308,7 @@ async def test_stops_group_after_robot_exits(tmp_path: Path, monkeypatch: pytest
     pid_file = tmp_path / "pid"
     fake_java(tmp_path, monkeypatch, f"echo $$ > {pid_file}; sleep 60 &")  # the sleep holds the output open
     with pytest.raises(StageError, match=r"^time limit: "):
-        await run_robot([], make_settings(REASONER_TIMEOUT_S=1))
+        await run_robot([], tmp_path, make_settings(REASONER_TIMEOUT_S=1))
     assert running_in_group(int(pid_file.read_text())) == []
 
 

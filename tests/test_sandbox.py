@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 import signal
@@ -15,11 +16,16 @@ from pathlib import Path
 
 import pytest
 
+import browl.ofn
 import browl.process
-from browl.jobs import StageError
+import browl.robot
+from browl.jobs import Reasoner, StageError
 from browl.process import MAX_LINE_CHARS, run_process
+from browl.robot import reasoning_stage
 from browl.sandbox import Runner
-from tests.helpers import running_in_group
+from tests.conftest import find_robot_jar
+from tests.helpers import StaticServer, make_settings, running_in_group
+from tests.test_robot import job
 
 pytestmark = pytest.mark.anyio
 
@@ -258,3 +264,50 @@ async def test_runner_shutdown(runner_process: tuple[subprocess.Popen[bytes], Pa
     with pytest.raises(StageError, match=r"^the tool sandbox closed the connection while process ran$"):
         await task
     assert await gone(pgid)
+
+
+@pytest.mark.jvm
+@pytest.mark.usefixtures("jvm")
+async def test_robot_in_sandbox(
+    site: StaticServer, short_dir: Path, data_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Check that ROBOT runs through the sandbox: it fails on an import missing from the catalog, naming it."""
+    path = data_dir / "uploads" / "1" / "ontology.ttl"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+        f"<http://example.org/o> a owl:Ontology ; owl:imports <{site.url}/missing> .\n"
+    )
+    async with runner(short_dir) as socket:
+        settings = make_settings(ROBOT_JAR=str(find_robot_jar()), SANDBOX_SOCKET=str(socket))
+        context = job(settings, Reasoner.ELK, path)
+        with (
+            caplog.at_level(logging.INFO, "browl.sandbox"),
+            pytest.raises(StageError, match=f"Could not load imported ontology: <{site.url}/missing>"),
+        ):
+            await reasoning_stage(context)
+    assert site.requested == []
+    assert any(record.name == "browl.sandbox" and "Running ROBOT" in record.message for record in caplog.records)
+
+
+@pytest.mark.parametrize("tool", ["robot", "ofn"])
+async def test_tools_use_sandbox(tool: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path) -> None:
+    """Check that ROBOT and the OFN lister run in the sandbox, watching the volume of the directory they write into."""
+    calls: list[dict[str, object]] = []
+
+    async def run_process(command: list[str], *args: object, **kwargs: object) -> browl.process.Completed:
+        calls.append(kwargs)
+        return browl.process.Completed(1)
+
+    monkeypatch.setattr(browl.robot if tool == "robot" else browl.ofn, "run_process", run_process)
+    settings = make_settings(SANDBOX_SOCKET="/sandbox/socket")
+    with pytest.raises(StageError):
+        if tool == "robot":
+            await browl.robot.robot_to_file(
+                [], tmp_path / "out" / "o.partial.ttl", tmp_path / "out" / "o.ttl", settings
+            )
+        else:
+            await browl.ofn.convert_ofn(tmp_path / "o.ofn", tmp_path / "out" / "o.ttl", settings)
+    [call] = calls
+    assert call["sandbox"] == Path("/sandbox/socket")
+    assert call["watch"] == [tmp_path / "out"]
