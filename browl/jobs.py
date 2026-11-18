@@ -5,12 +5,13 @@ A job starts with `JobRunner.upload`, which the upload handler (`browl.upload`) 
 
 import asyncio
 import fcntl
+import json
 import logging
 import sqlite3
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager, closing, suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -63,12 +64,18 @@ MIGRATIONS: list[str] = [
     ALTER TABLE job ADD COLUMN upload_syntax TEXT;
     ALTER TABLE job ADD COLUMN upload_bytes INTEGER;
     """,
+    # Version 3: the ontology's imports, as a JSON list of `ImportResult`s, and the triples loaded into the default
+    # graph (P-8).
+    """
+    ALTER TABLE job ADD COLUMN imports TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE job ADD COLUMN triples INTEGER;
+    """,
 ]
 """The persistent database's schema migrations: entry n migrates from version n to n + 1."""
 
 _COLUMNS = (
     "generation, stage, started_at, finished_at, failed_stage, reason, ready_generation, reasoner,"
-    " upload_name, upload_syntax, upload_bytes"
+    " upload_name, upload_syntax, upload_bytes, imports, triples"
 )
 """The job table's columns but its id, in `JobState`'s order."""
 
@@ -103,6 +110,36 @@ class Site(StrEnum):
     AVAILABLE = "available"
 
 
+@dataclass(frozen=True)
+class ImportResult:
+    """An ontology the served ontology imports, directly or not, and whether it was loaded (A-4).
+
+    Attributes:
+        iri: Its IRI, as declared in the `owl:imports` that imports it.
+        imported_by: The IRI of the import that imports it; None if the upload does.
+        reason: Why it was dropped, e.g. "only http and https imports are fetched"; None if it was fetched.
+        triples: How many triples its named graph holds, once loaded; None before then, or if it was dropped.
+    """
+
+    iri: str
+    imported_by: str | None = None
+    reason: str | None = None
+    triples: int | None = None
+
+    @property
+    def dropped(self) -> bool:
+        """Whether it couldn't be fetched, or wasn't allowed, so it isn't part of the served ontology."""
+        return self.reason is not None
+
+
+def _imports_json(imports: tuple[ImportResult, ...]) -> str:
+    return json.dumps([vars(result) for result in imports])
+
+
+def _imports_from_json(text: str) -> tuple[ImportResult, ...]:
+    return tuple(ImportResult(**result) for result in json.loads(text))
+
+
 BACKGROUND_STAGES = (Stage.IMPORTS, Stage.REASONING, Stage.LOADING, Stage.PRE_CACHING)
 """The stages that run as registered functions, after the upload and before ready."""
 
@@ -123,6 +160,8 @@ class JobState:
         upload_name: The name of the file uploaded for it, as the admin's browser gave it; None if it had none.
         upload_syntax: The file's syntax, e.g. "RDF/XML".
         upload_bytes: The file's size, or while uploading or after a failed upload, how much had arrived.
+        imports: The ontology's imports, direct and indirect, once the imports stage has listed them.
+        triples: How many triples the store's default graph holds, once loaded: the ontology without its imports.
     """
 
     generation: int | None = None
@@ -136,6 +175,13 @@ class JobState:
     upload_name: str | None = None
     upload_syntax: str | None = None
     upload_bytes: int | None = None
+    imports: tuple[ImportResult, ...] = ()
+    triples: int | None = None
+
+    @property
+    def dropped_imports(self) -> list[ImportResult]:
+        """Return the imports that couldn't be fetched or weren't allowed."""
+        return [result for result in self.imports if result.dropped]
 
     @property
     def running(self) -> bool:
@@ -263,6 +309,8 @@ class JobStore:
             upload_name,
             upload_syntax,
             upload_bytes,
+            imports,
+            triples,
         ) = row
         return JobState(
             generation=generation,
@@ -276,6 +324,8 @@ class JobStore:
             upload_name=upload_name,
             upload_syntax=upload_syntax,
             upload_bytes=upload_bytes,
+            imports=_imports_from_json(imports),
+            triples=triples,
         )
 
     @staticmethod
@@ -296,6 +346,8 @@ class JobStore:
                 state.upload_name,
                 state.upload_syntax,
                 state.upload_bytes,
+                _imports_json(state.imports),
+                state.triples,
             ),
         )
 
@@ -343,7 +395,13 @@ class JobContext:
         reasoner: The reasoner the admin chose.
         upload: The uploaded file, its suffix naming its format (`browl.upload.FORMATS`); None until it's stored.
         upload_bytes: How much of the file has arrived.
-        reasoned: The reasoned ontology, once the reasoning stage has made it; None if it didn't run.
+        converted: An OWL Functional Syntax upload converted to Turtle by the imports stage, which stands in for it
+            from then on; None for any other upload.
+        reasoned: The reasoned ontology the reasoning stage made; None if it made none.
+        catalog: The catalog that maps each import in the closure to a local file, written by the imports stage.
+        imports: The imports, direct and indirect, listed by the imports stage.
+        import_files: The RDF file to load for each import that was fetched, by its IRI.
+        triples: How many triples the store's default graph holds, once loaded.
     """
 
     generation: int
@@ -351,15 +409,17 @@ class JobContext:
     reasoner: Reasoner = Reasoner.NONE
     upload: Path | None = None
     upload_bytes: int | None = None
+    converted: Path | None = None
     reasoned: Path | None = None
+    catalog: Path | None = None
+    imports: list[ImportResult] = field(default_factory=list)
+    import_files: dict[str, Path] = field(default_factory=dict)
+    triples: int | None = None
 
     @property
     def ontology(self) -> Path | None:
-        """Return the ontology to serve: the reasoned one if reasoning ran, else the upload.
-
-        Without reasoning, that can be an `.ofn` upload, which the TDB2 loader can't read until P-8 converts it.
-        """
-        return self.reasoned or self.upload
+        """Return the ontology to serve: the reasoned one if reasoning ran, else the upload, converted if it's OFN."""
+        return self.reasoned or self.converted or self.upload
 
 
 StageFunction = Callable[[JobContext], Awaitable[None]]
@@ -687,13 +747,20 @@ class JobRunner:
             )
             self._record_end(self._state.failed(INTERRUPTED_BY_SHUTDOWN if self._closing else STOPPED_UNRECORDED))
 
+    def _with_results(self, context: JobContext) -> JobState:
+        """Return the state with what the stages have found so far: the imports and the triples loaded."""
+        return replace(self._state, imports=tuple(context.imports), triples=context.triples)
+
     async def _run(self, context: JobContext) -> None:
         try:
             for stage in BACKGROUND_STAGES:
-                await self._record(replace(self._state, stage=stage))
+                await self._record(replace(self._with_results(context), stage=stage))
                 if function := self._stages.get(stage):
                     logger.info("Load job %d: %s", context.generation, stage)
-                    await function(context)
+                    try:
+                        await function(context)
+                    finally:
+                        self._set(self._with_results(context))  # stored with the next stage, or the job's end
             await self._record(
                 replace(self._state, stage=Stage.READY, finished_at=_now(), ready_generation=context.generation)
             )

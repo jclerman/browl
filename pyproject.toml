@@ -23,6 +23,7 @@ pydantic = "^2.14.3"
 langcodes = "^3.5.1"
 uvicorn = "^0.54.0"
 httpx2 = "^2.16.0"
+httpcore2 = "^2.16.0"
 jpype1 = "^1.7.1"
 jinja2 = "^3.1.6"
 python-multipart = ">=0.0.34,<0.1"
@@ -39,7 +40,7 @@ rdflib = "^7.6.0"
 # An xfail test that unexpectedly passes is a failure, not a silent pass.
 xfail_strict = true
 # When run with --cov, record which test covered each line; no effect otherwise.
-addopts = ["--cov-context=test", "--strict-markers"]
+addopts = ["--cov-context=test", "--strict-markers", "--durations=15"]
 markers = [
     "jvm: needs a JVM and robot.jar; skipped when Java is not available (fails in CI)",
     "fuseki: needs Fuseki, from BROWL_TEST_FUSEKI_URL or started with Docker; skipped when neither is available (fails in CI)",
@@ -50,6 +51,8 @@ verbosity_assertions = 2
 [tool.coverage.run]
 # Measure the browl package, including modules no test imports.
 source = ["browl"]
+# Also measure Python subprocesses, such as `python -m browl.ofn`.
+patch = ["subprocess"]
 
 [tool.coverage.report]
 # Show coverage percentages to two decimal places.

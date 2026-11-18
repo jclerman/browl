@@ -4,11 +4,13 @@ browl serves any OWL ontology, so its queries can rely only on the RDF, RDFS, OW
 output can't show, such as a shared restriction node, run on rdflib; the rest are tested through ROBOT (test_robot.py).
 """
 
+import re
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from rdflib import Graph, Literal, URIRef, namespace
+from rdflib import Dataset, Graph, Literal, URIRef, namespace
+from rdflib.graph import DATASET_DEFAULT_GRAPH_ID
 from rdflib.paths import Path as PropertyPath
 from rdflib.plugins.sparql import prepareQuery, prepareUpdate
 
@@ -73,8 +75,9 @@ def test_parses(path: Path) -> None:
 @pytest.mark.parametrize("path", FILES, ids=lambda path: path.name)
 def test_standard_terms_only(path: Path) -> None:
     """Check that every IRI the file names is a term defined in the RDF, RDFS, OWL or XSD vocabulary."""
-    found = set(iris(algebra(path.read_text())))
-    assert found
+    text = path.read_text()
+    found = set(iris(algebra(text)))
+    assert found or not re.search(r"PREFIX|<\S*>", text)  # a query may name no IRI, as the triple count doesn't
     assert nonstandard(found) == []
 
 
@@ -128,3 +131,16 @@ def test_shortcuts_need_some_restriction(filler: str, deleted: bool) -> None:
     shared = graph.value(URIRef("http://example.org/s/W"), namespace.RDFS.subClassOf)
     graph.update((SPARQL_DIR / "remove-superclass-shortcuts.rq").read_text())
     assert ((URIRef("http://example.org/s/X"), namespace.RDFS.subClassOf, shared) in graph) is not deleted
+
+
+@pytest.mark.filterwarnings("ignore:Dataset.*is deprecated:DeprecationWarning")  # rdflib's query code calls them
+def test_count_triples() -> None:
+    """Check that the triple count gives the default graph's on a row with no graph, and each named graph's."""
+    a, p, b, c, g = (URIRef(f"http://example.org/{name}") for name in "apbcg")
+    dataset = Dataset()
+    default = dataset.graph(DATASET_DEFAULT_GRAPH_ID)
+    default.add((a, p, b))
+    default.add((b, p, c))
+    dataset.graph(g).add((a, p, b))
+    rows = dataset.query((SPARQL_DIR / "count-triples.rq").read_text())
+    assert {(row[0], row[1].toPython()) for row in rows} == {(None, 2), (g, 1)}  # type: ignore[index]

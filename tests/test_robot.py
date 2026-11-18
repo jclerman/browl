@@ -9,13 +9,18 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+import browl.imports
+import browl.loading
+import browl.process
 import browl.robot
+from browl.imports import imports_stage, write_catalog
 from browl.jobs import JobContext, Reasoner, Stage, StageError
+from browl.ofn import Listing
+from browl.process import TAIL_LINES, Completed
 from browl.robot import (
     OUT_OF_MEMORY,
     PARSE_ERROR,
     REASONED,
-    TAIL_LINES,
     UNSATISFIABLE_SHOWN,
     RobotOutput,
     failure_reason,
@@ -25,7 +30,7 @@ from browl.robot import (
 )
 from browl.settings import Settings
 from tests.conftest import DATA, find_robot_jar
-from tests.helpers import make_app, make_settings
+from tests.helpers import StaticServer, make_app, make_settings
 
 pytestmark = pytest.mark.anyio
 
@@ -57,9 +62,22 @@ def upload(data_dir: Path, fixture: str) -> Path:
     return path
 
 
+def job(settings: Settings, reasoner: Reasoner, path: Path) -> JobContext:
+    """Return a job's context for an upload, with the empty catalog the imports stage writes for one without imports."""
+    catalog = path.with_name(browl.imports.CATALOG)
+    write_catalog(catalog, {})
+    return JobContext(1, settings, reasoner, path, catalog=catalog)
+
+
+def stored_files(context: JobContext) -> list[str]:
+    """Return the names of the files beside the upload, but the catalog."""
+    assert context.upload is not None
+    return sorted(path.name for path in context.upload.parent.iterdir() if path.name != browl.imports.CATALOG)
+
+
 async def reason(settings: Settings, data_dir: Path, fixture: str, reasoner: Reasoner = Reasoner.ELK) -> JobContext:
     """Run the reasoning stage on a fixture, returning the job's context."""
-    context = JobContext(1, settings, reasoner, upload(data_dir, fixture))
+    context = job(settings, reasoner, upload(data_dir, fixture))
     await reasoning_stage(context)
     return context
 
@@ -118,35 +136,76 @@ def running_in_group(pgid: int) -> list[str]:
 )
 def test_failure_reason(status: int, lines: list[str], timed_out: bool, expected: str, data_dir: Path) -> None:
     """Check that each kind of failure is told apart by S-2's signatures, in S-2's order."""
-    assert failure_reason(status, output_of(*lines), timed_out, make_settings()).startswith(expected)
+    completed = Completed(status, timed_out, tail=tuple(lines))
+    assert failure_reason(completed, output_of(*lines), make_settings()).startswith(expected)
 
 
 def test_unsatisfiable_reason(data_dir: Path) -> None:
     """Check that an unsatisfiable-classes failure names the first classes and counts the rest."""
     lines = [f"ERROR ReasonerHelper - There are {UNSATISFIABLE_SHOWN + 2} unsatisfiable classes in the ontology."]
     lines += [f"ERROR ReasonerHelper -     unsatisfiable: {NS}C{i}" for i in range(UNSATISFIABLE_SHOWN + 2)]
-    reason = failure_reason(1, output_of(*lines), False, make_settings())
+    reason = failure_reason(Completed(1, tail=tuple(lines)), output_of(*lines), make_settings())
     shown = ", ".join(f"{NS}C{i}" for i in range(UNSATISFIABLE_SHOWN))
     assert reason == f"{UNSATISFIABLE_SHOWN + 2} unsatisfiable classes: {shown} and 2 more"
 
 
-def test_tail() -> None:
-    """Check that only the last lines are kept, each cut short if long."""
-    output = output_of(*(f"line {i}" for i in range(TAIL_LINES + 5)), "x" * 10_000)
-    assert len(output.tail) == TAIL_LINES
-    assert output.tail[0] == "line 6"
-    assert len(output.tail[-1]) == browl.robot.MAX_LINE_CHARS
+async def test_tail() -> None:
+    """Check that only a process's last lines are kept, and that its stdout, read as chunks, isn't among them."""
+    chunks: list[bytes] = []
+    script = f'echo out; i=0; while [ $i -lt {TAIL_LINES + 5} ]; do echo "line $i" >&2; i=$((i+1)); done'
+    completed = await browl.process.run_process(["sh", "-c", script], timeout_s=10, on_stdout=chunks.append)
+    assert b"".join(chunks) == b"out\n"
+    assert len(completed.tail) == TAIL_LINES
+    assert completed.tail[0] == "line 5"
+    assert completed.output.endswith(f"line {TAIL_LINES + 4}")
+
+
+async def test_tool_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a tool gets only the app's `ENVIRONMENT` variables, and those the caller adds."""
+    monkeypatch.setenv("BROWL_SECRET", "s3cret")
+    monkeypatch.setenv("LANG", "C")
+    lines: list[str] = []
+    command = ["sh", "-c", 'echo "secret=$BROWL_SECRET lang=$LANG added=$ADDED"']
+    completed = await browl.process.run_process(command, lines.append, timeout_s=10, env={"ADDED": "yes"})
+    assert completed.ok
+    assert lines == ["secret= lang=C added=yes"]
+
+
+@pytest.mark.jvm
+@pytest.mark.usefixtures("jvm")
+async def test_robot_fetches_nothing(site: StaticServer, settings: Settings, data_dir: Path) -> None:
+    """Check that ROBOT fails on an import missing from the catalog, naming it, and never requests it."""
+    url, requested = site.url, site.requested
+    path = data_dir / "uploads" / "1" / "ontology.ttl"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+        f"<http://example.org/o> a owl:Ontology ; owl:imports <{url}/missing> .\n"
+    )
+    context = job(settings, Reasoner.ELK, path)
+    with pytest.raises(StageError, match=f"Could not load imported ontology: <{url}/missing>"):
+        await reasoning_stage(context)
+    assert requested == []
+
+
+async def test_long_lines_cut(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
+    """Check that a long output line is cut short."""
+    fake_java(tmp_path, monkeypatch, "printf '%010000d\n'; exit 1")
+    with pytest.raises(StageError) as raised:
+        await run_robot([], settings)
+    assert str(raised.value).endswith("\n" + "0" * browl.process.MAX_LINE_CHARS)
 
 
 def test_reason_args(data_dir: Path) -> None:
     """Check that materialize runs only when properties are configured, and the shortcuts query always."""
     source, out = Path("in.ofn"), Path("out.ttl")
-    plain = reason_args(Reasoner.HERMIT, source, out, make_settings())
-    assert plain[:5] == ["reason", "--input", "in.ofn", "--reasoner", "HermiT"]
+    plain = reason_args(Reasoner.HERMIT, source, out, make_settings(), Path("catalog.xml"))
+    assert plain[:7] == ["reason", "--catalog", "catalog.xml", "--input", "in.ofn", "--reasoner", "HermiT"]
     assert "materialize" not in plain
     assert plain[-5:] == ["query", "--update", str(browl.robot.SHORTCUTS_QUERY), "--output", "out.ttl"]
     properties = [f"{NS}part_of", f"{NS}has_part"]
-    materialized = reason_args(Reasoner.ELK, source, out, make_settings(MATERIALIZE_PROPERTIES=properties))
+    settings = make_settings(MATERIALIZE_PROPERTIES=properties)
+    materialized = reason_args(Reasoner.ELK, source, out, settings, Path("catalog.xml"))
     start = materialized.index("materialize")
     assert materialized[start : start + 7] == [
         "materialize",
@@ -167,8 +226,11 @@ async def test_no_upload_skips(data_dir: Path) -> None:
 
 
 async def test_none_skips(data_dir: Path) -> None:
-    """Check that with no reasoner chosen the stage does nothing, and the upload is what's served."""
-    context = JobContext(1, make_settings(ROBOT_JAR="/nonexistent"), Reasoner.NONE, upload(data_dir, "ok.ofn"))
+    """Check that with no reasoner chosen the stage leaves an RDF upload alone, as the ontology served."""
+    path = data_dir / "uploads" / "1" / "ontology.ttl"
+    path.parent.mkdir(parents=True)
+    path.write_text("<http://example.org/a> a <http://example.org/B> .\n")
+    context = job(make_settings(ROBOT_JAR="/nonexistent"), Reasoner.NONE, path)
     await reasoning_stage(context)
     assert context.reasoned is None
     assert context.ontology == context.upload
@@ -188,7 +250,7 @@ async def test_output_handling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, 
 async def test_output_split_characters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
     """Check that a multi-byte character split between reads is decoded whole."""
     fake_java(tmp_path, monkeypatch, f"printf 'There are 1 unsatisfiable classes\\nunsatisfiable: {NS}Bär→'; exit 1")
-    monkeypatch.setattr(browl.robot, "READ_BYTES", 1)
+    monkeypatch.setattr(browl.process, "READ_BYTES", 1)
     with pytest.raises(StageError, match=f"^1 unsatisfiable classes: {NS}Bär→$"):
         await run_robot([], settings)
 
@@ -197,10 +259,28 @@ async def test_stops_group_on_cancel(tmp_path: Path, monkeypatch: pytest.MonkeyP
     """Check that a cancelled run stops ROBOT's whole process group, with SIGKILL if SIGTERM is ignored."""
     pid_file = tmp_path / "pid"
     fake_java(tmp_path, monkeypatch, f"trap '' TERM; sleep 60 & echo $$ > {pid_file}; wait")
-    monkeypatch.setattr(browl.robot, "TERM_GRACE_S", 0.2)
+    monkeypatch.setattr(browl.process, "TERM_GRACE_S", 0.2)
     task = asyncio.create_task(run_robot([], settings))
     while not pid_file.exists() or not pid_file.read_text():
         await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert running_in_group(int(pid_file.read_text())) == []
+
+
+async def test_stops_group_on_second_cancel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: Settings
+) -> None:
+    """Check that a run cancelled again while its process group is being stopped still waits for it to stop."""
+    pid_file = tmp_path / "pid"
+    fake_java(tmp_path, monkeypatch, f"trap '' TERM; sleep 60 & echo $$ > {pid_file}; wait")
+    monkeypatch.setattr(browl.process, "TERM_GRACE_S", 1.0)
+    task = asyncio.create_task(run_robot([], settings))
+    while not pid_file.exists() or not pid_file.read_text():
+        await asyncio.sleep(0.05)
+    task.cancel()
+    await asyncio.sleep(0.2)  # SIGTERM sent and ignored
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -212,11 +292,11 @@ async def test_failed_run_leaves_no_output(
 ) -> None:
     """Check that a run that fails after writing its output leaves neither a partial nor a reasoned file."""
     fake_java(tmp_path, monkeypatch, f'{OUTPUT_ARG}; echo x > "$out"; echo boom; exit 1')
-    context = JobContext(1, settings, Reasoner.ELK, upload(data_dir, "ok.ofn"))
+    context = job(settings, Reasoner.ELK, upload(data_dir, "ok.ofn"))
     with pytest.raises(StageError, match=r"^reasoner failed \(ROBOT exit status 1\):\nboom$"):
         await reasoning_stage(context)
     assert context.reasoned is None
-    assert [path.name for path in context.upload.parent.iterdir()] == ["ontology.ofn"]
+    assert stored_files(context) == ["ontology.ofn"]
 
 
 async def test_time_limit_stops_group(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path) -> None:
@@ -225,13 +305,13 @@ async def test_time_limit_stops_group(tmp_path: Path, monkeypatch: pytest.Monkey
     fake_java(
         tmp_path, monkeypatch, f"{OUTPUT_ARG}; echo x > \"$out\"; trap '' TERM; sleep 60 & echo $$ > {pid_file}; wait"
     )
-    monkeypatch.setattr(browl.robot, "TERM_GRACE_S", 0.2)
+    monkeypatch.setattr(browl.process, "TERM_GRACE_S", 0.2)
     settings = make_settings(REASONER_TIMEOUT_S=1)
-    context = JobContext(1, settings, Reasoner.ELK, upload(data_dir, "ok.ofn"))
+    context = job(settings, Reasoner.ELK, upload(data_dir, "ok.ofn"))
     with pytest.raises(StageError, match=r"^time limit: "):
         await reasoning_stage(context)
     assert running_in_group(int(pid_file.read_text())) == []
-    assert [path.name for path in context.upload.parent.iterdir()] == ["ontology.ofn"]
+    assert stored_files(context) == ["ontology.ofn"]
 
 
 async def test_stops_group_after_robot_exits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path) -> None:
@@ -247,22 +327,31 @@ async def test_low_space_stops(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, 
     """Check that ROBOT is stopped, leaving no output, once the data volume's free space falls below the margin."""
     pid_file = tmp_path / "pid"
     fake_java(tmp_path, monkeypatch, f'{OUTPUT_ARG}; echo x > "$out"; sleep 60 & echo $$ > {pid_file}; wait')
-    margin = browl.robot.FREE_SPACE_MARGIN_BYTES
+    margin = browl.process.FREE_SPACE_MARGIN_BYTES
     # Space runs low once the fake ROBOT has started.
     monkeypatch.setattr(
-        browl.robot, "free_bytes", lambda path: margin - bool(pid_file.exists() and pid_file.read_text())
+        browl.process, "free_bytes", lambda path: margin - bool(pid_file.exists() and pid_file.read_text())
     )
-    monkeypatch.setattr(browl.robot, "SPACE_CHECK_S", 0.05)
-    context = JobContext(1, make_settings(), Reasoner.ELK, upload(data_dir, "ok.ofn"))
-    with pytest.raises(StageError, match=r"^disk space: the data volume fell below 1,000,000,000 bytes free"):
+    monkeypatch.setattr(browl.process, "SPACE_CHECK_S", 0.05)
+    context = job(make_settings(), Reasoner.ELK, upload(data_dir, "ok.ofn"))
+    with pytest.raises(
+        StageError, match=r"^disk space: a volume fell below 1,000,000,000 bytes free while reasoning ran$"
+    ):
         await reasoning_stage(context)
     assert running_in_group(int(pid_file.read_text())) == []
-    assert [path.name for path in context.upload.parent.iterdir()] == ["ontology.ofn"]
+    assert stored_files(context) == ["ontology.ofn"]
 
 
 def test_free_bytes(tmp_path: Path) -> None:
     """Check that the free space reported is the file system's."""
-    assert 0 < browl.robot.free_bytes(tmp_path) <= shutil.disk_usage(tmp_path).total
+    assert 0 < browl.process.free_bytes(tmp_path) <= shutil.disk_usage(tmp_path).total
+
+
+async def test_no_catalog_fails(data_dir: Path) -> None:
+    """Check that ROBOT never runs without the catalog, which keeps it from resolving imports itself."""
+    context = JobContext(1, make_settings(), Reasoner.ELK, upload(data_dir, "ok.ofn"))
+    with pytest.raises(StageError, match="no catalog"):
+        await reasoning_stage(context)
 
 
 @pytest.mark.parametrize(
@@ -277,7 +366,17 @@ def test_app_runs_stage(
 ) -> None:
     """Check that the app's uploads run the reasoning stage, and a failure is recorded with ROBOT's output (A-6)."""
     fake_java(tmp_path, monkeypatch, script)
-    app = make_app()
+
+    async def no_imports(*args: object) -> Listing:
+        return Listing([])
+
+    async def no_loading(*args: object, **kwargs: object) -> None:
+        pass
+
+    # The other stages run Jena's tools, which would run the fake Java too.
+    monkeypatch.setattr(browl.imports, "list_imports", no_imports)
+    monkeypatch.setattr(browl.loading, "loading_stage", no_loading)
+    app = make_app(real_stages=True)
     with TestClient(app) as client:
         files = {"ontology": ("o.ttl", b"@prefix ex: <http://example.org/> .\nex:a a ex:B .\n")}
         response = client.post("/_browl/admin/upload", data={"reasoner": "elk"}, files=files, follow_redirects=False)
@@ -369,7 +468,21 @@ async def test_logical_failures(
     with pytest.raises(StageError) as raised:
         await reason(settings, data_dir, fixture, reasoner)
     assert str(raised.value).startswith(expected)
-    assert sorted(p.name for p in (data_dir / "uploads" / "1").iterdir()) == [f"ontology{Path(fixture).suffix}"]
+    names = sorted(p.name for p in (data_dir / "uploads" / "1").iterdir())
+    assert names == [browl.imports.CATALOG, f"ontology{Path(fixture).suffix}"]
+
+
+@pytest.mark.jvm
+@pytest.mark.usefixtures("jvm")
+async def test_reasons_over_converted(settings: Settings, data_dir: Path, tmp_path: Path) -> None:
+    """Check that an OWL Functional Syntax upload is reasoned over as the Turtle the imports stage converted it to."""
+    context = JobContext(1, settings, Reasoner.ELK, upload(data_dir, "ok.ofn"))
+    await imports_stage(context)
+    assert context.converted is not None
+    context.upload.unlink()  # only the converted file is read from here on
+    await reasoning_stage(context)
+    assert context.reasoned == context.ontology
+    assert "SubClassOf(Dog Pet)" in await axioms(context.reasoned, "http://example.org/s2/", settings, tmp_path)
 
 
 @pytest.mark.jvm
@@ -377,7 +490,7 @@ async def test_logical_failures(
 async def test_time_limit(data_dir: Path) -> None:
     """Check that a run past REASONER_TIMEOUT_S is killed, and the job records the time limit."""
     settings = make_settings(ROBOT_JAR=str(find_robot_jar()), REASONER_TIMEOUT_S=1)
-    context = JobContext(1, settings, Reasoner.HERMIT, pigeonhole(data_dir / "uploads" / "1" / "ontology.ofn", 9))
+    context = job(settings, Reasoner.HERMIT, pigeonhole(data_dir / "uploads" / "1" / "ontology.ofn", 9))
     started = asyncio.get_running_loop().time()
     with pytest.raises(StageError, match=r"^time limit: reasoning took longer than REASONER_TIMEOUT_S \(1 s\)$"):
         await reasoning_stage(context)

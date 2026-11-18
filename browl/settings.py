@@ -70,6 +70,7 @@ class Settings(BaseSettings):
         fuseki_url: Fuseki's address.
         robot_jar: Path to `robot.jar`, where the app image installs it.
         jena_home: Jena's command-line tools, where the app image installs them.
+        fuseki_base: Fuseki's base directory as the app mounts it; the loader builds each store under its `databases`.
         data_dir: Mounted volume for data that survives restarts (O-9).
         max_upload_bytes: The largest ontology upload accepted, in bytes (A-2).
         oidc_client_id: Google OAuth client ID (O-6).
@@ -96,6 +97,7 @@ class Settings(BaseSettings):
     fuseki_url: HttpUrl = HttpUrl("http://fuseki:3030")
     robot_jar: Path = Path("/opt/robot/robot.jar")
     jena_home: Path = Path("/opt/jena")
+    fuseki_base: Path = Path("/fuseki")
     data_dir: Path = Path("/data")
     max_upload_bytes: int = Field(default=20 * 10**9, gt=0)
     oidc_client_id: str | None = None

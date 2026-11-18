@@ -21,6 +21,7 @@ from browl.jobs import (
     INTERRUPTED_BY_SHUTDOWN,
     STATE_DB,
     STOPPED_UNRECORDED,
+    ImportResult,
     JobContext,
     JobRunner,
     JobRunningError,
@@ -62,7 +63,7 @@ def schema_version(path: Path) -> int:
 def test_store_migrates_new_database(data_dir: Path) -> None:
     """Check that a new database is created at the latest schema version, with no job."""
     store = JobStore(data_dir / "sub" / STATE_DB)
-    assert schema_version(store.path) == len(browl.jobs.MIGRATIONS) == 2
+    assert schema_version(store.path) == len(browl.jobs.MIGRATIONS) == 3
     assert store.read() == JobState()
 
 
@@ -279,7 +280,44 @@ def test_store_migrates_version_1(data_dir: Path) -> None:
     state = JobStore(path).read()
     assert (state.generation, state.reasoner) == (4, Reasoner.NONE)
     assert (state.upload_name, state.upload_syntax, state.upload_bytes) == (None, None, None)
+    assert (state.imports, state.triples) == ((), None)
     assert schema_version(path) == len(browl.jobs.MIGRATIONS)
+
+
+def test_store_migrates_version_2(data_dir: Path) -> None:
+    """Check that a version 2 database migrates, its job keeping its upload and read as having no imports or count."""
+    path = data_dir / STATE_DB
+    with closing(sqlite3.connect(path)) as connection:
+        connection.executescript(
+            f"BEGIN;\n{browl.jobs.MIGRATIONS[0]}\n{browl.jobs.MIGRATIONS[1]}\nPRAGMA user_version = 2;\n"
+            "INSERT INTO job VALUES (1, 4, 'ready', '2026-01-02T03:04:05+00:00', '2026-01-02T03:04:06+00:00',"
+            " NULL, NULL, 4, 'elk', 'o.ttl', 'Turtle', 123);\nCOMMIT;"
+        )
+    state = JobStore(path).read()
+    assert (state.generation, state.reasoner) == (4, Reasoner.ELK)
+    assert (state.upload_name, state.upload_syntax, state.upload_bytes) == ("o.ttl", "Turtle", 123)
+    assert (state.imports, state.triples) == ((), None)
+    assert schema_version(path) == len(browl.jobs.MIGRATIONS)
+
+
+async def test_stage_results_recorded(data_dir: Path) -> None:
+    """Check that the imports and triple counts a stage sets are stored, also when a later stage fails."""
+    imports = [ImportResult("http://a/", None, None, 3), ImportResult("file:/x", "http://a/", "not allowed")]
+
+    async def listing(context: JobContext) -> None:
+        context.imports = imports
+
+    async def loading(context: JobContext) -> None:
+        context.triples = 7
+        raise StageError("boom")
+
+    runner = await open_runner(data_dir, {Stage.IMPORTS: listing, Stage.LOADING: loading})
+    await runner.start()
+    await runner.wait()
+    stored = JobStore(data_dir / STATE_DB).read()
+    assert (stored.failed_stage, stored.imports, stored.triples) == (Stage.LOADING, tuple(imports), 7)
+    assert stored.dropped_imports == [imports[1]]
+    assert imports[1].dropped and not imports[0].dropped
 
 
 async def test_upload_recorded(data_dir: Path) -> None:

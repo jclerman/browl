@@ -4,7 +4,7 @@ Every response is checked strictly, because a query that fails after Fuseki has 
 with the error appended as text (DESIGN.md §2.14). A query fails, raising `SparqlError`, when Fuseki answers with any
 status other than 2xx, when the connection fails or the body ends early, when it doesn't answer in time, and when the
 result doesn't parse. A failed query never looks like a short result. Bulk results that may break off cleanly at a row
-boundary need their own completeness check (P-8).
+boundary need their own completeness check (P-9).
 """
 
 import asyncio
@@ -88,6 +88,81 @@ class SelectStream:
                 except RDFSyntaxError as error:
                     raise SparqlError(f"malformed SELECT result: {error}") from error
                 yield row
+
+
+UNION_FROM = "FROM <urn:x-arq:DefaultGraph> FROM <urn:x-arq:UnionGraph>"
+"""The dataset clause of a query that sees the ontology and its imports: the default graph merged with every named
+graph, as a set, so a triple both state counts once (DESIGN.md §2.4). Unused by app code until P-9's bulk queries."""
+
+ADMIN_TIMEOUT_S = 120.0
+"""Time limit for an admin protocol call: opening a store is quick, but removing one deletes its files."""
+
+
+def dataset_clause(has_imports: bool) -> str:
+    """Return the dataset clause for queries that should see the imports: `UNION_FROM` if there are any, else ""."""
+    return UNION_FROM if has_imports else ""
+
+
+class FusekiAdminError(Exception):
+    """A call to Fuseki's admin protocol failed."""
+
+
+class FusekiAdmin:
+    """Registers and removes Fuseki's TDB2 datasets through its admin protocol (`/$/datasets`, DESIGN.md §2.4)."""
+
+    def __init__(self, http: httpx2.AsyncClient) -> None:
+        """Use an HTTP client whose base URL is Fuseki's (`FUSEKI_URL`)."""
+        self._http = http
+
+    async def datasets(self) -> list[str]:
+        """Return the registered datasets' names.
+
+        Raises:
+            FusekiAdminError: The call failed, or its answer isn't a dataset list.
+        """
+        response = await self._call("GET", "/$/datasets")
+        try:
+            return [entry["ds.name"].removeprefix("/") for entry in response.json()["datasets"]]
+        except (ValueError, KeyError, TypeError, AttributeError) as error:
+            raise FusekiAdminError(f"Fuseki's dataset list is malformed: {error!r}") from error
+
+    async def add(self, name: str) -> None:
+        """Register the TDB2 dataset whose store is at `{FUSEKI_BASE}/databases/{name}`, opening it.
+
+        Raises:
+            FusekiAdminError: The call failed.
+        """
+        await self._call("POST", "/$/datasets", data={"dbName": _checked(name), "dbType": "tdb2"})
+
+    async def remove(self, name: str) -> None:
+        """Remove a dataset, which deletes its store.
+
+        Raises:
+            FusekiAdminError: The call failed.
+        """
+        await self._call("DELETE", f"/$/datasets/{_checked(name)}")
+
+    async def _call(self, method: str, path: str, data: dict[str, str] | None = None) -> httpx2.Response:
+        try:
+            async with asyncio.timeout(ADMIN_TIMEOUT_S):
+                # The app's client has httpx's 5 s default, too short to delete or open a large store.
+                response = await self._http.request(method, path, data=data, timeout=ADMIN_TIMEOUT_S)
+        except TimeoutError as error:
+            raise FusekiAdminError(
+                f"Fuseki HTTP request {method} {path} timed out after {ADMIN_TIMEOUT_S:g} s"
+            ) from error
+        except httpx2.HTTPError as error:
+            raise FusekiAdminError(f"Fuseki HTTP request {method} {path} failed: {error!r}") from error
+        if not response.is_success:
+            text = response.text[:_ERROR_TEXT_LIMIT].strip()
+            raise FusekiAdminError(f"Fuseki HTTP request {method} {path} answered {response.status_code}: {text}")
+        return response
+
+
+def _checked(name: str) -> str:
+    if not _DATASET.fullmatch(name):
+        raise ValueError(f"not a dataset name: {name!r}")
+    return name
 
 
 class FusekiClient:

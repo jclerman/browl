@@ -1,7 +1,8 @@
 """The FastAPI application. Run it with one worker: `uvicorn browl.app:create_app --factory --workers 1`."""
 
 import asyncio
-from collections.abc import AsyncIterator
+import functools
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from typing import Literal
 
@@ -11,9 +12,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import browl
-from browl import admin, owlapi, robot
+from browl import admin, imports, loading, owlapi, robot
 from browl.fuseki import FusekiClient
-from browl.jobs import JobRunner, Stage
+from browl.jobs import JobRunner, Stage, StageFunction
 from browl.pages import STATIC_DIR, SiteGate
 from browl.settings import Settings, load_settings
 
@@ -57,6 +58,7 @@ def create_app(
     settings: Settings | None = None,
     fuseki_transport: httpx2.AsyncBaseTransport | None = None,
     start_jvm: bool = True,
+    stages: Mapping[Stage, StageFunction] | None = None,
 ) -> FastAPI:
     """Build the application, loading the settings from the environment unless given.
 
@@ -68,6 +70,7 @@ def create_app(
         settings: The settings; loaded from the environment if not given.
         fuseki_transport: The transport for the Fuseki client, which tests replace; httpx2's default if not given.
         start_jvm: Whether to start the JVM; tests that don't need it turn it off.
+        stages: The load job's background stages; tests replace them. If not given: imports, reasoning and loading.
 
     Raises:
         pydantic.ValidationError: A setting is missing or invalid.
@@ -82,7 +85,15 @@ def create_app(
         async with httpx2.AsyncClient(base_url=str(settings.fuseki_url), transport=fuseki_transport) as client:
             app.state.fuseki_http = client
             app.state.sparql = FusekiClient(client)
-            app.state.jobs = await JobRunner.open(settings, {Stage.REASONING: robot.reasoning_stage})
+            if stages is None:
+                functions: Mapping[Stage, StageFunction] = {
+                    Stage.IMPORTS: imports.imports_stage,
+                    Stage.REASONING: robot.reasoning_stage,
+                    Stage.LOADING: functools.partial(loading.loading_stage, http=client),
+                }
+            else:
+                functions = stages
+            app.state.jobs = await JobRunner.open(settings, functions)
             try:
                 yield
             finally:
