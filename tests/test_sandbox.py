@@ -189,6 +189,7 @@ async def test_malformed_reply(short_dir: Path, reply: bytes) -> None:
     """Check that a run fails, saying so, when the sandbox's reply isn't one it sends."""
 
     async def malformed(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.readline()  # unread, it would make Linux reset the connection (`test_connection_reset`)
         writer.write(reply)
         writer.close()
 
@@ -196,6 +197,25 @@ async def test_malformed_reply(short_dir: Path, reply: bytes) -> None:
     server = await asyncio.start_unix_server(malformed, socket)
     try:
         with pytest.raises(StageError, match=r"^the tool sandbox sent a malformed reply while process ran$"):
+            await sandboxed(socket, "true")
+    finally:
+        server.close()
+
+
+async def test_connection_reset(short_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a connection reset while reading replies fails the run as a closed connection."""
+
+    async def reset(self: browl.process._Remote) -> bool:
+        raise ConnectionResetError(104, "Connection reset by peer")
+
+    async def accept(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        writer.close()
+
+    monkeypatch.setattr(browl.process._Remote, "_read", reset)
+    socket = short_dir / "socket"
+    server = await asyncio.start_unix_server(accept, socket)
+    try:
+        with pytest.raises(StageError, match=r"^the tool sandbox closed the connection while process ran$"):
             await sandboxed(socket, "true")
     finally:
         server.close()

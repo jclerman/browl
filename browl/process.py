@@ -297,8 +297,12 @@ class _Remote:
         return cls(reader, writer, request.name, on_line)
 
     async def finish(self) -> None:
-        if not await self._read():
-            raise StageError(f"the tool sandbox closed the connection while {self.name} ran")
+        closed = f"the tool sandbox closed the connection while {self.name} ran"
+        try:
+            if not await self._read():
+                raise StageError(closed)
+        except ConnectionError as error:  # e.g. reset: the runner closed with our request unread
+            raise StageError(closed) from error
 
     async def stop(self) -> None:
         """Ask the sandbox to stop the run, by closing the request's side of the connection, and wait for its status.
