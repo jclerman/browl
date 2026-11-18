@@ -22,6 +22,7 @@ from browl.imports import (
     imports_stage,
     is_public,
     list_rdf_imports,
+    write_catalog,
 )
 from browl.jobs import STATE_DB, ImportResult, JobContext, JobState, JobStore, Reasoner, Stage, StageError
 from browl.robot import reasoning_stage
@@ -158,6 +159,13 @@ def test_is_public(address: str, public: bool) -> None:
 def test_catalog_names(iri: str, names: list[str]) -> None:
     """Check that a file IRI is listed in every spelling the OWLAPI or Jena may give it."""
     assert catalog_names(iri) == names
+
+
+def test_catalog_skips_iri_xml_cant_hold(tmp_path: Path) -> None:
+    """Check that an IRI with a control character is left out of the catalog, which stays readable."""
+    catalog = tmp_path / "catalog.xml"
+    write_catalog(catalog, {f"{EX}a\x01": tmp_path / "a.ttl", f"{EX}b": tmp_path / "b.ttl"})
+    assert catalog_map(catalog) == {f"{EX}b": (tmp_path / "b.ttl").as_uri()}
 
 
 def test_empty_ontology() -> None:

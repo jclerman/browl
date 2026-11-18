@@ -375,10 +375,12 @@ without a reasoner, as revised in P-8's review (the OWLAPI lists OFN imports; RO
    declaration stays in the ontology as written, but nothing is loaded for it. A load whose documents list more than
    1000 distinct imports fails, since each needs a catalog entry and no real ontology has that many.
 3. Write a catalog file mapping every import listed: to its fetched file, or to an empty ontology if it was dropped.
-   ROBOT's catalog accepts only exact names, so for a file IRI it lists every spelling the OWLAPI may request:
-   `file:/…`, `file:///…` and `file://localhost/…` (the OWLAPI and Jena resolve a relative RDF import against the
-   document differently). Until P-30, ROBOT's JVM sends every HTTP(S) request to a closed port, so it fetches nothing
-   itself, and every tool gets only a few of the app's environment variables (`browl.process.ENVIRONMENT`).
+   An IRI with a character XML can't hold, such as a control character, is left out (it can't be fetched either), so
+   it fails only a reasoning run that reaches it, not every load. ROBOT's catalog accepts only exact names, so for a
+   file IRI it lists every spelling the OWLAPI may request: `file:/…`, `file:///…` and `file://localhost/…` (the
+   OWLAPI and Jena resolve a relative RDF import against the document differently). Until P-30, ROBOT's JVM sends
+   every HTTP(S) request to a closed port, so it fetches nothing itself, and every tool gets only a few of the app's
+   environment variables (`browl.process.ENVIRONMENT`).
 4. The loading stage loads the ontology into the store's default graph, and each fetched import into its own named
    graph, named by the IRI it's imported by. Each triple's source stays known, e.g. to mark imported entities; merging
    into one file first (ROBOT `merge`) would lose that.

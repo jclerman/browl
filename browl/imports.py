@@ -82,6 +82,8 @@ SYNTAX_NAMES = {Syntax.TURTLE: "Turtle", Syntax.RDF_XML: "RDF/XML"}
 _IRI = r"[^\s<>\"{}|^`\\]*"
 _SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 _NT_IMPORT = re.compile(rf"^(?:<{_IRI}>|_:\S+) <{re.escape(OWL_IMPORTS)}> <({_IRI})> \.$")
+_NOT_XML = re.compile("[^\t\n\r\x20-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]")
+"""A character XML 1.0 can't hold, even escaped, such as a control character."""
 
 
 class _ImportLines:
@@ -362,9 +364,16 @@ def catalog_names(iri: str) -> list[str]:
 
 
 def write_catalog(path: Path, entries: dict[str, Path]) -> None:
-    """Write an XML catalog that maps each import IRI to a file, as ROBOT's `--catalog` reads it."""
+    """Write an XML catalog that maps each import IRI to a file, as ROBOT's `--catalog` reads it.
+
+    An IRI with a character XML can't hold is left out, rather than make the catalog unreadable: such an IRI can't be
+    fetched, and a reasoning run that reaches it fails, naming it.
+    """
     catalog = ET.Element("catalog", xmlns="urn:oasis:names:tc:entity:xmlns:xml:catalog", prefer="public")
     for iri, file in entries.items():
+        if _NOT_XML.search(iri):
+            logger.warning("Left the import %r out of the catalog: XML can't hold its IRI", iri)
+            continue
         for name in catalog_names(iri):
             ET.SubElement(catalog, "uri", name=name, uri=file.resolve().as_uri())
     ET.ElementTree(catalog).write(path, encoding="utf-8", xml_declaration=True)
