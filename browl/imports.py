@@ -375,7 +375,9 @@ def write_catalog(path: Path, entries: dict[str, Path]) -> None:
             logger.warning("Left the import %r out of the catalog: XML can't hold its IRI", iri)
             continue
         for name in catalog_names(iri):
-            ET.SubElement(catalog, "uri", name=name, uri=file.resolve().as_uri())
+            # Not `resolve()`d: `riot` resolves a relative import against the path as given, symlinks and all, and
+            # the OWLAPI against the URI it reads the file from, which must then be the same.
+            ET.SubElement(catalog, "uri", name=name, uri=file.absolute().as_uri())
     ET.ElementTree(catalog).write(path, encoding="utf-8", xml_declaration=True)
 
 

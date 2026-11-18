@@ -168,6 +168,15 @@ def test_catalog_skips_iri_xml_cant_hold(tmp_path: Path) -> None:
     assert catalog_map(catalog) == {f"{EX}b": (tmp_path / "b.ttl").as_uri()}
 
 
+def test_catalog_keeps_symlinks(tmp_path: Path) -> None:
+    """Check that the catalog names a file by the path it's given, as `riot` resolves relative imports against it."""
+    (tmp_path / "real").mkdir()
+    (tmp_path / "link").symlink_to(tmp_path / "real")
+    catalog = tmp_path / "catalog.xml"
+    write_catalog(catalog, {f"{EX}a": tmp_path / "link" / "a.ttl"})
+    assert catalog_map(catalog) == {f"{EX}a": (tmp_path / "link" / "a.ttl").as_uri()}
+
+
 def test_empty_ontology() -> None:
     """Check that a dropped import's empty ontology keeps its IRI, unless the IRI can't be written."""
     assert empty_ontology(f"{EX}a") == f"Ontology(<{EX}a>)\n"
