@@ -4,15 +4,12 @@ import asyncio
 import json
 import logging
 import os
-import shutil
 import signal
 import socket as socket_
 import subprocess
 import sys
-import tempfile
 import time
-from collections.abc import AsyncIterator, Iterator
-from contextlib import asynccontextmanager
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -23,38 +20,14 @@ import browl.robot
 from browl.jobs import Reasoner, StageError
 from browl.process import MAX_LINE_CHARS, run_process
 from browl.robot import reasoning_stage
-from browl.sandbox import Runner
 from tests.conftest import find_robot_jar
-from tests.helpers import StaticServer, make_settings, running_in_group, wait_for
+from tests.helpers import StaticServer, make_settings, running_in_group, serve_runs, wait_for
 from tests.test_robot import job
 
 pytestmark = pytest.mark.anyio
 
 STARTUP_S = 10.0
 """How long the runner, started as a subprocess, gets to start serving."""
-
-
-@pytest.fixture
-def short_dir() -> Iterator[Path]:
-    """Return a new directory with a path short enough for a Unix socket (macOS allows about 104 bytes)."""
-    directory = Path(tempfile.mkdtemp(prefix="browl-", dir="/tmp"))
-    try:
-        yield directory
-    finally:
-        shutil.rmtree(directory)
-
-
-@asynccontextmanager
-async def runner(directory: Path) -> AsyncIterator[Path]:
-    """Serve runs in this process, on this event loop, yielding the socket."""
-    socket = directory / "socket"
-    runner = Runner()
-    server = await asyncio.start_unix_server(runner.handle, socket)
-    try:
-        yield socket
-    finally:
-        server.close()
-        runner.kill_all()
 
 
 async def sandboxed(socket: Path, script: str, **kwargs: object) -> tuple[browl.process.Completed, list[str]]:
@@ -75,7 +48,7 @@ async def gone(pgid: int) -> bool:
 
 async def test_output_and_status(short_dir: Path) -> None:
     """Check that output lines, stdout's and stderr's, and the exit status come through."""
-    async with runner(short_dir) as socket:
+    async with serve_runs(short_dir) as socket:
         completed, lines = await sandboxed(socket, "echo one; echo two >&2; printf 'Bär'")
         assert completed.ok
         assert lines == ["one", "two", "Bär"]
@@ -86,7 +59,7 @@ async def test_output_and_status(short_dir: Path) -> None:
 
 async def test_long_line_cut(short_dir: Path) -> None:
     """Check that a long output line is cut short."""
-    async with runner(short_dir) as socket:
+    async with serve_runs(short_dir) as socket:
         _, lines = await sandboxed(socket, "printf '%05000d\\nend\\n'")
     assert lines == ["0" * MAX_LINE_CHARS, "end"]
 
@@ -102,7 +75,7 @@ async def test_time_limit_stops_group(short_dir: Path, monkeypatch: pytest.Monke
     """Check that a run past its time limit is stopped, its whole process group too."""
     monkeypatch.setattr(browl.process, "TERM_GRACE_S", 0.2)
     pid = short_dir / "pid"
-    async with runner(short_dir) as socket:
+    async with serve_runs(short_dir) as socket:
         completed, _ = await sandboxed(socket, script.format(pid=pid), timeout_s=0.5)
     assert completed.timed_out
     assert completed.status is not None
@@ -113,7 +86,7 @@ async def test_cancel_stops_group(short_dir: Path, monkeypatch: pytest.MonkeyPat
     """Check that a cancelled run's process group is stopped before `run_process` returns, even if cancelled again."""
     monkeypatch.setattr(browl.process, "TERM_GRACE_S", 1.0)
     pid = short_dir / "pid"
-    async with runner(short_dir) as socket:
+    async with serve_runs(short_dir) as socket:
         task = asyncio.create_task(sandboxed(socket, f"trap '' TERM; sleep 60 & echo $$ > {pid}; wait"))
         pgid = await wait_for(pid, task)
         task.cancel()
@@ -126,7 +99,7 @@ async def test_cancel_stops_group(short_dir: Path, monkeypatch: pytest.MonkeyPat
 
 async def test_ended_run_stops_group(short_dir: Path) -> None:
     """Check that what's left of a run's process group, once its leader has exited, is stopped."""
-    async with runner(short_dir) as socket:
+    async with serve_runs(short_dir) as socket:
         completed, lines = await sandboxed(socket, "sleep 60 >/dev/null 2>&1 & echo $$")
     assert completed.ok
     assert running_in_group(int(lines[0])) == []
@@ -135,7 +108,7 @@ async def test_ended_run_stops_group(short_dir: Path) -> None:
 async def test_hangup_stops_group(short_dir: Path) -> None:
     """Check that the runner stops a run's process group when its client disconnects."""
     pid = short_dir / "pid"
-    async with runner(short_dir) as socket:
+    async with serve_runs(short_dir) as socket:
         _, writer = await asyncio.open_unix_connection(socket)
         request = {"command": ["sh", "-c", f"sleep 60 & echo $$ > {pid}; wait"]}
         writer.write(json.dumps(request).encode() + b"\n")
@@ -150,7 +123,7 @@ async def test_low_space_stops(short_dir: Path, monkeypatch: pytest.MonkeyPatch)
     margin = browl.process.FREE_SPACE_MARGIN_BYTES
     monkeypatch.setattr(browl.process, "free_bytes", lambda path: margin - bool(pid.exists() and pid.read_text()))
     monkeypatch.setattr(browl.process, "SPACE_CHECK_S", 0.05)
-    async with runner(short_dir) as socket:
+    async with serve_runs(short_dir) as socket:
         completed, _ = await sandboxed(socket, f"sleep 60 & echo $$ > {pid}; wait", watch=[short_dir])
     assert completed.out_of_space
     assert running_in_group(int(pid.read_text())) == []
@@ -183,7 +156,7 @@ async def test_on_stdout_refused(short_dir: Path) -> None:
 )
 async def test_bad_request(short_dir: Path, request_: bytes) -> None:
     """Check that a request the runner can't run gets an error, and the connection is closed."""
-    async with runner(short_dir) as socket:
+    async with serve_runs(short_dir) as socket:
         reader, writer = await asyncio.open_unix_connection(socket)
         writer.write(request_)
         writer.write_eof()
@@ -194,7 +167,7 @@ async def test_bad_request(short_dir: Path, request_: bytes) -> None:
 
 async def test_empty_connection(short_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
     """Check that a connection with no request, as the health check makes, is closed without a word."""
-    async with runner(short_dir) as socket:
+    async with serve_runs(short_dir) as socket:
         reader, writer = await asyncio.open_unix_connection(socket)
         writer.write_eof()
         assert await reader.read() == b""
@@ -204,7 +177,7 @@ async def test_empty_connection(short_dir: Path, caplog: pytest.LogCaptureFixtur
 
 async def test_refused_run_fails(short_dir: Path) -> None:
     """Check that a run the sandbox refuses fails, saying why."""
-    async with runner(short_dir) as socket:
+    async with serve_runs(short_dir) as socket:
         with pytest.raises(StageError, match=r"^the tool sandbox couldn't run process: .*No such file"):
             await run_process(["/nonexistent/program"], timeout_s=10, sandbox=socket)
 
@@ -324,7 +297,7 @@ async def test_robot_in_sandbox(
         "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
         f"<http://example.org/o> a owl:Ontology ; owl:imports <{site.url}/missing> .\n"
     )
-    async with runner(short_dir) as socket:
+    async with serve_runs(short_dir) as socket:
         settings = make_settings(ROBOT_JAR=str(find_robot_jar()), SANDBOX_SOCKET=str(socket))
         context = job(settings, Reasoner.ELK, path)
         with (

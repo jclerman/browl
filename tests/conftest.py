@@ -14,6 +14,7 @@ tests whose needs are missing are skipped; in CI
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 import uuid
 from collections.abc import Iterator
@@ -40,6 +41,16 @@ MACOS_JAVA_HOME = "/usr/libexec/java_home"
 def anyio_backend() -> str:
     """Run the async tests on asyncio, as the app does."""
     return "asyncio"
+
+
+@pytest.fixture
+def short_dir() -> Iterator[Path]:
+    """Return a new directory with a path short enough for a Unix socket (macOS allows about 104 bytes)."""
+    directory = Path(tempfile.mkdtemp(prefix="browl-", dir="/tmp"))
+    try:
+        yield directory
+    finally:
+        shutil.rmtree(directory)
 
 
 @pytest.fixture

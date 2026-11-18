@@ -3,6 +3,7 @@
 import asyncio
 import shutil
 import stat
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
@@ -29,7 +30,7 @@ from browl.robot import (
 )
 from browl.settings import Settings
 from tests.conftest import DATA, find_robot_jar
-from tests.helpers import StaticServer, make_app, make_settings, running_in_group, wait_for
+from tests.helpers import StaticServer, make_app, make_settings, running_in_group, serve_runs, wait_for
 
 pytestmark = pytest.mark.anyio
 
@@ -51,6 +52,16 @@ def output_of(*lines: str) -> RobotOutput:
 def settings(data_dir: Path) -> Settings:
     """Return test settings with the tests' robot.jar."""
     return make_settings(ROBOT_JAR=str(find_robot_jar()))
+
+
+@pytest.fixture(params=["here", "sandbox"])
+async def where(request: pytest.FixtureRequest, short_dir: Path) -> AsyncIterator[dict[str, str]]:
+    """Yield settings that run ROBOT here, or through the sandbox's runner, served in this process (P-30)."""
+    if request.param == "here":
+        yield {}
+    else:
+        async with serve_runs(short_dir) as socket:
+            yield {"SANDBOX_SOCKET": str(socket)}
 
 
 def upload(data_dir: Path, fixture: str) -> Path:
@@ -178,11 +189,13 @@ async def test_robot_fetches_nothing(site: StaticServer, settings: Settings, dat
     assert requested == []
 
 
-async def test_long_lines_cut(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
+async def test_long_lines_cut(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path, where: dict[str, str]
+) -> None:
     """Check that a long output line is cut short."""
     fake_java(tmp_path, monkeypatch, "printf '%010000d\n'; exit 1")
     with pytest.raises(StageError) as raised:
-        await run_robot([], tmp_path, settings)
+        await run_robot([], tmp_path, make_settings(**where))
     assert str(raised.value).endswith("\n" + "0" * browl.process.MAX_LINE_CHARS)
 
 
@@ -226,7 +239,9 @@ async def test_none_skips(data_dir: Path) -> None:
     assert context.ontology == context.upload
 
 
-async def test_output_handling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
+async def test_output_handling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path, where: dict[str, str]
+) -> None:
     """Check that output is read whole, however long its lines and whether or not it ends in a newline."""
     fake_java(
         tmp_path,
@@ -234,23 +249,36 @@ async def test_output_handling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, 
         f"printf 'start\\n%0100000d\\nThere are 1 unsatisfiable classes\\nunsatisfiable: {NS}A'; exit 1",
     )
     with pytest.raises(StageError, match=f"^1 unsatisfiable classes: {NS}A$"):
-        await run_robot([], tmp_path, settings)
+        await run_robot([], tmp_path, make_settings(**where))
 
 
-async def test_output_split_characters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
+async def test_out_of_memory_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path, where: dict[str, str]
+) -> None:
+    """Check that the JVM's out-of-memory exit gives the memory-limit reason, here and through the sandbox."""
+    fake_java(tmp_path, monkeypatch, f"echo '{OUT_OF_MEMORY}: Java heap space'; exit 3")
+    with pytest.raises(StageError, match=r"^memory limit: reasoning needed more than REASONER_MAX_HEAP \(8g\)$"):
+        await run_robot([], tmp_path, make_settings(**where))
+
+
+async def test_output_split_characters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path, where: dict[str, str]
+) -> None:
     """Check that a multi-byte character split between reads is decoded whole."""
     fake_java(tmp_path, monkeypatch, f"printf 'There are 1 unsatisfiable classes\\nunsatisfiable: {NS}Bär→'; exit 1")
     monkeypatch.setattr(browl.process, "READ_BYTES", 1)
     with pytest.raises(StageError, match=f"^1 unsatisfiable classes: {NS}Bär→$"):
-        await run_robot([], tmp_path, settings)
+        await run_robot([], tmp_path, make_settings(**where))
 
 
-async def test_stops_group_on_cancel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
+async def test_stops_group_on_cancel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path, where: dict[str, str]
+) -> None:
     """Check that a cancelled run stops ROBOT's whole process group, with SIGKILL if SIGTERM is ignored."""
     pid_file = tmp_path / "pid"
     fake_java(tmp_path, monkeypatch, f"trap '' TERM; sleep 60 & echo $$ > {pid_file}; wait")
     monkeypatch.setattr(browl.process, "TERM_GRACE_S", 0.2)
-    task = asyncio.create_task(run_robot([], tmp_path, settings))
+    task = asyncio.create_task(run_robot([], tmp_path, make_settings(**where)))
     await wait_for(pid_file, task)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -259,13 +287,13 @@ async def test_stops_group_on_cancel(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 
 async def test_stops_group_on_second_cancel(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: Settings
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path, where: dict[str, str]
 ) -> None:
     """Check that a run cancelled again while its process group is being stopped still waits for it to stop."""
     pid_file = tmp_path / "pid"
     fake_java(tmp_path, monkeypatch, f"trap '' TERM; sleep 60 & echo $$ > {pid_file}; wait")
     monkeypatch.setattr(browl.process, "TERM_GRACE_S", 1.0)
-    task = asyncio.create_task(run_robot([], tmp_path, settings))
+    task = asyncio.create_task(run_robot([], tmp_path, make_settings(**where)))
     await wait_for(pid_file, task)
     task.cancel()
     await asyncio.sleep(0.2)  # SIGTERM sent and ignored
@@ -276,25 +304,27 @@ async def test_stops_group_on_second_cancel(
 
 
 async def test_failed_run_leaves_no_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: Settings, data_dir: Path
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path, where: dict[str, str]
 ) -> None:
     """Check that a run that fails after writing its output leaves neither a partial nor a reasoned file."""
     fake_java(tmp_path, monkeypatch, f'{OUTPUT_ARG}; echo x > "$out"; echo boom; exit 1')
-    context = job(settings, Reasoner.ELK, upload(data_dir, "ok.ofn"))
+    context = job(make_settings(**where), Reasoner.ELK, upload(data_dir, "ok.ofn"))
     with pytest.raises(StageError, match=r"^reasoner failed \(ROBOT exit status 1\):\nboom$"):
         await reasoning_stage(context)
     assert context.reasoned is None
     assert stored_files(context) == ["ontology.ofn"]
 
 
-async def test_time_limit_stops_group(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path) -> None:
+async def test_time_limit_stops_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path, where: dict[str, str]
+) -> None:
     """Check that a run past the time limit is stopped, its whole process group too, and leaves no output."""
     pid_file = tmp_path / "pid"
     fake_java(
         tmp_path, monkeypatch, f"{OUTPUT_ARG}; echo x > \"$out\"; trap '' TERM; sleep 60 & echo $$ > {pid_file}; wait"
     )
     monkeypatch.setattr(browl.process, "TERM_GRACE_S", 0.2)
-    settings = make_settings(REASONER_TIMEOUT_S=1)
+    settings = make_settings(**where, REASONER_TIMEOUT_S=1)
     context = job(settings, Reasoner.ELK, upload(data_dir, "ok.ofn"))
     with pytest.raises(StageError, match=r"^time limit: "):
         await reasoning_stage(context)
@@ -302,16 +332,20 @@ async def test_time_limit_stops_group(tmp_path: Path, monkeypatch: pytest.Monkey
     assert stored_files(context) == ["ontology.ofn"]
 
 
-async def test_stops_group_after_robot_exits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path) -> None:
+async def test_stops_group_after_robot_exits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path, where: dict[str, str]
+) -> None:
     """Check that a process ROBOT started is stopped, even once ROBOT itself has exited."""
     pid_file = tmp_path / "pid"
     fake_java(tmp_path, monkeypatch, f"echo $$ > {pid_file}; sleep 60 &")  # the sleep holds the output open
     with pytest.raises(StageError, match=r"^time limit: "):
-        await run_robot([], tmp_path, make_settings(REASONER_TIMEOUT_S=1))
+        await run_robot([], tmp_path, make_settings(**where, REASONER_TIMEOUT_S=1))
     assert running_in_group(int(pid_file.read_text())) == []
 
 
-async def test_low_space_stops(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path) -> None:
+async def test_low_space_stops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path, where: dict[str, str]
+) -> None:
     """Check that ROBOT is stopped, leaving no output, once its directory's free space falls below the margin."""
     pid_file = tmp_path / "pid"
     fake_java(tmp_path, monkeypatch, f'{OUTPUT_ARG}; echo x > "$out"; sleep 60 & echo $$ > {pid_file}; wait')
@@ -321,7 +355,7 @@ async def test_low_space_stops(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, 
         browl.process, "free_bytes", lambda path: margin - bool(pid_file.exists() and pid_file.read_text())
     )
     monkeypatch.setattr(browl.process, "SPACE_CHECK_S", 0.05)
-    context = job(make_settings(), Reasoner.ELK, upload(data_dir, "ok.ofn"))
+    context = job(make_settings(**where), Reasoner.ELK, upload(data_dir, "ok.ofn"))
     with pytest.raises(
         StageError, match=r"^disk space: a volume fell below 1,000,000,000 bytes free while reasoning ran$"
     ):

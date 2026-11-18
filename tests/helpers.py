@@ -5,6 +5,8 @@ import http.server
 import os
 import subprocess
 import threading
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx2
@@ -12,6 +14,7 @@ from fastapi import FastAPI
 
 from browl.app import create_app
 from browl.imports import OWL_IMPORTS
+from browl.sandbox import Runner
 from browl.settings import Settings
 
 
@@ -86,6 +89,19 @@ def turtle(iri: str, *imports: str, extra: str = "") -> str:
     lines = [f"<{iri}> a <http://www.w3.org/2002/07/owl#Ontology> ."]
     lines += [f"<{iri}> <{OWL_IMPORTS}> <{imported}> ." for imported in imports]
     return "\n".join([*lines, extra, ""])
+
+
+@asynccontextmanager
+async def serve_runs(directory: Path) -> AsyncIterator[Path]:
+    """Serve the sandbox's runs in this process, on this event loop, on a socket in the directory, which it yields."""
+    socket = directory / "socket"
+    runner = Runner()
+    server = await asyncio.start_unix_server(runner.handle, socket)
+    try:
+        yield socket
+    finally:
+        server.close()
+        runner.kill_all()
 
 
 WAIT_S = 10.0
