@@ -163,6 +163,8 @@ async def test_fetch(site: Site, tmp_path: Path, data_dir: Path) -> None:
     [
         ("file:///etc/passwd", None, "only http and https imports are fetched"),
         ("ftp://example.org/a", None, "only http and https imports are fetched"),
+        ("https://exaémple..com/", None, "not a valid URL: Invalid IDNA hostname"),
+        ("http://[::1/", None, "not a valid URL"),
         ("/missing", None, "HTTP 404 from"),
         ("/ofx", ("<Ontology ontologyIRI='x'/>", "application/owl+xml"), r"not in a syntax.*: OWL/XML"),
         ("/zip", (b"\x1f\x8b\x08 compressed", "application/gzip"), r"not in a syntax.*: compressed"),

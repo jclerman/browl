@@ -260,6 +260,8 @@ async def _fetch(client: httpx2.AsyncClient, iri: str, path: Path, settings: Set
         raise FetchError(f"timed out ({type(error).__name__})") from error
     except httpx2.HTTPError as error:
         raise FetchError(str(error) or type(error).__name__) from error
+    except httpx2.InvalidURL as error:  # not an HTTPError: e.g. a host name that isn't valid IDNA
+        raise FetchError(f"not a valid URL: {error}") from error
     syntax = sniff_syntax(sample)
     if syntax is None and content_type in {"text/turtle", "application/n-triples"}:
         syntax = Syntax.TURTLE
