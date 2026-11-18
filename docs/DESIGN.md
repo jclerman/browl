@@ -305,7 +305,8 @@ before its restriction cases became joins); converting the ontology to Jena's in
   once it's below the upload's margin (1 GB). The job records "disk space".
 - Memory: `-XX:+ExitOnOutOfMemoryError` makes any thread's `OutOfMemoryError` end the JVM with status 3 and the line
   `Terminating due to java.lang.OutOfMemoryError`; the job records "memory limit". Without the flag, an ELK worker's
-  breach shows only as a generic failure.
+  breach shows only as a generic failure. A SIGKILL at no limit of browl's, as from the sandbox's container memory
+  limit (`SANDBOX_MEM_LIMIT`), gives no such line; the job records "killed", most likely out of memory.
 - Other failures are told apart by ROBOT's log lines, checked in this order: `StackOverflowError` ("stack overflow"),
   `The ontology is inconsistent` ("inconsistent ontology"), `There are N unsatisfiable classes` ("unsatisfiable
   classes", with the classes it lists), `INVALID ONTOLOGY FILE ERROR` ("parse error"); anything else is "reasoner

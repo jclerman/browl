@@ -9,6 +9,7 @@ output signatures S-2 found (A-6, `failure_reason`).
 import asyncio
 import logging
 import re
+import signal
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,6 +40,8 @@ UNSATISFIABLE_SHOWN = 10
 
 OUT_OF_MEMORY = "Terminating due to java.lang.OutOfMemoryError"
 OUT_OF_MEMORY_STATUS = 3  # the JVM's exit status with -XX:+ExitOnOutOfMemoryError; ROBOT itself exits 1 on any error
+KILLED_STATUS = -signal.SIGKILL
+"""How a tool that the container's memory limit stopped ends: the kernel kills it without a word."""
 STACK_OVERFLOW = "StackOverflowError"
 INCONSISTENT = "The ontology is inconsistent"
 UNSATISFIABLE = re.compile(r"There are (\d+) unsatisfiable classes")
@@ -84,6 +87,8 @@ def failure_reason(completed: Completed, output: RobotOutput, settings: Settings
     status = completed.status
     if status == OUT_OF_MEMORY_STATUS and OUT_OF_MEMORY in output.signals:
         return f"memory limit: reasoning needed more than REASONER_MAX_HEAP ({settings.reasoner_max_heap})"
+    if status == KILLED_STATUS:
+        return killed_reason("reasoning")
     if STACK_OVERFLOW in output.signals:
         return "stack overflow: the reasoner recursed too deeply"
     if INCONSISTENT in output.signals:
@@ -95,6 +100,15 @@ def failure_reason(completed: Completed, output: RobotOutput, settings: Settings
     if PARSE_ERROR in output.signals:
         return f"parse error: ROBOT couldn't read the ontology:\n{completed.output}"
     return f"reasoner failed (ROBOT exit status {status}):\n{completed.output}"
+
+
+def killed_reason(activity: str) -> str:
+    """Return why a tool was killed with SIGKILL, which it wasn't sent at a limit: most likely, out of memory.
+
+    Args:
+        activity: What it did, as a noun, e.g. "reasoning".
+    """
+    return f"killed: {activity} most likely ran out of memory: the sandbox's (SANDBOX_MEM_LIMIT) or the host's"
 
 
 def reason_args(reasoner: Reasoner, source: Path, output: Path, settings: Settings, catalog: Path) -> list[str]:

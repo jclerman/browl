@@ -117,6 +117,7 @@ def fake_java(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, script: str) -> N
         (-15, [OUT_OF_MEMORY], True, "time limit: reasoning took longer than REASONER_TIMEOUT_S (3600 s)"),
         (3, ["Terminating due to java.lang.OutOfMemoryError: Java heap space"], False, "memory limit: "),
         (1, [OUT_OF_MEMORY], False, "reasoner failed (ROBOT exit status 1)"),  # needs status 3 too
+        (-9, [], False, "killed: reasoning most likely ran out of memory: the sandbox's (SANDBOX_MEM_LIMIT)"),
         (1, ['Exception in thread "main" java.lang.StackOverflowError'], False, "stack overflow"),
         (1, ["ERROR org.obolibrary.robot.ReasonerHelper - The ontology is inconsistent"], False, "inconsistent"),
         (1, [f"{PARSE_ERROR} Could not load a valid ontology"], False, "parse error: ROBOT couldn't read"),

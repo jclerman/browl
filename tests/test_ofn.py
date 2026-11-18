@@ -5,8 +5,10 @@ from pathlib import Path
 
 import pytest
 
+import browl.ofn
 from browl.jobs import StageError
 from browl.ofn import convert_ofn
+from browl.process import Completed
 from browl.settings import Settings
 from tests.conftest import find_robot_jar
 from tests.helpers import StaticServer, make_settings, turtle
@@ -95,3 +97,23 @@ async def test_time_limit(tmp_path: Path, data_dir: Path) -> None:
     ):
         await convert_ofn(source, tmp_path / "o.ttl", settings)
     assert sorted(path.name for path in tmp_path.iterdir()) == ["o.ofn"]
+
+
+@pytest.mark.parametrize(
+    ("completed", "expected"),
+    [
+        (Completed(3, tail=("java.lang.OutOfMemoryError: Java heap space",)), r"^memory limit: the OFN conversion "),
+        (Completed(-9), r"^killed: the OFN conversion most likely ran out of memory: "),
+    ],
+)
+async def test_memory_reasons(
+    completed: Completed, expected: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path
+) -> None:
+    """Check that a conversion past its heap limit, or killed, as by the sandbox's memory limit, says so."""
+
+    async def run_process(*args: object, **kwargs: object) -> Completed:
+        return completed
+
+    monkeypatch.setattr(browl.ofn, "run_process", run_process)
+    with pytest.raises(StageError, match=expected):
+        await convert_ofn(tmp_path / "o.ofn", tmp_path / "o.ttl", make_settings())

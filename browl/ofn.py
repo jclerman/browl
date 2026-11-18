@@ -17,7 +17,7 @@ from pathlib import Path
 
 from browl.jobs import StageError
 from browl.process import NO_NETWORK_JAVA_OPTIONS, run_process
-from browl.robot import OUT_OF_MEMORY_STATUS
+from browl.robot import KILLED_STATUS, OUT_OF_MEMORY_STATUS, killed_reason
 from browl.settings import Settings
 
 OUT_OF_MEMORY = "OutOfMemoryError"
@@ -73,6 +73,8 @@ async def convert_ofn(source: Path, output: Path, settings: Settings) -> Listing
             raise StageError(
                 f"memory limit: the OFN conversion needed more than REASONER_MAX_HEAP ({settings.reasoner_max_heap})"
             )
+        if completed.status == KILLED_STATUS:
+            raise StageError(killed_reason("the OFN conversion"))
         if not completed.ok:
             raise StageError(f"parse error: the OWLAPI couldn't read it as OWL Functional Syntax:\n{completed.output}")
         found = json.loads(await asyncio.to_thread(listed.read_text, encoding="utf-8"))
