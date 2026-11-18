@@ -1,21 +1,25 @@
 """Run a load job's tools (ROBOT, Jena's loader and parser) as subprocesses, each in its own process group.
 
-A process group is stopped however the run ends: at its time limit, when the data volume runs low on space, or when
-the job is cancelled.
+A process group is stopped however the run ends: at its time limit, when a watched volume runs low on space, or when
+the job is cancelled. ROBOT and the OFN lister run in the tool sandbox (`browl.sandbox`), when there is one; the
+time limit and the free-space watch stay here.
 """
 
 import asyncio
 import codecs
+import json
 import logging
 import os
 import shutil
 import signal
 from collections import deque
-from collections.abc import Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol, Self
 
+from browl.jobs import StageError
 from browl.upload import FREE_SPACE_MARGIN_BYTES
 
 logger = logging.getLogger(__name__)
@@ -35,6 +39,9 @@ MAX_LINE_CHARS = 2000
 TAIL_LINES = 20
 """How many of a process's last output lines are kept, for a failure's reason."""
 
+SANDBOX_STOP_EXTRA_S = 5.0
+"""How much longer than `TERM_GRACE_S` the sandbox gets to report a stopped run's status."""
+
 NO_NETWORK_JAVA_OPTIONS = (
     "-Dhttp.proxyHost=127.0.0.1",
     "-Dhttp.proxyPort=1",
@@ -43,11 +50,11 @@ NO_NETWORK_JAVA_OPTIONS = (
     "-Dhttp.nonProxyHosts=",
 )
 """JVM options that send every HTTP(S) request through a closed port, so the OWLAPI fetches nothing itself: defense in
-depth behind the catalog, until P-30's sandbox. They don't stop `file:` reads."""
+depth behind the catalog and the sandbox. They don't stop `file:` reads."""
 
 ENVIRONMENT = ("PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "JAVA_HOME", "JENA_HOME", "PYTHONPATH")
-"""The only variables of the app's environment a tool gets, besides coverage's (`COVERAGE_*`, so tests measure the
-Python ones), so a `file:///proc/self/environ` import can't read the app's settings."""
+"""The only variables of the app's (or the sandbox's) environment a tool gets, besides coverage's (`COVERAGE_*`, so
+tests measure the Python ones), so a `file:///proc/self/environ` import can't read the app's settings."""
 
 
 def tool_environment() -> dict[str, str]:
@@ -115,6 +122,7 @@ async def run_process(
     on_stdout: Callable[[bytes], None] | None = None,
     env: Mapping[str, str] | None = None,
     name: str = "process",
+    sandbox: Path | None = None,
 ) -> Completed:
     """Run a command in its own process group, until it ends, `timeout_s` passes, or a watched volume fills up.
 
@@ -125,19 +133,14 @@ async def run_process(
         timeout_s: The time limit.
         watch: Directories whose volumes must keep `FREE_SPACE_MARGIN_BYTES` free while it runs.
         on_stdout: Called with each chunk of its standard output, which then isn't read as lines.
-        env: Variables it gets besides the app's `ENVIRONMENT` ones.
+        env: Variables it gets besides the `ENVIRONMENT` ones of the app, or of the sandbox.
         name: What to call it in the log.
-    """
-    logger.info("Running %s", " ".join(command))
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE if on_stdout else asyncio.subprocess.STDOUT,
-        env={**tool_environment(), **(env or {})},
-        start_new_session=True,  # its own process group, so it and anything it starts can be stopped together
-    )
+        sandbox: The tool sandbox's socket (`browl.sandbox`), to run it there rather than here.
 
+    Raises:
+        ValueError: Both `on_stdout` and `sandbox` were given.
+        StageError: The sandbox couldn't be reached, or didn't run it.
+    """
     tail: deque[str] = deque(maxlen=TAIL_LINES)
 
     def line(text: str) -> None:
@@ -146,22 +149,157 @@ async def run_process(
             on_line(text)
         logger.info("%s: %s", name, text)
 
-    assert process.stdout is not None
-    reads = [_read_lines(process.stdout, line) if on_stdout is None else _read_chunks(process.stdout, on_stdout)]
-    if process.stderr is not None:
-        reads.append(_read_lines(process.stderr, line))
-    run = asyncio.ensure_future(_finish(process, reads))
+    run: _Run
+    if sandbox is None:
+        logger.info("Running %s", " ".join(command))
+        process = await start_process(command, env or {}, stderr_apart=on_stdout is not None)
+        run = _Local(process, name, line, on_stdout)
+    elif on_stdout is not None:
+        raise ValueError("on_stdout can't be used with a sandbox")
+    else:
+        logger.info("Running %s in the sandbox", " ".join(command))
+        run = await _Remote.connect(sandbox, {"command": list(command), "env": dict(env or {}), "name": name}, line)
+    finishing = asyncio.ensure_future(run.finish())
     timed_out = out_of_space = False
     try:
         try:
             async with asyncio.timeout(timeout_s):
-                out_of_space = not await _watch_space(run, watch)
+                out_of_space = not await _watch_space(finishing, watch)
         except TimeoutError:
             timed_out = True
     finally:
-        run.cancel()
-        await _despite_cancellation(asyncio.ensure_future(_stop(process, name)))
-    return Completed(process.returncode, timed_out, out_of_space, tuple(tail))
+        finishing.cancel()
+        await _despite_cancellation(asyncio.ensure_future(_end(finishing, run)))
+    return Completed(run.status, timed_out, out_of_space, tuple(tail))
+
+
+async def start_process(
+    command: Sequence[str], env: Mapping[str, str], *, stderr_apart: bool = False
+) -> asyncio.subprocess.Process:
+    """Start a command in its own process group, with `tool_environment()` and `env`, reading its output.
+
+    Args:
+        command: The program and its arguments.
+        env: Variables it gets besides the `ENVIRONMENT` ones.
+        stderr_apart: Read its stderr apart from its standard output, rather than merged into it.
+    """
+    return await asyncio.create_subprocess_exec(
+        *command,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE if stderr_apart else asyncio.subprocess.STDOUT,
+        env={**tool_environment(), **env},
+        start_new_session=True,  # its own process group, so it and anything it starts can be stopped together
+    )
+
+
+class _Run(Protocol):
+    """A process run here or in the sandbox, as `run_process` supervises it."""
+
+    @property
+    def status(self) -> int | None:
+        """Its exit status, once known."""
+
+    async def finish(self) -> None:
+        """Pass on its output until it ends."""
+
+    async def stop(self) -> None:
+        """Stop whatever is left of its process group."""
+
+
+class _Local:
+    def __init__(
+        self,
+        process: asyncio.subprocess.Process,
+        name: str,
+        on_line: Callable[[str], None],
+        on_stdout: Callable[[bytes], None] | None,
+    ) -> None:
+        self.process, self.name, self.on_line, self.on_stdout = process, name, on_line, on_stdout
+
+    @property
+    def status(self) -> int | None:
+        return self.process.returncode
+
+    async def finish(self) -> None:
+        stdout, stderr = self.process.stdout, self.process.stderr
+        assert stdout is not None
+        reads = [_read_lines(stdout, self.on_line) if self.on_stdout is None else _read_chunks(stdout, self.on_stdout)]
+        if stderr is not None:
+            reads.append(_read_lines(stderr, self.on_line))
+        await asyncio.gather(*reads)
+        await self.process.wait()
+
+    async def stop(self) -> None:
+        await stop_group(self.process, self.name)
+
+
+class _Remote:
+    """A run in the sandbox: its output lines, then its status, arrive as JSON lines (`browl.sandbox`)."""
+
+    def __init__(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, name: str, on_line: Callable[[str], None]
+    ) -> None:
+        self.reader, self.writer, self.name, self.on_line = reader, writer, name, on_line
+        self.status: int | None = None
+
+    @classmethod
+    async def connect(cls, socket: Path, request: Mapping[str, object], on_line: Callable[[str], None]) -> Self:
+        """Send the sandbox a request to run a command.
+
+        Raises:
+            StageError: The sandbox couldn't be reached.
+        """
+        try:
+            reader, writer = await asyncio.open_unix_connection(socket)
+        except OSError as error:
+            raise StageError(f"the tool sandbox isn't available at {socket}: {error}") from error
+        writer.write(json.dumps(request).encode() + b"\n")
+        return cls(reader, writer, str(request["name"]), on_line)
+
+    async def finish(self) -> None:
+        if not await self._read():
+            raise StageError(f"the tool sandbox closed the connection while {self.name} ran")
+
+    async def stop(self) -> None:
+        """Ask the sandbox to stop the run, by closing the request's side of the connection, and wait for its status."""
+        try:
+            if self.status is None:
+                with suppress(OSError, RuntimeError):  # the connection is already closed
+                    self.writer.write_eof()
+                try:
+                    async with asyncio.timeout(TERM_GRACE_S + SANDBOX_STOP_EXTRA_S):
+                        await self._read()
+                except (TimeoutError, OSError, StageError) as error:
+                    logger.warning(
+                        "No exit status from the tool sandbox for %s: %s", self.name, str(error) or "timed out"
+                    )
+        finally:
+            self.writer.close()
+            with suppress(OSError):
+                await self.writer.wait_closed()
+
+    async def _read(self) -> bool:
+        """Pass on output lines until the status arrives; return False if the connection ends first.
+
+        Raises:
+            StageError: The sandbox refused the run.
+        """
+        while message := await self.reader.readline():
+            reply = json.loads(message)
+            if "line" in reply:
+                self.on_line(reply["line"])
+            elif "status" in reply:
+                self.status = reply["status"]
+                return True
+            else:
+                raise StageError(f"the tool sandbox couldn't run {self.name}: {reply.get('error')}")
+        return False
+
+
+async def _end(finishing: asyncio.Future[None], run: _Run) -> None:
+    await asyncio.wait({finishing})  # so it no longer reads the output when stop() does
+    await run.stop()
 
 
 async def _despite_cancellation(task: asyncio.Future[None]) -> None:
@@ -178,11 +316,6 @@ async def _despite_cancellation(task: asyncio.Future[None]) -> None:
     task.result()
     if cancelled is not None:
         raise cancelled
-
-
-async def _finish(process: asyncio.subprocess.Process, reads: list[Coroutine[None, None, None]]) -> None:
-    await asyncio.gather(*reads)
-    await process.wait()
 
 
 async def _watch_space(run: asyncio.Future[None], directories: Sequence[Path]) -> bool:
@@ -203,19 +336,24 @@ async def _read_chunks(stream: asyncio.StreamReader, on_chunk: Callable[[bytes],
 
 
 async def _read_lines(stream: asyncio.StreamReader, on_line: Callable[[str], None]) -> None:
-    """Pass on each line of output, read in chunks, so no line is too long to read; long lines are cut short."""
+    async for line in output_lines(stream):
+        on_line(line)
+
+
+async def output_lines(stream: asyncio.StreamReader) -> AsyncIterator[str]:
+    """Yield each line of output, read in chunks, so no line is too long to read; long lines are cut short."""
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")  # keeps a character split between reads whole
     rest = ""
     while chunk := await stream.read(READ_BYTES):
         lines = (rest + decoder.decode(chunk)).split("\n")
         rest = lines.pop()[:MAX_LINE_CHARS]
         for line in lines:
-            on_line(line.rstrip()[:MAX_LINE_CHARS])
+            yield line.rstrip()[:MAX_LINE_CHARS]
     if rest := rest + decoder.decode(b"", final=True):
-        on_line(rest.rstrip())
+        yield rest.rstrip()
 
 
-async def _stop(process: asyncio.subprocess.Process, name: str) -> None:
+async def stop_group(process: asyncio.subprocess.Process, name: str) -> None:
     """Stop whatever is left in a process group: SIGTERM, then SIGKILL once its leader exits or `TERM_GRACE_S` passes.
 
     The group is signalled even after its leader exits, as a process it started could outlive it. A group's ID isn't

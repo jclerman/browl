@@ -2,6 +2,7 @@
 
 import http.server
 import os
+import subprocess
 import threading
 
 import httpx2
@@ -83,3 +84,13 @@ def turtle(iri: str, *imports: str, extra: str = "") -> str:
     lines = [f"<{iri}> a <http://www.w3.org/2002/07/owl#Ontology> ."]
     lines += [f"<{iri}> <{OWL_IMPORTS}> <{imported}> ." for imported in imports]
     return "\n".join([*lines, extra, ""])
+
+
+def running_in_group(pgid: int) -> list[str]:
+    """Return the `ps` lines of the processes still running in the process group, ignoring zombies.
+
+    A zombie has exited, but stays in its group until its parent reaps it: here a child of the killed shell, which is
+    reparented to a process that may never reap it (as on GitHub's runners), so `os.killpg(pgid, 0)` still succeeds.
+    """
+    ps = subprocess.run(["ps", "-A", "-o", "pgid=,stat=,pid=,command="], check=True, capture_output=True, text=True)
+    return [line for line in ps.stdout.splitlines() if int(line.split()[0]) == pgid and line.split()[1][0] != "Z"]
