@@ -15,7 +15,7 @@ import logging
 import sqlite3
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import AbstractAsyncContextManager, AbstractContextManager, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, AbstractContextManager, asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -207,7 +207,9 @@ async def build(data_dir: Path, meta: Meta) -> AsyncIterator[DerivedWriter]:
     """Build a generation's derived database on a thread of its own (`browl.derived.build`), yielding its writer.
 
     On a clean exit the database is swapped in; if the block fails or is cancelled, the temporary file is deleted.
-    Either way the build's end runs on the connection's thread after any work still queued there, and is waited for.
+    Either way the build's end runs on the connection's thread after any work still queued there, and is waited for,
+    even if this is cancelled meanwhile: the end, e.g. the rename into place, mustn't outlive the job lock. A
+    cancellation then propagates once the end is done, even if the database was swapped in.
     """
     loop = asyncio.get_running_loop()
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="derived-build")
@@ -221,7 +223,15 @@ async def build(data_dir: Path, meta: Meta) -> AsyncIterator[DerivedWriter]:
     finally:
         end = loop.run_in_executor(executor, building.exit, error)
         executor.shutdown(wait=False)
-        await asyncio.shield(end)
+        try:
+            await asyncio.shield(end)
+        except asyncio.CancelledError:
+            while not end.done():  # however often it's cancelled, e.g. by an anyio cancel scope
+                with suppress(asyncio.CancelledError):
+                    await asyncio.wait({end})
+            if not end.cancelled() and (end_error := end.exception()) is not None:
+                logger.warning("The cancelled derived build's end failed", exc_info=end_error)
+            raise
 
 
 class _Build:

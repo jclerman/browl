@@ -270,6 +270,38 @@ async def test_build_cancelled(settings: Settings) -> None:
     assert previous.is_file()
 
 
+async def test_build_cancelled_at_end(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a build cancelled during its end, here the rename, waits for the end before the cancellation ends it.
+
+    So the end can't outlive the job lock. The database it swapped in is whole.
+    """
+    renaming, release = threading.Event(), threading.Event()
+    rename = derived.os.replace
+
+    def blocked(source: Path, target: Path) -> None:
+        renaming.set()
+        release.wait(10)
+        rename(source, target)
+
+    monkeypatch.setattr(derived.os, "replace", blocked)
+
+    async def run() -> None:
+        async with build(settings.data_dir, Meta(2, Reasoner.NONE, LOADED_AT)):
+            pass
+
+    task = asyncio.create_task(run())
+    assert await asyncio.to_thread(renaming.wait, 10)
+    for _ in range(2):  # a second cancellation doesn't end the wait either
+        task.cancel()
+        await asyncio.sleep(0.05)
+        assert not task.done()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert derived_files(settings) == ["2.sqlite3"]
+    assert derived.is_current(settings.data_dir, 2)
+
+
 async def test_build_failure_at_swap(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that a failure at the swap, after the block, propagates and leaves no file."""
 
