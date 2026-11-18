@@ -81,6 +81,8 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **U-39** · Where a reasoner ran, inferred parents and axioms are marked as inferred, on entity pages, in the Usage tab and in the trees. | Later |
 | **U-40** · An inferred parent or axiom has a "Why?" link that shows its explanation: the asserted axioms that entail it, in Manchester syntax. | Later |
 | **U-41** · Each class page can list similar classes, ranked by similarity computed from the ontology's structure (graph embeddings of its axioms and hierarchies), at least as an option alongside any similarity from label text. | Later |
+| **U-42** · The main content of the pages is also available as JSON from a read-only API: an entity's header, annotations, logical axioms, direct parents and children, and Usage, plus search and the ontology's metadata. It returns the same data the pages show, from the same functions (see [2.13](#213-url-space-for-the-services-own-pages)). | Later |
+| **U-43** · Ontology diff: show how two versions of an ontology differ, with each change in its local graph context. A new area of work, with its own requirements and open questions in [ONTOLOGY-DIFF.md](ONTOLOGY-DIFF.md). | Later |
 
 ### 1.3 Admin requirements
 
@@ -631,6 +633,13 @@ Tabs (U-28; see [2.9](#29-page-layout)):
 - **Compact layout** (U-32): label column and value column in a two-column grid; tight line spacing within a group and a
   little more between groups. Multi-column values for long lists are Later (U-33).
 
+**Panel data apart from its HTML** (for U-42): each panel and tab is built in two steps. First a function returns its
+content as typed data (Pydantic models), with no HTML in it: annotations grouped by property, axioms grouped by kind,
+direct parents and children, a page of the Usage tab. Then a Jinja template renders that data. The HTML pages are built
+this way from v1, so the JSON API (U-42) can return the same models without rework ([2.13](#213-url-space-for-the-services-own-pages)).
+A JSON axiom carries its Manchester text with full IRIs (step 1 below), the entities it mentions with their display
+names, and the axiom kind; steps 2 and 3, which make HTML, belong to the template layer.
+
 **Manchester rendering** _(post-log; supersedes Q6's hand-written renderer)_: the OWLAPI's own Manchester syntax
 renderer, the one Protégé uses, covers all of OWL 2. It renders from a fragment of the ontology fetched for each page
 ([S-4 findings](../research/S-4/README.md)):
@@ -776,6 +785,7 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | `admin/upload` | The upload form (A-2, A-3) and the load job's status. The form is parsed as it streams in, the file written straight to the jobs volume, never held whole in memory or spooled to a temporary file; its reasoner field must come before its file. The job is claimed only once the file's name has been checked and its first 8 KiB found to look like the syntax the name says, so a malformed request or a mislabelled, OWL/XML or compressed file leaves the served ontology alone. A post a browser sent from another site's page (by `Sec-Fetch-Site`) is refused, against CSRF (P-6) |
 | `admin/status` | The load job's stage, start time, uploaded file (name, syntax, size), and failed stage and reason (A-5, A-6): an HTML fragment for htmx requests (`HX-Request`), which polls itself while a job runs, else a page, which polls the same way, or refreshes itself while a job runs if JS is off (P-5) |
 | `admin/docs`, `admin/openapi.json` | FastAPI's API docs (Swagger UI only, no ReDoc), as admin routes, so admin sign-in covers them; moved from FastAPI's default root paths, where they would shadow ontology entities. Swagger UI loads its assets from a CDN at an exact pinned version: an accepted exception to the no-CDN rule ([2.2](#22-libraries-and-components)), for admin pages only (P-5) |
+| `api/…` | JSON API (U-42; Later), below |
 | `health` | Liveness check for the container; also reports whether Fuseki answers |
 
 While a load job runs, every other URL (the ontology's pages, the other routes above, and paths nothing serves) gets
@@ -787,6 +797,30 @@ Neither page says why the site is unavailable; the failure reason is shown only 
 
 Pages link to the service's own routes by root-relative paths, never by URLs built from the request's scheme and
 `Host`, which a proxy may change and a client may forge (P-5).
+
+**JSON API** (U-42; Later, tentative). Read-only routes that return, as JSON, the same data the HTML pages show,
+from the same functions ([2.8](#28-entity-pages), "Panel data apart from its HTML"). An entity is named by its IRI in
+the query string, as in `iri?u=…`, so hash IRIs and IRIs that share a URL need no special handling. A first set:
+
+| Path | Returns |
+| --- | --- |
+| `api/entity?iri=…` | The page header: IRI, CURIE, display name, entity type, equivalent entities |
+| `api/entity/annotations?iri=…` | The annotations panel, grouped by property |
+| `api/entity/axioms?iri=…` | The logical-axioms panel, grouped by kind (SubClass Of, Equivalent To, …) |
+| `api/entity/parents?iri=…`, `api/entity/children?iri=…` | Direct parents or children in the entity's hierarchy, with child and descendant counts (U-7) |
+| `api/entity/usage?iri=…&page=…` | One page of the Usage tab (U-26) |
+| `api/search?q=…` | Search results, with the filters of U-10 |
+| `api/ontology` | The home page's metadata (U-1) |
+
+To settle when it's built:
+
+- Whether the entity URL also returns JSON when asked for it with `Accept: application/json`, beside U-23's RDF.
+- Public API docs. The OpenAPI docs are admin routes today, and their CDN exception covers admin pages only; a public
+  API needs public docs, so either the exception widens or Swagger UI's assets are served from the app.
+- While no ontology is ready, the API answers 503 with a JSON body rather than the "loading" page.
+- Whether the page cache ([2.10](#210-page-cache)) also keeps JSON responses. Building one costs about the same as a
+  page's data, about 10 ms, so it may not need to.
+- Rate or size limits on routes that page through large results (children of a class with many subclasses, Usage).
 
 ### 2.14 Risks
 
@@ -891,7 +925,7 @@ go into this document.
 
 ### Later
 
-Requirements marked **Later** (U-18–U-25, U-33–U-41, A-8, A-9, O-12) are not yet broken into work items.
+Requirements marked **Later** (U-18–U-25, U-33–U-43, A-8, A-9, O-12) are not yet broken into work items.
 
 **Novel features** _(post-log)_. EBI's [OLS4](https://github.com/EBISPOT/ols4) already offers much of v1 for many
 ontologies at once. It shows hierarchies along configured properties, but it does no reasoning, and its "Related from"
@@ -906,6 +940,10 @@ the load pipeline, and serving one ontology at a time. In rough priority order:
 5. Inferred axioms and their explanations (U-39, U-40).
 6. Similar classes by ontology structure (U-41). OLS4 offers similarity from text embeddings of labels and synonyms
    (S-5); U-41 uses the ontology's graph instead.
+7. Ontology diff (U-43), shown in graph context: a new area of work, in [ONTOLOGY-DIFF.md](ONTOLOGY-DIFF.md).
+
+The JSON API (U-42) isn't on this list, since OLS4 has a REST API too. Its cost is kept low by building the v1 pages'
+data apart from their HTML ([2.8](#28-entity-pages)).
 
 **Relation-tree edges from equivalence definitions** (for U-38). `EquivalentClasses(C, A and (P some D))` gives `C` the
 parent `D` in the tree for `P`. Tentatively, the edges query (P-12) finds these itself: it walks the `owl:intersectionOf`
@@ -942,4 +980,5 @@ shortcut `rdfs:subClassOf` links that reasoning removes, since they're asserted,
 them again.
 
 Out of scope for now: a quality report on upload (ROBOT `report`, which assumes OBO conventions that not every
-ontology follows) and version history with diffs between loads.
+ontology follows) and version history beyond the diff between two loads that [ONTOLOGY-DIFF.md](ONTOLOGY-DIFF.md)
+considers.
