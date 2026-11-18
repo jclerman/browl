@@ -3,7 +3,10 @@
 `jvm` tests need Java and `robot.jar`: `ROBOT_JAR`, else the one `make robot-jar` downloads, else the settings'
 default path. JPype finds Java through `JAVA_HOME`, so point it at Java 21; on macOS, when it's unset, the tests set it
 to Java 21 if that's installed. `fuseki` tests need a Fuseki: the one at `BROWL_TEST_FUSEKI_URL`, or one the
-tests build and start from `docker/fuseki` with Docker. Locally, tests whose needs are missing are skipped; in CI
+tests build and start from `docker/fuseki` with Docker. Tests that build stores for it (`fuseki_base`) also need Jena's
+tools (`JENA_HOME`, else the ones `make jena` downloads) and its base directory: for the Fuseki the tests start, a
+temporary directory mounted as its base; for one at `BROWL_TEST_FUSEKI_URL`, `BROWL_TEST_FUSEKI_BASE`. Locally,
+tests whose needs are missing are skipped; in CI
 (`CI` set) they fail instead, so CI runs every test. Mark such tests `jvm` or `fuseki`, and have them use the `jvm` or
 `fuseki_url` fixture.
 """
@@ -24,12 +27,14 @@ import pytest
 
 from browl import owlapi
 from browl.settings import Settings
+from tests.helpers import Site
 
 ROOT = Path(__file__).parent.parent
 DATA = Path(__file__).parent / "data"
 FUSEKI_IMAGE = "browl-fuseki-test"
 FUSEKI_START_TIMEOUT_S = 60
 ROBOT_JAR_CACHE = ROOT / ".cache" / "robot.jar"  # where `make robot-jar` puts it
+JENA_CACHE = ROOT / ".cache" / "jena"  # where `make jena` puts it
 MACOS_JAVA_HOME = "/usr/libexec/java_home"
 
 
@@ -44,6 +49,16 @@ def data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Return an empty directory, set as `DATA_DIR` in the environment."""
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     return tmp_path
+
+
+@pytest.fixture
+def site() -> Iterator[Site]:
+    """Yield a local HTTP server with fixed responses (`Site`)."""
+    server = Site()
+    try:
+        yield server
+    finally:
+        server.close()
 
 
 @pytest.fixture
@@ -76,6 +91,24 @@ def find_robot_jar() -> Path:
     if ROBOT_JAR_CACHE.is_file():
         return ROBOT_JAR_CACHE
     return Path(Settings.model_fields["robot_jar"].default)
+
+
+def find_jena_home() -> Path:
+    """Return the Jena tools the tests use: `JENA_HOME`, else `make jena`'s, else the settings' default."""
+    if path := os.environ.get("JENA_HOME"):
+        return Path(path)
+    if (JENA_CACHE / "bin").is_dir():
+        return JENA_CACHE
+    return Path(Settings.model_fields["jena_home"].default)
+
+
+@pytest.fixture(scope="session")
+def jena_home() -> Path:
+    """Return Jena's tools, or skip the test if they're missing (run `make jena`)."""
+    home = find_jena_home()
+    if not (home / "bin" / "tdb2.tdbloader").is_file():
+        skip_or_fail(f"no Jena tools at {home} (run `make jena`, or set JENA_HOME)")
+    return home
 
 
 def default_java_home() -> None:
@@ -143,25 +176,59 @@ def _wait_for_fuseki(url: str) -> None:
 
 
 @pytest.fixture(scope="session")
-def fuseki_url() -> Iterator[str]:
-    """Yield the URL of a Fuseki for the tests: `BROWL_TEST_FUSEKI_URL`, or one started in Docker from browl's image."""
+def fuseki_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[str, Path | None]]:
+    """Yield a Fuseki's URL and its base directory as the tests see it, None if unknown.
+
+    That's `BROWL_TEST_FUSEKI_URL` and `BROWL_TEST_FUSEKI_BASE`, or a Fuseki started in Docker from browl's image,
+    whose base is a temporary directory, and which runs as the tests' user, so it can open and delete the stores the
+    tests build there.
+    """
     if url := os.environ.get("BROWL_TEST_FUSEKI_URL", "").rstrip("/"):
         _wait_for_fuseki(url)
-        yield url
+        base = os.environ.get("BROWL_TEST_FUSEKI_BASE")
+        yield url, Path(base) if base else None
         return
     if (
         shutil.which("docker") is None
         or subprocess.run(["docker", "info"], check=False, capture_output=True).returncode
     ):
         skip_or_fail("no Fuseki: set BROWL_TEST_FUSEKI_URL, or make Docker available")
+    base = tmp_path_factory.mktemp("fuseki")
     _docker("build", "--quiet", "--tag", FUSEKI_IMAGE, str(ROOT / "docker" / "fuseki"))
-    container = _docker("run", "--detach", "--rm", "--publish", "127.0.0.1::3030", FUSEKI_IMAGE)
+    container = _docker(
+        "run",
+        "--detach",
+        "--rm",
+        "--publish",
+        "127.0.0.1::3030",
+        "--user",
+        f"{os.getuid()}:{os.getgid()}",
+        "--volume",
+        f"{base}:/fuseki",
+        FUSEKI_IMAGE,
+    )
     try:
         url = f"http://{_docker('port', container, '3030/tcp').splitlines()[0]}"
         _wait_for_fuseki(url)
-        yield url
+        yield url, base
     finally:
         subprocess.run(["docker", "rm", "--force", container], check=False, capture_output=True)
+
+
+@pytest.fixture(scope="session")
+def fuseki_url(fuseki_server: tuple[str, Path | None]) -> str:
+    """Return the URL of a Fuseki for the tests (`fuseki_server`)."""
+    return fuseki_server[0]
+
+
+@pytest.fixture(scope="session")
+def fuseki_base(fuseki_server: tuple[str, Path | None], jena_home: Path) -> Path:
+    """Return the base directory of the tests' Fuseki, where tests build stores; skip the test if it's unknown."""
+    base = fuseki_server[1]
+    if base is None:
+        skip_or_fail("BROWL_TEST_FUSEKI_URL is set but BROWL_TEST_FUSEKI_BASE isn't")
+    assert base is not None
+    return base
 
 
 @pytest.fixture(scope="session")

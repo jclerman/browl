@@ -34,6 +34,7 @@ DEFAULTS = [
     ("fuseki_url", HttpUrl("http://fuseki:3030")),
     ("robot_jar", Path("/opt/robot/robot.jar")),
     ("jena_home", Path("/opt/jena")),
+    ("fuseki_base", Path("/fuseki")),
     ("data_dir", Path("/data")),
     ("max_upload_bytes", 20 * 10**9),
     ("oidc_client_id", None),

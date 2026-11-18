@@ -20,6 +20,25 @@
     {%- endif %}.
   </p>
   {% endif %}
+  {% if job.triples is not none %}
+  <p>{{ "{:,}".format(job.triples) }} triples loaded{% if job.imports %}, not counting imports{% endif %}.</p>
+  {% endif %}
+  {% if job.imports %}
+  {% set dropped = job.dropped_imports %}
+  {% if dropped %}
+  <p class="failure" role="alert"><strong>{{ dropped | length }} of the ontology's {{ job.imports | length }} imports
+    couldn't be loaded</strong>, so the site leaves out what {{ "it declares" if dropped | length == 1 else "they declare" }}.</p>
+  {% endif %}
+  <ul class="imports">
+    {% for result in job.imports %}
+    <li{% if result.dropped %} class="failure"{% endif %}><code>{{ result.iri }}</code>
+      {%- if result.imported_by is not none %} (imported by <code>{{ result.imported_by }}</code>){% endif %}:
+      {% if result.dropped %}not loaded: {{ result.reason }}
+      {%- elif result.triples is not none %}{{ "{:,}".format(result.triples) }} triples
+      {%- else %}fetched{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
   <ol class="stages">
     {% set current = stages.index(job.stage) %}
     {% for stage in stages %}

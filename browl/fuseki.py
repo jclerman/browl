@@ -90,6 +90,80 @@ class SelectStream:
                 yield row
 
 
+UNION_FROM = "FROM <urn:x-arq:DefaultGraph> FROM <urn:x-arq:UnionGraph>"
+"""The dataset clause of a query that sees the ontology and its imports: the default graph merged with every named
+graph, as a set, so a triple both state counts once (DESIGN.md §2.4)."""
+
+ADMIN_TIMEOUT_S = 120.0
+"""Time limit for an admin protocol call: opening a store is quick, but removing one deletes its files."""
+
+
+def dataset_clause(has_imports: bool) -> str:
+    """Return the dataset clause for queries that should see the imports: `UNION_FROM` if there are any, else ""."""
+    return UNION_FROM if has_imports else ""
+
+
+class FusekiAdminError(Exception):
+    """A call to Fuseki's admin protocol failed."""
+
+
+class FusekiAdmin:
+    """Registers and removes Fuseki's TDB2 datasets through its admin protocol (`/$/datasets`, DESIGN.md §2.4)."""
+
+    def __init__(self, http: httpx2.AsyncClient) -> None:
+        """Use an HTTP client whose base URL is Fuseki's (`FUSEKI_URL`)."""
+        self._http = http
+
+    async def datasets(self) -> list[str]:
+        """Return the registered datasets' names.
+
+        Raises:
+            FusekiAdminError: The call failed, or its answer isn't a dataset list.
+        """
+        response = await self._call("GET", "/$/datasets")
+        try:
+            return [entry["ds.name"].removeprefix("/") for entry in response.json()["datasets"]]
+        except (ValueError, KeyError, TypeError, AttributeError) as error:
+            raise FusekiAdminError(f"Fuseki's dataset list is malformed: {error!r}") from error
+
+    async def add(self, name: str) -> None:
+        """Register the TDB2 dataset whose store is at `{FUSEKI_BASE}/databases/{name}`, opening it.
+
+        Raises:
+            FusekiAdminError: The call failed.
+        """
+        await self._call("POST", "/$/datasets", data={"dbName": _checked(name), "dbType": "tdb2"})
+
+    async def remove(self, name: str) -> None:
+        """Remove a dataset, which deletes its store.
+
+        Raises:
+            FusekiAdminError: The call failed.
+        """
+        await self._call("DELETE", f"/$/datasets/{_checked(name)}")
+
+    async def _call(self, method: str, path: str, data: dict[str, str] | None = None) -> httpx2.Response:
+        try:
+            async with asyncio.timeout(ADMIN_TIMEOUT_S):
+                response = await self._http.request(method, path, data=data)
+        except TimeoutError as error:
+            raise FusekiAdminError(
+                f"Fuseki HTTP request {method} {path} timed out after {ADMIN_TIMEOUT_S:g} s"
+            ) from error
+        except httpx2.HTTPError as error:
+            raise FusekiAdminError(f"Fuseki HTTP request {method} {path} failed: {error!r}") from error
+        if not response.is_success:
+            text = response.text[:_ERROR_TEXT_LIMIT].strip()
+            raise FusekiAdminError(f"Fuseki HTTP request {method} {path} answered {response.status_code}: {text}")
+        return response
+
+
+def _checked(name: str) -> str:
+    if not _DATASET.fullmatch(name):
+        raise ValueError(f"not a dataset name: {name!r}")
+    return name
+
+
 class FusekiClient:
     """Sends SPARQL queries to Fuseki's datasets, over the app's HTTP client for Fuseki."""
 

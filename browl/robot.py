@@ -6,19 +6,15 @@ was hit, or what else went wrong, using the output signatures S-2 found (A-6, `f
 """
 
 import asyncio
-import codecs
 import logging
-import os
 import re
-import shutil
-import signal
 from collections import deque
 from collections.abc import Sequence
-from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from browl.jobs import JobContext, Reasoner, StageError
+from browl.process import java, run_process
 from browl.settings import Settings
 from browl.upload import FREE_SPACE_MARGIN_BYTES
 
@@ -39,21 +35,8 @@ REASONED = "reasoned.ttl"
 PARTIAL = "reasoned.partial.ttl"
 """ROBOT's output while it's written, renamed to `REASONED` once complete; ROBOT picks the syntax by its suffix."""
 
-TERM_GRACE_S = 5.0
-"""How long ROBOT gets to exit after SIGTERM before it's sent SIGKILL."""
-
-SPACE_CHECK_S = 1.0
-"""How often the data volume's free space is checked while ROBOT runs; it stops ROBOT below
-`FREE_SPACE_MARGIN_BYTES`."""
-
 TAIL_LINES = 20
 """How many of ROBOT's last output lines a failure's reason quotes."""
-
-READ_BYTES = 65536
-"""How much of ROBOT's output is read at a time."""
-
-MAX_LINE_CHARS = 2000
-"""The longest output line kept; a longer one is cut short."""
 
 UNSATISFIABLE_SHOWN = 10
 """How many unsatisfiable classes a failure's reason names."""
@@ -85,7 +68,6 @@ class RobotOutput:
 
     def add(self, line: str) -> None:
         """Keep a line of output."""
-        line = line.rstrip()[:MAX_LINE_CHARS]
         self.tail.append(line)
         for signal_ in (OUT_OF_MEMORY, STACK_OVERFLOW, INCONSISTENT, PARSE_ERROR):
             if signal_ in line:
@@ -128,21 +110,21 @@ def failure_reason(
     return f"reasoner failed (ROBOT exit status {status}):\n{tail}"
 
 
-def java() -> str:
-    """Return the Java executable: `JAVA_HOME`'s, else `java` on the PATH."""
-    home = os.environ.get("JAVA_HOME")
-    return str(Path(home) / "bin" / "java") if home else "java"
-
-
-def reason_args(reasoner: Reasoner, source: Path, output: Path, settings: Settings) -> list[str]:
+def reason_args(reasoner: Reasoner, source: Path, output: Path, settings: Settings, catalog: Path) -> list[str]:
     """Return ROBOT's arguments for a reasoning run: reason, materialize if configured, then remove shortcuts."""
     name = ROBOT_REASONERS[reasoner]
-    args = ["reason", "--input", str(source), "--reasoner", name, "--axiom-generators", AXIOM_GENERATORS]
+    args = ["reason", "--catalog", str(catalog), "--input", str(source), "--reasoner", name]
+    args += ["--axiom-generators", AXIOM_GENERATORS]
     if settings.materialize_properties:
         args += ["materialize", "--reasoner", name]
         for prop in settings.materialize_properties:
             args += ["--term", prop]
     return [*args, "query", "--update", str(SHORTCUTS_QUERY), "--output", str(output)]
+
+
+def convert_args(source: Path, output: Path, catalog: Path) -> list[str]:
+    """Return ROBOT's arguments for converting an ontology to the syntax its output's suffix names."""
+    return ["convert", "--catalog", str(catalog), "--input", str(source), "--output", str(output)]
 
 
 async def run_robot(args: Sequence[str], settings: Settings) -> None:
@@ -160,102 +142,48 @@ async def run_robot(args: Sequence[str], settings: Settings) -> None:
         "-vv",
         *args,
     ]
-    logger.info("Running %s", " ".join(command))
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        start_new_session=True,  # its own process group, so the JVM and anything it starts can be stopped together
-    )
     output = RobotOutput()
-    run = asyncio.ensure_future(_read(process, output))
-    timed_out = out_of_space = False
-    try:
-        try:
-            async with asyncio.timeout(settings.reasoner_timeout_s):
-                out_of_space = not await _watch_space(run, settings.data_dir)
-        except TimeoutError:
-            timed_out = True
-    finally:
-        run.cancel()
-        # Shielded: a cancelled job still stops ROBOT, even if cancelled again meanwhile.
-        await asyncio.shield(_stop(process))
-    if timed_out or out_of_space or process.returncode != 0:
-        raise StageError(failure_reason(process.returncode, output, timed_out, settings, out_of_space))
+    completed = await run_process(
+        command, output.add, timeout_s=settings.reasoner_timeout_s, watch=[settings.data_dir], name="ROBOT"
+    )
+    if not completed.ok:
+        raise StageError(
+            failure_reason(completed.status, output, completed.timed_out, settings, completed.out_of_space)
+        )
 
 
-async def _watch_space(run: asyncio.Future[None], data_dir: Path) -> bool:
-    """Wait for the run; return False as soon as the data volume has less than `FREE_SPACE_MARGIN_BYTES` free."""
-    while True:
-        done, _ = await asyncio.wait({run}, timeout=SPACE_CHECK_S)
-        if done:
-            run.result()
-            return True
-        if await asyncio.to_thread(free_bytes, data_dir) < FREE_SPACE_MARGIN_BYTES:
-            return False
-
-
-def free_bytes(path: Path) -> int:
-    """Return the free space on the file system that holds the path."""
-    return shutil.disk_usage(path).free
-
-
-async def _read(process: asyncio.subprocess.Process, output: RobotOutput) -> None:
-    """Keep and log ROBOT's output lines until it ends, read in chunks, so no line is too long to read."""
-    assert process.stdout is not None
-    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")  # keeps a character split between reads whole
-    rest = ""
-    while chunk := await process.stdout.read(READ_BYTES):
-        lines = (rest + decoder.decode(chunk)).split("\n")
-        rest = lines.pop()[:MAX_LINE_CHARS]
-        for line in lines:
-            _keep(line, output)
-    if rest := rest + decoder.decode(b"", final=True):
-        _keep(rest, output)
-    await process.wait()
-
-
-def _keep(line: str, output: RobotOutput) -> None:
-    output.add(line)
-    logger.info("ROBOT: %s", output.tail[-1])
-
-
-async def _stop(process: asyncio.subprocess.Process) -> None:
-    """Stop whatever is left in ROBOT's process group: SIGTERM, then SIGKILL once ROBOT exits or `TERM_GRACE_S` passes.
-
-    The group is signalled even after ROBOT exits, as a process it started could outlive it. A group's ID isn't reused
-    while any process is left in it. macOS refuses to signal a group of zombies (EPERM), which is as good as gone.
-    """
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
-        return  # nothing left
-    try:
-        async with asyncio.timeout(TERM_GRACE_S):
-            await process.wait()
-    except TimeoutError:
-        logger.warning("ROBOT (pid %d) didn't exit on SIGTERM", process.pid)
-    with suppress(ProcessLookupError, PermissionError):
-        os.killpg(process.pid, signal.SIGKILL)
-    await process.wait()
-
-
-async def reasoning_stage(context: JobContext) -> None:
-    """Classify the upload with the chosen reasoner, setting the context's `reasoned` file; skip it if none was chosen.
-
-    The output is written to a temporary file and renamed, so a run stopped mid-write leaves no partial ontology.
+async def robot_to_file(args: Sequence[str], partial: Path, output: Path, settings: Settings) -> None:
+    """Run ROBOT writing to `partial`, renamed to `output` once it succeeds, so a stopped run leaves no partial file.
 
     Raises:
-        StageError: Reasoning failed (`failure_reason`).
+        StageError: ROBOT failed.
     """
-    if context.reasoner is Reasoner.NONE or context.upload is None:
-        return
-    partial, reasoned = context.upload.with_name(PARTIAL), context.upload.with_name(REASONED)
     try:
-        await run_robot(reason_args(context.reasoner, context.upload, partial, context.settings), context.settings)
-        await asyncio.to_thread(partial.replace, reasoned)
+        await run_robot(args, settings)
+        await asyncio.to_thread(partial.replace, output)
     except BaseException:
         await asyncio.to_thread(partial.unlink, missing_ok=True)
         raise
+
+
+async def reasoning_stage(context: JobContext) -> None:
+    """Classify the upload with the chosen reasoner, setting the context's `reasoned` file.
+
+    Without a reasoner, an OWL Functional Syntax upload, which the TDB2 loader can't read, is converted to an RDF
+    syntax instead, also set as `reasoned`; any other upload is left as it is. ROBOT resolves imports only through the
+    catalog the imports stage wrote (`browl.imports`), never from their IRIs.
+
+    Raises:
+        StageError: Reasoning or the conversion failed (`failure_reason`).
+    """
+    if context.upload is None or (context.reasoner is Reasoner.NONE and context.upload.suffix != ".ofn"):
+        return
+    if context.catalog is None:
+        raise StageError("internal error: the imports stage wrote no catalog")
+    partial, reasoned = context.upload.with_name(PARTIAL), context.upload.with_name(REASONED)
+    if context.reasoner is Reasoner.NONE:
+        args = convert_args(context.upload, partial, context.catalog)
+    else:
+        args = reason_args(context.reasoner, context.upload, partial, context.settings, context.catalog)
+    await robot_to_file(args, partial, reasoned, context.settings)
     context.reasoned = reasoned
