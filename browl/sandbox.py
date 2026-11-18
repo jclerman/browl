@@ -1,16 +1,15 @@
 """The tool sandbox's runner (P-30): runs ROBOT and the OFN lister for the app, in a container with no network.
 
 `python -m browl.sandbox SOCKET_PATH` serves runs on a Unix socket that only its user can use. A run is one connection:
-the client sends one JSON line, `{"command": [...], "env": {...}, "name": "..."}`; the runner starts the command as
+the client sends a `browl.process.Request` as one JSON line; the runner starts the command as
 `browl.process.run_process` does, in its own process group with `tool_environment()` and `env`, and sends each output
-line as `{"line": "..."}`. Once the process ends, or the client closes its side of the connection, the runner stops
-what's left of the group and sends `{"status": <exit status>}`. A request it can't run gets `{"error": "..."}`.
+line as a `Reply`, `{"line": "..."}`. Once the process ends, or the client closes its side of the connection, the runner
+stops what's left of the group and sends `{"status": <exit status>}`. A request it can't run gets `{"error": "..."}`.
 
 The client (`run_process` with `sandbox`) keeps the time limit and the free-space watch.
 """
 
 import asyncio
-import json
 import logging
 import os
 import signal
@@ -18,27 +17,9 @@ import sys
 from contextlib import suppress
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
-
-from browl.process import READ_BYTES, output_lines, start_process, stop_group
+from browl.process import READ_BYTES, Reply, Request, output_lines, start_process, stop_group
 
 logger = logging.getLogger(__name__)
-
-
-class Request(BaseModel):
-    """A client's request to run a command.
-
-    Attributes:
-        command: The program and its arguments.
-        env: Variables it gets besides the runner's `ENVIRONMENT` ones.
-        name: What to call it in the log.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    command: list[str] = Field(min_length=1)
-    env: dict[str, str] = {}
-    name: str = "process"
 
 
 class Runner:
@@ -76,7 +57,7 @@ class Runner:
         except (ValueError, OSError) as error:  # pydantic's ValidationError is a ValueError
             logger.warning("Refused a request: %s", error)
             with suppress(OSError):
-                await _send(writer, {"error": str(error)})
+                await _send(writer, Reply(error=str(error)))
             return
         name = request.name
         logger.info("Running %s (pid %d): %s", name, process.pid, " ".join(request.command))
@@ -95,18 +76,18 @@ class Runner:
             await asyncio.gather(output, hangup, return_exceptions=True)
         logger.info("%s (pid %d) ended with status %s", name, process.pid, process.returncode)
         with suppress(OSError):
-            await _send(writer, {"status": process.returncode})
+            await _send(writer, Reply(status=process.returncode))
 
 
-async def _send(writer: asyncio.StreamWriter, message: dict[str, object]) -> None:
-    writer.write(json.dumps(message).encode() + b"\n")
+async def _send(writer: asyncio.StreamWriter, reply: Reply) -> None:
+    writer.write(reply.model_dump_json(exclude_none=True).encode() + b"\n")
     await writer.drain()  # so a slow client holds the process back, rather than its output piling up here
 
 
 async def _forward(process: asyncio.subprocess.Process, writer: asyncio.StreamWriter) -> None:
     assert process.stdout is not None
     async for line in output_lines(process.stdout):
-        await _send(writer, {"line": line})
+        await _send(writer, Reply(line=line))
     await process.wait()
 
 

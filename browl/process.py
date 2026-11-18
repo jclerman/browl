@@ -7,7 +7,6 @@ time limit and the free-space watch stay here.
 
 import asyncio
 import codecs
-import json
 import logging
 import os
 import shutil
@@ -19,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, Self
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from browl.jobs import StageError
 from browl.upload import FREE_SPACE_MARGIN_BYTES
@@ -160,7 +159,7 @@ async def run_process(
         raise ValueError("on_stdout can't be used with a sandbox")
     else:
         logger.info("Running %s in the sandbox", " ".join(command))
-        run = await _Remote.connect(sandbox, {"command": list(command), "env": dict(env or {}), "name": name}, line)
+        run = await _Remote.connect(sandbox, Request(command=list(command), env=dict(env or {}), name=name), line)
     finishing = asyncio.ensure_future(run.finish())
     timed_out = out_of_space = False
     try:
@@ -193,6 +192,22 @@ async def start_process(
         env={**tool_environment(), **env},
         start_new_session=True,  # its own process group, so it and anything it starts can be stopped together
     )
+
+
+class Request(BaseModel):
+    """A request to the sandbox to run a command.
+
+    Attributes:
+        command: The program and its arguments.
+        env: Variables it gets besides the sandbox's `ENVIRONMENT` ones.
+        name: What to call it in the log.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    command: list[str] = Field(min_length=1)
+    env: dict[str, str] = {}
+    name: str = "process"
 
 
 class Reply(BaseModel):
@@ -268,7 +283,7 @@ class _Remote:
         self.status: int | None = None
 
     @classmethod
-    async def connect(cls, socket: Path, request: Mapping[str, object], on_line: Callable[[str], None]) -> Self:
+    async def connect(cls, socket: Path, request: Request, on_line: Callable[[str], None]) -> Self:
         """Send the sandbox a request to run a command.
 
         Raises:
@@ -278,8 +293,8 @@ class _Remote:
             reader, writer = await asyncio.open_unix_connection(socket)
         except OSError as error:
             raise StageError(f"the tool sandbox isn't available at {socket}: {error}") from error
-        writer.write(json.dumps(request).encode() + b"\n")
-        return cls(reader, writer, str(request["name"]), on_line)
+        writer.write(request.model_dump_json().encode() + b"\n")
+        return cls(reader, writer, request.name, on_line)
 
     async def finish(self) -> None:
         if not await self._read():
