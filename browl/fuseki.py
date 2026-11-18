@@ -4,7 +4,7 @@ Every response is checked strictly, because a query that fails after Fuseki has 
 with the error appended as text (DESIGN.md §2.14). A query fails, raising `SparqlError`, when Fuseki answers with any
 status other than 2xx, when the connection fails or the body ends early, when it doesn't answer in time, and when the
 result doesn't parse. A failed query never looks like a short result. Bulk results that may break off cleanly at a row
-boundary need their own completeness check (P-8).
+boundary need their own completeness check (P-9).
 """
 
 import asyncio
@@ -92,7 +92,7 @@ class SelectStream:
 
 UNION_FROM = "FROM <urn:x-arq:DefaultGraph> FROM <urn:x-arq:UnionGraph>"
 """The dataset clause of a query that sees the ontology and its imports: the default graph merged with every named
-graph, as a set, so a triple both state counts once (DESIGN.md §2.4)."""
+graph, as a set, so a triple both state counts once (DESIGN.md §2.4). Unused by app code until P-9's bulk queries."""
 
 ADMIN_TIMEOUT_S = 120.0
 """Time limit for an admin protocol call: opening a store is quick, but removing one deletes its files."""

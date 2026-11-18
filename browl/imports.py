@@ -35,7 +35,7 @@ from browl.jobs import ImportResult, JobContext, StageError
 from browl.ofn import Listing, convert_ofn
 from browl.process import free_bytes, run_process
 from browl.settings import Settings
-from browl.upload import FREE_SPACE_MARGIN_BYTES, IDLE_S, SNIFF_BYTES, STORED_SUFFIXES, Syntax, sniff_syntax
+from browl.upload import FORMATS, FREE_SPACE_MARGIN_BYTES, IDLE_S, SNIFF_BYTES, STORED_SUFFIXES, Syntax, sniff_syntax
 
 logger = logging.getLogger(__name__)
 
@@ -520,8 +520,7 @@ async def imports_stage(context: JobContext, allowed: AddressCheck | None = None
     directory = context.upload.parent / IMPORTS_DIR
     await asyncio.to_thread(shutil.rmtree, directory, ignore_errors=True)
     await asyncio.to_thread(directory.mkdir)
-    syntax = next(syntax for syntax, suffix in STORED_SUFFIXES.items() if suffix == context.upload.suffix)
-    upload = _Document(context.upload, syntax, None)
+    upload = _Document(context.upload, FORMATS[context.upload.suffix], None)
     async with fetch_client(allowed) as client:
         closure = _Closure(directory, context.settings, client)
         await closure.walk(upload)
