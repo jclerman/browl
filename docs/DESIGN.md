@@ -550,6 +550,8 @@ end, a 256 MiB page cache (SQLite's default 2 MB thrashes on these inserts and s
 **The ontology's IRI** comes from the default graph only, the ontology without its imports: an `owl:Ontology` IRI that
 nothing there imports, since an OFN upload's converted Turtle may declare the ontologies it imports. If several remain,
 the alphabetically first is taken, so the choice is stable, and a warning logged; likewise for several version IRIs.
+The result is read as it streams, keeping only that ontology's values, and one of more than `HEADER_MAX_ROWS` rows
+fails pre-caching, so an upload that declares millions of ontologies can't hold the job lock while they're all read.
 The same query reads that ontology's title and `owl:versionInfo`, literals only. The title is the first property's
 value among `dcterms:title`, `dc:title`, then `NAME_PROPERTIES`, chosen by language ranking ([2.7](#27-display-names))
 then lexical order, with a warning if several tie; without one, pages show the IRI. Several `owl:versionInfo` values are

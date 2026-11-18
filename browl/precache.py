@@ -53,6 +53,12 @@ WHERE {{
 from its own (default) graph: an ontology it imports, as an OFN upload's converted Turtle may declare, is left out,
 and so are an import's titles, in its own named graph."""
 
+HEADER_MAX_ROWS = 10_000
+"""The most rows the ontology header query may return, a few per ontology in practice: an upload that declares
+millions of ontologies, or values, fails pre-caching instead of holding the job lock while they're all read."""
+
+_LOGGED_IRIS = 10  # the most other ontology IRIs a warning lists
+
 OWL_VERSION_IRI = "http://www.w3.org/2002/07/owl#versionIRI"
 OWL_VERSION_INFO = "http://www.w3.org/2002/07/owl#versionInfo"
 DCTERMS_TITLE = "http://purl.org/dc/terms/title"
@@ -167,7 +173,7 @@ async def pre_caching_stage(context: JobContext, http: httpx2.AsyncClient, hooks
     """Build the new generation's derived database from the store just loaded, and swap it in (`pre_cache`).
 
     Raises:
-        StageError: A query failed or returned an incomplete result.
+        StageError: A query failed or returned an incomplete result, or the header query too many rows.
     """
     if context.ontology is None:  # nothing was loaded (as the loading stage skips it)
         return
@@ -187,7 +193,7 @@ async def pre_cache(context: JobContext, http: httpx2.AsyncClient, hooks: Sequen
         hooks: The hooks that fill the tables, run in order.
 
     Raises:
-        StageError: A query failed or returned an incomplete result.
+        StageError: A query failed or returned an incomplete result, or the header query too many rows.
     """
     sparql = FusekiClient(http)
     dataset = dataset_name(context.generation)
@@ -292,26 +298,46 @@ async def ontology_header(sparql: FusekiClient, dataset: str, settings: Settings
 
     Raises:
         SparqlError: The query failed, or its result is incomplete.
+        StageError: The query returned more than `HEADER_MAX_ROWS` rows.
     """
     titles = title_properties(settings)
     properties = ", ".join(f"<{iri}>" for iri in [OWL_VERSION_IRI, OWL_VERSION_INFO, *titles])
+    iri: str | None = None
+    others: set[str] = set()
+    values: dict[str, list[Term]] = {}  # iri's
     async with sparql.bulk_select(dataset, ONTOLOGY_HEADER.format(properties=properties), PREFIXES) as stream:
         columns = [stream.variables.index(name) for name in ("ontology", "property", "value")]
-        rows = [tuple(row[column] for column in columns) async for row in stream]
-    ontologies = sorted({str(ontology) for ontology, _, _ in rows if ontology is not None})
-    if not ontologies:
+        count = 0
+        async for row in stream:
+            count += 1
+            if count > HEADER_MAX_ROWS:
+                raise StageError(f"the ontology header query returned more than {HEADER_MAX_ROWS:,} rows")
+            ontology, prop, value = (row[column] for column in columns)
+            if ontology is None:
+                continue
+            if iri is None or str(ontology) < iri:
+                if iri is not None:
+                    others.add(iri)
+                iri, values = str(ontology), {}
+            elif ontology != iri:
+                others.add(str(ontology))
+                continue
+            if prop is not None and value is not None:
+                values.setdefault(str(prop), []).append(value)
+    if iri is None:
         return OntologyHeader()
-    iri = ontologies[0]
-    if len(ontologies) > 1:
-        logger.warning("The ontology declares several ontology IRIs; taking %s from %s", iri, ontologies)
-    values: dict[str, list[Term]] = {}
-    for ontology, prop, value in rows:
-        if ontology == iri and prop is not None and value is not None:
-            values.setdefault(str(prop), []).append(value)
+    if others:
+        logger.warning(
+            "The ontology declares %d ontology IRIs; taking %r, not %r%s",
+            len(others) + 1,
+            iri,
+            sorted(others)[:_LOGGED_IRIS],
+            " …" if len(others) > _LOGGED_IRIS else "",
+        )
 
     versions = sorted({str(version) for version in values.get(OWL_VERSION_IRI, []) if isinstance(version, IRI)})
     if len(versions) > 1:
-        logger.warning("The ontology %s has several version IRIs; taking %s", iri, versions[0])
+        logger.warning("The ontology %r has several version IRIs; taking %r", iri, versions[0])
 
     title = None
     ranking = settings.language_ranking
@@ -321,7 +347,7 @@ async def ontology_header(sparql: FusekiClient, dataset: str, settings: Settings
             title = best[0]
             if len(best) > 1:
                 logger.warning(
-                    "The ontology %s has several titles (%s) of the best language; taking %r",
+                    "The ontology %r has several titles (%s) of the best language; taking %r",
                     iri,
                     title_property,
                     title,
@@ -332,7 +358,7 @@ async def ontology_header(sparql: FusekiClient, dataset: str, settings: Settings
     best_infos = best_values(infos, ranking)
     if len({info.value for info in infos}) > 1:
         logger.warning(
-            "The ontology %s has several owl:versionInfo values %r; taking %r",
+            "The ontology %r has several owl:versionInfo values %r; taking %r",
             iri,
             sorted({info.value for info in infos}),
             best_infos[0],

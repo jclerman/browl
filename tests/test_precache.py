@@ -223,9 +223,12 @@ async def test_stage_skipped_without_ontology(settings: Settings) -> None:
         ("", OntologyHeader(), None),
         (f"<{ONTOLOGY}>\t\t\t\n", OntologyHeader(ONTOLOGY), None),
         (
-            f'<{EX}b>\t\t\t\n<{EX}a>\t{VERSION_IRI}\t<{EX}a/1>\t\n<{EX}b>\t{DCTERMS_TITLE}\t"B"\t\n',
+            (
+                f'<{EX}b>\t{DCTERMS_TITLE}\t"B"\t\n<{EX}a>\t{VERSION_IRI}\t<{EX}a/1>\t\n'
+                f'<{EX}c>\t{DCTERMS_TITLE}\t"C"\t\n<{EX}b>\t{VERSION_INFO}\t"b"\t\n'
+            ),
             OntologyHeader(f"{EX}a", f"{EX}a/1"),
-            "several ontology IRIs",
+            f"declares 3 ontology IRIs; taking '{EX}a', not ['{EX}b', '{EX}c']",
         ),
         (
             (
@@ -302,6 +305,22 @@ async def test_ontology_header(
     assert (warning is None) == (not caplog.records)
     if warning:
         assert warning in caplog.text
+
+
+async def test_ontology_header_limits(
+    settings: Settings, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Check that a header query result of too many rows fails, and that a warning lists only a few other IRIs."""
+    monkeypatch.setattr(precache, "HEADER_MAX_ROWS", 4)
+    monkeypatch.setattr(precache, "_LOGGED_IRIS", 2)
+    rows = "".join(f"<{EX}{name}>\t\t\t\n" for name in "dcba")
+    async with fuseki(f"{HEADER}{rows}{END}") as http:
+        with caplog.at_level(logging.WARNING, logger="browl.precache"):
+            assert await ontology_header(FusekiClient(http), "gen-1", settings) == OntologyHeader(f"{EX}a")
+    assert f"declares 4 ontology IRIs; taking '{EX}a', not ['{EX}b', '{EX}c'] …" in caplog.text
+    async with fuseki(f"{HEADER}{rows}<{EX}e>\t\t\t\n{END}") as http:
+        with pytest.raises(StageError, match=r"^the ontology header query returned more than 4 rows$"):
+            await ontology_header(FusekiClient(http), "gen-1", settings)
 
 
 async def test_ontology_header_query(data_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
