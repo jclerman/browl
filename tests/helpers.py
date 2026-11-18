@@ -64,7 +64,8 @@ class StaticServer:
 
         self._server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self._server.server_port}"
-        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+        # A short poll interval: `shutdown()` waits up to one, 0.5 s by default, in each test's teardown.
+        threading.Thread(target=self._server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
 
     def page(self, path: str, body: str | bytes, content_type: str = "text/turtle", status: int = 200) -> str:
         """Serve a page, returning its URL."""
