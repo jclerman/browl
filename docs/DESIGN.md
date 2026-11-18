@@ -409,10 +409,11 @@ past the listing reaches no network and nothing worth reading; the job fails, na
   cancellation stay in the app: it closes the connection, and the runner stops the process group. The app never gets
   the Docker socket. Without `SANDBOX_SOCKET` (tests, development), the tools run in the app's container.
 - The container is the app's image with no network (`network_mode: none`, so no DNS either), a read-only file system
-  with a tmpfs `/tmp`, no capabilities, `no-new-privileges`, and only the image's environment (no `.env`). Of the app's
-  volumes it mounts only the socket's and the jobs volume, the latter at `DATA_DIR/uploads` as in the app, so the paths
-  the app sends hold there too. Each upload removes the earlier jobs' files, so it holds only the current job's: the
-  upload, fetched imports, catalog and outputs. Not the data volume (job database, admins, derived database) nor Fuseki's.
+  with a 256 MB tmpfs `/tmp`, no capabilities, `no-new-privileges`, caps on processes and open files, the image's user
+  set explicitly, and only the image's environment (no `.env`). Of the app's volumes it mounts only the socket's and the
+  jobs volume, the latter at `DATA_DIR/uploads` as in the app, so the paths the app sends hold there too. Each upload
+  removes the earlier jobs' files, so it holds only the current job's: the upload, fetched imports, catalog and outputs.
+  Not the data volume (job database, admins, derived database) nor Fuseki's.
 - Checked in CI's Compose job (`docker/sandbox-check.py`): an import missing from the catalog, by `http:` from the
   app's container and by `file:` of the job database, fails the run naming it, with no request received and the file
   not found, with or without the JVM's no-network options. Run in the app's container instead, ROBOT read the file,

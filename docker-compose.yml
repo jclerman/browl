@@ -62,11 +62,18 @@ services:
     build: *app-build
     command: ["python", "-m", "browl.sandbox", "/sandbox/runner.sock"]
     network_mode: none
+    # The image's user, set here too so a change to the image can't make the sandbox root.
+    user: "10001:10001"
     read_only: true
-    # The JVM's perf data (/tmp/hsperfdata_*); the tools run here, so a JVM crash log lands here too.
+    # The JVM's perf data (/tmp/hsperfdata_*); the tools run here, so a JVM crash log lands here too. Its size counts
+    # against the memory limit.
     tmpfs:
-      - /tmp
+      - /tmp:size=256m
     working_dir: /tmp
+    # Caps on what a runaway tool can take: a JVM's threads count as processes.
+    pids_limit: 1024
+    ulimits:
+      nofile: 4096
     cap_drop:
       - ALL
     security_opt:
