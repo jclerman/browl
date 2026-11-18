@@ -301,7 +301,11 @@ class _Remote:
             raise StageError(f"the tool sandbox closed the connection while {self.name} ran")
 
     async def stop(self) -> None:
-        """Ask the sandbox to stop the run, by closing the request's side of the connection, and wait for its status."""
+        """Ask the sandbox to stop the run, by closing the request's side of the connection, and wait for its status.
+
+        Best effort: if the status doesn't come within `TERM_GRACE_S + SANDBOX_STOP_EXTRA_S`, this logs a warning and
+        returns, and the process may still be running in the sandbox.
+        """
         try:
             if self.status is None:
                 with suppress(OSError, RuntimeError):  # the connection is already closed

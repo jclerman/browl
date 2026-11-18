@@ -109,12 +109,15 @@ async def test_time_limit_stops_group(short_dir: Path, monkeypatch: pytest.Monke
     assert running_in_group(int(pid.read_text())) == []
 
 
-async def test_cancel_stops_group(short_dir: Path) -> None:
-    """Check that a cancelled run's process group is stopped before `run_process` returns."""
+async def test_cancel_stops_group(short_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a cancelled run's process group is stopped before `run_process` returns, even if cancelled again."""
+    monkeypatch.setattr(browl.process, "TERM_GRACE_S", 1.0)
     pid = short_dir / "pid"
     async with runner(short_dir) as socket:
-        task = asyncio.create_task(sandboxed(socket, f"sleep 60 & echo $$ > {pid}; wait"))
+        task = asyncio.create_task(sandboxed(socket, f"trap '' TERM; sleep 60 & echo $$ > {pid}; wait"))
         pgid = await wait_for(pid, task)
+        task.cancel()
+        await asyncio.sleep(0.2)  # SIGTERM sent and ignored
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task

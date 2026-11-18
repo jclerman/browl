@@ -405,10 +405,11 @@ it. The status page lists them, and says in red how many were dropped; the ontol
 **The sandbox** (P-30): ROBOT and the OFN lister (`browl.ofn`) run in the `sandbox` container, so an import that gets
 past the listing reaches no network and nothing worth reading; the job fails, naming it.
 
-- The app connects to `browl.sandbox` on a Unix socket in a shared volume (mode 0600; both run as the image's user,
-  uid 10001), sends the command, and reads its output lines and exit status. The time limit, the free-space watch and
-  cancellation stay in the app: it closes the connection, and the runner stops the process group. The app never gets
-  the Docker socket. Without `SANDBOX_SOCKET` (tests, development), the tools run in the app's container.
+- The app connects to `browl.sandbox` on a Unix socket in a shared volume (mode 0600; both run as the image's user, uid
+  10001), sends the command, and reads its output lines and exit status. The time limit, the free-space watch and
+  cancellation stay in the app: it closes the connection, and the runner stops the process group. That stop is best
+  effort: if the runner's status doesn't come within 10 s, the app logs a warning and the stage goes on. The app never
+  gets the Docker socket. Without `SANDBOX_SOCKET` (tests, development), the tools run in the app's container.
 - The container is the app's image with no network (`network_mode: none`, so no DNS either), a read-only file system
   with a 256 MB tmpfs `/tmp`, no capabilities, `no-new-privileges`, caps on processes and open files, the image's user
   set explicitly, and only the image's environment (no `.env`). Of the app's volumes it mounts only the socket's and the
