@@ -121,10 +121,13 @@ jobs:
           docker compose exec -T fuseki java -version
 
       # P-30: ROBOT and the OFN lister run in the sandbox, which has no network (no DNS either), none of the app's files
-      # but the jobs volume, and none of its settings. Each network check passes only on the error it expects.
-      # `!` alone doesn't fail a step, hence `|| exit 1`.
+      # but the jobs volume, none of its settings, and the hardening docker-compose.yml gives it. Each network check
+      # passes only on the error it expects. `!` alone doesn't fail a step, hence `|| exit 1`.
       - name: Check the sandbox's isolation
         run: |
+          docker inspect "$(docker compose ps -q sandbox)" | jq -e '.[0] | .Config.User == "10001:10001"
+            and (.HostConfig | .NetworkMode == "none" and .ReadonlyRootfs and .CapDrop == ["ALL"]
+              and .SecurityOpt == ["no-new-privileges:true"] and .PidsLimit > 0 and .Tmpfs["/tmp"] != null)'
           docker compose exec -T sandbox python -c '
           import socket
           try:
