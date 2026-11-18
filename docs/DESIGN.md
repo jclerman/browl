@@ -378,6 +378,9 @@ without a reasoner, as revised in P-8's review (the OWLAPI lists OFN imports; RO
    An import of the ontology's own IRI (or version IRI, for OFN), by a cycle back to it, isn't fetched: its published
    version may differ from the upload, which ROBOT already holds. For RDF, the ontology's IRIs are taken to be those
    of the subjects of its `owl:imports` triples, as only an ontology that imports something can be in a cycle.
+   A relative import in RDF resolves against the file it's in, to a `file:` IRI, so it's dropped; in a fetched import
+   too, not resolved against the URL fetched, since ROBOT reads the import from the file the catalog names and
+   resolves it the same way.
 3. Write a catalog file mapping every import listed: to its fetched file, or to an empty ontology if it was dropped.
    An IRI with a character XML can't hold, such as a control character, is left out (it can't be fetched either), so
    it fails only a reasoning run that reaches it, not every load. ROBOT's catalog accepts only exact names, so for a

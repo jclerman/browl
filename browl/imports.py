@@ -10,6 +10,9 @@ Imports are listed by the parser that reads the document next. An RDF document's
 streams it as N-Triples, from the whole file. An OWL Functional Syntax (OFN) document is read only by the OWLAPI, which
 lists its imports and converts it to Turtle in one parse, with every other load refused (`browl.ofn`); from then on,
 the Turtle stands in for it.
+
+A relative import resolves against the local file, even in a fetched import, so it isn't fetched: ROBOT reads a fetched
+import from the file the catalog names, and would resolve it the same way, not against the URL it came from.
 """
 
 import asyncio
