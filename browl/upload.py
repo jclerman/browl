@@ -102,6 +102,20 @@ def upload_path(data_dir: Path, generation: int, suffix: str) -> Path:
     return data_dir / UPLOADS_DIR / str(generation) / f"ontology{suffix}"
 
 
+def check_job_file(data_dir: Path, path: Path) -> None:
+    """Check that a job's file is a regular file on the jobs volume, not reached by a symlink that leads off it.
+
+    The sandbox writes to the jobs volume, so a tool that ran code there could plant a symlink to a file that only the
+    app's container has, for the app to load and serve.
+
+    Raises:
+        StageError: It isn't.
+    """
+    resolved = path.resolve()
+    if not resolved.is_relative_to((data_dir / UPLOADS_DIR).resolve()) or not resolved.is_file():
+        raise StageError(f"{path.name} isn't a regular file on the jobs volume")
+
+
 def file_syntax(filename: str) -> Syntax:
     """Return the syntax a file's name says it's in.
 
@@ -423,7 +437,7 @@ def _open(path: Path) -> IO[bytes]:
     if uploads.is_dir():
         for entry in uploads.iterdir():
             if entry != path.parent:
-                shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
+                shutil.rmtree(entry) if entry.is_dir() and not entry.is_symlink() else entry.unlink()
     path.parent.mkdir(parents=True, exist_ok=True)
     return path.open("wb")
 
