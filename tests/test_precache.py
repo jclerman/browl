@@ -111,7 +111,10 @@ def derived_files(settings: Settings) -> list[str]:
 
 
 async def test_stage_builds_database(settings: Settings) -> None:
-    """Check that the stage writes `meta` and runs the hooks in order, then swaps the file in at its final path."""
+    """Check that the stage writes `meta` and runs the hooks in order, then swaps the file in at its final path.
+
+    A hook's indexes are there for the hooks after it.
+    """
     seen: list[str] = []
     queries: list[str] = []
 
@@ -123,9 +126,17 @@ async def test_stage_builds_database(settings: Settings) -> None:
             "INSERT INTO prefix VALUES (?, ?)", [("ex", EX), ("owl", "http://www.w3.org/2002/07/owl#")]
         )
 
+        await context.db.insert("INSERT INTO entity (iri, type, path) VALUES (?, 'class', '/')", [(f"{EX}a",)])
+        await context.db.create_indexes("entity")
+
     async def second(context: PreCacheContext) -> None:
         seen.append("second")
         assert await context.db.run(lambda db: db.execute("SELECT count(*) FROM prefix").fetchone()[0]) == 2
+        indexes = "SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'entity' ORDER BY name"
+        assert await context.db.run(lambda db: db.execute(indexes).fetchall()) == [
+            ("entity_iri_type",),
+            ("entity_path",),
+        ]
 
     imports = [ImportResult(f"{EX}i", triples=3), ImportResult("file:///x", reason="dropped")]
     async with fuseki(queries=queries) as http:

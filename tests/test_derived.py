@@ -18,6 +18,7 @@ from browl.derived import (
     NotCurrentError,
     build,
     connect,
+    create_indexes,
     derived_path,
     is_current,
     read_meta,
@@ -26,6 +27,19 @@ from browl.derived import (
 from browl.jobs import Reasoner
 
 TABLES = {"entity", "name_value", "edge", "equiv_group", "counts", "hash_prefix", "prefix", "meta"}
+INDEXES = {
+    "entity_iri_type",
+    "entity_path",
+    "name_value_entity",
+    "name_value_normalized",
+    "edge_child",
+    "equiv_group_representative",
+}
+
+
+def index_names(connection: sqlite3.Connection) -> set[str]:
+    """Return the names of the indexes in a database."""
+    return {row[0] for row in connection.execute("SELECT name FROM sqlite_schema WHERE type = 'index'")}
 
 
 def meta(generation: int) -> Meta:
@@ -61,8 +75,7 @@ def test_build_creates_schema_and_meta(tmp_path: Path) -> None:
     try:
         names = {row[0] for row in connection.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")}
         assert names >= TABLES
-        indexes = {row[0] for row in connection.execute("SELECT name FROM sqlite_schema WHERE type = 'index'")}
-        assert {"entity_iri_type", "name_value_normalized", "edge_child"} <= indexes
+        assert index_names(connection) == INDEXES
         assert read_meta(connection) == meta(3)
         assert connection.execute("SELECT schema_version FROM meta").fetchone()[0] == SCHEMA_VERSION
     finally:
@@ -104,6 +117,22 @@ def test_failed_index_leaves_no_file(tmp_path: Path) -> None:
         for _ in range(2):
             connection.execute("INSERT INTO entity (iri, type, path) VALUES ('http://example.org/a', 'class', '/a')")
     assert list((tmp_path / DERIVED_DIR).iterdir()) == []
+
+
+def test_create_indexes(tmp_path: Path) -> None:
+    """A build can create a table's indexes once it has filled it, and use them; the build creates the rest."""
+    with build(tmp_path, meta(1)) as connection:
+        connection.execute("INSERT INTO entity (iri, type, path) VALUES ('http://example.org/a', 'class', '/a')")
+        create_indexes(connection, "entity")
+        assert index_names(connection) == {"entity_iri_type", "entity_path"}
+        plan = connection.execute("EXPLAIN QUERY PLAN SELECT id FROM entity WHERE iri = 'x' AND type = 'class'")
+        assert "entity_iri_type" in " ".join(row[-1] for row in plan)
+        create_indexes(connection, "entity")  # once only
+        create_indexes(connection, "prefix")  # none
+        with pytest.raises(ValueError, match="no table 'entities'"):
+            create_indexes(connection, "entities")
+    with closing(connect(tmp_path, 1)) as connection:
+        assert index_names(connection) == INDEXES
 
 
 def test_failed_rename_leaves_no_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

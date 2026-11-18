@@ -27,7 +27,8 @@ from browl.jobs import Reasoner
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
-"""The derived database's schema version; raise it whenever `SCHEMA` or `INDEXES` changes, forcing a rebuild."""
+"""The derived database's schema version; raise it whenever the SQL in `SCHEMA` or `INDEXES` changes, forcing a
+rebuild."""
 
 DERIVED_DIR = "derived"
 """The directory in `DATA_DIR` that holds the derived databases."""
@@ -92,15 +93,20 @@ CREATE TABLE prefix (
 declared with several types (punning) has a row for each. The `meta` table's `schema_version` and `generation` columns
 must keep their names, since `connect` reads them from a file of any schema version."""
 
-INDEXES = """
-CREATE UNIQUE INDEX entity_iri_type ON entity (iri, type);
-CREATE INDEX entity_path ON entity (path, fragment);
-CREATE INDEX name_value_entity ON name_value (entity);
-CREATE INDEX name_value_normalized ON name_value (normalized);
-CREATE INDEX edge_child ON edge (hierarchy, child);
-CREATE INDEX equiv_group_representative ON equiv_group (representative);
-"""
-"""The secondary indexes, created once the tables are filled, which is faster than keeping them up to date."""
+INDEXES: dict[str, tuple[str, ...]] = {
+    "entity": (
+        "CREATE UNIQUE INDEX entity_iri_type ON entity (iri, type)",
+        "CREATE INDEX entity_path ON entity (path, fragment)",
+    ),
+    "name_value": (
+        "CREATE INDEX name_value_entity ON name_value (entity)",
+        "CREATE INDEX name_value_normalized ON name_value (normalized)",
+    ),
+    "edge": ("CREATE INDEX edge_child ON edge (hierarchy, child)",),
+    "equiv_group": ("CREATE INDEX equiv_group_representative ON equiv_group (representative)",),
+}
+"""Each table's secondary indexes, created once the table is filled, which is faster than keeping them up to date
+(`create_indexes`)."""
 
 
 @dataclass(frozen=True)
@@ -140,10 +146,11 @@ def derived_path(data_dir: Path, generation: int) -> Path:
 def build(data_dir: Path, meta: Meta) -> Iterator[sqlite3.Connection]:
     """Build a generation's derived database, and swap it in atomically once the block exits cleanly.
 
-    The block fills the tables through the connection yielded, which is in a transaction; it needn't commit. On a clean
-    exit the secondary indexes are created, the file is synced to disk and renamed to `derived_path`, replacing any
-    file there. If the block, or any of that, fails, the temporary file is deleted and any file at `derived_path` is
-    left as it was. The connection may be used only on the thread that called `build`.
+    The block fills the tables through the connection yielded, which is in a transaction; it needn't commit. It creates
+    a table's indexes once it has filled it (`create_indexes`), so it can use them for the rest of the build. On a clean
+    exit any indexes not yet created are, the database is analyzed, and the file is synced to disk and renamed to
+    `derived_path`, replacing any file there. If the block, or any of that, fails, the temporary file is deleted and
+    any file at `derived_path` is left as it was. The connection may be used only on the thread that called `build`.
 
     Args:
         data_dir: The data directory.
@@ -177,7 +184,8 @@ def build(data_dir: Path, meta: Meta) -> Iterator[sqlite3.Connection]:
             yield connection
             if connection.in_transaction:
                 connection.execute("COMMIT")
-            connection.executescript(INDEXES)
+            for table in INDEXES:
+                create_indexes(connection, table)
             connection.executescript("PRAGMA analysis_limit = 1000; ANALYZE;")
         _fsync(temp)
         os.replace(temp, path)
@@ -186,6 +194,22 @@ def build(data_dir: Path, meta: Meta) -> Iterator[sqlite3.Connection]:
         raise
     _fsync(path.parent)
     logger.info("Built the derived database for generation %d", meta.generation)
+
+
+def create_indexes(connection: sqlite3.Connection, table: str) -> None:
+    """Create a table's secondary indexes (`INDEXES`), unless they have been; do nothing for a table that has none.
+
+    Raises:
+        ValueError: The database has no such table.
+    """
+    if connection.execute("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?", (table,)).fetchone() is None:
+        raise ValueError(f"the derived database has no table {table!r}")
+    # An index of browl's has SQL; one SQLite made for a constraint has none.
+    query = "SELECT 1 FROM sqlite_schema WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL"
+    if connection.execute(query, (table,)).fetchone() is not None:
+        return
+    for statement in INDEXES.get(table, ()):
+        connection.execute(statement)
 
 
 def _fsync(path: Path) -> None:

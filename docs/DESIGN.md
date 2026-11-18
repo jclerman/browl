@@ -527,11 +527,11 @@ about a minute ([S-4 findings](../research/S-4/README.md)). The tables (`browl.d
 | `meta` | ontology IRI, version IRI, reasoner used, load time (the job's start), generation number, schema version |
 
 Entities are referred to by `entity.id`, a dense integer (e.g. for descendant bitmaps); an IRI declared with several
-types (punning) has a row for each. Secondary indexes are created once the tables are filled. The database is rebuilt on
-every load, so it has no migrations: a file of another schema version (`SCHEMA_VERSION`, raised with any schema change)
-or generation isn't current, and is rebuilt ([2.4](#24-load-pipeline), App restart). Pages read it, never Fuseki, for
-whole-ontology data (N-4), through `browl.pages.read_derived`: the file is opened read-only and immutable, so reads take
-no locks, with a connection per thread, in the thread pool.
+types (punning) has a row for each. Each table's secondary indexes are created once it's filled (below). The database is
+rebuilt on every load, so it has no migrations: a file of another schema version (`SCHEMA_VERSION`, raised with any
+schema change) or generation isn't current, and is rebuilt ([2.4](#24-load-pipeline), App restart). Pages read it, never
+Fuseki, for whole-ontology data (N-4), through `browl.pages.read_derived`: the file is opened read-only and immutable,
+so reads take no locks, with a connection per thread, in the thread pool.
 
 **Pre-caching hooks** (P-9). The stage reads the ontology's IRI and version IRI, starts the file with its `meta` row,
 then runs the hooks in `browl.precache.HOOKS` in order, so a hook may read tables an earlier one filled: P-10
@@ -539,7 +539,10 @@ then runs the hooks in `browl.precache.HOOKS` in order, so a hook may read table
 client, the generation's dataset, whether any import was loaded (for the `FROM` merge), and a writer. A SQLite
 connection must stay on one thread while the queries stream on the event loop, so the build runs on a single-thread
 executor that owns the connection, and hooks hand it rows in batches of 10,000. Every bulk query is checked to be
-complete ([2.14](#214-risks)). Any hook's failure fails the stage.
+complete ([2.14](#214-risks)). Any hook's failure fails the stage. A hook creates the indexes of each table it fills
+when it's done (`DerivedWriter.create_indexes`), which is faster than keeping them up to date while filling, so later
+hooks can use them (e.g. P-11 maps IRIs to `entity.id`); the build creates any left, then runs `ANALYZE`. Where it can,
+a hook inserts into a `WITHOUT ROWID` table in its key's order.
 
 **The ontology's IRI** comes from the default graph only, the ontology without its imports: an `owl:Ontology` IRI that
 nothing there imports, since an OFN upload's converted Turtle may declare the ontologies it imports. If several remain,

@@ -73,6 +73,14 @@ class DerivedWriter:
         """Call a function with the connection on its thread, returning its result."""
         return await asyncio.get_running_loop().run_in_executor(self._executor, function, self._connection)
 
+    async def create_indexes(self, table: str) -> None:
+        """Create a table's secondary indexes, once it's filled, so later hooks can use them (`derived.create_indexes`).
+
+        Raises:
+            ValueError: The database has no such table.
+        """
+        await self.run(lambda connection: derived.create_indexes(connection, table))
+
     async def insert(self, sql: str, rows: Iterable[Sequence[Any]]) -> None:
         """Run a statement once per row (`executemany`), on the connection's thread.
 
@@ -122,7 +130,11 @@ Hook = Callable[[PreCacheContext], Awaitable[None]]
 """A pre-caching hook: fills derived tables from bulk queries. A `SparqlError` it raises fails the stage, naming it."""
 
 HOOKS: tuple[Hook, ...] = ()
-"""The hooks the app runs, in order: a hook may read tables an earlier one filled."""
+"""The hooks the app runs, in order: a hook may read tables an earlier one filled.
+
+A hook creates the indexes of each table it fills once it's done (`DerivedWriter.create_indexes`), so later hooks can
+use them; the build creates any left at its end. Where it can, it inserts into a `WITHOUT ROWID` table in its primary
+key's order, as such a table is stored in that order."""
 
 
 def has_loaded_imports(imports: Iterable[ImportResult]) -> bool:
