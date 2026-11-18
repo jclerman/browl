@@ -873,7 +873,16 @@ in the default graph and only the inferred axioms would go in a named graph of t
 graph, so they see both unchanged. An axiom is inferred if its triples are in that graph and not in the default graph.
 Inferences are usually far fewer than asserted axioms, so the extra load time and store size that a named graph costs
 (about 2.2× on NCBITaxon, P-3) fall only on them. Explanations are computed on demand (ROBOT `explain` or the OWLAPI
-explanation API) and cached. Settle this before P-8 is built, so loading doesn't have to be reworked.
+explanation API) and cached.
+
+Deferred with U-39 and U-40 (decided after P-8): until then, a load with reasoning serves the reasoned ontology alone,
+and nothing is marked inferred. The split should cost little rework. The loading stage already loads files into graphs
+by name and checks every graph's count, so it gains one more file and graph, plus computing the inferred triples (the
+reasoned output's triples that aren't the upload's). Two things would change elsewhere: the `FROM` merge would apply
+whenever the store has any named graph, not only imports (`browl.fuseki.dataset_clause`), and whatever marks imported
+entities by graph must skip the inferred graph. One behavior to settle then: the merged view would bring back the
+shortcut `rdfs:subClassOf` links that reasoning removes, since they're asserted, so trees (P-12) would need to drop
+them again.
 
 Out of scope for now: a quality report on upload (ROBOT `report`, which assumes OBO conventions that not every
 ontology follows) and version history with diffs between loads.
