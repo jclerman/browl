@@ -83,6 +83,13 @@ def test_build_creates_schema_and_meta(tmp_path: Path) -> None:
     assert entity_iris(tmp_path, 3) == ["http://example.org/onto#A"]
 
 
+def test_build_pragmas(tmp_path: Path) -> None:
+    """A build runs with a large page cache, and helper threads to sort."""
+    with build(tmp_path, meta(1)) as connection:
+        assert connection.execute("PRAGMA cache_size").fetchone()[0] == -256 * 1024
+        assert connection.execute("PRAGMA threads").fetchone()[0] == 4
+
+
 def test_meta_without_iris(tmp_path: Path) -> None:
     """An ontology without IRIs stores none."""
     plain = Meta(generation=1, reasoner=Reasoner.NONE, loaded_at=datetime(2026, 1, 1, tzinfo=UTC))

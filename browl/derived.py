@@ -33,6 +33,13 @@ rebuild."""
 DERIVED_DIR = "derived"
 """The directory in `DATA_DIR` that holds the derived databases."""
 
+BUILD_CACHE_KIB = 256 * 1024
+"""The build's page cache: SQLite's default 2 MB would thrash on inserts in no key order into the `WITHOUT ROWID`
+tables, and spill the index builds' sorts to temporary files early."""
+
+BUILD_THREADS = 4
+"""How many helper threads SQLite may use to sort, as for an index build."""
+
 _SUFFIX = ".sqlite3"
 _TEMP_SUFFIX = ".tmp"
 _FILE_NAME = re.compile(r"(\d+)\.sqlite3")
@@ -166,7 +173,10 @@ def build(data_dir: Path, meta: Meta) -> Iterator[sqlite3.Connection]:
     try:
         with closing(sqlite3.connect(temp, isolation_level=None)) as connection:
             # The file is thrown away if anything fails, so there's no need for a journal or for syncing until the end.
-            connection.executescript("PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF;")
+            connection.executescript(
+                "PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF;"
+                f" PRAGMA cache_size = -{BUILD_CACHE_KIB}; PRAGMA threads = {BUILD_THREADS};"
+            )
             connection.executescript(SCHEMA)
             connection.execute(
                 "INSERT INTO meta (id, schema_version, generation, ontology_iri, version_iri, reasoner, loaded_at)"

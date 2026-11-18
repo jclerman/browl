@@ -542,7 +542,9 @@ executor that owns the connection, and hooks hand it rows in batches of 10,000. 
 complete ([2.14](#214-risks)). Any hook's failure fails the stage. A hook creates the indexes of each table it fills
 when it's done (`DerivedWriter.create_indexes`), which is faster than keeping them up to date while filling, so later
 hooks can use them (e.g. P-11 maps IRIs to `entity.id`); the build creates any left, then runs `ANALYZE`. Where it can,
-a hook inserts into a `WITHOUT ROWID` table in its key's order.
+a hook inserts into a `WITHOUT ROWID` table in its key's order. The build runs with no journal or syncing until the
+end, a 256 MiB page cache (SQLite's default 2 MB thrashes on these inserts and spills the index sorts early), and up to
+4 helper threads to sort.
 
 **The ontology's IRI** comes from the default graph only, the ontology without its imports: an `owl:Ontology` IRI that
 nothing there imports, since an OFN upload's converted Turtle may declare the ontologies it imports. If several remain,
