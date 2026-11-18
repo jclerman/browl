@@ -167,13 +167,13 @@
           "name": "display_name",
           "type": "TEXT",
           "nullable": true,
-          "comment": "Its display name (DESIGN.md 2.7); NULL until P-11 fills it."
+          "comment": "Its display name (DESIGN.md 2.7): its best name value, else its CURIE, else its IRI; for the ontology, its title (meta.title) if it has one."
         },
         {
           "name": "curie",
           "type": "TEXT",
           "nullable": true,
-          "comment": "Its CURIE, if a prefix in the prefix table covers it; NULL until P-11 fills it."
+          "comment": "Its CURIE, from the longest namespace in the prefix table that covers it; NULL if none does."
         }
       ],
       "indexes": [
@@ -212,7 +212,7 @@
     {
       "name": "name_value",
       "type": "table",
-      "comment": "Each entity's values of the name properties (NAME_PROPERTIES), for display names and search: one row per direct value, and one per value entailed through rdfs:subPropertyOf.",
+      "comment": "Each entity's values of the name properties (NAME_PROPERTIES), for display names and search: one row per value and name property, direct if the entity has it under that property itself, else entailed through rdfs:subPropertyOf; stored in entity order.",
       "columns": [
         {
           "name": "entity",
@@ -236,7 +236,7 @@
           "name": "normalized",
           "type": "TEXT",
           "nullable": false,
-          "comment": "The value normalized for search."
+          "comment": "The value normalized for search (browl.names.normalize)."
         },
         {
           "name": "language",
@@ -519,7 +519,7 @@
     {
       "name": "prefix",
       "type": "table",
-      "comment": "CURIE prefixes, for entity.curie (the ontology's own, built-ins, and EXTRA_PREFIXES overrides).",
+      "comment": "CURIE prefixes, for entity.curie: the built-in ones, overridden by those the ontology file declares, overridden by EXTRA_PREFIXES.",
       "columns": [
         {
           "name": "prefix",

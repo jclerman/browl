@@ -1,0 +1,34 @@
+# Name values for the names pre-caching hook's tests (tests/test_precache_names.py): sub-property chains and cycles,
+# several languages, punning, and entities without names.
+@prefix : <http://example.org/names#> .
+@prefix ex: <http://example.org/names#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+
+<http://example.org/names> a owl:Ontology ;
+    rdfs:label "Names" .
+
+# A chain under rdfs:label, and a cycle through skos:prefLabel.
+:label2 a owl:AnnotationProperty ;
+    rdfs:subPropertyOf rdfs:label .
+:label3 a owl:AnnotationProperty ;
+    rdfs:subPropertyOf :label2 .
+:alias a owl:AnnotationProperty ;
+    rdfs:subPropertyOf skos:prefLabel .
+skos:prefLabel rdfs:subPropertyOf :alias .
+
+:Heart a owl:Class ;
+    rdfs:label "Heart"@en, "Herz"@de ;
+    :label3 "cardiac organ"@en .
+:Bee a owl:Class ;
+    :label2 "Bee"@EN-GB .
+:Cafe a owl:Class ;
+    rdfs:label "Café" ;
+    :label2 "Café" .
+:Dumpling a owl:Class ;
+    :alias "餃子"@zh-Hant-TW .
+:Nameless a owl:Class .
+:Pun a owl:Class, owl:ObjectProperty ;
+    skos:prefLabel "pun"@en .
+:someone rdfs:label "not an entity"@en .

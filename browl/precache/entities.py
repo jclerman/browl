@@ -35,7 +35,7 @@ async def entities(context: PreCacheContext) -> None:
     The entities are the ontology itself, whose IRI the `meta` row holds, and every declared class and property, from
     one bulk query (`entity-list.rq`). The URLs are computed on the database's thread, off the event loop. IRIs whose
     native or proxied URL would be under the reserved prefix get the fallback URL, and a warning lists them (O-3).
-    `display_name` and `curie` are left NULL, for P-11.
+    `display_name` and `curie` are left NULL, for the names hook (`browl.precache.names`).
     """
     settings = context.job.settings
     mapper = URLMapper(settings.base_url, settings.reserved_prefix)

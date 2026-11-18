@@ -11,7 +11,7 @@ browl keeps this SQLite file, `DATA_DIR/state.sqlite3`, for the load job's state
 
 | Name          | Columns | Comment                                                                                                                                | Type  |
 | ------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------- | ----- |
-| [job](job.md) | 14      | The latest load job (browl.jobs.JobState), at most one row: each job replaces the previous one's. Times are ISO 8601 with a time zone. | table |
+| [job](job.md) | 15      | The latest load job (browl.jobs.JobState), at most one row: each job replaces the previous one's. Times are ISO 8601 with a time zone. | table |
 
 ## Relations
 
@@ -34,6 +34,7 @@ erDiagram
   INTEGER upload_bytes
   TEXT imports
   INTEGER triples
+  TEXT prefixes
 }
 ```
 

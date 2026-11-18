@@ -81,9 +81,18 @@ ENTITY_END = "\t\ttrue\n"
 ENTITY_RESULT = f"{ENTITY_HEADER}<{EX}onto#A>\t<{OWL}Class>\t\n{ENTITY_END}"
 
 
+NAME_HEADER = f"?entity\t?name\t?property\t?value\t?{END_VARIABLE}\n"
+NAME_END = "\t\t\t\ttrue\n"
+NAME_RESULT = f'{NAME_HEADER}<{EX}onto#A>\t{LABEL}\t{LABEL}\t"A"@en\t\n{NAME_END}'
+
+
 def answer(query: str) -> str:
-    """Return a stubbed Fuseki's answer to a query: `ENTITY_RESULT` to the entity list, else `ONTOLOGY_RESULT`."""
-    return ENTITY_RESULT if "?entity ?type" in query else ONTOLOGY_RESULT
+    """Return a stubbed Fuseki's answer to a query: to the entity list, the name values query, else the header's."""
+    if "?entity ?type" in query:
+        return ENTITY_RESULT
+    if "?entity ?name" in query:
+        return NAME_RESULT
+    return ONTOLOGY_RESULT
 
 
 def fuseki(*bodies: str, queries: list[str] | None = None) -> httpx2.AsyncClient:
@@ -107,8 +116,10 @@ def fuseki(*bodies: str, queries: list[str] | None = None) -> httpx2.AsyncClient
 
 
 def job(settings: Settings, generation: int, imports: list[ImportResult] | None = None) -> JobContext:
-    """Return a job's context as the loading stage leaves it."""
+    """Return a job's context as the loading stage leaves it, with an empty upload."""
     upload = settings.data_dir / "uploads" / str(generation) / "ontology.ttl"
+    upload.parent.mkdir(parents=True, exist_ok=True)
+    upload.touch()
     return JobContext(generation, settings, Reasoner.ELK, upload=upload, imports=imports or [], started_at=LOADED_AT)
 
 
@@ -814,7 +825,7 @@ def test_restart_rebuilds(settings: Settings, prepare: Callable[[Settings], obje
         state = app.state.jobs.state
         assert (state.generation, state.stage, state.ready_generation, state.started_at) == (2, Stage.READY, 2, STARTED)
         assert client.get("/probe").json() == 2
-    assert fuseki.requests == ["/$/ping", f"/{dataset_name(2)}/sparql", f"/{dataset_name(2)}/sparql"]
+    assert fuseki.requests == ["/$/ping", *[f"/{dataset_name(2)}/sparql"] * (1 + len(HOOKS))]
     assert derived_files(settings) == ["2.sqlite3"]
     with closing(connect(settings, 2)) as connection:
         assert read_meta(connection) == Meta(2, Reasoner.ELK, STARTED, ONTOLOGY, VERSION, "Onto", "1.0")
@@ -931,15 +942,17 @@ async def test_read_derived_without_ready_generation() -> None:
         await read_derived(request, read_meta)
 
 
-def entity_rows(settings: Settings, generation: int) -> list[tuple[str, str, str, str | None]]:
-    """Return a generation's `entity` rows, as (IRI, type, path, fragment), in id order."""
-    with closing(connect(settings, generation)) as connection:
+def entity_rows(
+    settings: Settings, generation: int, hooks: Sequence[Hook] = (entities,)
+) -> list[tuple[str, str, str, str | None]]:
+    """Return a generation's `entity` rows, as (IRI, type, path, fragment), in id order, built with these hooks."""
+    with closing(connect(settings, generation, hooks)) as connection:
         return connection.execute("SELECT iri, type, path, fragment FROM entity ORDER BY id").fetchall()
 
 
-def hash_prefixes(settings: Settings, generation: int) -> list[str]:
-    """Return a generation's `hash_prefix` paths, in stored order."""
-    with closing(connect(settings, generation)) as connection:
+def hash_prefixes(settings: Settings, generation: int, hooks: Sequence[Hook] = (entities,)) -> list[str]:
+    """Return a generation's `hash_prefix` paths, in stored order, from a build with these hooks."""
+    with closing(connect(settings, generation, hooks)) as connection:
         return [row[0] for row in connection.execute("SELECT path FROM hash_prefix")]
 
 
@@ -984,7 +997,7 @@ async def test_entities(settings: Settings, caplog: pytest.LogCaptureFixture) ->
     assert hash_prefixes(settings, 2) == ["/example.net/other", "/onto"]
     warning = "1 entity IRIs would have URLs under the reserved prefix /_browl, so they get fallback URLs:"
     assert caplog.messages == [f"{warning} ['{base}/_browl/admin']"]
-    with closing(connect(settings, 2)) as connection:
+    with closing(connect(settings, 2, [entities])) as connection:
         shared = entities_at(connection, "/example.net/x")
         assert [(entity.iri, entity.type) for entity in shared] == [
             ("http://example.net/x", EntityType.CLASS),
@@ -1072,7 +1085,7 @@ async def test_entities_on_real_fuseki(fuseki_url: str, settings: Settings) -> N
             await pre_caching_stage(job(settings, generation, [ImportResult(f"{EX}imported", triples=4)]), http)
         finally:
             await http.delete(f"/$/datasets/{name}")
-    rows = entity_rows(settings, generation)
+    rows = entity_rows(settings, generation, HOOKS)
     assert rows[0] == (family, "ontology", "/family", None)
     assert sorted(rows[1:]) == [
         (f"{family}#Female", "class", "/family", "Female"),
@@ -1085,4 +1098,4 @@ async def test_entities_on_real_fuseki(fuseki_url: str, settings: Settings) -> N
         (f"{family}#rank", "annotation_property", "/family", "rank"),
         ("https://example.org/family#Person", "class", "/family", "Person"),
     ]
-    assert hash_prefixes(settings, generation) == ["/family"]
+    assert hash_prefixes(settings, generation, HOOKS) == ["/family"]

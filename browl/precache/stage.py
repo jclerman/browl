@@ -25,6 +25,8 @@ from browl.precache.core import DerivedWriter, Hook, PreCacheContext
 from browl.precache.entities import entities
 from browl.precache.header import header_meta
 from browl.precache.keys import build_keys
+from browl.precache.names import names
+from browl.prefixes import read_prefixes
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +36,7 @@ FUSEKI_WAIT_S = 120.0
 FUSEKI_RETRY_S = (0.5, 5.0)
 """The first and the longest wait between pings while waiting for Fuseki; each wait doubles the last."""
 
-HOOKS: tuple[Hook, ...] = (entities,)
+HOOKS: tuple[Hook, ...] = (entities, names)
 """The hooks the app runs, in order: a hook may read tables an earlier one filled.
 
 A hook creates the indexes of each table it fills once it's done (`DerivedWriter.create_indexes`), so later hooks can
@@ -45,11 +47,17 @@ key's order, as such a table is stored in that order."""
 async def pre_caching_stage(context: JobContext, http: httpx2.AsyncClient, hooks: Sequence[Hook] = HOOKS) -> None:
     """Build the new generation's derived database from the store just loaded, and swap it in (`pre_cache`).
 
+    First it reads the prefixes the uploaded file declares (`browl.prefixes.read_prefixes`), for CURIEs, into the
+    job's context, which stores them, since a rebuild after a restart can't count on the file.
+
     Raises:
         StageError: A query failed or returned an incomplete result, or the header query too many rows.
     """
     if context.ontology is None:  # nothing was loaded (as the loading stage skips it)
         return
+    source = context.converted or context.upload
+    if source is not None:  # the file the admin chose, whose prefixes a reasoned one may not keep
+        context.prefixes = await asyncio.to_thread(read_prefixes, source)
     await pre_cache(context, http, hooks)
 
 

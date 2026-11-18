@@ -1,10 +1,13 @@
 """Tests for choosing among name values."""
 
+from pathlib import Path
+
 import pytest
 
-from browl.names import BUILTIN_PREFIXES, best_values, expand_curie, language_rank
+from browl.names import BUILTIN_PREFIXES, best_values, expand_curie, language_rank, name_property_iris, normalize
 from browl.rdf import RDF_LANG_STRING, XSD_STRING, Literal
 from browl.settings import UNTAGGED
+from tests.helpers import make_settings
 
 DEFAULT = ["en", UNTAGGED]
 UNTAGGED_FIRST = ["fr", UNTAGGED, "en-gb", "zh-hant"]
@@ -67,3 +70,33 @@ def test_expand_curie(name: str, expected: str) -> None:
     """A CURIE with a known prefix is expanded; anything else is left as it is."""
     prefixes = BUILTIN_PREFIXES | {"ex": "http://example.org/", "http": "http://wrong/"}
     assert expand_curie(name, prefixes) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Café", "cafe"),
+        ("CAFÉ", "cafe"),  # a combining accent
+        ("Straße", "strasse"),  # case folding, not just lowercasing
+        ("İstanbul", "istanbul"),  # the dot above, added by folding, is removed too
+        ("\ufb01ne \uff12", "fine 2"),  # compatibility forms: a ligature, a full-width digit
+        ("餃子", "餃子"),
+    ],
+)
+def test_normalize(text: str, expected: str) -> None:
+    """A value is normalized by NFKD, without accents, case folded (§2.6)."""
+    assert normalize(text) == expected
+
+
+def test_name_property_iris(data_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Name properties are expanded with the built-in and configured prefixes; repeats and non-IRIs are left out."""
+    settings = make_settings(
+        NAME_PROPERTIES=["skos:prefLabel", "ex:name", "http://example.org/name", "rdfs:label", "nope"],
+        EXTRA_PREFIXES={"ex": "http://example.org/"},
+    )
+    assert name_property_iris(settings) == [
+        "http://www.w3.org/2004/02/skos/core#prefLabel",
+        "http://example.org/name",
+        "http://www.w3.org/2000/01/rdf-schema#label",
+    ]
+    assert "The name property 'nope' isn't an IRI or a known CURIE" in caplog.text

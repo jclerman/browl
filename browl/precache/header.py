@@ -11,9 +11,9 @@ from typing import TYPE_CHECKING
 from browl.derived import Meta
 from browl.fuseki import FusekiClient
 from browl.jobtypes import StageError
-from browl.names import BUILTIN_PREFIXES, best_values, expand_curie
+from browl.names import best_values, name_property_iris
 from browl.precache.core import PREFIXES
-from browl.rdf import IRI, Literal, RDFSyntaxError, Term
+from browl.rdf import IRI, Literal, Term
 from browl.settings import Settings
 
 if TYPE_CHECKING:
@@ -67,17 +67,9 @@ class OntologyHeader:
 def title_properties(settings: Settings) -> list[str]:
     """Return the IRIs of the properties a title is taken from, best first: dcterms:title, dc:title, `NAME_PROPERTIES`.
 
-    A name property's CURIE is expanded with the built-in prefixes and `EXTRA_PREFIXES`; one that's still not an IRI is
-    left out, with a warning.
+    The name properties are expanded as `browl.names.name_property_iris` does.
     """
-    prefixes = BUILTIN_PREFIXES | settings.extra_prefixes
-    properties = [DCTERMS_TITLE, DC_TITLE]
-    for name in settings.name_properties:
-        try:
-            properties.append(IRI(expand_curie(name, prefixes)))
-        except RDFSyntaxError:
-            logger.warning("The name property %r isn't an IRI or a known CURIE; it's left out of the title", name)
-    return list(dict.fromkeys(properties))
+    return list(dict.fromkeys([DCTERMS_TITLE, DC_TITLE, *name_property_iris(settings)]))
 
 
 async def ontology_header(sparql: FusekiClient, dataset: str, settings: Settings) -> OntologyHeader:

@@ -322,9 +322,9 @@ def test_build_keys_independent_of_process(data_dir: Path, tmp_path: Path) -> No
     [
         ({"BASE_URL": "http://example.com/"}, {"entities"}),
         ({"RESERVED_PREFIX": "_other"}, {"entities"}),
-        ({"NAME_PROPERTIES": ["skos:prefLabel"]}, {"meta"}),
-        ({"LANGUAGE_RANKING": ["fr"]}, {"meta"}),
-        ({"EXTRA_PREFIXES": {"ex": EX}}, {"meta"}),
+        ({"NAME_PROPERTIES": ["skos:prefLabel"]}, {"meta", "names"}),
+        ({"LANGUAGE_RANKING": ["fr"]}, {"meta", "names"}),
+        ({"EXTRA_PREFIXES": {"ex": EX}}, {"meta", "names"}),
         ({"OIDC_CLIENT_SECRET": "rotated", "FUSEKI_URL": "http://other:3030"}, set()),
     ],
     ids=["base url", "reserved prefix", "name properties", "language ranking", "extra prefixes", "undeclared"],

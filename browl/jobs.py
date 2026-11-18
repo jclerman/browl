@@ -75,12 +75,16 @@ MIGRATIONS: list[str] = [
     ALTER TABLE job ADD COLUMN imports TEXT NOT NULL DEFAULT '[]';
     ALTER TABLE job ADD COLUMN triples INTEGER;
     """,
+    # Version 4: the prefixes the ontology file declares, as a JSON object, for CURIEs (P-11).
+    """
+    ALTER TABLE job ADD COLUMN prefixes TEXT NOT NULL DEFAULT '{}';
+    """,
 ]
 """The persistent database's schema migrations: entry n migrates from version n to n + 1."""
 
 _COLUMNS = (
     "generation, stage, started_at, finished_at, failed_stage, reason, ready_generation, reasoner,"
-    " upload_name, upload_syntax, upload_bytes, imports, triples"
+    " upload_name, upload_syntax, upload_bytes, imports, triples, prefixes"
 )
 """The job table's columns but its id, in `JobState`'s order."""
 
@@ -137,6 +141,7 @@ class JobState:
         upload_bytes: The file's size, or while uploading or after a failed upload, how much had arrived.
         imports: The ontology's imports, direct and indirect, once the imports stage has listed them.
         triples: How many triples the store's default graph holds, once loaded: the ontology without its imports.
+        prefixes: The prefixes the ontology file declares, name → namespace, once the pre-caching stage has read them.
     """
 
     generation: int | None = None
@@ -152,6 +157,7 @@ class JobState:
     upload_bytes: int | None = None
     imports: tuple[ImportResult, ...] = ()
     triples: int | None = None
+    prefixes: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def dropped_imports(self) -> list[ImportResult]:
@@ -294,6 +300,7 @@ class JobStore:
             upload_bytes,
             imports,
             triples,
+            prefixes,
         ) = row
         return JobState(
             generation=generation,
@@ -309,6 +316,7 @@ class JobStore:
             upload_bytes=upload_bytes,
             imports=_imports_from_json(imports),
             triples=triples,
+            prefixes=json.loads(prefixes),
         )
 
     @staticmethod
@@ -331,6 +339,7 @@ class JobStore:
                 state.upload_bytes,
                 _imports_json(state.imports),
                 state.triples,
+                json.dumps(state.prefixes),
             ),
         )
 
@@ -385,6 +394,8 @@ class JobContext:
         imports: The imports, direct and indirect, listed by the imports stage.
         import_files: The RDF file to load for each import that was fetched, by its IRI.
         triples: How many triples the store's default graph holds, once loaded.
+        prefixes: The prefixes the ontology file declares (`browl.prefixes.read_prefixes`), read by the pre-caching
+            stage.
         started_at: When the job started.
     """
 
@@ -399,6 +410,7 @@ class JobContext:
     imports: list[ImportResult] = field(default_factory=list)
     import_files: dict[str, Path] = field(default_factory=dict)
     triples: int | None = None
+    prefixes: dict[str, str] = field(default_factory=dict)
     started_at: datetime = field(default_factory=_now)
 
     @property
@@ -638,6 +650,7 @@ class JobRunner:
             state.reasoner,
             imports=list(state.imports),
             triples=state.triples,
+            prefixes=dict(state.prefixes),
             started_at=state.started_at,
         )
         if not state.running:  # recorded ready
@@ -803,8 +816,10 @@ class JobRunner:
             self._record_end(self._state.failed(INTERRUPTED_BY_SHUTDOWN if self._closing else STOPPED_UNRECORDED))
 
     def _with_results(self, context: JobContext) -> JobState:
-        """Return the state with what the stages have found so far: the imports and the triples loaded."""
-        return replace(self._state, imports=tuple(context.imports), triples=context.triples)
+        """Return the state with what the stages have found so far: the imports, the triples loaded and the prefixes."""
+        return replace(
+            self._state, imports=tuple(context.imports), triples=context.triples, prefixes=dict(context.prefixes)
+        )
 
     async def _run(self, context: JobContext, stages: Mapping[Stage, StageFunction] | None = None) -> None:
         """Run the job's background stages, from `stages` if given, else the registered functions, then record it ready.

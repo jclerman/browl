@@ -66,7 +66,7 @@ def schema_version(path: Path) -> int:
 def test_store_migrates_new_database(data_dir: Path) -> None:
     """Check that a new database is created at the latest schema version, with no job."""
     store = JobStore(data_dir / "sub" / STATE_DB)
-    assert schema_version(store.path) == len(browl.jobs.MIGRATIONS) == 3
+    assert schema_version(store.path) == len(browl.jobs.MIGRATIONS) == 4
     assert store.read() == JobState()
 
 
@@ -304,7 +304,7 @@ def test_store_migrates_version_2(data_dir: Path) -> None:
 
 
 async def test_stage_results_recorded(data_dir: Path) -> None:
-    """Check that the imports and triple counts a stage sets are stored, also when a later stage fails."""
+    """Check that the imports, triple counts and prefixes the stages set are stored, also when a stage fails."""
     imports = [ImportResult("http://a/", None, None, 3), ImportResult("file:/x", "http://a/", "not allowed")]
 
     async def listing(context: JobContext) -> None:
@@ -312,13 +312,18 @@ async def test_stage_results_recorded(data_dir: Path) -> None:
 
     async def loading(context: JobContext) -> None:
         context.triples = 7
+
+    async def pre_caching(context: JobContext) -> None:
+        context.prefixes = {"ex": "http://example.org/"}
         raise StageError("boom")
 
-    runner = await open_runner(data_dir, {Stage.IMPORTS: listing, Stage.LOADING: loading})
+    stages = {Stage.IMPORTS: listing, Stage.LOADING: loading, Stage.PRE_CACHING: pre_caching}
+    runner = await open_runner(data_dir, stages)
     await runner.start()
     await runner.wait()
     stored = JobStore(data_dir / STATE_DB).read()
-    assert (stored.failed_stage, stored.imports, stored.triples) == (Stage.LOADING, tuple(imports), 7)
+    assert (stored.failed_stage, stored.imports, stored.triples) == (Stage.PRE_CACHING, tuple(imports), 7)
+    assert stored.prefixes == {"ex": "http://example.org/"}
     assert stored.dropped_imports == [imports[1]]
     assert imports[1].dropped and not imports[0].dropped
 
@@ -847,6 +852,7 @@ READY = JobState(
     upload_bytes=10,
     imports=(ImportResult("http://example.org/i", triples=2),),
     triples=5,
+    prefixes={"ex": "http://example.org/"},
 )
 """A job that reached ready, whose pre-caching a restart may re-run."""
 
@@ -891,13 +897,14 @@ async def test_rebuild(data_dir: Path) -> None:
         await entered.wait()
     assert checked == [3]
     [context] = contexts
-    assert (context.generation, context.reasoner, context.imports, context.triples, context.started_at) == (
-        3,
-        Reasoner.ELK,
-        list(READY.imports),
-        5,
-        STARTED,
-    )
+    assert (
+        context.generation,
+        context.reasoner,
+        context.imports,
+        context.triples,
+        context.prefixes,
+        context.started_at,
+    ) == (3, Reasoner.ELK, list(READY.imports), 5, READY.prefixes, STARTED)
     for state in runner.state, JobStore(data_dir / STATE_DB).read():
         assert (state.generation, state.stage, state.started_at, state.ready_generation, state.site) == (
             3,
