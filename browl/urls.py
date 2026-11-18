@@ -9,7 +9,6 @@ import functools
 import re
 import urllib.parse
 from dataclasses import dataclass
-from enum import StrEnum
 
 from pydantic import HttpUrl
 from pydantic_core import Url, ValidationError
@@ -37,14 +36,6 @@ _PATH_AS_IS = re.compile(f"[{re.escape(_ALWAYS_SAFE + _PATH_SAFE)}]*")
 _DOT_SEGMENT = re.compile(r"(?:\.|%2e){1,2}", re.IGNORECASE)
 
 
-class Rule(StrEnum):
-    """Which of DESIGN.md §2.3's rules gave an entity's URL."""
-
-    NATIVE = "native"
-    PROXIED = "proxied"
-    FALLBACK = "fallback"
-
-
 @dataclass(frozen=True)
 class EntityURL:
     """An entity's URL on the site.
@@ -54,19 +45,17 @@ class EntityURL:
             string: `/{RESERVED_PREFIX}/iri?u={the percent-encoded IRI}`.
         fragment: The fragment of a hash IRI's URL, in URI form; None for any other, and for every fallback URL, whose
             query holds the whole IRI.
-        rule: The rule that gave the URL.
         reserved: Whether the IRI got the fallback URL because the URL another rule gives it would be under the reserved
             prefix (O-3).
     """
 
     path: str
     fragment: str | None
-    rule: Rule
     reserved: bool = False
 
 
 class URLMapper:
-    """Maps IRIs to their URLs on a site (`entity_url`), with `BASE_URL` parsed once.
+    """Maps IRIs to their URLs on a site (DESIGN.md §2.3), with `BASE_URL` parsed once.
 
     Args:
         base_url: The site's `BASE_URL`, normalized as Pydantic normalizes it.
@@ -115,11 +104,11 @@ class URLMapper:
             path = _to_uri(path, _PATH_SAFE)
         path = path or "/"
         if host == self._host and port == self._port and (path == self._path or path.startswith(self._path + "/")):
-            url_path, rule = path[len(self._path) :] or "/", Rule.NATIVE
+            url_path = path[len(self._path) :] or "/"
             if url_path.startswith("//"):  # a protocol-relative URL, to another host
                 return self._fallback(iri)
         elif port is None and not host.startswith("["):
-            url_path, rule = f"/{host}{path}", Rule.PROXIED
+            url_path = f"/{host}{path}"
         else:
             return self._fallback(iri)
         # In the path, or the host; a dot segment starts with `.` or `%` after a `/`, which most paths lack.
@@ -129,16 +118,11 @@ class URLMapper:
             return self._fallback(iri)
         if urllib.parse.unquote(url_path).split("/", 2)[1] == self.reserved_prefix:
             return self._fallback(iri, reserved=True)
-        return EntityURL(url_path, None if fragment is None else _to_uri(fragment, _FRAGMENT_SAFE), rule)
+        return EntityURL(url_path, None if fragment is None else _to_uri(fragment, _FRAGMENT_SAFE))
 
     def _fallback(self, iri: str, reserved: bool = False) -> EntityURL:
         path = f"/{self.reserved_prefix}/{FALLBACK_PATH}?u={urllib.parse.quote(iri, safe='')}"
-        return EntityURL(path, None, Rule.FALLBACK, reserved)
-
-
-def entity_url(iri: str, base_url: HttpUrl, reserved_prefix: str) -> EntityURL:
-    """Return an IRI's URL on a site served at `base_url` with a reserved prefix (`URLMapper`)."""
-    return URLMapper(base_url, reserved_prefix)(iri)
+        return EntityURL(path, None, reserved)
 
 
 def _split_authority(authority: str, default_port: int) -> tuple[str | None, int | None]:

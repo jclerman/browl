@@ -5,7 +5,7 @@ import urllib.parse
 import pytest
 from pydantic import HttpUrl
 
-from browl.urls import EntityURL, Rule, URLMapper, entity_url
+from browl.urls import EntityURL, URLMapper
 
 BASE = HttpUrl("http://example.com/")
 PREFIX = "_browl"
@@ -13,12 +13,12 @@ PREFIX = "_browl"
 
 def url(iri: str, base: str | HttpUrl = BASE, prefix: str = PREFIX) -> EntityURL:
     """Return an IRI's URL on a site at `base`."""
-    return entity_url(iri, HttpUrl(base) if isinstance(base, str) else base, prefix)
+    return URLMapper(HttpUrl(base) if isinstance(base, str) else base, prefix)(iri)
 
 
 def fallback(iri: str, prefix: str = PREFIX, reserved: bool = False) -> EntityURL:
     """Return the fallback URL of an IRI."""
-    return EntityURL(f"/{prefix}/iri?u={urllib.parse.quote(iri, safe='')}", None, Rule.FALLBACK, reserved)
+    return EntityURL(f"/{prefix}/iri?u={urllib.parse.quote(iri, safe='')}", None, reserved)
 
 
 @pytest.mark.parametrize(
@@ -44,14 +44,14 @@ def fallback(iri: str, prefix: str = PREFIX, reserved: bool = False) -> EntityUR
 )
 def test_native(iri: str, expected: tuple[str, str | None]) -> None:
     """An IRI under `BASE_URL` gets its own path, and keeps its fragment."""
-    assert url(iri) == EntityURL(*expected, Rule.NATIVE)
+    assert url(iri) == EntityURL(*expected)
 
 
 def test_native_http_and_https() -> None:
     """The `http` and `https` forms of a native IRI share a URL (U-15), whichever scheme `BASE_URL` has."""
     for base in ["http://example.com/", "https://example.com/"]:
         assert url("http://example.com/x#y", base) == url("https://example.com/x#y", base)
-        assert url("https://example.com/x", base) == EntityURL("/x", None, Rule.NATIVE)
+        assert url("https://example.com/x", base) == EntityURL("/x", None)
 
 
 @pytest.mark.parametrize(
@@ -72,7 +72,7 @@ def test_native_http_and_https() -> None:
 )
 def test_native_base(base: str, iri: str, path: str) -> None:
     """IRIs are compared with `BASE_URL` in URI form, its path left off theirs."""
-    assert url(iri, base) == EntityURL(path, None, Rule.NATIVE)
+    assert url(iri, base) == EntityURL(path, None)
 
 
 @pytest.mark.parametrize(
@@ -88,8 +88,8 @@ def test_native_base(base: str, iri: str, path: str) -> None:
     ],
 )
 def test_not_native(base: str, iri: str) -> None:
-    """An IRI not under `BASE_URL` isn't native."""
-    assert url(iri, base).rule != Rule.NATIVE
+    """An IRI not under `BASE_URL` isn't native: here, it's proxied."""
+    assert url(iri, base).path.startswith(f"/{urllib.parse.urlsplit(iri).hostname}/")
 
 
 @pytest.mark.parametrize(
@@ -108,7 +108,7 @@ def test_not_native(base: str, iri: str) -> None:
 )
 def test_proxied(iri: str, expected: tuple[str, str | None]) -> None:
     """Any other plain `http` or `https` IRI gets `/{host}{path}`, and keeps its fragment."""
-    assert url(iri) == EntityURL(*expected, Rule.PROXIED)
+    assert url(iri) == EntityURL(*expected)
 
 
 @pytest.mark.parametrize(
@@ -162,12 +162,12 @@ def test_fallback_protocol_relative_under_base_path() -> None:
     assert url("http://example.com/sub//evil.com/x", "http://example.com/sub") == fallback(
         "http://example.com/sub//evil.com/x"
     )
-    assert url("http://example.com/sub/x//y", "http://example.com/sub") == EntityURL("/x//y", None, Rule.NATIVE)
+    assert url("http://example.com/sub/x//y", "http://example.com/sub") == EntityURL("/x//y", None)
 
 
 def test_fallback_encoding() -> None:
     """The fallback URL percent-encodes the whole IRI, non-ASCII as UTF-8, under the configured prefix."""
-    assert url("urn:x:é#a b", prefix="_site") == EntityURL("/_site/iri?u=urn%3Ax%3A%C3%A9%23a%20b", None, Rule.FALLBACK)
+    assert url("urn:x:é#a b", prefix="_site") == EntityURL("/_site/iri?u=urn%3Ax%3A%C3%A9%23a%20b", None)
 
 
 @pytest.mark.parametrize(
@@ -189,15 +189,8 @@ def test_reserved_prefix(iri: str, base: HttpUrl) -> None:
 
 def test_reserved_prefix_configured() -> None:
     """The collision is with the configured prefix."""
-    assert url("http://example.com/_browl/x", prefix="_site").rule == Rule.NATIVE
+    assert url("http://example.com/_browl/x", prefix="_site") == EntityURL("/_browl/x", None)
     assert url("http://example.com/_site/x", prefix="_site") == fallback(
         "http://example.com/_site/x", "_site", reserved=True
     )
-    assert url("http://example.com/sub/_browl/x").rule == Rule.NATIVE  # not at the root
-
-
-def test_mapper_matches_function() -> None:
-    """A `URLMapper` maps IRIs as `entity_url` does, for many IRIs with one `BASE_URL`."""
-    mapper = URLMapper(BASE, PREFIX)
-    for iri in ["http://example.com/x", "http://example.org/x#y", "urn:x"]:
-        assert mapper(iri) == url(iri)
+    assert url("http://example.com/sub/_browl/x") == EntityURL("/sub/_browl/x", None)  # not at the root

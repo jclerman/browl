@@ -69,7 +69,7 @@ for tool in curl shasum tar; do
 done
 
 # The tbls the Makefile pins, for the schema docs; `make ci` downloads it when it's missing.
-version=$(sed -n 's/^TBLS_VERSION := //p' "$(dirname "$0")/../Makefile")
+version=$(make -s --no-print-directory -C "$(dirname "$0")/.." tbls-version)
 if [ -x "$(dirname "$0")/../.cache/tbls/$version/tbls" ]; then
     ok "tbls $version (in .cache/)"
 else

@@ -18,9 +18,8 @@ def build_derived(path: Path) -> None:
     """Create the derived database's tables and indexes, empty, at `path`."""
     with closing(connect(path, isolation_level=None)) as connection:
         connection.executescript(derived.SCHEMA)
-        for statements in derived.INDEXES.values():
-            for statement in statements:
-                connection.execute(statement)
+        for table in derived.INDEXES:
+            derived.create_indexes(connection, table)
 
 
 def build_state(path: Path) -> None:

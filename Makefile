@@ -66,12 +66,10 @@ ci: lint check-schema-docs test  ## Run the CI checks locally (lint, the schema 
 # SCHEMA DOCS
 ################################################################################
 
-# tbls (https://github.com/k1LoW/tbls) documents the SQLite databases in docs/schema/ (docs/SCHEMA.md), from empty
-# databases scripts/schema_dbs.py builds from the schemas in code, with one config per database in .tbls/. The release
-# and the checksums of its macOS and Linux builds are pinned here, from the release's checksums-darwin.txt and
-# checksums-linux.txt. It's installed in a directory named for its version, so bumping TBLS_VERSION gets the new
-# release, with no need to compare file times. The archive is downloaded and unpacked in a .part directory first,
-# renamed once complete. tar reads both the .tar.gz and, as bsdtar on macOS, the .zip.
+# tbls (https://github.com/k1LoW/tbls) documents the SQLite databases in docs/schema/ (docs/SCHEMA.md). The checksums
+# come from the release's checksums-darwin.txt and checksums-linux.txt. The install directory is named for the version,
+# so a bump needs no file-time check, and is renamed into place once complete, so a failed download isn't taken as
+# installed. tar is bsdtar on macOS, which reads the .zip too.
 TBLS_VERSION := 1.96.1
 TBLS_SHA256_darwin_amd64 := c744731de4f96517acac234d65175eb9084968abd1a77268d75007b0443a4241
 TBLS_SHA256_darwin_arm64 := 99d1d53b02e06635d4d94e2823fecc78b3249e996b1785a199ba1868f9f28a8f
@@ -89,6 +87,10 @@ SCHEMA_DOCS := derived state
 
 .PHONY: tbls
 tbls: $(TBLS)  ## Download the pinned tbls for the schema docs, unless already present
+
+.PHONY: tbls-version
+tbls-version:  ## Print the pinned tbls version, for CI's cache key and make doctor
+	@echo $(TBLS_VERSION)
 
 $(TBLS):
 	@test -n "$(TBLS_SHA256)" || { echo "tbls: no pinned build for $(TBLS_OS) $(TBLS_ARCH)" >&2; exit 1; }

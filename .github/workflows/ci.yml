@@ -78,7 +78,7 @@ jobs:
       # in a directory named for that version, which make checks only for existence, so a restored copy needs no touch.
       - name: Read the pinned tbls version
         id: tbls-version
-        run: echo "version=$(sed -n 's/^TBLS_VERSION := //p' Makefile)" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(make -s tbls-version)" >> "$GITHUB_OUTPUT"
 
       - name: Cache tbls
         uses: actions/cache@v6
