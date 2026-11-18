@@ -313,7 +313,7 @@ async def test_stops_group_after_robot_exits(tmp_path: Path, monkeypatch: pytest
 
 
 async def test_low_space_stops(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path) -> None:
-    """Check that ROBOT is stopped, leaving no output, once the data volume's free space falls below the margin."""
+    """Check that ROBOT is stopped, leaving no output, once its directory's free space falls below the margin."""
     pid_file = tmp_path / "pid"
     fake_java(tmp_path, monkeypatch, f'{OUTPUT_ARG}; echo x > "$out"; sleep 60 & echo $$ > {pid_file}; wait')
     margin = browl.process.FREE_SPACE_MARGIN_BYTES

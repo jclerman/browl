@@ -27,6 +27,7 @@ from browl.upload import (
     UPLOADS_DIR,
     Syntax,
     UploadError,
+    check_space,
     check_syntax,
     receive_upload,
     sniff_syntax,
@@ -402,7 +403,7 @@ async def test_cancelled_while_opening(data_dir: Path, monkeypatch: pytest.Monke
     ("overrides", "free", "status_code", "reason"),
     [
         ({"MAX_UPLOAD_BYTES": 100}, 10**12, 413, "the upload is larger than the limit of 100 bytes (MAX_UPLOAD_BYTES)"),
-        ({}, browl.upload.FREE_SPACE_MARGIN_BYTES + 100, 507, "the data volume has too little free space"),
+        ({}, browl.upload.FREE_SPACE_MARGIN_BYTES + 100, 507, "the jobs volume has too little free space"),
     ],
 )
 def test_refused_too_large(
@@ -422,6 +423,23 @@ def test_refused_too_large(
     assert response.status_code == status_code
     assert escape(reason) in response.text
     assert app.state.jobs.state.generation is None
+
+
+@pytest.mark.parametrize("uploads", [True, False], ids=["uploads", "no-uploads"])
+async def test_space_checked_on_uploads(data_dir: Path, monkeypatch: pytest.MonkeyPatch, uploads: bool) -> None:
+    """Check that the free space checked is the uploads directory's (the jobs volume), or DATA_DIR's without it."""
+    if uploads:
+        (data_dir / UPLOADS_DIR).mkdir()
+    checked: list[Path] = []
+    usage = shutil.disk_usage(data_dir)
+
+    def disk_usage(path: Path) -> shutil._ntuple_diskusage:
+        checked.append(path)
+        return usage._replace(free=10**12)
+
+    monkeypatch.setattr(browl.upload.shutil, "disk_usage", disk_usage)
+    await check_space(1, 100, data_dir)
+    assert checked == [data_dir / UPLOADS_DIR if uploads else data_dir]
 
 
 @pytest.mark.parametrize(("max_bytes", "claimed"), [(100, False), (len(LONG), True)], ids=["unclaimed", "claimed"])

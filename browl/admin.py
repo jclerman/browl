@@ -76,14 +76,14 @@ def same_origin(request: Request) -> None:
 
 @router.post("/upload", response_class=HTMLResponse, dependencies=[Depends(same_origin)])
 async def upload(request: Request) -> Response:
-    """Start a load job that replaces the ontology with the uploaded file, streamed to the data volume (A-2, A-4).
+    """Start a load job that replaces the ontology with the uploaded file, streamed to the jobs volume (A-2, A-4).
 
     The body is a multipart form: a `reasoner` field (`none`, `elk` or `hermit`), then an `ontology` file (`.ttl`,
     `.rdf`, `.owl` as RDF/XML, or `.ofn`). It's read as it streams in, so FastAPI can't describe it.
 
     On success, redirects to the upload page, which shows the job's progress; a refused upload gets the page with the
     reason: 400 if the request was invalid, 403 if it came from another site's page, 409 if a job was already running,
-    413 if it's larger than `MAX_UPLOAD_BYTES`, 507 if the data volume is full or would be, 500 if the file couldn't
+    413 if it's larger than `MAX_UPLOAD_BYTES`, 507 if the jobs volume is full or would be, 500 if the file couldn't
     be stored for another reason.
     """
     # A refusal before the body has been read (e.g. a bad suffix, or 409) responds while the browser may still be

@@ -328,11 +328,11 @@ async def test_fetch_timeouts(
 async def test_fetch_low_space(
     site: StaticServer, tmp_path: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Check that a fetch fails, leaving no file, if the data volume runs low on space."""
+    """Check that a fetch fails, leaving no file, if the jobs volume runs low on space."""
     url = site.page("/a", "ex:a ex:b ex:c .")
     monkeypatch.setattr(browl.imports, "free_bytes", lambda path: 0)
     async with fetch_client(allow_all) as client:
-        with pytest.raises(FetchError, match=r"^the data volume is low on space$"):
+        with pytest.raises(FetchError, match=r"^the jobs volume is low on space$"):
             await fetch(client, url, tmp_path / "a", make_settings())
     assert not (tmp_path / "a").exists()
 
