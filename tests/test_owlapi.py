@@ -8,6 +8,7 @@ import jpype
 import pytest
 
 from browl import owlapi
+from tests.helpers import StaticServer
 
 pytestmark = [pytest.mark.jvm, pytest.mark.usefixtures("jvm"), pytest.mark.anyio]
 
@@ -72,15 +73,13 @@ IMPORTS = f"<{OWL}imports>"
     ],
     ids=["plain", "escaped-iri", "escaped-predicate", "blank-node-subject", "file"],
 )
-async def test_imports_not_fetched(
-    triple: str, imported: str, http_server: tuple[str, list[str]], tmp_path: Path
-) -> None:
+async def test_imports_not_fetched(triple: str, imported: str, site: StaticServer, tmp_path: Path) -> None:
     """Check that an import is kept as a declaration but never fetched, however its triple is written.
 
     The imported IRIs point at a local HTTP server, which records any request, and at a file holding an ontology, which
     would be imported if it were read.
     """
-    server, requests = http_server
+    server, requests = site.url, site.requested
     file = tmp_path / "imported.nt"
     file.write_text(f"<http://example.org/imported> {RDF_TYPE} <{OWL}Ontology> .\n")
     values = {"imports": IMPORTS, "server": server, "file": file.as_uri()}
@@ -96,9 +95,9 @@ async def test_imports_not_fetched(
     assert requests == []
 
 
-async def test_fragment_manager_loads_nothing_else(http_server: tuple[str, list[str]]) -> None:
+async def test_fragment_manager_loads_nothing_else(site: StaticServer) -> None:
     """Check that a fragment's manager refuses to load any other document, but can still create ontologies."""
-    server, requests = http_server
+    server, requests = site.url, site.requested
 
     def use_manager() -> tuple[str, int]:
         with owlapi.ntriples_ontology(FRAGMENT) as fragment:

@@ -26,7 +26,7 @@ from browl.robot import reasoning_stage
 from browl.settings import Settings
 from browl.upload import Syntax
 from tests.conftest import find_robot_jar
-from tests.helpers import Site, make_app, make_settings, turtle
+from tests.helpers import StaticServer, make_app, make_settings, turtle
 
 pytestmark = pytest.mark.anyio
 
@@ -157,7 +157,7 @@ def test_empty_ontology() -> None:
     assert empty_ontology(f"{EX}a b") == "Ontology()\n"
 
 
-async def test_fetch(site: Site, tmp_path: Path, data_dir: Path) -> None:
+async def test_fetch(site: StaticServer, tmp_path: Path, data_dir: Path) -> None:
     """Check that an import is fetched and its syntax found, from its content or else its content type."""
     settings = make_settings()
     async with fetch_client(allow_all) as client:
@@ -178,7 +178,7 @@ async def test_fetch(site: Site, tmp_path: Path, data_dir: Path) -> None:
     ("location", "match"),
     [("file:///etc/passwd", "^redirected to an unsupported scheme: "), ("/loop", "^more than 10 redirects$")],
 )
-async def test_redirect_refused(site: Site, tmp_path: Path, data_dir: Path, location: str, match: str) -> None:
+async def test_redirect_refused(site: StaticServer, tmp_path: Path, data_dir: Path, location: str, match: str) -> None:
     """Check that a redirect to another scheme, or round in a loop, fails, leaving no file."""
     site.pages["/loop"] = (302, {"Location": location}, b"")
     async with fetch_client(allow_all) as client:
@@ -202,7 +202,7 @@ async def test_redirect_refused(site: Site, tmp_path: Path, data_dir: Path, loca
     ],
 )
 async def test_fetch_refused(
-    site: Site, tmp_path: Path, data_dir: Path, iri: str, page: tuple[str | bytes, str] | None, match: str
+    site: StaticServer, tmp_path: Path, data_dir: Path, iri: str, page: tuple[str | bytes, str] | None, match: str
 ) -> None:
     """Check that an import that isn't allowed, can't be fetched, or isn't readable fails, leaving no file."""
     if page is not None:
@@ -215,7 +215,7 @@ async def test_fetch_refused(
     assert not (tmp_path / "f").exists()
 
 
-async def test_private_address_refused(site: Site, tmp_path: Path, data_dir: Path) -> None:
+async def test_private_address_refused(site: StaticServer, tmp_path: Path, data_dir: Path) -> None:
     """Check that by default nothing is fetched from a loopback address: the check runs before connecting."""
     url = site.page("/a", "ex:a ex:b ex:c .")
     async with fetch_client() as client:
@@ -224,7 +224,7 @@ async def test_private_address_refused(site: Site, tmp_path: Path, data_dir: Pat
     assert site.requested == []
 
 
-async def test_redirect_checked(site: Site, tmp_path: Path, data_dir: Path) -> None:
+async def test_redirect_checked(site: StaticServer, tmp_path: Path, data_dir: Path) -> None:
     """Check that each redirect's address is checked too, before connecting to it."""
     checked: list[str] = []
 
@@ -241,7 +241,7 @@ async def test_redirect_checked(site: Site, tmp_path: Path, data_dir: Path) -> N
     assert site.requested == ["/r"]
 
 
-async def test_stage(site: Site, settings: Settings, data_dir: Path) -> None:
+async def test_stage(site: StaticServer, settings: Settings, data_dir: Path) -> None:
     """Check that imports are fetched recursively, the unfetchable dropped, and every one is in the catalog."""
     a, b = site.url + "/a.ttl", site.url + "/b.rdf"
     site.page("/a.ttl", turtle(a, b, "file:///etc/passwd", a))
@@ -279,7 +279,7 @@ async def test_stage_parse_error(settings: Settings, data_dir: Path) -> None:
         await imports_stage(context, allow_all)
 
 
-async def test_stage_unreadable_import(site: Site, settings: Settings, data_dir: Path) -> None:
+async def test_stage_unreadable_import(site: StaticServer, settings: Settings, data_dir: Path) -> None:
     """Check that an import that can't be parsed is dropped, not loaded."""
     bad = site.page("/bad.ttl", "<a> <b> .\n")
     context = JobContext(1, settings, upload=store_upload(data_dir, turtle(f"{EX}o", bad)))
@@ -291,7 +291,7 @@ async def test_stage_unreadable_import(site: Site, settings: Settings, data_dir:
 
 
 async def test_stage_import_limit(
-    site: Site, settings: Settings, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    site: StaticServer, settings: Settings, data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Check that imports past `MAX_IMPORTS` attempts, failed ones too, are dropped without being fetched."""
     monkeypatch.setattr(browl.imports, "MAX_IMPORTS", 2)
@@ -306,7 +306,7 @@ async def test_stage_import_limit(
 
 
 async def test_stage_listed_limit(
-    site: Site, settings: Settings, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    site: StaticServer, settings: Settings, data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Check that a load whose documents list more than `MAX_LISTED` imports fails."""
     monkeypatch.setattr(browl.imports, "MAX_LISTED", 2)
@@ -316,7 +316,7 @@ async def test_stage_listed_limit(
     assert site.requested == []
 
 
-async def test_stage_byte_budget(site: Site, data_dir: Path, jena_home: Path) -> None:
+async def test_stage_byte_budget(site: StaticServer, data_dir: Path, jena_home: Path) -> None:
     """Check that the imports together may be no larger than `MAX_UPLOAD_BYTES`."""
     first = site.page("/1.ttl", turtle("urn:1"))
     second = site.page("/2.ttl", turtle("urn:2"))
@@ -330,7 +330,9 @@ async def test_stage_byte_budget(site: Site, data_dir: Path, jena_home: Path) ->
     ]
 
 
-async def test_stage_deadline(site: Site, settings: Settings, data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stage_deadline(
+    site: StaticServer, settings: Settings, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Check that imports not fetched within `FETCH_ALL_TIMEOUT_S` are dropped."""
     monkeypatch.setattr(browl.imports, "FETCH_ALL_TIMEOUT_S", 0.0)
     context = JobContext(1, settings, upload=store_upload(data_dir, turtle(f"{EX}o", site.url + "/1.ttl")))
@@ -348,7 +350,7 @@ async def test_stage_no_upload(settings: Settings) -> None:
 
 @pytest.mark.jvm
 @pytest.mark.usefixtures("jvm")
-async def test_ofn_import_converted(site: Site, settings: Settings, data_dir: Path) -> None:
+async def test_ofn_import_converted(site: StaticServer, settings: Settings, data_dir: Path) -> None:
     """Check that an import in OWL Functional Syntax is converted to Turtle, for the loader, and its imports listed."""
     nested = site.page("/n.ttl", turtle(site.url + "/n.ttl"))
     ofn = site.page("/o.ofn", f"Ontology(<{site.url}/o.ofn>\nImport(<{nested}>)\nDeclaration(Class(<{EX}A>))\n)\n")
@@ -365,14 +367,14 @@ async def test_ofn_import_converted(site: Site, settings: Settings, data_dir: Pa
 @pytest.mark.usefixtures("jvm")
 @pytest.mark.parametrize("reasoner", [Reasoner.ELK, Reasoner.NONE])
 async def test_ofn_upload_resolves_no_import(
-    http_server: tuple[str, list[str]], settings: Settings, data_dir: Path, tmp_path: Path, reasoner: Reasoner
+    site: StaticServer, settings: Settings, data_dir: Path, tmp_path: Path, reasoner: Reasoner
 ) -> None:
     """Check that neither the OFN conversion nor ROBOT, given the catalog, fetches an import or reads a local one.
 
     The local file imports a page of the local server, which would be requested if it were read. The relative import
     can't be fetched, and is left out of the converted Turtle, so ROBOT doesn't resolve it against the Turtle's base.
     """
-    url, requested = http_server
+    url, requested = site.url, site.requested
     secret = tmp_path / "secret.ttl"
     secret.write_text(turtle(f"{EX}secret", f"{url}/from-secret"))
     imports = "".join(f"Import(<{iri}>)\n" for iri in (f"{url}/a.owl", secret.as_uri(), "relative.owl"))

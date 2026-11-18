@@ -29,7 +29,7 @@ from browl.robot import (
 )
 from browl.settings import Settings
 from tests.conftest import DATA, find_robot_jar
-from tests.helpers import make_app, make_settings
+from tests.helpers import StaticServer, make_app, make_settings
 
 pytestmark = pytest.mark.anyio
 
@@ -172,9 +172,9 @@ async def test_tool_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.jvm
 @pytest.mark.usefixtures("jvm")
-async def test_robot_fetches_nothing(http_server: tuple[str, list[str]], settings: Settings, data_dir: Path) -> None:
+async def test_robot_fetches_nothing(site: StaticServer, settings: Settings, data_dir: Path) -> None:
     """Check that ROBOT fails on an import missing from the catalog, naming it, and never requests it."""
-    url, requested = http_server
+    url, requested = site.url, site.requested
     path = data_dir / "uploads" / "1" / "ontology.ttl"
     path.parent.mkdir(parents=True)
     path.write_text(

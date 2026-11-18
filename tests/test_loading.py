@@ -15,8 +15,7 @@ from browl.fuseki import UNION_FROM, FusekiAdmin, FusekiAdminError, FusekiClient
 from browl.jobs import ImportResult, JobContext, Site, Stage, StageError
 from browl.loading import dataset_name, loading_stage, store_path
 from browl.settings import Settings
-from tests.helpers import Site as WebSite
-from tests.helpers import make_app, make_settings, turtle
+from tests.helpers import StaticServer, make_app, make_settings, turtle
 
 pytestmark = [pytest.mark.anyio, pytest.mark.fuseki]
 
@@ -256,7 +255,7 @@ async def test_admin_timeouts(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_app_loads_and_restarts(
-    settings: Settings, site: WebSite, monkeypatch: pytest.MonkeyPatch, fuseki_url: str, fuseki_base: Path
+    settings: Settings, site: StaticServer, monkeypatch: pytest.MonkeyPatch, fuseki_url: str, fuseki_base: Path
 ) -> None:
     """Check an upload end to end, with nested imports and one that can't be fetched, then a restart.
 

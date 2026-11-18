@@ -9,6 +9,7 @@ import pytest
 from browl import owlapi
 from browl.fuseki import FusekiClient, SparqlError
 from browl.rdf import IRI, RDF_DIR_LANG_STRING, RDF_LANG_STRING, XSD, BlankNode, Literal
+from tests.helpers import StaticServer
 
 pytestmark = [pytest.mark.jvm, pytest.mark.fuseki, pytest.mark.usefixtures("jvm"), pytest.mark.anyio]
 
@@ -85,14 +86,12 @@ async def test_fragment_with_base_direction(sparql: FusekiClient, family_dataset
     assert f'AnnotationAssertion(rdfs:label <{FAMILY}Person> "شخص"@ar--rtl)' in await owlapi.run_java(axioms)
 
 
-async def test_fragment_with_imports(
-    sparql: FusekiClient, family_dataset: str, http_server: tuple[str, list[str]]
-) -> None:
+async def test_fragment_with_imports(sparql: FusekiClient, family_dataset: str, site: StaticServer) -> None:
     """Check that the ontology's own fragment parses, keeping its import, without fetching it.
 
     The import's IRI is pointed at a local HTTP server, which records any request.
     """
-    server, requests = http_server
+    server, requests = site.url, site.requested
     ntriples = await sparql.construct(family_dataset, "DESCRIBE <http://example.org/family>")
     ntriples = ntriples.replace(b"<http://example.org/not-fetched.owl>", f"<{server}/family-import.owl>".encode())
 

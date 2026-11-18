@@ -33,7 +33,7 @@ def make_app(
     )
 
 
-class Site:
+class StaticServer:
     """A local HTTP server with fixed responses, recording the paths requested.
 
     Attributes:

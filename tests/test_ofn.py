@@ -9,7 +9,7 @@ from browl.jobs import StageError
 from browl.ofn import convert_ofn
 from browl.settings import Settings
 from tests.conftest import find_robot_jar
-from tests.helpers import make_settings, turtle
+from tests.helpers import StaticServer, make_settings, turtle
 
 pytestmark = [pytest.mark.anyio, pytest.mark.jvm]
 
@@ -23,9 +23,7 @@ def settings(data_dir: Path) -> Settings:
 
 
 @pytest.mark.usefixtures("jvm")
-async def test_lists_what_the_owlapi_reads(
-    http_server: tuple[str, list[str]], settings: Settings, tmp_path: Path
-) -> None:
+async def test_lists_what_the_owlapi_reads(site: StaticServer, settings: Settings, tmp_path: Path) -> None:
     """Check that the imports a regex scan missed (PR #70's review, M1) are listed, and nothing is fetched or read.
 
     Each import is one the OWLAPI reads in a way a scan didn't: a prefix redefined in a comment, a non-ASCII prefix
@@ -33,7 +31,7 @@ async def test_lists_what_the_owlapi_reads(
     `Import` after an annotation. The local file imports a page of the server, which would be requested if it were
     read.
     """
-    url, requested = http_server
+    url, requested = site.url, site.requested
     secret = tmp_path / "secret.ttl"
     secret.write_text(turtle(f"{EX}secret", f"{url}/from-secret"))
     source = tmp_path / "o.ofn"

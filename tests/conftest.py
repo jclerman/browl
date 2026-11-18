@@ -11,11 +11,9 @@ tests whose needs are missing are skipped; in CI
 `fuseki_url` fixture.
 """
 
-import http.server
 import os
 import shutil
 import subprocess
-import threading
 import time
 import uuid
 from collections.abc import Iterator
@@ -27,7 +25,7 @@ import pytest
 
 from browl import owlapi
 from browl.settings import Settings
-from tests.helpers import Site
+from tests.helpers import StaticServer
 
 ROOT = Path(__file__).parent.parent
 DATA = Path(__file__).parent / "data"
@@ -52,36 +50,13 @@ def data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture
-def site() -> Iterator[Site]:
-    """Yield a local HTTP server with fixed responses (`Site`)."""
-    server = Site()
+def site() -> Iterator[StaticServer]:
+    """Yield a local HTTP server with fixed responses (`StaticServer`), recording the paths requested."""
+    server = StaticServer()
     try:
         yield server
     finally:
         server.close()
-
-
-@pytest.fixture
-def http_server() -> Iterator[tuple[str, list[str]]]:
-    """Yield the base URL of a local HTTP server, and the list of paths it's asked for; it answers each with 404."""
-    requests: list[str] = []
-
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self) -> None:
-            requests.append(self.path)
-            self.send_error(404)
-
-        def log_message(self, format: str, *args: object) -> None:
-            pass
-
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}", requests
-    finally:
-        server.shutdown()
-        server.server_close()
 
 
 def find_robot_jar() -> Path:
