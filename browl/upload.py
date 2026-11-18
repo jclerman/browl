@@ -20,7 +20,8 @@ from typing import IO, Any
 from python_multipart.multipart import MultipartParser, parse_options_header
 from starlette.requests import ClientDisconnect, Request
 
-from browl.jobs import JobContext, JobRunner, Reasoner, StageError
+from browl.jobs import JobContext, JobRunner
+from browl.jobtypes import Reasoner, StageError
 from browl.pages import clear_page_cache
 from browl.settings import Settings
 

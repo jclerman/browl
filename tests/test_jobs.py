@@ -25,20 +25,18 @@ from browl.jobs import (
     REBUILDING,
     STATE_DB,
     STOPPED_UNRECORDED,
-    ImportResult,
     JobContext,
     JobLock,
     JobRunner,
     JobRunningError,
     JobState,
     JobStore,
-    Reasoner,
     Site,
     Stage,
-    StageError,
     StageFunction,
     time_limit,
 )
+from browl.jobtypes import ImportResult, Reasoner, StageError
 from tests.helpers import make_settings
 
 pytestmark = pytest.mark.anyio

@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.openapi.docs import get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from browl.jobs import JobRunningError, Reasoner, Stage
+from browl.jobs import JobRunningError, Stage
+from browl.jobtypes import Reasoner
 from browl.pages import templates
 from browl.upload import FORMATS, StorageError, UploadError, receive_upload
 

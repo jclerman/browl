@@ -20,6 +20,7 @@ from typing import IO, Self
 
 import httpx2
 
+from browl.jobtypes import ImportResult, Reasoner, StageError
 from browl.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -98,42 +99,12 @@ class Stage(StrEnum):
     READY = "ready"
 
 
-class Reasoner(StrEnum):
-    """The reasoner an admin chooses for a job (A-3); `NONE` skips the reasoning stage."""
-
-    NONE = "none"
-    ELK = "elk"
-    HERMIT = "hermit"
-
-
 class Site(StrEnum):
     """What the site serves (U-16): the "loading" page, the "not available" page, or the ontology."""
 
     LOADING = "loading"
     NOT_AVAILABLE = "not available"
     AVAILABLE = "available"
-
-
-@dataclass(frozen=True)
-class ImportResult:
-    """An ontology the served ontology imports, directly or not, and whether it was loaded (A-4).
-
-    Attributes:
-        iri: Its IRI, as declared in the `owl:imports` that imports it.
-        imported_by: The IRI of the import that imports it; None if the upload does.
-        reason: Why it was dropped, e.g. "only http and https imports are fetched"; None if it was fetched.
-        triples: How many triples its named graph holds, once loaded; None before then, or if it was dropped.
-    """
-
-    iri: str
-    imported_by: str | None = None
-    reason: str | None = None
-    triples: int | None = None
-
-    @property
-    def dropped(self) -> bool:
-        """Whether it couldn't be fetched, or wasn't allowed, so it isn't part of the served ontology."""
-        return self.reason is not None
 
 
 def _imports_json(imports: tuple[ImportResult, ...]) -> str:
@@ -446,10 +417,6 @@ Its failure is logged; the job stays ready."""
 
 class JobRunningError(RuntimeError):
     """A job was started while another one runs."""
-
-
-class StageError(Exception):
-    """A stage failed for a reason worth showing to admins as it is (A-6), e.g. "time limit"."""
 
 
 @asynccontextmanager

@@ -64,9 +64,17 @@ for tool in curl shasum tar; do
     if command -v "$tool" >/dev/null 2>&1; then
         ok "$tool"
     else
-        fail "$tool (\`make test\` downloads robot.jar and Jena's tools with it)"
+        fail "$tool (\`make test\` downloads robot.jar and Jena's tools with it, \`make ci\` tbls)"
     fi
 done
+
+# The tbls the Makefile pins, for the schema docs; `make ci` downloads it when it's missing.
+version=$(make -s --no-print-directory -C "$(dirname "$0")/.." tbls-version)
+if [ -x "$(dirname "$0")/../.cache/tbls/$version/tbls" ]; then
+    ok "tbls $version (in .cache/)"
+else
+    warn "tbls $version: \`make tbls\` downloads it (\`make ci\` does too)"
+fi
 
 hook=$(git rev-parse --git-path hooks/pre-commit 2>/dev/null)
 if [ -n "$hook" ] && [ -f "$hook" ]; then

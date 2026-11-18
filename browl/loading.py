@@ -22,7 +22,8 @@ from pathlib import Path
 import httpx2
 
 from browl.fuseki import FusekiAdmin, FusekiAdminError, FusekiClient, SparqlError
-from browl.jobs import JobContext, StageError
+from browl.jobs import JobContext
+from browl.jobtypes import StageError
 from browl.process import Completed, run_process
 from browl.rdf import Literal, RDFSyntaxError, Term, parse_tsv_header, parse_tsv_row
 from browl.settings import Settings

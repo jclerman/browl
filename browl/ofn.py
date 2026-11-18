@@ -15,7 +15,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from browl.jobs import StageError
+from browl.jobtypes import StageError
 from browl.process import NO_NETWORK_JAVA_OPTIONS, run_process
 from browl.robot import KILLED_STATUS, OUT_OF_MEMORY_STATUS, killed_reason
 from browl.settings import Settings

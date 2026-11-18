@@ -17,7 +17,7 @@ import pytest
 import browl.ofn
 import browl.process
 import browl.robot
-from browl.jobs import Reasoner, StageError
+from browl.jobtypes import Reasoner, StageError
 from browl.process import run_process
 from browl.robot import reasoning_stage
 from browl.settings import Settings

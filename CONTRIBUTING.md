@@ -9,7 +9,7 @@ Required:
 | Git | | |
 | Python | 3.12+ | CI tests 3.12 and 3.14 |
 | [Poetry](https://python-poetry.org/docs/#installation) | 2.5.1+ | The venv and its dependencies, from `poetry.lock` |
-| curl, shasum, tar | | `make test` downloads the pinned `robot.jar` and Jena tools with them |
+| curl, shasum, tar | | `make test` downloads the pinned `robot.jar` and Jena tools with them, and `make ci` the pinned [tbls](https://github.com/k1LoW/tbls) |
 
 Optional locally. CI has them all, and there the tests that need them fail instead of being skipped:
 
@@ -30,8 +30,10 @@ make ci        # lint and test, as CI does
 make help      # list all targets
 ```
 
-The first `make test` downloads `robot.jar` and Jena's tools into `.cache/`, at the versions the `Dockerfile` pins. The
-git hook runs the linters on each commit; `make lint` runs them on every file.
+The first `make test` downloads `robot.jar` and Jena's tools into `.cache/`, at the versions the `Dockerfile` pins, and
+the first `make ci` (or `make tbls`) downloads tbls, at the version the `Makefile` pins, for the SQLite schema docs
+([`docs/SCHEMA.md`](docs/SCHEMA.md)). The git hook runs the linters on each commit; `make lint` runs them on every
+file.
 
 ## Running the app
 

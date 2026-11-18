@@ -1,3 +1,7 @@
+# tbls writes docs/schema/ (`make schema-docs`), and `make check-schema-docs` compares it with tbls's output byte
+# for byte, so no hook may change it.
+exclude: ^docs/schema/
+
 repos:
 
   - repo: https://github.com/astral-sh/ruff-pre-commit

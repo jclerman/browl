@@ -20,7 +20,7 @@ from typing import Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from browl.jobs import StageError
+from browl.jobtypes import StageError
 from browl.upload import FREE_SPACE_MARGIN_BYTES
 
 logger = logging.getLogger(__name__)

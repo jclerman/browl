@@ -74,6 +74,18 @@ jobs:
         if: steps.jena.outputs.cache-hit == 'true'
         run: touch .cache/jena/bin/tdb2.tdbloader
 
+      # tbls, which `make ci` downloads to check the schema docs, keyed by the version the Makefile pins. It's installed
+      # in a directory named for that version, which make checks only for existence, so a restored copy needs no touch.
+      - name: Read the pinned tbls version
+        id: tbls-version
+        run: echo "version=$(make -s tbls-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache tbls
+        uses: actions/cache@v6
+        with:
+          path: .cache/tbls
+          key: tbls-${{ steps.tbls-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
+
       - name: Install dependencies, lint, and test
         run: make install ci
 

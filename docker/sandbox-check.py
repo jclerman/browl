@@ -26,7 +26,8 @@ from unittest import mock
 
 import browl.robot
 from browl.imports import write_catalog
-from browl.jobs import STATE_DB, Reasoner, StageError
+from browl.jobs import STATE_DB
+from browl.jobtypes import Reasoner, StageError
 from browl.ofn import convert_ofn
 from browl.robot import reason_args, run_robot
 from browl.settings import Settings

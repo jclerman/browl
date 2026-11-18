@@ -20,8 +20,8 @@ from browl.jobs import (
     JobStore,
     Site,
     Stage,
-    StageError,
 )
+from browl.jobtypes import StageError
 from browl.pages import RETRY_AFTER_S, SiteGate, templates
 from tests.helpers import make_app
 

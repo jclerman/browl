@@ -14,7 +14,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from browl.jobs import JobContext, Reasoner, StageError
+from browl.jobs import JobContext
+from browl.jobtypes import Reasoner, StageError
 from browl.process import NO_NETWORK_JAVA_OPTIONS, Completed, java, run_process
 from browl.settings import Settings
 
