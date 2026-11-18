@@ -829,6 +829,7 @@ go into this document.
 | --- | --- | --- | --- | --- | --- |
 | P-24 | Performance check against N-1–N-3 targets at scale; whether streaming extraction alongside the TDB2 load is worth it | N-1–N-3 | all above | To do | [#42](https://github.com/jclerman/browl/issues/42) |
 | P-25 | Accessibility pass (trees, combobox, no-JS pages) | U-17 | P-18, P-20 | To do | [#35](https://github.com/jclerman/browl/issues/35) |
+| P-29 | Store the upload, fetched imports and ROBOT's output compressed at rest (gzip shrank Uberon 13–16×, P-8), and accept compressed uploads; measure the cost first | A-2 | P-8 | To do | [#71](https://github.com/jclerman/browl/issues/71) |
 | P-26 | Update README: remove Owlready2 and Fuseki (now the OWLAPI via JPype); replace "cached once built" with the bounded cache | | | Done | [#7](https://github.com/jclerman/browl/pull/7) |
 
 ### Later
