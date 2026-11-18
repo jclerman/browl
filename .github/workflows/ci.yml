@@ -121,21 +121,36 @@ jobs:
           docker compose exec -T fuseki java -version
 
       # P-30: ROBOT and the OFN lister run in the sandbox, which has no network (no DNS either), none of the app's files
-      # but the jobs volume, and none of its settings. `!` alone doesn't fail a step, hence `|| exit 1`.
+      # but the jobs volume, and none of its settings. Each network check passes only on the error it expects.
+      # `!` alone doesn't fail a step, hence `|| exit 1`.
       - name: Check the sandbox's isolation
         run: |
           docker compose exec -T sandbox test -S /sandbox/runner.sock
-          ! docker compose exec -T sandbox python -c 'import socket; socket.getaddrinfo("fuseki", 3030)' || exit 1
-          ! docker compose exec -T sandbox python -c 'import socket; socket.create_connection(("1.1.1.1", 443), 5)' \
-            || exit 1
+          docker compose exec -T sandbox python -c '
+          import socket
+          try:
+              socket.getaddrinfo("fuseki", 3030)
+          except socket.gaierror:
+              raise SystemExit(0)
+          raise SystemExit("fuseki resolved")'
+          docker compose exec -T sandbox python -c '
+          import errno, socket
+          try:
+              socket.create_connection(("1.1.1.1", 443), 5)
+          except OSError as error:
+              raise SystemExit(0 if error.errno == errno.ENETUNREACH else f"unexpected error: {error!r}")
+          raise SystemExit("connected")'
           docker compose exec -T app test -f /data/state.sqlite3
           docker compose exec -T sandbox sh -c 'test "$(ls -A /data)" = uploads && test -z "$(ls -A /fuseki)"'
           environment=$(docker compose exec -T sandbox env)
           ! grep -E '^(BASE_URL|AUTH_DISABLED|OIDC_|SEED_ADMINS|SANDBOX_SOCKET)=' <<< "$environment" || exit 1
 
-      # An import missing from ROBOT's catalog, by http: from the app's container and by file: of the job database,
-      # fails the run naming it, with nothing fetched or read (docker/sandbox-check.py).
-      - name: Check that ROBOT's imports reach nothing from the sandbox
+      # The control: run in the app's container, ROBOT's imports reach their targets, so the next check can see a leak.
+      - name: Check that ROBOT's imports reach their targets without the sandbox
+        run: docker compose exec -T app python - --unsandboxed < docker/sandbox-check.py
+
+      # ROBOT and the OFN lister work in the sandbox, and ROBOT's imports reach nothing (docker/sandbox-check.py).
+      - name: Check the tools in the sandbox
         run: docker compose exec -T app python - < docker/sandbox-check.py
 
       # Fuseki's admin protocol is open to anything that reaches it, so its port must stay inside the Compose network.
