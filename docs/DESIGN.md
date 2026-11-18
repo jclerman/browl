@@ -944,7 +944,7 @@ go into this document.
 | --- | --- | --- | --- | --- | --- |
 | P-9 | Derived database schema; atomic swap; generation number; reuse on restart when current; completeness check for bulk query results (2.14) | N-4 | P-8 | Done | [#21](https://github.com/jclerman/browl/issues/21) |
 | P-10 | Entities (entity-list query), IRI → URL mapping, hash prefixes, collision warnings | U-2, U-13, U-15, O-3 | P-9 | To do | [#22](https://github.com/jclerman/browl/issues/22) |
-| P-11 | Name values, direct and entailed through sub-properties (first decide: property path or Fuseki-configured RDFS), display names, CURIE prefixes | U-6, O-4, O-5, O-11 | P-10 | To do | [#23](https://github.com/jclerman/browl/issues/23) |
+| P-11 | Name values, direct and entailed through sub-properties (first decide: property path or Fuseki-configured RDFS), display names, CURIE prefixes; measure whether reading the next batch while the last is inserted pays | U-6, O-4, O-5, O-11 | P-10 | To do | [#23](https://github.com/jclerman/browl/issues/23) |
 | P-12 | Hierarchies (edges query), equivalence groups, distinct descendant counts | U-7, U-8, U-9 | P-10, S-3 | To do | [#24](https://github.com/jclerman/browl/issues/24) |
 
 ### Phase 4: Browsing
@@ -967,7 +967,7 @@ go into this document.
 | P-20 | Autocomplete UI (accessible combobox) with type and property filters | U-10, U-17 | P-19, P-14 | To do | [#32](https://github.com/jclerman/browl/issues/32) |
 | P-33 | JSON API over the pages' data: routes under `api/` returning the models the pages render (2.8, 2.13) | U-42 | P-16, P-17, P-18, P-19, P-27 | To do | [#76](https://github.com/jclerman/browl/issues/76) |
 | P-21 | Page cache keyed by generation | O-10, N-3 | P-16 | To do | [#40](https://github.com/jclerman/browl/issues/40) |
-| P-22 | Google sign-in, admin-route protection, dev no-auth mode | A-1, O-6, O-7 | P-6 | To do | [#17](https://github.com/jclerman/browl/issues/17) |
+| P-22 | Google sign-in, admin-route protection, dev no-auth mode; then consider an admin action that cancels a running job or rebuild, and a time limit on pre-caching | A-1, O-6, O-7 | P-6 | To do | [#17](https://github.com/jclerman/browl/issues/17) |
 | P-23 | Admin list management page and persistence | A-7 | P-22 | To do | [#19](https://github.com/jclerman/browl/issues/19) |
 
 ### Phase 6: Hardening
