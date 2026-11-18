@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import browl
-from browl import admin, imports, loading, owlapi, robot
+from browl import admin, imports, loading, owlapi, precache, robot
 from browl.fuseki import FusekiClient
 from browl.jobs import JobRunner, Stage, StageFunction
 from browl.pages import STATIC_DIR, SiteGate
@@ -70,7 +70,8 @@ def create_app(
         settings: The settings; loaded from the environment if not given.
         fuseki_transport: The transport for the Fuseki client, which tests replace; httpx2's default if not given.
         start_jvm: Whether to start the JVM; tests that don't need it turn it off.
-        stages: The load job's background stages; tests replace them. If not given: imports, reasoning and loading.
+        stages: The load job's background stages; tests replace them. If not given: imports, reasoning, loading
+            and pre-caching. Either way, each job that reaches ready deletes the previous derived databases.
 
     Raises:
         pydantic.ValidationError: A setting is missing or invalid.
@@ -90,10 +91,11 @@ def create_app(
                     Stage.IMPORTS: imports.imports_stage,
                     Stage.REASONING: robot.reasoning_stage,
                     Stage.LOADING: functools.partial(loading.loading_stage, http=client),
+                    Stage.PRE_CACHING: functools.partial(precache.pre_caching_stage, http=client),
                 }
             else:
                 functions = stages
-            app.state.jobs = await JobRunner.open(settings, functions)
+            app.state.jobs = await JobRunner.open(settings, functions, on_ready=precache.remove_previous)
             try:
                 yield
             finally:

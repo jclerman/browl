@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
+from contextlib import closing
 from pathlib import Path
 
 import httpx2
@@ -11,6 +12,8 @@ from fastapi.testclient import TestClient
 import browl.fuseki
 import browl.imports
 import browl.loading
+from browl import derived
+from browl.derived import read_meta
 from browl.fuseki import UNION_FROM, FusekiAdmin, FusekiAdminError, FusekiClient, SparqlError, dataset_clause
 from browl.jobs import ImportResult, JobContext, Site, Stage, StageError
 from browl.loading import count_store, dataset_name, loading_stage, store_path
@@ -349,6 +352,8 @@ def test_app_loads_and_restarts(
         ]
         generation = state.ready_generation
         assert "couldn't be loaded" in client.get("/_browl/admin/status").text
+        with closing(derived.connect(settings.data_dir, generation)) as connection:
+            assert read_meta(connection).ontology_iri == f"{EX}o"
 
         async def datasets() -> list[str]:
             async with httpx2.AsyncClient(base_url=fuseki_url) as http:

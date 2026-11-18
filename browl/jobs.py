@@ -5,6 +5,7 @@ A job starts with `JobRunner.upload`, which the upload handler (`browl.upload`) 
 
 import asyncio
 import fcntl
+import functools
 import json
 import logging
 import sqlite3
@@ -425,6 +426,10 @@ class JobContext:
 StageFunction = Callable[[JobContext], Awaitable[None]]
 """A stage's work. It runs on the event loop, so it runs blocking work in a thread or subprocess."""
 
+ReadyFunction = Callable[[JobContext], Awaitable[None]]
+"""Work after a job is recorded ready, while the job lock is still held, e.g. deleting the previous generation's files.
+Its failure is logged; the job stays ready."""
+
 
 class JobRunningError(RuntimeError):
     """A job was started while another one runs."""
@@ -490,6 +495,7 @@ class JobRunner:
         settings: The app's settings, given to the stage functions.
         state: The state read from the store.
         stages: Stage functions for the background stages; more can be registered later.
+        on_ready: Run after each job is recorded ready, before the job lock is released.
     """
 
     def __init__(
@@ -499,8 +505,10 @@ class JobRunner:
         settings: Settings,
         state: JobState,
         stages: Mapping[Stage, StageFunction] | None = None,
+        on_ready: ReadyFunction | None = None,
     ) -> None:
         """Make a runner with no job running."""
+        self._on_ready = on_ready
         self._store = store
         self._lock = lock
         self._settings = settings
@@ -519,7 +527,12 @@ class JobRunner:
         self._set(state)
 
     @classmethod
-    async def open(cls, settings: Settings, stages: Mapping[Stage, StageFunction] | None = None) -> Self:
+    async def open(
+        cls,
+        settings: Settings,
+        stages: Mapping[Stage, StageFunction] | None = None,
+        on_ready: ReadyFunction | None = None,
+    ) -> Self:
         """Open the persistent database and job lock in `DATA_DIR`, mark failed an interrupted job, and return a runner.
 
         A job recorded as running is interrupted unless another process holds the job lock, as another server
@@ -531,7 +544,7 @@ class JobRunner:
         store = await asyncio.to_thread(JobStore, settings.data_dir / STATE_DB)
         lock = JobLock(settings.data_dir / JOB_LOCK)
         state = await asyncio.to_thread(_recover, store, lock)
-        return cls(store, lock, settings, state, stages)
+        return cls(store, lock, settings, state, stages, on_ready)
 
     @property
     def state(self) -> JobState:
@@ -764,15 +777,41 @@ class JobRunner:
             await self._record(
                 replace(self._state, stage=Stage.READY, finished_at=_now(), ready_generation=context.generation)
             )
-            self._unlock()
-            logger.info("Load job %d is ready", context.generation)
         except asyncio.CancelledError as error:
             await self._fail(error)
             raise
         except Exception as error:  # noqa: BLE001  # any stage failure fails the job; _fail logs it
             await self._fail(error)
+            return
         finally:
             self._settle()
+        logger.info("Load job %d is ready", context.generation)
+        try:
+            await self._after_ready(context)
+        finally:
+            self._unlock()
+
+    async def _after_ready(self, context: JobContext) -> None:
+        """Run `on_ready`, logging its failure: the job stays ready.
+
+        A cancellation waits for it to finish, so it never runs once the job lock is released, when the next job may
+        be writing what it cleans up.
+        """
+        if self._on_ready is None:
+            return
+        task = asyncio.ensure_future(self._on_ready(context))
+        task.add_done_callback(functools.partial(_log_ready_failure, context.generation))
+        try:
+            with suppress(Exception):  # the callback logs it
+                await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await asyncio.wait({task})
+            raise
+
+
+def _log_ready_failure(generation: int, task: asyncio.Future[None]) -> None:
+    if not task.cancelled() and (error := task.exception()) is not None:
+        logger.error("Load job %d is ready, but its after-ready work failed", generation, exc_info=error)
 
 
 def _recover(store: JobStore, lock: JobLock) -> JobState:

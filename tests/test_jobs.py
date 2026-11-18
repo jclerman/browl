@@ -19,10 +19,12 @@ from browl.jobs import (
     CANCELLED,
     INTERRUPTED_BY_RESTART,
     INTERRUPTED_BY_SHUTDOWN,
+    JOB_LOCK,
     STATE_DB,
     STOPPED_UNRECORDED,
     ImportResult,
     JobContext,
+    JobLock,
     JobRunner,
     JobRunningError,
     JobState,
@@ -775,3 +777,58 @@ async def test_upload_progress_write_before_end(data_dir: Path, monkeypatch: pyt
     await runner.close()
     stored = JobStore(data_dir / STATE_DB).read()
     assert (stored.failed_stage, stored.reason, stored.upload_bytes) == (Stage.UPLOADING, CANCELLED, 5)
+
+
+async def test_on_ready_runs_under_lock(data_dir: Path) -> None:
+    """Check that the after-ready work runs once the job is recorded ready, while the job lock is still held."""
+    seen: list[tuple[int, Stage | None, bool]] = []
+    runner: JobRunner
+
+    async def on_ready(context: JobContext) -> None:
+        other = JobLock(data_dir / JOB_LOCK)
+        seen.append((context.generation, JobStore(data_dir / STATE_DB).read().stage, other.acquire()))
+        other.release()
+
+    runner = await JobRunner.open(make_settings(), on_ready=on_ready)
+    state = await run_job(runner)
+    assert seen == [(1, Stage.READY, False)]
+    assert state.stage == Stage.READY
+    assert (await run_job(runner)).ready_generation == 2  # the lock was released
+
+
+async def test_on_ready_failure(data_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Check that failed after-ready work is logged, and the job stays ready."""
+
+    async def on_ready(context: JobContext) -> None:
+        raise OSError("can't delete")
+
+    runner = await JobRunner.open(make_settings(), on_ready=on_ready)
+    state = await run_job(runner)
+    assert (state.stage, state.ready_generation, state.failed_stage) == (Stage.READY, 1, None)
+    assert "Load job 1 is ready, but its after-ready work failed" in caplog.text
+    assert "can't delete" in caplog.text
+    assert (await run_job(runner)).ready_generation == 2
+
+
+async def test_on_ready_cancelled(data_dir: Path) -> None:
+    """Check that a shutdown during the after-ready work waits for it, and leaves the job ready."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    finished: list[int] = []
+
+    async def on_ready(context: JobContext) -> None:
+        started.set()
+        await asyncio.shield(release.wait())
+        finished.append(context.generation)
+
+    runner = await JobRunner.open(make_settings(), on_ready=on_ready)
+    await runner.start()
+    await started.wait()
+    closing_task = asyncio.create_task(runner.close())
+    await asyncio.sleep(0.01)
+    assert not closing_task.done()
+    release.set()
+    await closing_task
+    assert finished == [1]
+    assert JobStore(data_dir / STATE_DB).read().stage == Stage.READY
+    assert runner.state.stage == Stage.READY
