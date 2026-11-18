@@ -19,7 +19,7 @@ from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 
-from browl.jobs import Reasoner
+from browl.jobtypes import Reasoner
 
 logger = logging.getLogger(__name__)
 

@@ -47,7 +47,7 @@
           "name": "reasoner",
           "type": "TEXT",
           "nullable": false,
-          "comment": "The reasoner the load ran (browl.jobs.Reasoner)."
+          "comment": "The reasoner the load ran (browl.jobtypes.Reasoner)."
         },
         {
           "name": "loaded_at",

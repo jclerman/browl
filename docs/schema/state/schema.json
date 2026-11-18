@@ -60,7 +60,7 @@
           "type": "TEXT",
           "nullable": false,
           "default": "'none'",
-          "comment": "The reasoner the admin chose (browl.jobs.Reasoner); 'none' skips the reasoning stage."
+          "comment": "The reasoner the admin chose (browl.jobtypes.Reasoner); 'none' skips the reasoning stage."
         },
         {
           "name": "upload_name",
@@ -85,7 +85,7 @@
           "type": "TEXT",
           "nullable": false,
           "default": "'[]'",
-          "comment": "The ontology's imports, direct and indirect, as a JSON list of browl.jobs.ImportResult; '[]' until the imports stage lists them."
+          "comment": "The ontology's imports, direct and indirect, as a JSON list of browl.jobtypes.ImportResult; '[]' until the imports stage lists them."
         },
         {
           "name": "triples",

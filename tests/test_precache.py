@@ -28,17 +28,15 @@ from browl.jobs import (
     JOB_LOCK,
     REBUILDING,
     STATE_DB,
-    ImportResult,
     JobContext,
     JobLock,
     JobRunner,
     JobState,
     JobStore,
-    Reasoner,
     Site,
     Stage,
-    StageError,
 )
+from browl.jobtypes import ImportResult, Reasoner, StageError
 from browl.loading import dataset_name
 from browl.pages import RETRY_AFTER_S, read_derived
 from browl.precache import header, stage

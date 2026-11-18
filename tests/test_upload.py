@@ -21,7 +21,8 @@ from starlette.types import Message, Receive
 
 import browl.jobs
 import browl.upload
-from browl.jobs import JobContext, JobRunner, Reasoner, Stage, StageError
+from browl.jobs import JobContext, JobRunner, Stage
+from browl.jobtypes import Reasoner, StageError
 from browl.upload import (
     SNIFF_BYTES,
     UPLOADS_DIR,

@@ -591,11 +591,12 @@ none keeps a deleted file's space in use; the app closes them all at shutdown.
 It stores a key per component (`build_key`): `schema`, a hash of the SQL (`SCHEMA`, `INDEXES`); `meta`, for the ontology
 header (`browl.precache.header`); and one per hook, by name. Their code's hashes are computed once per process, and a
 file whose components or keys differ, or that has none (built before them), isn't current. The key of `meta` or a hook
-hashes its code: its module and every browl module it imports, directly or not, found by parsing their imports, each as
-its syntax tree without docstrings; the files it loads, which pre-caching code reads only through
-`browl.precache.core.sparql_file`, with a string literal, so the parse finds them; the versions of the third-party
-distributions those modules import; and Python's major and minor version. It also hashes the values of the `Settings`
-fields the hook declares (`@hook("base_url", "reserved_prefix")`; `header.SETTINGS`), and only those.
+hashes its code: its module and every browl module it imports, directly or not, found by parsing their imports
+(except under `if TYPE_CHECKING:`, as those don't run), each as its syntax tree without docstrings; the files it
+loads, which pre-caching code reads only through `browl.precache.core.sparql_file`, with a string literal, so the parse
+finds them; the versions of the third-party distributions those modules import; and Python's major and minor version.
+It also hashes the values of the `Settings` fields the hook declares (`@hook("base_url", "reserved_prefix")`;
+`header.SETTINGS`), and only those.
 
 - **Why computed keys:** a hand-raised schema version can be forgotten, leaving a stale file taken as current; a key
   can't. A component's key covers only its own closure, so a hook's module imports only what it uses (one module per
@@ -608,6 +609,11 @@ fields the hook declares (`@hook("base_url", "reserved_prefix")`; `header.SETTIN
   Fuseki, tracing the browl code that runs (`sys.monitoring`), the files under `browl/` it opens (audit events) and the
   settings it reads, and fails, saying what to do, if the component's key doesn't cover one. A hook's own code paths
   that the stub doesn't reach, and files read when its module is imported, are left to review.
+- **Outside the keys:** the stage itself (`browl.precache.stage`): which hooks run and in what order, the dataset they
+  query, and the build's thread and swap. It imports the loader and the job runner, so keying it would rebuild every
+  file on edits that can't change what's stored. Code that decides what's stored belongs in a keyed module instead,
+  e.g. the choice of dataset clause (`PreCacheContext.dataset_clause`, in `browl.precache.core`). Adding or removing a
+  hook changes the components, so it rebuilds; reordering hooks, and edits to `browl.precache.keys`, are left to review.
 
 **Pre-caching hooks** (P-9). The stage reads the ontology's header (below), starts the file with its `meta` row, then
 runs the hooks in `browl.precache.HOOKS` in order (each in a module of its own), so a hook may read tables an earlier

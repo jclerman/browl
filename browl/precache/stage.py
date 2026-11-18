@@ -17,10 +17,11 @@ import httpx2
 
 from browl import derived
 from browl.derived import Meta
-from browl.fuseki import FusekiClient, SparqlError, dataset_clause, ping
-from browl.jobs import JobContext, StageError
+from browl.fuseki import FusekiClient, SparqlError, ping
+from browl.jobs import JobContext
+from browl.jobtypes import StageError
 from browl.loading import dataset_name
-from browl.precache.core import DerivedWriter, Hook, PreCacheContext, has_loaded_imports
+from browl.precache.core import DerivedWriter, Hook, PreCacheContext
 from browl.precache.entities import entities
 from browl.precache.header import header_meta
 from browl.precache.keys import build_keys
@@ -73,8 +74,7 @@ async def pre_cache(context: JobContext, http: httpx2.AsyncClient, hooks: Sequen
     try:
         meta = await header_meta(context, sparql, dataset)
         async with build(context.settings.data_dir, meta, keys) as db:
-            clause = dataset_clause(has_loaded_imports(context.imports))
-            hook_context = PreCacheContext(context, sparql, dataset, clause, db)
+            hook_context = PreCacheContext(context, sparql, dataset, db)
             for hook in hooks:
                 logger.info("Load job %d: pre-caching hook %s", context.generation, hook.name)
                 try:

@@ -24,7 +24,7 @@ from browl.derived import (
     read_meta,
     remove_others,
 )
-from browl.jobs import Reasoner
+from browl.jobtypes import Reasoner
 
 COLUMNS = {
     "build_key": [("component", "TEXT", 1, 1), ("key", "TEXT", 1, 0)],

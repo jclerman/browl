@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 import browl.ofn
-from browl.jobs import StageError
+from browl.jobtypes import StageError
 from browl.ofn import convert_ofn
 from browl.process import Completed
 from browl.settings import Settings

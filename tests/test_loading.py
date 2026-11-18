@@ -15,7 +15,8 @@ import browl.loading
 from browl import derived
 from browl.derived import read_meta
 from browl.fuseki import UNION_FROM, FusekiAdmin, FusekiAdminError, FusekiClient, SparqlError, dataset_clause
-from browl.jobs import ImportResult, JobContext, Site, Stage, StageError
+from browl.jobs import JobContext, Site, Stage
+from browl.jobtypes import ImportResult, StageError
 from browl.loading import count_store, dataset_name, loading_stage, store_path
 from browl.precache import HOOKS, build_keys
 from browl.process import Completed

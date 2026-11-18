@@ -24,7 +24,8 @@ import pytest
 import browl
 from browl.derived import Meta
 from browl.fuseki import FusekiClient
-from browl.jobs import ImportResult, JobContext, Reasoner
+from browl.jobs import JobContext
+from browl.jobtypes import ImportResult, Reasoner
 from browl.loading import dataset_name
 from browl.precache import header, keys
 from browl.precache.core import Hook, PreCacheContext, hook
@@ -76,6 +77,9 @@ MODULES = {
         """The module whose closure is found."""
 
         import json
+        import typing
+        from typing import TYPE_CHECKING
+
         import {pkg}.absolute
         from {pkg} import imported
         from {pkg}.sub import VALUE
@@ -84,6 +88,13 @@ MODULES = {
 
         import httpx2
         from browl.precache.core import sparql_file
+
+        if TYPE_CHECKING:
+            from {pkg} import typed
+        else:
+            from {pkg} import otherwise
+        if typing.TYPE_CHECKING:
+            import {pkg}.typed_too
 
         ANSWER = 42
         """An attribute's docstring."""
@@ -100,6 +111,9 @@ MODULES = {
     "functions.py": "def function() -> str:\n    return ''\n",
     "sub/__init__.py": "VALUE = 4\n",
     "unused.py": "W = 5\n",
+    "typed.py": "T = 6\n",
+    "typed_too.py": "T = 7\n",
+    "otherwise.py": "O = 8\n",
 }
 
 
@@ -116,13 +130,15 @@ def scanned(package: tuple[str, Path], tmp_path: Path) -> tuple[str, Path, Path]
 def test_closure(scanned: tuple[str, Path, Path]) -> None:
     """Check that the closure follows absolute, `from` and relative imports, and finds `sparql_file`'s files.
 
-    A package's `__init__` is in it when a name that isn't a submodule is imported from it. The standard library is left
-    out, and a third-party module is recorded by its distribution's version.
+    A package's `__init__` is in it when a name that isn't a submodule is imported from it. Imports under `if
+    TYPE_CHECKING:` are left out, but not its `else`. The standard library is left out, and a third-party module is
+    recorded by its distribution's version.
     """
     name, directory, sparql = scanned
     found = closure(f"{name}.main", root=name, sparql_dir=sparql)
     assert sorted(found.modules) == sorted(
-        f"{name}.{module}" for module in ["main", "absolute", "imported", "deep", "relative", "functions", "sub"]
+        f"{name}.{module}"
+        for module in ["main", "absolute", "imported", "deep", "relative", "functions", "sub", "otherwise"]
     )
     assert found.modules[f"{name}.sub"] == directory / "sub" / "__init__.py"
     assert found.files == {"q.rq": sparql / "q.rq"}
@@ -420,7 +436,7 @@ async def test_hook_key_covers_hook(settings: Settings, index: int) -> None:
     meta = Meta(1, Reasoner.ELK, LOADED_AT, ontology_iri=f"{EX}onto")
     traced = HOOKS[index]
     async with fuseki() as http, build(settings.data_dir, meta, build_keys(settings, HOOKS)) as db:
-        context = PreCacheContext(job, FusekiClient(http), dataset_name(1), "", db)
+        context = PreCacheContext(job, FusekiClient(http), dataset_name(1), db)
         for earlier in HOOKS[:index]:
             await earlier(context)
         recording.read.clear()

@@ -29,7 +29,8 @@ from browl.imports import (
     list_rdf_imports,
     write_catalog,
 )
-from browl.jobs import STATE_DB, ImportResult, JobContext, JobState, JobStore, Reasoner, Stage, StageError
+from browl.jobs import STATE_DB, JobContext, JobState, JobStore, Stage
+from browl.jobtypes import ImportResult, Reasoner, StageError
 from browl.pages import templates
 from browl.process import Completed
 from browl.robot import reasoning_stage

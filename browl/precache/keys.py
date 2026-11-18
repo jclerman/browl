@@ -153,8 +153,11 @@ def _source(module: str) -> tuple[Path, bool]:
 
 
 def _imports(tree: ast.Module, package: str, root: str) -> Iterator[str]:
-    """Yield the names of the modules a module imports; for `from m import x`, `m.x` if that's a module in `root`."""
-    for node in ast.walk(tree):
+    """Yield the names of the modules a module imports; for `from m import x`, `m.x` if that's a module in `root`.
+
+    Imports in the body of an `if TYPE_CHECKING:` don't run, so they're left out.
+    """
+    for node in _runtime_nodes(tree):
         if isinstance(node, ast.Import):
             yield from (alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
@@ -164,6 +167,25 @@ def _imports(tree: ast.Module, package: str, root: str) -> Iterator[str]:
                 continue
             for alias in node.names:
                 yield f"{base}.{alias.name}" if _is_module(f"{base}.{alias.name}") else base
+
+
+def _runtime_nodes(node: ast.AST) -> Iterator[ast.AST]:
+    """Yield a node and the nodes under it, except those in the body of an `if TYPE_CHECKING:`."""
+    yield node
+    if isinstance(node, ast.If) and _is_type_checking(node.test):
+        children: list[ast.AST] = [node.test, *node.orelse]
+    else:
+        children = list(ast.iter_child_nodes(node))
+    for child in children:
+        yield from _runtime_nodes(child)
+
+
+def _is_type_checking(test: ast.expr) -> bool:
+    """Return whether a condition is `TYPE_CHECKING` or `typing.TYPE_CHECKING`."""
+    match test:
+        case ast.Name(id="TYPE_CHECKING") | ast.Attribute(value=ast.Name(id="typing"), attr="TYPE_CHECKING"):
+            return True
+    return False
 
 
 def _is_module(name: str) -> bool:

@@ -10,11 +10,14 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from browl import derived
-from browl.fuseki import BulkSelectStream, FusekiClient
-from browl.jobs import ImportResult, JobContext
+from browl.fuseki import BulkSelectStream, FusekiClient, dataset_clause
+from browl.jobtypes import ImportResult
+
+if TYPE_CHECKING:
+    from browl.jobs import JobContext
 
 BATCH_ROWS = 10_000
 """How many rows `batched` hands over at once: few enough to hold, many enough that the thread hand-off is cheap."""
@@ -79,15 +82,18 @@ class PreCacheContext:
         sparql: The Fuseki client, for small queries. A bulk query must go through `bulk_select`, which checks that its
             result is complete; the client's own methods don't.
         dataset: The Fuseki dataset that serves the new store (`browl.loading.dataset_name`).
-        dataset_clause: The dataset clause of a query that should see the imports (`browl.fuseki.dataset_clause`).
         db: Writes to the new derived database.
     """
 
-    job: JobContext
+    job: "JobContext"
     sparql: FusekiClient
     dataset: str
-    dataset_clause: str
     db: DerivedWriter
+
+    @property
+    def dataset_clause(self) -> str:
+        """Return the dataset clause of a query that should see the imports (`browl.fuseki.dataset_clause`)."""
+        return dataset_clause(has_loaded_imports(self.job.imports))
 
     def bulk_select(
         self, query: str, prologue: str = PREFIXES, imports: bool = True

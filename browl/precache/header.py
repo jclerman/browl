@@ -6,14 +6,18 @@ Its build key is the `meta` component's, from this module and `SETTINGS` (`browl
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from browl.derived import Meta
 from browl.fuseki import FusekiClient
-from browl.jobs import JobContext, StageError
+from browl.jobtypes import StageError
 from browl.names import BUILTIN_PREFIXES, best_values, expand_curie
 from browl.precache.core import PREFIXES
 from browl.rdf import IRI, Literal, RDFSyntaxError, Term
 from browl.settings import Settings
+
+if TYPE_CHECKING:
+    from browl.jobs import JobContext
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +163,7 @@ def _literals(values: Iterable[Term]) -> list[Literal]:
     return [value for value in values if isinstance(value, Literal)]
 
 
-async def header_meta(context: JobContext, sparql: FusekiClient, dataset: str) -> Meta:
+async def header_meta(context: "JobContext", sparql: FusekiClient, dataset: str) -> Meta:
     """Return a job's `meta` row: its generation, reasoner and start time, and the ontology header (`ontology_header`).
 
     Raises:

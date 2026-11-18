@@ -31,7 +31,8 @@ import httpcore2
 import httpx2
 
 import browl
-from browl.jobs import ImportResult, JobContext, StageError
+from browl.jobs import JobContext
+from browl.jobtypes import ImportResult, StageError
 from browl.ofn import Listing, convert_ofn
 from browl.process import free_bytes, run_process
 from browl.settings import Settings

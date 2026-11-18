@@ -32,7 +32,7 @@ CREATE TABLE meta (
 | version_iri  | TEXT    |         | true     |          |         | Its owl:versionIRI; NULL if it has none.                                                                |
 | title        | TEXT    |         | true     |          |         | Its title (dcterms:title, dc:title, then NAME_PROPERTIES); NULL if it has none, and pages show the IRI. |
 | version_info | TEXT    |         | true     |          |         | Its owl:versionInfo; NULL if it has none.                                                               |
-| reasoner     | TEXT    |         | false    |          |         | The reasoner the load ran (browl.jobs.Reasoner).                                                        |
+| reasoner     | TEXT    |         | false    |          |         | The reasoner the load ran (browl.jobtypes.Reasoner).                                                    |
 | loaded_at    | TEXT    |         | false    |          |         | When the load job started, ISO 8601 with a time zone; a rebuild after a restart keeps it.               |
 
 ## Constraints

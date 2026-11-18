@@ -15,7 +15,8 @@ import browl.precache
 import browl.process
 import browl.robot
 from browl.imports import imports_stage, write_catalog
-from browl.jobs import JobContext, Reasoner, Stage, StageError
+from browl.jobs import JobContext, Stage
+from browl.jobtypes import Reasoner, StageError
 from browl.ofn import Listing
 from browl.process import TAIL_LINES, Completed
 from browl.robot import (
