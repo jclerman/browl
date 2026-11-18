@@ -146,15 +146,31 @@ async def list_rdf_imports(path: Path, syntax: Syntax, settings: Settings) -> li
     return list(found)
 
 
+_EMBEDS_IPV4_LAST = tuple(
+    ipaddress.IPv6Network(network)
+    for network in (
+        "64:ff9b::/96",  # NAT64
+        "::/96",  # IPv4-compatible (deprecated)
+        "::ffff:0:0:0/96",  # IPv4-translated (SIIT)
+    )
+)
+"""IPv6 networks whose addresses end in an IPv4 address that NAT64 or SIIT may route to, which `ipaddress` ignores."""
+
+
 def is_public(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """Return whether an address is on the public internet: not loopback, private, link-local, reserved or multicast.
 
-    An IPv6 address that embeds an IPv4 one (mapped, 6to4, Teredo) is judged by both.
+    An IPv6 address that embeds an IPv4 one (mapped, 6to4, Teredo, NAT64, IPv4-compatible or -translated) is judged by
+    both. Deprecated site-local IPv6 addresses (`fec0::/10`) aren't public.
     """
     if not address.is_global or address.is_multicast:
         return False
     if isinstance(address, ipaddress.IPv6Address):
+        if address.is_site_local:
+            return False
         embedded = [address.ipv4_mapped, address.sixtofour, *(address.teredo or ())]
+        if any(address in network for network in _EMBEDS_IPV4_LAST):
+            embedded.append(ipaddress.IPv4Address(int(address) & 0xFFFFFFFF))
         return all(is_public(inner) for inner in embedded if inner is not None)
     return True
 

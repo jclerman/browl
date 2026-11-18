@@ -132,6 +132,13 @@ async def test_rdf_parse_error(settings: Settings, tmp_path: Path) -> None:
         ("::ffff:8.8.8.8", True),
         ("2002:7f00:1::", False),  # 6to4 for 127.0.0.1
         ("2002:0808:0808::", False),  # 6to4 isn't globally reachable, whatever it embeds
+        ("64:ff9b::a9fe:a9fe", False),  # NAT64 for 169.254.169.254
+        ("64:ff9b::808:808", True),
+        ("::7f00:1", False),  # IPv4-compatible 127.0.0.1
+        ("::808:808", True),
+        ("::ffff:0:a9fe:a9fe", False),  # IPv4-translated 169.254.169.254
+        ("::ffff:0:808:808", True),
+        ("fec0::1", False),  # deprecated site-local
     ],
 )
 def test_is_public(address: str, public: bool) -> None:
