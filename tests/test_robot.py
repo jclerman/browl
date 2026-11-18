@@ -29,7 +29,7 @@ from browl.robot import (
 )
 from browl.settings import Settings
 from tests.conftest import DATA, find_robot_jar
-from tests.helpers import StaticServer, make_app, make_settings, running_in_group
+from tests.helpers import StaticServer, make_app, make_settings, running_in_group, wait_for
 
 pytestmark = pytest.mark.anyio
 
@@ -250,8 +250,7 @@ async def test_stops_group_on_cancel(tmp_path: Path, monkeypatch: pytest.MonkeyP
     fake_java(tmp_path, monkeypatch, f"trap '' TERM; sleep 60 & echo $$ > {pid_file}; wait")
     monkeypatch.setattr(browl.process, "TERM_GRACE_S", 0.2)
     task = asyncio.create_task(run_robot([], tmp_path, settings))
-    while not pid_file.exists() or not pid_file.read_text():
-        await asyncio.sleep(0.05)
+    await wait_for(pid_file, task)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -266,8 +265,7 @@ async def test_stops_group_on_second_cancel(
     fake_java(tmp_path, monkeypatch, f"trap '' TERM; sleep 60 & echo $$ > {pid_file}; wait")
     monkeypatch.setattr(browl.process, "TERM_GRACE_S", 1.0)
     task = asyncio.create_task(run_robot([], tmp_path, settings))
-    while not pid_file.exists() or not pid_file.read_text():
-        await asyncio.sleep(0.05)
+    await wait_for(pid_file, task)
     task.cancel()
     await asyncio.sleep(0.2)  # SIGTERM sent and ignored
     task.cancel()

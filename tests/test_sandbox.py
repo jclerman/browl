@@ -24,7 +24,7 @@ from browl.process import MAX_LINE_CHARS, run_process
 from browl.robot import reasoning_stage
 from browl.sandbox import Runner
 from tests.conftest import find_robot_jar
-from tests.helpers import StaticServer, make_settings, running_in_group
+from tests.helpers import StaticServer, make_settings, running_in_group, wait_for
 from tests.test_robot import job
 
 pytestmark = pytest.mark.anyio
@@ -61,13 +61,6 @@ async def sandboxed(socket: Path, script: str, **kwargs: object) -> tuple[browl.
     lines: list[str] = []
     completed = await run_process(["sh", "-c", script], lines.append, sandbox=socket, **{"timeout_s": 10, **kwargs})
     return completed, lines
-
-
-async def wait_for(path: Path) -> int:
-    """Wait for a file to hold a number, and return it."""
-    while not path.exists() or not path.read_text().strip():
-        await asyncio.sleep(0.02)
-    return int(path.read_text())
 
 
 async def gone(pgid: int) -> bool:
@@ -120,7 +113,7 @@ async def test_cancel_stops_group(short_dir: Path) -> None:
     pid = short_dir / "pid"
     async with runner(short_dir) as socket:
         task = asyncio.create_task(sandboxed(socket, f"sleep 60 & echo $$ > {pid}; wait"))
-        pgid = await wait_for(pid)
+        pgid = await wait_for(pid, task)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
@@ -286,7 +279,7 @@ async def test_runner_shutdown(runner_process: tuple[subprocess.Popen[bytes], Pa
     process, socket = runner_process
     pid = short_dir / "pid"
     task = asyncio.create_task(sandboxed(socket, f"trap '' TERM; sleep 60 & echo $$ > {pid}; wait"))
-    pgid = await wait_for(pid)
+    pgid = await wait_for(pid, task)
     process.send_signal(signal.SIGTERM)
     assert await asyncio.to_thread(process.wait, browl.process.TERM_GRACE_S / 2) == 0  # it didn't wait for SIGTERM
     with pytest.raises(StageError, match=r"^the tool sandbox closed the connection while process ran$"):

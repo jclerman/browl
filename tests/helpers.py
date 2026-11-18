@@ -1,9 +1,11 @@
 """Helpers shared by the tests."""
 
+import asyncio
 import http.server
 import os
 import subprocess
 import threading
+from pathlib import Path
 
 import httpx2
 from fastapi import FastAPI
@@ -84,6 +86,25 @@ def turtle(iri: str, *imports: str, extra: str = "") -> str:
     lines = [f"<{iri}> a <http://www.w3.org/2002/07/owl#Ontology> ."]
     lines += [f"<{iri}> <{OWL_IMPORTS}> <{imported}> ." for imported in imports]
     return "\n".join([*lines, extra, ""])
+
+
+WAIT_S = 10.0
+"""How long `wait_for` waits."""
+
+
+async def wait_for(path: Path, run: asyncio.Future[object] | None = None) -> int:
+    """Wait for a file to hold a number, such as a pid a run writes, and return it.
+
+    Raises:
+        TimeoutError: It took longer than `WAIT_S`.
+        AssertionError: The run ended first (or its exception, if it failed).
+    """
+    async with asyncio.timeout(WAIT_S):
+        while not path.exists() or not path.read_text().strip():
+            if run is not None and run.done():
+                raise AssertionError(f"the run ended first: {run.result()!r}")  # or raises how it failed
+            await asyncio.sleep(0.02)
+    return int(path.read_text())
 
 
 def running_in_group(pgid: int) -> list[str]:
