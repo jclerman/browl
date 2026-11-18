@@ -531,7 +531,8 @@ types (punning) has a row for each. Each table's secondary indexes are created o
 rebuilt on every load, so it has no migrations: a file of another schema version (`SCHEMA_VERSION`, raised with any
 schema change) or generation isn't current, and is rebuilt ([2.4](#24-load-pipeline), App restart). Pages read it, never
 Fuseki, for whole-ontology data (N-4), through `browl.pages.read_derived`: the file is opened read-only and immutable,
-so reads take no locks, with a connection per thread, in the thread pool.
+so reads take no locks, in the thread pool, from a pool of connections. Once a newer generation is read, the older
+one's connections are closed, so none keeps a deleted file's space in use; the app closes them all at shutdown.
 
 **Pre-caching hooks** (P-9). The stage reads the ontology's header (below), starts the file with its `meta` row,
 then runs the hooks in `browl.precache.HOOKS` in order, so a hook may read tables an earlier one filled: P-10

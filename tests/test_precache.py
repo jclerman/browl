@@ -720,7 +720,10 @@ def status(client: TestClient) -> str:
 
 
 def test_restart_reuses_current_database(settings: Settings) -> None:
-    """Check that a restart reuses a current derived database: no query, no rebuild, and pages read it."""
+    """Check that a restart reuses a current derived database: no query, no rebuild, and pages read it.
+
+    Shutdown closes the reader's connections.
+    """
     JobStore(settings.data_dir / STATE_DB).write(READY)
     make_previous(settings, 2)
     fuseki = StubFuseki()
@@ -728,7 +731,10 @@ def test_restart_reuses_current_database(settings: Settings) -> None:
     with TestClient(app) as client:
         assert app.state.jobs.state == READY
         assert client.get("/probe").json() == 2
+        [connection] = app.state.derived._idle
     assert fuseki.requests == []
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        connection.execute("SELECT 1")
 
 
 def stale_schema(settings: Settings) -> None:

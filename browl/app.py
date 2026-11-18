@@ -60,8 +60,8 @@ def create_app(
     client doesn't, so tests start it first); it opens its Fuseki client, the load job runner (`app.state.jobs`) and the
     derived database's reader (`app.state.derived`, read through `browl.pages.read_derived`). If the ready
     generation's derived database isn't current, e.g. after an upgrade changed its schema, it's rebuilt in the
-    background (`JobRunner.rebuild`, §2.4). On shutdown a running load job, or rebuild, is cancelled. Pages are gated
-    on the job state (`SiteGate`, §2.13).
+    background (`JobRunner.rebuild`, §2.4). On shutdown a running load job, or rebuild, is cancelled, and the reader's
+    connections closed. Pages are gated on the job state (`SiteGate`, §2.13).
 
     Args:
         settings: The settings; loaded from the environment if not given.
@@ -103,7 +103,10 @@ def create_app(
                     )
                 yield
             finally:
-                await app.state.jobs.close()
+                try:
+                    await app.state.jobs.close()
+                finally:
+                    app.state.derived.close()
 
     reserved = f"/{settings.reserved_prefix}"
     # The API docs are admin routes (admin.py), not at FastAPI's default root paths, which would shadow entities.

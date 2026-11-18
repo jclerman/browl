@@ -16,7 +16,7 @@ import os
 import re
 import sqlite3
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import closing, contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
@@ -320,10 +320,13 @@ def read_meta(connection: sqlite3.Connection) -> Meta:
 
 
 class DerivedReader:
-    """Read-only connections to the derived database, one per thread, for the generation last asked for.
+    """A pool of read-only connections to the derived database, for the newest generation asked for.
 
-    Each thread keeps its own connection, since a `sqlite3.Connection` mustn't be used by two threads at once. Asking
-    for another generation closes the thread's connection and opens that generation's file.
+    A `sqlite3.Connection` mustn't be used by two threads at once, so each read takes an idle connection, or opens
+    one, and puts it back when done. Once a newer generation is asked for, the older one's connections are closed: the
+    idle ones then, the busy ones when their read ends. So none outlives `remove_others` deleting its file, which
+    would keep the file's space in use. A read of an older generation, e.g. by a request that read the job state just
+    before, opens a connection of its own and closes it after.
 
     Args:
         data_dir: The data directory.
@@ -332,22 +335,10 @@ class DerivedReader:
     def __init__(self, data_dir: Path) -> None:
         """Hold no connections yet."""
         self.data_dir = data_dir
-        self._local = threading.local()
-
-    def connection(self, generation: int) -> sqlite3.Connection:
-        """Return this thread's connection to a generation's derived database, opening it if needed.
-
-        Raises:
-            NotCurrentError: The database for the generation is not current (`connect`).
-        """
-        current: tuple[int, sqlite3.Connection] | None = getattr(self._local, "current", None)
-        if current is not None:
-            if current[0] == generation:
-                return current[1]
-            self.close()
-        connection = connect(self.data_dir, generation)
-        self._local.current = (generation, connection)
-        return connection
+        self._lock = threading.Lock()
+        self._generation: int | None = None  # the newest asked for
+        self._idle: list[sqlite3.Connection] = []  # the newest generation's
+        self._closed = False
 
     async def read[T](self, generation: int, function: Callable[[sqlite3.Connection], T]) -> T:
         """Return a function's result on a connection to a generation's derived database, run in the thread pool.
@@ -355,12 +346,45 @@ class DerivedReader:
         Raises:
             NotCurrentError: The database for the generation is not current (`connect`).
         """
-        return await asyncio.to_thread(lambda: function(self.connection(generation)))
+        return await asyncio.to_thread(self._read, generation, function)
 
     def close(self) -> None:
-        """Close this thread's connection, if it has one."""
-        current: tuple[int, sqlite3.Connection] | None = getattr(self._local, "current", None)
-        self._local.current = None
-        if current is not None:
-            with suppress(sqlite3.Error):
-                current[1].close()
+        """Close every connection, each busy one when its read ends; later reads close theirs after."""
+        with self._lock:
+            self._closed = True
+            idle, self._idle = self._idle, []
+        _close_all(idle)
+
+    def _read[T](self, generation: int, function: Callable[[sqlite3.Connection], T]) -> T:
+        connection = self._take(generation)
+        try:
+            return function(connection)
+        finally:
+            self._put_back(generation, connection)
+
+    def _take(self, generation: int) -> sqlite3.Connection:
+        """Return an idle connection to a generation's database, or a new one; close older generations' idle ones."""
+        stale: list[sqlite3.Connection] = []
+        connection = None
+        with self._lock:
+            if self._generation is None or generation > self._generation:
+                self._generation = generation
+                stale, self._idle = self._idle, []
+            elif generation == self._generation and self._idle:
+                connection = self._idle.pop()
+        _close_all(stale)
+        return connection if connection is not None else connect(self.data_dir, generation)
+
+    def _put_back(self, generation: int, connection: sqlite3.Connection) -> None:
+        """Keep the connection for the next read if its generation is still the newest; else close it."""
+        with self._lock:
+            if generation == self._generation and not self._closed:
+                self._idle.append(connection)
+                return
+        _close_all([connection])
+
+
+def _close_all(connections: Iterable[sqlite3.Connection]) -> None:
+    for connection in connections:
+        with suppress(sqlite3.Error):
+            connection.close()

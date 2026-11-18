@@ -1,5 +1,6 @@
 """Tests for the derived database: its schema, atomic swap, cleanup and readers."""
 
+import asyncio
 import sqlite3
 import sys
 import threading
@@ -275,44 +276,96 @@ def test_rejects_non_database(tmp_path: Path) -> None:
         connect(tmp_path, 1)
 
 
-def test_reader_reuses_and_switches(tmp_path: Path) -> None:
-    """A reader keeps a thread's connection for the same generation, and opens another for a new one."""
+def generation_of(connection: sqlite3.Connection) -> int:
+    """Return the generation of the derived database a connection reads."""
+    return read_meta(connection).generation
+
+
+def is_closed(connection: sqlite3.Connection) -> bool:
+    """Return whether a connection is closed."""
+    try:
+        connection.execute("SELECT 1")
+    except sqlite3.ProgrammingError:
+        return True
+    return False
+
+
+async def read_together(reader: DerivedReader, generation: int, count: int) -> list[sqlite3.Connection]:
+    """Return the connections of reads of a generation that run at once, so each has its own."""
+    barrier = threading.Barrier(count, timeout=5)
+
+    def wait(connection: sqlite3.Connection) -> sqlite3.Connection:
+        barrier.wait()
+        return connection
+
+    return list(await asyncio.gather(*(reader.read(generation, wait) for _ in range(count))))
+
+
+@pytest.mark.anyio
+async def test_reader_reuses_connections(tmp_path: Path) -> None:
+    """A reader gives reads that run at once their own connections, and reuses them for later reads."""
+    make(tmp_path, 1)
+    reader = DerivedReader(tmp_path)
+    first, second = await read_together(reader, 1, 2)
+    assert first is not second
+    assert generation_of(first) == generation_of(second) == 1
+    assert await reader.read(1, lambda connection: connection) in (first, second)
+    assert {id(connection) for connection in await read_together(reader, 1, 2)} == {id(first), id(second)}
+    reader.close()
+    assert is_closed(first) and is_closed(second)
+
+
+@pytest.mark.anyio
+async def test_reader_closes_older_generation(tmp_path: Path) -> None:
+    """Once a newer generation is read, every connection to an older one is closed, a busy one when its read ends."""
     make(tmp_path, 1)
     make(tmp_path, 2)
     reader = DerivedReader(tmp_path)
-    first = reader.connection(1)
-    assert reader.connection(1) is first
-    second = reader.connection(2)
-    assert second is not first
-    assert read_meta(second).generation == 2
-    with pytest.raises(sqlite3.ProgrammingError):
-        first.execute("SELECT 1")  # closed when the reader switched
+    idle = await read_together(reader, 1, 2)
+    started, release = threading.Event(), threading.Event()
+
+    def busy(connection: sqlite3.Connection) -> sqlite3.Connection:
+        started.set()
+        release.wait(5)
+        return connection
+
+    task = asyncio.ensure_future(reader.read(1, busy))
+    await asyncio.to_thread(started.wait, 5)
+    try:
+        newer = await reader.read(2, lambda connection: connection)
+        assert generation_of(newer) == 2
+        assert [is_closed(connection) for connection in idle].count(True) == 1  # the one not in use
+    finally:
+        release.set()
+    held = await task
+    assert held in idle
+    assert is_closed(held)
+    # A request that saw the older generation can still read it.
+    older, generation = await reader.read(1, lambda connection: (connection, generation_of(connection)))
+    assert generation == 1
+    assert is_closed(older)
+    assert await reader.read(2, lambda connection: connection) is newer
     reader.close()
-    with pytest.raises(sqlite3.ProgrammingError):
-        second.execute("SELECT 1")
-    reader.close()
+    assert is_closed(newer)
 
 
-def test_reader_rejects_not_current(tmp_path: Path) -> None:
-    """A reader asked for a generation without a current database raises, and holds no connection."""
+@pytest.mark.anyio
+async def test_reader_rejects_not_current(tmp_path: Path) -> None:
+    """A reader asked for a generation without a current database raises, and closes the older one's connections."""
     make(tmp_path, 1)
     reader = DerivedReader(tmp_path)
-    reader.connection(1)
+    old = await reader.read(1, lambda connection: connection)
     with pytest.raises(NotCurrentError):
-        reader.connection(2)
-    assert reader.connection(1) is not None
+        await reader.read(2, generation_of)
+    assert is_closed(old)
+    reader.close()
 
 
-def test_reader_connection_per_thread(tmp_path: Path) -> None:
-    """Each thread gets its own connection."""
+@pytest.mark.anyio
+async def test_reader_closed(tmp_path: Path) -> None:
+    """A read after the reader is closed still works, and closes its connection after."""
     make(tmp_path, 1)
     reader = DerivedReader(tmp_path)
-    connections: list[sqlite3.Connection] = []
-
-    def read() -> None:
-        connections.append(reader.connection(1))
-
-    thread = threading.Thread(target=read)
-    thread.start()
-    thread.join()
-    assert reader.connection(1) is not connections[0]
+    reader.close()
+    connection = await reader.read(1, lambda connection: connection)
+    assert is_closed(connection)
