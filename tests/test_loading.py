@@ -15,6 +15,7 @@ from browl.fuseki import UNION_FROM, FusekiAdmin, FusekiAdminError, FusekiClient
 from browl.jobs import ImportResult, JobContext, Site, Stage, StageError
 from browl.loading import dataset_name, loading_stage, store_path
 from browl.settings import Settings
+from tests.conftest import find_robot_jar
 from tests.helpers import StaticServer, make_app, make_settings, turtle
 
 pytestmark = [pytest.mark.anyio, pytest.mark.fuseki]
@@ -294,6 +295,48 @@ def test_app_loads_and_restarts(
                 return await count(http, dataset_name(generation), UNION_FROM)
 
         assert client.portal.call(served) == 3 + 2 + 2
+
+
+@pytest.mark.parametrize(
+    ("name", "content", "triples"),
+    [
+        pytest.param(
+            "o.ofn",
+            f"Prefix(:=<{EX}>)\nOntology(<{EX}o>\n"
+            "Declaration(Class(:A))\nDeclaration(Class(:B))\nSubClassOf(:A :B)\n)\n",
+            4,
+            marks=pytest.mark.jvm,
+            id="ofn",
+        ),
+        pytest.param(
+            "o.owl",
+            '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" '
+            'xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#" xmlns:owl="http://www.w3.org/2002/07/owl#">'
+            f'<owl:Ontology rdf:about="{EX}o"/><rdf:Description rdf:about="{EX}A">'
+            f'<rdfs:subClassOf rdf:resource="{EX}B"/></rdf:Description></rdf:RDF>',
+            2,
+            id="rdf-xml",
+        ),
+    ],
+)
+def test_app_loads_each_syntax(
+    settings: Settings, fuseki_url: str, fuseki_base: Path, name: str, content: str, triples: int
+) -> None:
+    """Check that an OFN upload (converted to Turtle) and an RDF/XML one each load without a reasoner."""
+    overrides = {
+        "FUSEKI_URL": fuseki_url,
+        "FUSEKI_BASE": str(fuseki_base),
+        "JENA_HOME": str(settings.jena_home),
+        "ROBOT_JAR": str(find_robot_jar()),
+    }
+    app = make_app(real_stages=True, **overrides)
+    with TestClient(app) as client:
+        files = {"ontology": (name, content.encode())}
+        assert client.post("/_browl/admin/upload", data={"reasoner": "none"}, files=files).status_code == 200
+        assert client.portal is not None
+        client.portal.call(app.state.jobs.wait)
+    state = app.state.jobs.state
+    assert (state.stage, state.reason, state.triples) == (Stage.READY, None, triples)
 
 
 def test_app_failed_load(
