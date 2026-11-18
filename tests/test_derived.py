@@ -50,6 +50,8 @@ def meta(generation: int) -> Meta:
         loaded_at=datetime(2026, 11, 17, 12, 30, tzinfo=UTC),
         ontology_iri="http://example.org/onto",
         version_iri="http://example.org/onto/1.0",
+        title="Onto",
+        version_info="1.0-dev",
     )
 
 
@@ -97,6 +99,21 @@ def test_meta_without_iris(tmp_path: Path) -> None:
         pass
     with closing(connect(tmp_path, 1)) as connection:
         assert read_meta(connection) == plain
+
+
+@pytest.mark.parametrize(
+    ("version_iri", "version_info", "expected"),
+    [
+        ("http://example.org/onto/1.0", "1.0-dev", "http://example.org/onto/1.0"),
+        (None, "4.4-dev", "4.4-dev"),
+        (None, None, None),
+    ],
+    ids=["version-iri", "version-info", "neither"],
+)
+def test_meta_version(version_iri: str | None, version_info: str | None, expected: str | None) -> None:
+    """The version shown is the version IRI, else the version info."""
+    when = datetime(2026, 1, 1, tzinfo=UTC)
+    assert Meta(1, Reasoner.NONE, when, version_iri=version_iri, version_info=version_info).version == expected
 
 
 def test_build_commits_after_block_commits(tmp_path: Path) -> None:

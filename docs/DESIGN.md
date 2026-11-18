@@ -40,7 +40,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 
 | Requirement | Priority |
 | --- | --- |
-| **U-1** · The ontology home page shows the ontology's metadata: ontology IRI, version IRI, annotations, imports, entity and triple counts, and whether a reasoner was applied and which one. Imports that couldn't be loaded are listed in a prominent warning (in red), with why. _(Q7c; P-8)_ | v1 |
+| **U-1** · The ontology home page shows the ontology's metadata: title, ontology IRI, version (IRI, else `owl:versionInfo`), annotations, imports, entity and triple counts, and whether a reasoner was applied and which one. Imports that couldn't be loaded are listed in a prominent warning (in red), with why. _(Q7c; P-8)_ | v1 |
 | **U-2** · Every declared entity has a page at a URL implied by its IRI (see [2.3](#23-iri--url-mapping)). The ontology itself counts as a declared entity, and its page is the home page. No other entity-specific pages exist. _(Q1, Q2a)_ | v1 |
 | **U-3** · An entity page shows its immediate parents, its annotation values, and its logical axioms in Manchester syntax. | v1 |
 | **U-4** · Every entity mentioned on any page is a link to that entity's page. | v1 |
@@ -524,7 +524,7 @@ about a minute ([S-4 findings](../research/S-4/README.md)). The tables (`browl.d
 | `counts` | per node: number of immediate children, number of distinct descendants |
 | `hash_prefix` | distinct URL paths that have hash entities under them |
 | `prefix` | CURIE prefix → namespace (ontology's own, built-ins, configured overrides) |
-| `meta` | ontology IRI, version IRI, reasoner used, load time (the job's start), generation number, schema version |
+| `meta` | ontology IRI, version IRI, title, `owl:versionInfo`, reasoner used, load time (the job's start), generation number, schema version |
 
 Entities are referred to by `entity.id`, a dense integer (e.g. for descendant bitmaps); an IRI declared with several
 types (punning) has a row for each. Each table's secondary indexes are created once it's filled (below). The database is
@@ -533,7 +533,7 @@ schema change) or generation isn't current, and is rebuilt ([2.4](#24-load-pipel
 Fuseki, for whole-ontology data (N-4), through `browl.pages.read_derived`: the file is opened read-only and immutable,
 so reads take no locks, with a connection per thread, in the thread pool.
 
-**Pre-caching hooks** (P-9). The stage reads the ontology's IRI and version IRI, starts the file with its `meta` row,
+**Pre-caching hooks** (P-9). The stage reads the ontology's header (below), starts the file with its `meta` row,
 then runs the hooks in `browl.precache.HOOKS` in order, so a hook may read tables an earlier one filled: P-10
 (entities), P-11 (names), P-12 (hierarchies), P-19 (search), and P-27 if it keeps a `usage` table. Each gets the Fuseki
 client, the generation's dataset, whether any import was loaded (for the `FROM` merge), and a writer. A SQLite
@@ -549,6 +549,11 @@ end, a 256 MiB page cache (SQLite's default 2 MB thrashes on these inserts and s
 **The ontology's IRI** comes from the default graph only, the ontology without its imports: an `owl:Ontology` IRI that
 nothing there imports, since an OFN upload's converted Turtle may declare the ontologies it imports. If several remain,
 the alphabetically first is taken, so the choice is stable, and a warning logged; likewise for several version IRIs.
+The same query reads that ontology's title and `owl:versionInfo`, literals only. The title is the first property's
+value among `dcterms:title`, `dc:title`, then `NAME_PROPERTIES`, chosen by language ranking ([2.7](#27-display-names))
+then lexical order, with a warning if several tie; without one, pages show the IRI. Several `owl:versionInfo` values are
+chosen the same way, with a warning. The version shown is the version IRI, else the version info (`Meta.version`). The
+rest of the ontology's annotations aren't stored: the home page (P-17) queries Fuseki for them.
 
 An earlier design also had a `usage` table, because the OWLAPI can't find annotation assertions by value. Fuseki can
 (`?s ?p <entity>`), so P-27 decides whether any part of it is still needed ([2.8](#28-entity-pages)).

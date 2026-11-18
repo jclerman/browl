@@ -42,11 +42,12 @@ from browl.jobs import (
 from browl.loading import dataset_name
 from browl.pages import RETRY_AFTER_S, read_derived
 from browl.precache import (
+    OntologyHeader,
     PreCacheContext,
     batched,
     build,
     has_loaded_imports,
-    ontology_iris,
+    ontology_header,
     pre_cache,
     pre_caching_stage,
     rebuild,
@@ -61,8 +62,14 @@ pytestmark = pytest.mark.anyio
 EX = "http://example.org/"
 ONTOLOGY = f"{EX}onto"
 VERSION = f"{EX}onto/1.0"
-HEADER = f"?ontology\t?version\t?{END_VARIABLE}\n"
-END = "\t\ttrue\n"
+OWL = "http://www.w3.org/2002/07/owl#"
+VERSION_IRI = f"<{OWL}versionIRI>"
+VERSION_INFO = f"<{OWL}versionInfo>"
+DCTERMS_TITLE = "<http://purl.org/dc/terms/title>"
+DC_TITLE = "<http://purl.org/dc/elements/1.1/title>"
+LABEL = "<http://www.w3.org/2000/01/rdf-schema#label>"
+HEADER = f"?ontology\t?property\t?value\t?{END_VARIABLE}\n"
+END = "\t\t\ttrue\n"
 
 
 @pytest.fixture
@@ -71,7 +78,10 @@ def settings(data_dir: Path) -> Settings:
     return make_settings()
 
 
-ONTOLOGY_RESULT = f"{HEADER}<{ONTOLOGY}>\t<{VERSION}>\t\n{END}"
+ONTOLOGY_RESULT = (
+    f"{HEADER}<{ONTOLOGY}>\t{VERSION_IRI}\t<{VERSION}>\t\n"
+    f'<{ONTOLOGY}>\t{DCTERMS_TITLE}\t"Onto"@en\t\n<{ONTOLOGY}>\t{VERSION_INFO}\t"1.0"\t\n{END}'
+)
 LOADED_AT = datetime(2026, 11, 17, tzinfo=UTC)
 
 
@@ -152,6 +162,7 @@ async def test_stage_builds_database(settings: Settings) -> None:
         ONTOLOGY,
         VERSION,
     )
+    assert (stored.title, stored.version_info) == ("Onto", "1.0")
     assert stored.loaded_at == LOADED_AT  # the job's start
     [query] = queries
     assert "owl:Ontology" in query and "FROM" not in query  # the ontology's IRIs come from its own graph
@@ -188,7 +199,7 @@ async def test_stage_hook_query_fails(settings: Settings) -> None:
 
 @pytest.mark.parametrize(
     "body",
-    [f"{HEADER}<{ONTOLOGY}>\t<{VERSION}>\t\n", HEADER],
+    [f"{HEADER}<{ONTOLOGY}>\t{VERSION_IRI}\t<{VERSION}>\t\n", HEADER],
     ids=["no-marker", "no-rows"],
 )
 async def test_stage_incomplete_result(settings: Settings, body: str) -> None:
@@ -209,23 +220,103 @@ async def test_stage_skipped_without_ontology(settings: Settings) -> None:
 @pytest.mark.parametrize(
     ("rows", "expected", "warning"),
     [
-        ("", (None, None), None),
-        (f"<{ONTOLOGY}>\t\t\n", (ONTOLOGY, None), None),
-        (f"<{EX}b>\t\t\n<{EX}a>\t<{EX}a/1>\t\n", (f"{EX}a", f"{EX}a/1"), "several ontology IRIs"),
-        (f"<{ONTOLOGY}>\t<{EX}v2>\t\n<{ONTOLOGY}>\t<{EX}v1>\t\n", (ONTOLOGY, f"{EX}v1"), "several version IRIs"),
+        ("", OntologyHeader(), None),
+        (f"<{ONTOLOGY}>\t\t\t\n", OntologyHeader(ONTOLOGY), None),
+        (
+            f'<{EX}b>\t\t\t\n<{EX}a>\t{VERSION_IRI}\t<{EX}a/1>\t\n<{EX}b>\t{DCTERMS_TITLE}\t"B"\t\n',
+            OntologyHeader(f"{EX}a", f"{EX}a/1"),
+            "several ontology IRIs",
+        ),
+        (
+            (
+                f"<{ONTOLOGY}>\t{VERSION_IRI}\t<{EX}v2>\t\n<{ONTOLOGY}>\t{VERSION_IRI}\t<{EX}v1>\t\n"
+                f'<{ONTOLOGY}>\t{VERSION_IRI}\t"v0"\t\n'
+            ),
+            OntologyHeader(ONTOLOGY, f"{EX}v1"),
+            "several version IRIs",
+        ),
+        (
+            (
+                f'<{ONTOLOGY}>\t{LABEL}\t"label"@en\t\n<{ONTOLOGY}>\t{DC_TITLE}\t"dc"@en\t\n'
+                f'<{ONTOLOGY}>\t{DCTERMS_TITLE}\t"zz"\t\n<{ONTOLOGY}>\t{DCTERMS_TITLE}\t"titre"@fr\t\n'
+                f'<{ONTOLOGY}>\t{DCTERMS_TITLE}\t"Title"@en-gb\t\n'
+            ),
+            OntologyHeader(ONTOLOGY, title="Title"),
+            None,
+        ),
+        (
+            (
+                f'<{ONTOLOGY}>\t{LABEL}\t"label"@en\t\n<{ONTOLOGY}>\t{DC_TITLE}\t"dc"\t\n'
+                f"<{ONTOLOGY}>\t{DCTERMS_TITLE}\t<{EX}not-a-literal>\t\n"
+            ),
+            OntologyHeader(ONTOLOGY, title="dc"),
+            None,
+        ),
+        (
+            (
+                f'<{ONTOLOGY}>\t{LABEL}\t"label"\t\n<{ONTOLOGY}>\t{LABEL}\t"Label"@en\t\n'
+                f"<{ONTOLOGY}>\t{DC_TITLE}\t_:b0\t\n"
+            ),
+            OntologyHeader(ONTOLOGY, title="Label"),
+            None,
+        ),
+        (
+            f'<{ONTOLOGY}>\t{DCTERMS_TITLE}\t"B"@en\t\n<{ONTOLOGY}>\t{DCTERMS_TITLE}\t"A"@en-us\t\n',
+            OntologyHeader(ONTOLOGY, title="A"),
+            "several titles",
+        ),
+        (
+            f'<{ONTOLOGY}>\t{VERSION_INFO}\t"4.4-dev"\t\n<{ONTOLOGY}>\t{VERSION_INFO}\t<{EX}not-a-literal>\t\n',
+            OntologyHeader(ONTOLOGY, version_info="4.4-dev"),
+            None,
+        ),
+        (
+            (
+                f'<{ONTOLOGY}>\t{VERSION_INFO}\t"2"\t\n<{ONTOLOGY}>\t{VERSION_INFO}\t"3"@en\t\n'
+                f'<{ONTOLOGY}>\t{VERSION_INFO}\t"1"\t\n'
+            ),
+            OntologyHeader(ONTOLOGY, version_info="3"),
+            "several owl:versionInfo values ['1', '2', '3']; taking '3'",
+        ),
     ],
-    ids=["none", "no-version", "several-ontologies", "several-versions"],
+    ids=[
+        "none",
+        "no-version",
+        "several-ontologies",
+        "several-versions",
+        "dcterms-title-by-language",
+        "dc-title-fallback",
+        "name-property-fallback",
+        "tied-titles",
+        "version-info",
+        "several-version-infos",
+    ],
 )
-async def test_ontology_iris(
-    rows: str, expected: tuple[str | None, str | None], warning: str | None, caplog: pytest.LogCaptureFixture
+async def test_ontology_header(
+    rows: str, expected: OntologyHeader, warning: str | None, settings: Settings, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Check the ontology IRI and version IRI chosen, stably, from what the default graph declares."""
+    """Check the ontology's IRIs, title and version info chosen, stably, from what the default graph declares."""
     async with fuseki(f"{HEADER}{rows}{END}") as http:
         with caplog.at_level(logging.WARNING, logger="browl.precache"):
-            assert await ontology_iris(FusekiClient(http), "gen-1") == expected
+            assert await ontology_header(FusekiClient(http), "gen-1", settings) == expected
     assert (warning is None) == (not caplog.records)
     if warning:
         assert warning in caplog.text
+
+
+async def test_ontology_header_query(data_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Check that the query asks for the titles and the configured name properties, expanded, but no non-IRIs."""
+    queries: list[str] = []
+    names = ["skos:prefLabel", "ex:name", "dc:title", "not an IRI"]
+    settings = make_settings(NAME_PROPERTIES=names, EXTRA_PREFIXES={"ex": EX})
+    async with fuseki(queries=queries) as http:
+        await ontology_header(FusekiClient(http), "gen-1", settings)
+    properties = (
+        f"{VERSION_IRI}, {VERSION_INFO}, {DCTERMS_TITLE}, {DC_TITLE}, "
+        f"<http://www.w3.org/2004/02/skos/core#prefLabel>, <{EX}name>)"
+    )
+    assert properties in queries[0]
+    assert "isn't an IRI or a known CURIE" in caplog.text
 
 
 def test_has_loaded_imports() -> None:
@@ -505,32 +596,57 @@ async def test_rebuild_fuseki_down(settings: Settings, monkeypatch: pytest.Monke
 
 
 @pytest.mark.fuseki
-async def test_ontology_iris_on_real_fuseki(fuseki_url: str) -> None:
-    """Check on a real Fuseki that the ontology's IRI comes only from its own graph, leaving out what it imports.
+async def test_ontology_header_on_real_fuseki(fuseki_url: str, settings: Settings) -> None:
+    """Check on a real Fuseki that the ontology's IRIs and title come only from its own graph, not what it imports.
 
     The default graph also declares an ontology it imports, as an OFN upload's converted Turtle may, and a blank-node
-    ontology; an import's named graph declares one more. Each would come first in order, so would be taken, if the
-    query let it through.
+    ontology; an import's named graph declares one more, and gives the main ontology a title. Each would come first in
+    order, so would be taken, if the query let it through.
     """
     name = dataset_name(900_000 + uuid.uuid4().int % 100_000)
     own = f"""@prefix owl: <http://www.w3.org/2002/07/owl#> .
-<{EX}main> a owl:Ontology ; owl:versionIRI <{EX}main/1> ; owl:imports <{EX}a-imported> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+<{EX}main> a owl:Ontology ; owl:versionIRI <{EX}main/1> ; owl:imports <{EX}a-imported> ;
+    dcterms:title "Main"@en ; owl:versionInfo "1.0" .
 <{EX}a-imported> a owl:Ontology ; owl:versionIRI <{EX}a-imported/1> .
 [] a owl:Ontology ; owl:versionIRI <{EX}0-blank/1> .
 """
-    imported = f"@prefix owl: <http://www.w3.org/2002/07/owl#> .\n<{EX}0-in-import> a owl:Ontology .\n"
+    imported = f"""@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+<{EX}0-in-import> a owl:Ontology .
+<{EX}main> dcterms:title "A title from the import"@en .
+"""
+    # RadLex's header: a title and version info, but no version IRI.
+    radlex = """@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+<http://radlex.org/RID/> a owl:Ontology ; dcterms:title "RadLex radiology ontology"@en ; owl:versionInfo "4.4-dev" .
+"""
     async with httpx2.AsyncClient(base_url=fuseki_url, timeout=60) as http:
-        (await http.post("/$/datasets", data={"dbName": name, "dbType": "mem"})).raise_for_status()
+        datasets = [(name, [(None, own), (f"{EX}a-imported", imported)]), (f"{name}-radlex", [(None, radlex)])]
         try:
-            for graph, content in [(None, own), (f"{EX}a-imported", imported)]:
-                params = {} if graph is None else {"graph": graph}
-                response = await http.post(
-                    f"/{name}/data", params=params, content=content.encode(), headers={"Content-Type": "text/turtle"}
-                )
-                response.raise_for_status()
-            assert await ontology_iris(FusekiClient(http), name) == (f"{EX}main", f"{EX}main/1")
+            for dataset, graphs in datasets:
+                (await http.post("/$/datasets", data={"dbName": dataset, "dbType": "mem"})).raise_for_status()
+                for graph, content in graphs:
+                    params = {} if graph is None else {"graph": graph}
+                    response = await http.post(
+                        f"/{dataset}/data",
+                        params=params,
+                        content=content.encode(),
+                        headers={"Content-Type": "text/turtle"},
+                    )
+                    response.raise_for_status()
+            sparql = FusekiClient(http)
+            assert await ontology_header(sparql, name, settings) == OntologyHeader(
+                f"{EX}main", f"{EX}main/1", "Main", "1.0"
+            )
+            header = await ontology_header(sparql, f"{name}-radlex", settings)
+            assert header == OntologyHeader("http://radlex.org/RID/", None, "RadLex radiology ontology", "4.4-dev")
+            meta = Meta(1, Reasoner.NONE, LOADED_AT, header.iri, header.version_iri, header.title, header.version_info)
+            assert meta.version == "4.4-dev"
         finally:
-            await http.delete(f"/$/datasets/{name}")
+            for dataset, _ in datasets:
+                await http.delete(f"/$/datasets/{dataset}")
 
 
 async def test_build_fails_to_start(tmp_path: Path) -> None:
@@ -651,7 +767,7 @@ def test_restart_rebuilds(settings: Settings, prepare: Callable[[Settings], obje
     assert fuseki.requests == ["/$/ping", f"/{dataset_name(2)}/sparql"]
     assert derived_files(settings) == ["2.sqlite3"]
     with closing(derived.connect(settings.data_dir, 2)) as connection:
-        assert read_meta(connection) == Meta(2, Reasoner.ELK, STARTED, ONTOLOGY, VERSION)
+        assert read_meta(connection) == Meta(2, Reasoner.ELK, STARTED, ONTOLOGY, VERSION, "Onto", "1.0")
 
 
 def test_restart_rebuild_fails(settings: Settings) -> None:

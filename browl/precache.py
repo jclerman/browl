@@ -1,9 +1,9 @@
 """The pre-caching stage (DESIGN.md §2.4, §2.5): build the derived database from bulk queries to the loaded store.
 
-The stage reads the ontology's IRI and version IRI, starts a new derived database (`browl.derived.build`) with its
-`meta` row, and runs the hooks in `HOOKS` in order; each fills tables from its own bulk queries (P-10 entities, P-11
-names, P-12 hierarchy, P-19 search). The database is swapped in only once every hook has succeeded; if any fails, the
-stage fails and the previous database stays in place.
+The stage reads the ontology's IRI, version IRI, title and version info (`ontology_header`), starts a new derived
+database (`browl.derived.build`) with its `meta` row, and runs the hooks in `HOOKS` in order; each fills tables from its
+own bulk queries (P-10 entities, P-11 names, P-12 hierarchy, P-19 search). The database is swapped in only once every
+hook has succeeded; if any fails, the stage fails and the previous database stays in place.
 
 A SQLite connection must stay on one thread, while the queries stream on the event loop. So the build runs on a
 single-thread executor that owns the connection (`DerivedWriter`): a hook reads its query's rows on the event loop and
@@ -27,6 +27,9 @@ from browl.derived import Meta
 from browl.fuseki import BulkSelectStream, FusekiClient, SparqlError, dataset_clause, ping
 from browl.jobs import ImportResult, JobContext, StageError
 from browl.loading import dataset_name
+from browl.names import BUILTIN_PREFIXES, best_values, expand_curie
+from browl.rdf import IRI, Literal, RDFSyntaxError, Term
+from browl.settings import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -39,15 +42,21 @@ PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 """
 """The prologue of browl's bulk queries."""
 
-ONTOLOGY_IRIS = """SELECT ?ontology ?version
-WHERE {
+ONTOLOGY_HEADER = """SELECT ?ontology ?property ?value
+WHERE {{
   ?ontology rdf:type owl:Ontology .
   FILTER isIRI(?ontology)
-  FILTER NOT EXISTS { ?importer owl:imports ?ontology }
-  OPTIONAL { ?ontology owl:versionIRI ?version FILTER isIRI(?version) }
-}"""
-"""The ontology's IRI and version IRI, from its own (default) graph; an ontology it imports, as an OFN upload's
-converted Turtle may declare, is left out."""
+  FILTER NOT EXISTS {{ ?importer owl:imports ?ontology }}
+  OPTIONAL {{ ?ontology ?property ?value FILTER (?property IN ({properties})) }}
+}}"""
+"""The ontology's IRI and its header values for `OntologyHeader` (`{properties}`: the properties' IRIs, in `<>`),
+from its own (default) graph: an ontology it imports, as an OFN upload's converted Turtle may declare, is left out,
+and so are an import's titles, in its own named graph."""
+
+OWL_VERSION_IRI = "http://www.w3.org/2002/07/owl#versionIRI"
+OWL_VERSION_INFO = "http://www.w3.org/2002/07/owl#versionInfo"
+DCTERMS_TITLE = "http://purl.org/dc/terms/title"
+DC_TITLE = "http://purl.org/dc/elements/1.1/title"
 
 
 FUSEKI_WAIT_S = 120.0
@@ -183,8 +192,16 @@ async def pre_cache(context: JobContext, http: httpx2.AsyncClient, hooks: Sequen
     sparql = FusekiClient(http)
     dataset = dataset_name(context.generation)
     try:
-        ontology_iri, version_iri = await ontology_iris(sparql, dataset)
-        meta = Meta(context.generation, context.reasoner, context.started_at, ontology_iri, version_iri)
+        header = await ontology_header(sparql, dataset, context.settings)
+        meta = Meta(
+            context.generation,
+            context.reasoner,
+            context.started_at,
+            header.iri,
+            header.version_iri,
+            header.title,
+            header.version_info,
+        )
         async with build(context.settings.data_dir, meta) as db:
             hook_context = PreCacheContext(context, sparql, dataset, has_loaded_imports(context.imports), db)
             for hook in hooks:
@@ -231,27 +248,100 @@ async def wait_for_fuseki(http: httpx2.AsyncClient, limit_s: float | None = None
         pause = min(pause * 2, longest)
 
 
-async def ontology_iris(sparql: FusekiClient, dataset: str) -> tuple[str | None, str | None]:
-    """Return the ontology's IRI and version IRI, each None if it has none.
+@dataclass(frozen=True)
+class OntologyHeader:
+    """What the ontology says about itself, for the `meta` row; each None if it doesn't say.
+
+    Attributes:
+        iri: The ontology's IRI.
+        version_iri: Its version IRI.
+        title: Its display name (`ontology_header`); pages fall back to the IRI without one.
+        version_info: Its `owl:versionInfo`, the lexical form.
+    """
+
+    iri: str | None = None
+    version_iri: str | None = None
+    title: str | None = None
+    version_info: str | None = None
+
+
+def title_properties(settings: Settings) -> list[str]:
+    """Return the IRIs of the properties a title is taken from, best first: dcterms:title, dc:title, `NAME_PROPERTIES`.
+
+    A name property's CURIE is expanded with the built-in prefixes and `EXTRA_PREFIXES`; one that's still not an IRI is
+    left out, with a warning.
+    """
+    prefixes = BUILTIN_PREFIXES | settings.extra_prefixes
+    properties = [DCTERMS_TITLE, DC_TITLE]
+    for name in settings.name_properties:
+        try:
+            properties.append(IRI(expand_curie(name, prefixes)))
+        except RDFSyntaxError:
+            logger.warning("The name property %r isn't an IRI or a known CURIE; it's left out of the title", name)
+    return list(dict.fromkeys(properties))
+
+
+async def ontology_header(sparql: FusekiClient, dataset: str, settings: Settings) -> OntologyHeader:
+    """Return the ontology's IRI, version IRI, title and version info, from its own (default) graph.
 
     If the default graph declares several ontologies (none importing another), the first IRI in order is taken, so the
-    choice is stable, and a warning logged; likewise for several version IRIs.
+    choice is stable, and a warning logged; likewise for several version IRIs. The title is a literal of the first
+    property in `title_properties` that has one, chosen by language (`LANGUAGE_RANKING`, `browl.names.language_rank`)
+    then lexical order; a warning is logged if several tie on language. The version info is a literal too, chosen the
+    same way, with a warning if there are several.
 
     Raises:
         SparqlError: The query failed, or its result is incomplete.
     """
-    async with sparql.bulk_select(dataset, ONTOLOGY_IRIS, PREFIXES) as stream:
-        columns = stream.variables.index("ontology"), stream.variables.index("version")
-        rows = [(row[columns[0]], row[columns[1]]) async for row in stream]
-    ontologies = sorted({str(ontology) for ontology, _ in rows if ontology is not None})
+    titles = title_properties(settings)
+    properties = ", ".join(f"<{iri}>" for iri in [OWL_VERSION_IRI, OWL_VERSION_INFO, *titles])
+    async with sparql.bulk_select(dataset, ONTOLOGY_HEADER.format(properties=properties), PREFIXES) as stream:
+        columns = [stream.variables.index(name) for name in ("ontology", "property", "value")]
+        rows = [tuple(row[column] for column in columns) async for row in stream]
+    ontologies = sorted({str(ontology) for ontology, _, _ in rows if ontology is not None})
     if not ontologies:
-        return None, None
+        return OntologyHeader()
+    iri = ontologies[0]
     if len(ontologies) > 1:
-        logger.warning("The ontology declares several ontology IRIs; taking %s from %s", ontologies[0], ontologies)
-    versions = sorted({str(version) for ontology, version in rows if ontology == ontologies[0] and version is not None})
+        logger.warning("The ontology declares several ontology IRIs; taking %s from %s", iri, ontologies)
+    values: dict[str, list[Term]] = {}
+    for ontology, prop, value in rows:
+        if ontology == iri and prop is not None and value is not None:
+            values.setdefault(str(prop), []).append(value)
+
+    versions = sorted({str(version) for version in values.get(OWL_VERSION_IRI, []) if isinstance(version, IRI)})
     if len(versions) > 1:
-        logger.warning("The ontology %s has several version IRIs; taking %s", ontologies[0], versions[0])
-    return ontologies[0], versions[0] if versions else None
+        logger.warning("The ontology %s has several version IRIs; taking %s", iri, versions[0])
+
+    title = None
+    ranking = settings.language_ranking
+    for title_property in titles:
+        best = best_values(_literals(values.get(title_property, [])), ranking)
+        if best:
+            title = best[0]
+            if len(best) > 1:
+                logger.warning(
+                    "The ontology %s has several titles (%s) of the best language; taking %r",
+                    iri,
+                    title_property,
+                    title,
+                )
+            break
+
+    infos = _literals(values.get(OWL_VERSION_INFO, []))
+    best_infos = best_values(infos, ranking)
+    if len({info.value for info in infos}) > 1:
+        logger.warning(
+            "The ontology %s has several owl:versionInfo values %r; taking %r",
+            iri,
+            sorted({info.value for info in infos}),
+            best_infos[0],
+        )
+    return OntologyHeader(iri, versions[0] if versions else None, title, best_infos[0] if best_infos else None)
+
+
+def _literals(values: Iterable[Term]) -> list[Literal]:
+    return [value for value in values if isinstance(value, Literal)]
 
 
 @asynccontextmanager

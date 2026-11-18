@@ -26,7 +26,7 @@ from browl.jobs import Reasoner
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 """The derived database's schema version; raise it whenever the SQL in `SCHEMA` or `INDEXES` changes, forcing a
 rebuild."""
 
@@ -51,6 +51,8 @@ CREATE TABLE meta (
     generation INTEGER NOT NULL,
     ontology_iri TEXT,
     version_iri TEXT,
+    title TEXT,
+    version_info TEXT,
     reasoner TEXT NOT NULL,
     loaded_at TEXT NOT NULL
 );
@@ -126,6 +128,8 @@ class Meta:
         loaded_at: When the load job started; a rebuild after a restart keeps it (`browl.precache.pre_cache`).
         ontology_iri: The ontology's IRI; None if it has none.
         version_iri: Its version IRI; None if it has none.
+        title: Its display name (`browl.precache.ontology_header`); None if it has none, and pages show the IRI.
+        version_info: Its `owl:versionInfo`; None if it has none.
     """
 
     generation: int
@@ -133,6 +137,13 @@ class Meta:
     loaded_at: datetime
     ontology_iri: str | None = None
     version_iri: str | None = None
+    title: str | None = None
+    version_info: str | None = None
+
+    @property
+    def version(self) -> str | None:
+        """Return the version to show: the version IRI if there is one, else the version info, else None."""
+        return self.version_iri if self.version_iri is not None else self.version_info
 
 
 class NotCurrentError(Exception):
@@ -179,13 +190,15 @@ def build(data_dir: Path, meta: Meta) -> Iterator[sqlite3.Connection]:
             )
             connection.executescript(SCHEMA)
             connection.execute(
-                "INSERT INTO meta (id, schema_version, generation, ontology_iri, version_iri, reasoner, loaded_at)"
-                " VALUES (1, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO meta (id, schema_version, generation, ontology_iri, version_iri, title, version_info,"
+                " reasoner, loaded_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     SCHEMA_VERSION,
                     meta.generation,
                     meta.ontology_iri,
                     meta.version_iri,
+                    meta.title,
+                    meta.version_info,
                     str(meta.reasoner),
                     meta.loaded_at.isoformat(),
                 ),
@@ -292,8 +305,8 @@ def is_current(data_dir: Path, generation: int) -> bool:
 
 def read_meta(connection: sqlite3.Connection) -> Meta:
     """Return the `meta` row of a derived database."""
-    generation, reasoner, loaded_at, ontology_iri, version_iri = connection.execute(
-        "SELECT generation, reasoner, loaded_at, ontology_iri, version_iri FROM meta"
+    generation, reasoner, loaded_at, ontology_iri, version_iri, title, version_info = connection.execute(
+        "SELECT generation, reasoner, loaded_at, ontology_iri, version_iri, title, version_info FROM meta"
     ).fetchone()
     return Meta(
         generation=generation,
@@ -301,6 +314,8 @@ def read_meta(connection: sqlite3.Connection) -> Meta:
         loaded_at=datetime.fromisoformat(loaded_at),
         ontology_iri=ontology_iri,
         version_iri=version_iri,
+        title=title,
+        version_info=version_info,
     )
 
 
