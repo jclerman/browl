@@ -6,7 +6,9 @@ files under `browl/` opened and the settings read, and check that the component'
 """
 
 import importlib
+import json
 import os
+import subprocess
 import sys
 import textwrap
 import uuid
@@ -202,6 +204,42 @@ def test_build_keys(settings: Settings) -> None:
     built = build_keys(settings, HOOKS)
     assert list(built) == ["schema", "meta", *(hook.name for hook in HOOKS)]
     assert build_keys(make_settings(), HOOKS) == built  # computed the same each time
+
+
+# Prints the build keys for the settings given as JSON, run where `browl` is importable but `tests` may not be.
+_PRINT_KEYS = """
+import json, sys
+from browl.precache import HOOKS, build_keys
+from browl.settings import Settings
+print(json.dumps(build_keys(Settings.model_validate(json.loads(sys.argv[1])), HOOKS)))
+"""
+
+
+def test_build_keys_independent_of_process(data_dir: Path, tmp_path: Path) -> None:
+    """Check that the keys depend only on content: the same in processes with other hash seeds and directories."""
+    config = {
+        "BASE_URL": "http://example.com/sub/",
+        "AUTH_DISABLED": True,
+        "DATA_DIR": str(data_dir),
+        "EXTRA_PREFIXES": {f"p{n}": f"{EX}{n}/" for n in range(10)},
+        "NAME_PROPERTIES": ["skos:prefLabel", "rdfs:label", "skos:altLabel"],
+        "LANGUAGE_RANKING": ["fr", "en", "de"],
+    }
+    outputs = []
+    for seed in ["1", "2"]:
+        directory = tmp_path / f"cwd-{seed}"
+        directory.mkdir()
+        result = subprocess.run(
+            [sys.executable, "-c", _PRINT_KEYS, json.dumps(config)],
+            cwd=directory,
+            env=os.environ | {"PYTHONHASHSEED": seed},
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        outputs.append(json.loads(result.stdout))
+    assert outputs[0] == outputs[1]
+    assert outputs[0] == build_keys(Settings.model_validate(config), HOOKS)  # and in this process
 
 
 @pytest.mark.parametrize(
