@@ -115,7 +115,7 @@ class ImportResult:
     """An ontology the served ontology imports, directly or not, and whether it was loaded (A-4).
 
     Attributes:
-        iri: The IRI it's imported by.
+        iri: Its IRI, as declared in the `owl:imports` that imports it.
         imported_by: The IRI of the import that imports it; None if the upload does.
         reason: Why it was dropped, e.g. "only http and https imports are fetched"; None if it was fetched.
         triples: How many triples its named graph holds, once loaded; None before then, or if it was dropped.
