@@ -339,9 +339,21 @@ async def test_bulk_select() -> None:
         (f"?s\t?{END_VARIABLE}\n\ttrue\n{A}\t\n", "rows after its end marker"),
         (f"?s\t?{END_VARIABLE}\n{A}\ttrue\n", "isn't its end marker"),
         (f"?s\t?{END_VARIABLE}\n\tfalse\n", "isn't its end marker"),
-        (f"?s\n{A}\n", "has no browl_end column"),
+        (f'?s\t?{END_VARIABLE}\n\t"true"\n', "isn't its end marker"),
+        (f"?s\n{A}\n", "has 0 browl_end columns, not 1"),
+        (f"?{END_VARIABLE}\t?s\t?{END_VARIABLE}\n\t{A}\t\n", "has 2 browl_end columns, not 1"),
     ],
-    ids=["row-boundary", "no-rows", "cut-marker", "after-marker", "marker-with-row", "wrong-marker", "no-column"],
+    ids=[
+        "row-boundary",
+        "no-rows",
+        "cut-marker",
+        "after-marker",
+        "marker-with-row",
+        "wrong-marker",
+        "string-marker",
+        "no-column",
+        "two-columns",
+    ],
 )
 async def test_bulk_select_incomplete(body: str, match: str) -> None:
     """Check that a bulk result that ends cleanly but short, as at a row boundary, fails instead of looking whole."""

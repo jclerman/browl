@@ -27,7 +27,48 @@ from browl.derived import (
 )
 from browl.jobs import Reasoner
 
-TABLES = {"entity", "name_value", "edge", "equiv_group", "counts", "hash_prefix", "prefix", "meta"}
+COLUMNS = {
+    "counts": [
+        ("hierarchy", "TEXT", 1, 1),
+        ("node", "INTEGER", 1, 2),
+        ("children", "INTEGER", 1, 0),
+        ("descendants", "INTEGER", 1, 0),
+    ],
+    "edge": [("hierarchy", "TEXT", 1, 1), ("parent", "INTEGER", 1, 2), ("child", "INTEGER", 1, 3)],
+    "entity": [
+        ("id", "INTEGER", 0, 1),
+        ("iri", "TEXT", 1, 0),
+        ("type", "TEXT", 1, 0),
+        ("path", "TEXT", 1, 0),
+        ("fragment", "TEXT", 0, 0),
+        ("display_name", "TEXT", 0, 0),
+        ("curie", "TEXT", 0, 0),
+    ],
+    "equiv_group": [("entity", "INTEGER", 0, 1), ("representative", "INTEGER", 1, 0)],
+    "hash_prefix": [("path", "TEXT", 1, 1)],
+    "meta": [
+        ("id", "INTEGER", 0, 1),
+        ("schema_version", "INTEGER", 1, 0),
+        ("generation", "INTEGER", 1, 0),
+        ("ontology_iri", "TEXT", 0, 0),
+        ("version_iri", "TEXT", 0, 0),
+        ("title", "TEXT", 0, 0),
+        ("version_info", "TEXT", 0, 0),
+        ("reasoner", "TEXT", 1, 0),
+        ("loaded_at", "TEXT", 1, 0),
+    ],
+    "name_value": [
+        ("entity", "INTEGER", 1, 0),
+        ("property", "TEXT", 1, 0),
+        ("value", "TEXT", 1, 0),
+        ("normalized", "TEXT", 1, 0),
+        ("language", "TEXT", 0, 0),
+        ("direct", "INTEGER", 1, 0),
+    ],
+    "prefix": [("prefix", "TEXT", 1, 1), ("namespace", "TEXT", 1, 0)],
+}
+"""Each table's columns, as (name, type, not null, place in the primary key), for `SCHEMA_VERSION` 2. A change to them
+must raise `SCHEMA_VERSION`, and update this."""
 INDEXES = {
     "entity_iri_type",
     "entity_path",
@@ -71,13 +112,16 @@ def entity_iris(data_dir: Path, generation: int) -> list[str]:
 
 
 def test_build_creates_schema_and_meta(tmp_path: Path) -> None:
-    """A build creates every table and the indexes, stores its meta, and keeps the rows written."""
+    """A build creates every table, with its columns, and the indexes, stores its meta, and keeps the rows written."""
     make(tmp_path, 3)
     assert sorted(path.name for path in (tmp_path / DERIVED_DIR).iterdir()) == ["3.sqlite3"]
     connection = connect(tmp_path, 3)
     try:
-        names = {row[0] for row in connection.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")}
-        assert names >= TABLES
+        query = "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        tables = [row[0] for row in connection.execute(query)]
+        columns = {table: connection.execute(f"PRAGMA table_info({table})").fetchall() for table in tables}
+        assert SCHEMA_VERSION == 2
+        assert {table: [(n, t, nn, pk) for _, n, t, nn, _, pk in rows] for table, rows in columns.items()} == COLUMNS
         assert index_names(connection) == INDEXES
         assert read_meta(connection) == meta(3)
         assert connection.execute("SELECT schema_version FROM meta").fetchone()[0] == SCHEMA_VERSION

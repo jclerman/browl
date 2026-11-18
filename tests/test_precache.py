@@ -185,16 +185,18 @@ async def test_stage_hook_fails(settings: Settings) -> None:
 
 
 async def test_stage_hook_query_fails(settings: Settings) -> None:
-    """Check that a hook's failed query fails the stage with a reason naming the hook."""
+    """Check that a hook's incomplete result fails the stage, naming the hook, and the previous database stays."""
+    make_previous(settings, 4)
 
     async def entities(context: PreCacheContext) -> None:
         async with context.bulk_select("SELECT ?s WHERE { ?s ?p ?o }") as stream:
             [row async for row in stream]
 
     async with fuseki(ONTOLOGY_RESULT, f"?s\t?{END_VARIABLE}\n<{EX}a>\t\n") as http:
-        with pytest.raises(StageError, match=r"^pre-caching query failed \(.*entities\): "):
+        with pytest.raises(StageError, match=r"^pre-caching query failed \(.*entities\): the result is incomplete"):
             await pre_caching_stage(job(settings, 5), http, hooks=[entities])
-    assert derived_files(settings) == []
+    assert derived_files(settings) == ["4.sqlite3"]
+    assert derived.is_current(settings.data_dir, 4)
 
 
 @pytest.mark.parametrize(

@@ -112,10 +112,10 @@ class BulkSelectStream:
         """Wrap a stream whose query was wrapped by `bulk_select`.
 
         Raises:
-            SparqlError: The result has no `END_VARIABLE` column.
+            SparqlError: The result hasn't exactly one `END_VARIABLE` column.
         """
-        if stream.variables.count(END_VARIABLE) != 1:
-            raise SparqlError(f"a bulk SELECT result has no {END_VARIABLE} column: {stream.variables}")
+        if (columns := stream.variables.count(END_VARIABLE)) != 1:
+            raise SparqlError(f"a bulk SELECT result has {columns} {END_VARIABLE} columns, not 1: {stream.variables}")
         self._end = stream.variables.index(END_VARIABLE)
         self.variables = stream.variables[: self._end] + stream.variables[self._end + 1 :]
         self._stream = stream
