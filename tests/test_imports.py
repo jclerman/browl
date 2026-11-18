@@ -233,8 +233,13 @@ async def test_private_address_refused(site: StaticServer, tmp_path: Path, data_
     assert site.requested == []
 
 
-async def test_redirect_checked(site: StaticServer, tmp_path: Path, data_dir: Path) -> None:
-    """Check that each redirect's address is checked too, before connecting to it."""
+async def test_redirect_checked(
+    site: StaticServer, tmp_path: Path, data_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Check that each redirect's address is checked too, before connecting to it.
+
+    The reason names the host, but not its addresses, which are only logged.
+    """
     checked: list[str] = []
 
     def first_only(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
@@ -245,9 +250,11 @@ async def test_redirect_checked(site: StaticServer, tmp_path: Path, data_dir: Pa
     site.pages["/r"] = (302, {"Location": f"http://localhost:{port}/a"}, b"")
     site.page("/a", "ex:a ex:b ex:c .")
     async with fetch_client(first_only) as client:
-        with pytest.raises(FetchError, match="localhost has no public address"):
+        with pytest.raises(FetchError, match=r"^localhost has no public address$"):
             await fetch(client, site.url + "/r", tmp_path / "a", make_settings())
     assert site.requested == ["/r"]
+    assert "Refused to connect to localhost, which resolved only to " in caplog.text
+    assert "127.0.0.1" in caplog.text
 
 
 async def test_stage(site: StaticServer, settings: Settings, data_dir: Path) -> None:

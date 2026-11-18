@@ -214,7 +214,9 @@ class GuardedBackend(httpcore2.AsyncNetworkBackend):
         addresses = list(dict.fromkeys(str(info[4][0]) for info in infos))
         allowed = [address for address in addresses if self._allowed(ipaddress.ip_address(address.partition("%")[0]))]
         if not allowed:
-            raise BlockedAddressError(f"{host} has no public address ({', '.join(addresses)})")
+            # The addresses are logged, not given in the reason, which the status page shows: they can be internal.
+            logger.warning("Refused to connect to %s, which resolved only to %s", host, ", ".join(addresses))
+            raise BlockedAddressError(f"{host} has no public address")
         errors: list[httpcore2.ConnectError] = []
         for address in allowed:
             try:
