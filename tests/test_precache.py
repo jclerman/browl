@@ -284,10 +284,13 @@ async def test_build_cancelled(settings: Settings) -> None:
     assert previous.is_file()
 
 
-async def test_build_cancelled_at_end(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("fails", [False, True], ids=["swapped", "failed"])
+async def test_build_cancelled_at_end(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, fails: bool
+) -> None:
     """Check that a build cancelled during its end, here the rename, waits for the end before the cancellation ends it.
 
-    So the end can't outlive the job lock. The database it swapped in is whole.
+    So the end can't outlive the job lock. The database it swapped in is whole; if the end fails, that's logged.
     """
     renaming, release = threading.Event(), threading.Event()
     rename = derived.os.replace
@@ -295,6 +298,8 @@ async def test_build_cancelled_at_end(settings: Settings, monkeypatch: pytest.Mo
     def blocked(source: Path, target: Path) -> None:
         renaming.set()
         release.wait(10)
+        if fails:
+            raise OSError("disk gone")
         rename(source, target)
 
     monkeypatch.setattr(derived.os, "replace", blocked)
@@ -312,8 +317,12 @@ async def test_build_cancelled_at_end(settings: Settings, monkeypatch: pytest.Mo
     release.set()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert derived_files(settings) == ["2.sqlite3"]
-    assert derived.is_current(settings.data_dir, 2)
+    if fails:
+        assert derived_files(settings) == []
+        assert "The cancelled derived build's end failed" in caplog.text
+    else:
+        assert derived_files(settings) == ["2.sqlite3"]
+        assert derived.is_current(settings.data_dir, 2)
 
 
 async def test_build_failure_at_swap(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
