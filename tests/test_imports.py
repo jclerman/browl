@@ -30,6 +30,7 @@ from browl.imports import (
     write_catalog,
 )
 from browl.jobs import STATE_DB, ImportResult, JobContext, JobState, JobStore, Reasoner, Stage, StageError
+from browl.pages import templates
 from browl.process import Completed
 from browl.robot import reasoning_stage
 from browl.settings import Settings
@@ -687,3 +688,40 @@ def test_status_shows_dropped_imports(data_dir: Path) -> None:
     assert f'<li class="failure"><code>file:///x</code> (imported by <code>{EX}a</code>):' in page
     assert "only http and https" in page
     assert "5 triples" in page
+
+
+@pytest.mark.parametrize(
+    ("imports", "triples", "present", "absent"),
+    [
+        pytest.param(
+            (ImportResult(f"{EX}a", reason="x"), ImportResult(f"{EX}b", reason="y"), ImportResult(f"{EX}c", triples=1)),
+            5,
+            ["2 of the ontology's 3 imports couldn't be loaded</strong>, so the site leaves out what they declare."],
+            [],
+            id="plural",
+        ),
+        pytest.param((), 5, ["<p>5 triples loaded.</p>"], ['class="imports"', "couldn't be loaded"], id="no imports"),
+        pytest.param(
+            (ImportResult(f"{EX}a", triples=1),),
+            5,
+            ["5 triples loaded, not counting imports.", f"<code>{EX}a</code>: 1 triples"],
+            ['role="alert"'],
+            id="all loaded",
+        ),
+        pytest.param(
+            (ImportResult(f"{EX}a"),), None, [f"<code>{EX}a</code>: fetched"], ["triples loaded"], id="no triples yet"
+        ),
+    ],
+)
+def test_status_import_states(
+    imports: tuple[ImportResult, ...], triples: int | None, present: list[str], absent: list[str]
+) -> None:
+    """Check how the status shows imports and triples in each state: dropped, loaded, only fetched, or none."""
+    now = datetime.now(UTC)
+    state = JobState(1, Stage.LOADING, now, now, Stage.LOADING, "boom", imports=imports, triples=triples)
+    page = templates.get_template("admin/_job_status.html").render(job=state, stages=list(Stage), poll_s=1)
+    page = " ".join(page.split())
+    for text in present:
+        assert text in page
+    for text in absent:
+        assert text not in page
