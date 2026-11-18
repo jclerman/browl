@@ -239,6 +239,34 @@ async def test_malformed_count(
         await count_store(make_settings(), tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("completed", "match"),
+    [
+        (Completed(None, timed_out=True), r"^time limit: tdb2.tdbloader took longer than 14400 s$"),
+        (
+            Completed(None, out_of_space=True),
+            r"^disk space: a volume fell below [\d,]+ bytes free while tdb2.tdbloader",
+        ),
+        (Completed(1, tail=("boom",)), r"^tdb2.tdbloader failed \(exit status 1\):\nboom$"),
+    ],
+)
+async def test_loader_limits(
+    data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, completed: Completed, match: str
+) -> None:
+    """Check that a loader stopped at a limit fails the stage saying which, and that it watches both volumes."""
+    settings = make_settings(FUSEKI_BASE=str(tmp_path / "fuseki"))
+    watched: list[object] = []
+
+    async def run_process(*args: object, watch: list[Path], **kwargs: object) -> Completed:
+        watched.extend(watch)
+        return completed
+
+    monkeypatch.setattr(browl.loading, "run_process", run_process)
+    with pytest.raises(StageError, match=match):
+        await browl.loading.load_file(settings, tmp_path, tmp_path / "o.ttl")
+    assert watched == [settings.data_dir, settings.fuseki_base]
+
+
 async def test_admin_errors() -> None:
     """Check that the admin client's failures say what failed."""
 
@@ -310,11 +338,21 @@ def test_app_loads_and_restarts(
         generation = state.ready_generation
         assert "couldn't be loaded" in client.get("/_browl/admin/status").text
 
+        async def datasets() -> list[str]:
+            async with httpx2.AsyncClient(base_url=fuseki_url) as http:
+                return await browl_datasets(http)
+
+        before = client.portal.call(datasets)
+    store = store_path(settings, generation)
+    modified = store.stat().st_mtime_ns
+
     restarted = make_app(real_stages=True, **overrides)
     with TestClient(restarted) as client:
         assert restarted.state.jobs.state.ready_generation == generation
         assert restarted.state.jobs.state.site == Site.AVAILABLE
         assert client.portal is not None
+        assert client.portal.call(datasets) == before == [dataset_name(generation)]
+        assert store.stat().st_mtime_ns == modified
 
         async def served() -> int:
             async with httpx2.AsyncClient(base_url=fuseki_url) as http:
