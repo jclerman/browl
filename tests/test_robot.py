@@ -269,6 +269,24 @@ async def test_stops_group_on_cancel(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert running_in_group(int(pid_file.read_text())) == []
 
 
+async def test_stops_group_on_second_cancel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: Settings
+) -> None:
+    """Check that a run cancelled again while its process group is being stopped still waits for it to stop."""
+    pid_file = tmp_path / "pid"
+    fake_java(tmp_path, monkeypatch, f"trap '' TERM; sleep 60 & echo $$ > {pid_file}; wait")
+    monkeypatch.setattr(browl.process, "TERM_GRACE_S", 1.0)
+    task = asyncio.create_task(run_robot([], settings))
+    while not pid_file.exists() or not pid_file.read_text():
+        await asyncio.sleep(0.05)
+    task.cancel()
+    await asyncio.sleep(0.2)  # SIGTERM sent and ignored
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert running_in_group(int(pid_file.read_text())) == []
+
+
 async def test_failed_run_leaves_no_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: Settings, data_dir: Path
 ) -> None:

@@ -160,9 +160,24 @@ async def run_process(
             timed_out = True
     finally:
         run.cancel()
-        # Shielded: a cancelled job still stops the process, even if cancelled again meanwhile.
-        await asyncio.shield(_stop(process, name))
+        await _despite_cancellation(asyncio.ensure_future(_stop(process, name)))
     return Completed(process.returncode, timed_out, out_of_space, tuple(tail))
+
+
+async def _despite_cancellation(task: asyncio.Future[None]) -> None:
+    """Wait for a task to end, even if cancelled meanwhile, any number of times; then raise the cancellation, if any.
+
+    So a cancelled job still stops its process before its stage cleans up, e.g. deletes the store the process writes.
+    """
+    cancelled: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as error:
+            cancelled = error
+    task.result()
+    if cancelled is not None:
+        raise cancelled
 
 
 async def _finish(process: asyncio.subprocess.Process, reads: list[Coroutine[None, None, None]]) -> None:
