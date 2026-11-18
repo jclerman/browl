@@ -404,15 +404,15 @@ it. The status page lists them, and says in red how many were dropped; the ontol
 **The sandbox** (P-30): ROBOT and the OFN lister (`browl.ofn`) run in the `sandbox` container, so an import that gets
 past the listing reaches no network and nothing worth reading; the job fails, naming it.
 
-- The app connects to `browl.sandbox` on a Unix socket in a shared volume (mode 0600, so both run as the image's user,
+- The app connects to `browl.sandbox` on a Unix socket in a shared volume (mode 0600; both run as the image's user,
   uid 10001), sends the command, and reads its output lines and exit status. The time limit, the free-space watch and
   cancellation stay in the app: it closes the connection, and the runner stops the process group. The app never gets
   the Docker socket. Without `SANDBOX_SOCKET` (tests, development), the tools run in the app's container.
 - The container is the app's image with no network (`network_mode: none`, so no DNS either), a read-only file system
   with a tmpfs `/tmp`, no capabilities, `no-new-privileges`, and only the image's environment (no `.env`). Of the app's
-  files it mounts only the jobs volume, at `DATA_DIR/uploads` as in the app, so the paths the app sends hold there
-  too. Each upload removes the earlier jobs' files, so it holds only the current job's: the upload, fetched imports,
-  catalog and outputs. Not the data volume (job database, admins, derived database) nor Fuseki's.
+  volumes it mounts only the socket's and the jobs volume, the latter at `DATA_DIR/uploads` as in the app, so the paths
+  the app sends hold there too. Each upload removes the earlier jobs' files, so it holds only the current job's: the
+  upload, fetched imports, catalog and outputs. Not the data volume (job database, admins, derived database) nor Fuseki's.
 - Checked in CI's Compose job (`docker/sandbox-check.py`): an import missing from the catalog, by `http:` from the
   app's container and by `file:` of the job database, fails the run naming it, with no request received and the file
   not found, with or without the JVM's no-network options. Run in the app's container instead, ROBOT read the file,
@@ -767,7 +767,7 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | `iri?u=…` | Fallback entity URLs (Q1b) |
 | `static/…` | CSS, htmx, hash-IRI script |
 | `admin/…` | Upload, status, admin list, sign-in/out |
-| `admin/upload` | The upload form (A-2, A-3) and the load job's status. The form is parsed as it streams in, the file written straight to the data volume, never held whole in memory or spooled to a temporary file; its reasoner field must come before its file. The job is claimed only once the file's name has been checked and its first 8 KiB found to look like the syntax the name says, so a malformed request or a mislabelled, OWL/XML or compressed file leaves the served ontology alone. A post a browser sent from another site's page (by `Sec-Fetch-Site`) is refused, against CSRF (P-6) |
+| `admin/upload` | The upload form (A-2, A-3) and the load job's status. The form is parsed as it streams in, the file written straight to the jobs volume, never held whole in memory or spooled to a temporary file; its reasoner field must come before its file. The job is claimed only once the file's name has been checked and its first 8 KiB found to look like the syntax the name says, so a malformed request or a mislabelled, OWL/XML or compressed file leaves the served ontology alone. A post a browser sent from another site's page (by `Sec-Fetch-Site`) is refused, against CSRF (P-6) |
 | `admin/status` | The load job's stage, start time, uploaded file (name, syntax, size), and failed stage and reason (A-5, A-6): an HTML fragment for htmx requests (`HX-Request`), which polls itself while a job runs, else a page, which polls the same way, or refreshes itself while a job runs if JS is off (P-5) |
 | `admin/docs`, `admin/openapi.json` | FastAPI's API docs (Swagger UI only, no ReDoc), as admin routes, so admin sign-in covers them; moved from FastAPI's default root paths, where they would shadow ontology entities. Swagger UI loads its assets from a CDN at an exact pinned version: an accepted exception to the no-CDN rule ([2.2](#22-libraries-and-components)), for admin pages only (P-5) |
 | `health` | Liveness check for the container; also reports whether Fuseki answers |

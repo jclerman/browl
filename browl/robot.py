@@ -2,9 +2,8 @@
 
 ROBOT runs as `java -Xmx… -XX:+ExitOnOutOfMemoryError <no-network options> -jar robot.jar -vv …` in its own process
 group, in the sandbox if there is one (P-30), which is stopped at the time limit, if the job's volume runs low on
-space, or if the job is cancelled. A
-failure's reason says which limit was hit, or what else went wrong, using the output signatures S-2 found (A-6,
-`failure_reason`).
+space, or if the job is cancelled. A failure's reason says which limit was hit, or what else went wrong, using the
+output signatures S-2 found (A-6, `failure_reason`).
 """
 
 import asyncio
