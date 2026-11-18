@@ -187,30 +187,23 @@ async def loading_stage(context: JobContext, http: httpx2.AsyncClient) -> None:
     admin = FusekiAdmin(http)
     name = dataset_name(context.generation)
     store = store_path(settings, context.generation)
+    registering = False
     try:
-        await remove_stale_stores(settings, admin, name)
+        await remove_stale_stores(settings, admin, name)  # this also deletes any store left at `store`
         await asyncio.to_thread(store.parent.mkdir, parents=True, exist_ok=True)
-        await asyncio.to_thread(shutil.rmtree, store, ignore_errors=True)
         await load_file(settings, store, ontology)
         for iri, file in context.import_files.items():
             await load_file(settings, store, file, graph=iri)
         expected = await count_store(settings, store)
+        registering = True
         await admin.add(name)
-    except FusekiAdminError as error:
-        await asyncio.to_thread(shutil.rmtree, store, ignore_errors=True)
-        raise StageError(str(error)) from error
-    except BaseException:
-        await asyncio.to_thread(shutil.rmtree, store, ignore_errors=True)
-        raise
-    try:
         served = await count_fuseki(FusekiClient(http), name)
         if served != expected:
             raise StageError(f"Fuseki serves {_describe(served)} from the new store, which holds {_describe(expected)}")
     except BaseException as error:
-        try:
-            await admin.remove(name)
-        except FusekiAdminError:
-            logger.exception("Couldn't remove the dataset %s after a failed load", name)
+        await _discard(admin, name, store, registering)
+        if isinstance(error, FusekiAdminError):
+            raise StageError(str(error)) from error
         if isinstance(error, SparqlError):
             raise StageError(f"counting the new store's triples through Fuseki failed: {error}") from error
         raise
@@ -219,14 +212,39 @@ async def loading_stage(context: JobContext, http: httpx2.AsyncClient) -> None:
         replace(result, triples=served.get(result.iri, 0)) if result.iri in context.import_files else result
         for result in context.imports
     ]
+    await _remove_others(admin, name)
+
+
+async def _discard(admin: FusekiAdmin, name: str, store: Path, registering: bool) -> None:
+    """Remove a failed load's dataset and store.
+
+    Once registering has begun, Fuseki may have opened the store, even if the call failed or was cancelled, so the
+    dataset is removed through Fuseki, which deletes the store, before the directory is deleted.
+    """
+    if registering:
+        try:
+            await admin.remove(name)
+        except FusekiAdminError:
+            logger.exception("Couldn't remove the dataset %s after a failed load", name)
+    await asyncio.to_thread(shutil.rmtree, store, ignore_errors=True)
+
+
+async def _remove_others(admin: FusekiAdmin, name: str) -> None:
+    """Remove every other generation's dataset, each on its own, so one failure doesn't keep the rest.
+
+    The new store is served by now: an old one left behind only takes space, and the next load removes it.
+    """
     try:
-        for other in await admin.datasets():
-            if _DATASET.fullmatch(other) and other != name:
-                logger.info("Removing the previous dataset %s", other)
-                await admin.remove(other)
+        others = [other for other in await admin.datasets() if _DATASET.fullmatch(other) and other != name]
     except FusekiAdminError:
-        # The new store is served; an old one left behind only takes space, and the next load removes it.
-        logger.exception("Couldn't remove a previous dataset")
+        logger.exception("Couldn't list the previous datasets")
+        return
+    for other in others:
+        logger.info("Removing the previous dataset %s", other)
+        try:
+            await admin.remove(other)
+        except FusekiAdminError:
+            logger.exception("Couldn't remove the previous dataset %s", other)
 
 
 def _describe(counts: dict[str | None, int]) -> str:

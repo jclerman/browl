@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 import browl.fuseki
 import browl.imports
 import browl.loading
-from browl.fuseki import UNION_FROM, FusekiAdmin, FusekiAdminError, FusekiClient, dataset_clause
+from browl.fuseki import UNION_FROM, FusekiAdmin, FusekiAdminError, FusekiClient, SparqlError, dataset_clause
 from browl.jobs import ImportResult, JobContext, Site, Stage, StageError
 from browl.loading import dataset_name, loading_stage, store_path
 from browl.settings import Settings
@@ -115,6 +115,75 @@ async def test_count_mismatch(settings: Settings, http: httpx2.AsyncClient, monk
         await loading_stage(context, http)
     assert dataset_name(104) not in await browl_datasets(http)
     assert not store_path(settings, 104).exists()
+
+
+@pytest.mark.parametrize(
+    ("error", "raised", "match"),
+    [
+        (asyncio.CancelledError(), asyncio.CancelledError, None),
+        (SparqlError("boom"), StageError, r"^counting the new store's triples through Fuseki failed: boom$"),
+    ],
+)
+async def test_count_through_fuseki_fails(
+    settings: Settings,
+    http: httpx2.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    error: BaseException,
+    raised: type[BaseException],
+    match: str | None,
+) -> None:
+    """Check that a load cancelled or failing once Fuseki has opened the new store removes it, dataset and store."""
+
+    async def fail(*args: object) -> dict[str | None, int]:
+        raise error
+
+    monkeypatch.setattr(browl.loading, "count_fuseki", fail)
+    context = job(settings, 111, f"<{EX}a> <{EX}p> <{EX}b> .\n")
+    with pytest.raises(raised, match=match):
+        await loading_stage(context, http)
+    assert dataset_name(111) not in await browl_datasets(http)
+    assert not store_path(settings, 111).exists()
+
+
+async def test_registration_fails(
+    settings: Settings, http: httpx2.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Check that a registration failing after Fuseki opened the store, as on a timeout, removes it through Fuseki."""
+    add = FusekiAdmin.add
+
+    async def add_then_fail(self: FusekiAdmin, name: str) -> None:
+        await add(self, name)
+        raise FusekiAdminError("Fuseki HTTP request POST /$/datasets timed out after 120 s")
+
+    monkeypatch.setattr(FusekiAdmin, "add", add_then_fail)
+    context = job(settings, 112, f"<{EX}a> <{EX}p> <{EX}b> .\n")
+    with pytest.raises(StageError, match=r"^Fuseki HTTP request POST /\$/datasets timed out after 120 s$"):
+        await loading_stage(context, http)
+    assert dataset_name(112) not in await browl_datasets(http)
+    assert not store_path(settings, 112).exists()
+
+
+async def test_old_dataset_kept_on_failure(
+    settings: Settings, http: httpx2.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Check that failing to remove one old dataset fails nothing, and doesn't keep the others."""
+    remove = FusekiAdmin.remove
+
+    async def remove_but_113(self: FusekiAdmin, name: str) -> None:
+        if name == dataset_name(113):
+            raise FusekiAdminError("boom")
+        await remove(self, name)
+
+    await loading_stage(job(settings, 113, f"<{EX}a> <{EX}p> <{EX}b> .\n"), http)
+    monkeypatch.setattr(FusekiAdmin, "remove", remove_but_113)
+    await loading_stage(job(settings, 114, f"<{EX}a> <{EX}p> <{EX}b> .\n"), http)
+    assert await browl_datasets(http) == ["gen-113", "gen-114"]
+    context = job(settings, 115, f"<{EX}a> <{EX}p> <{EX}b> .\n")
+    await loading_stage(context, http)
+    assert context.triples == 1
+    assert await browl_datasets(http) == ["gen-113", "gen-115"]
+    monkeypatch.undo()
+    await FusekiAdmin(http).remove(dataset_name(113))
 
 
 async def test_stale_store_removed(settings: Settings, http: httpx2.AsyncClient) -> None:
