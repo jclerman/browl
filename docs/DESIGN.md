@@ -100,7 +100,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 
 | Requirement | Priority |
 | --- | --- |
-| **O-1** · The service starts with one command (`docker compose up`). It runs as two containers: the app and Fuseki. _(S-4; was a single container)_ | v1 |
+| **O-1** · The service starts with one command (`docker compose up`). It runs as three containers: the app, Fuseki, and the sandbox that runs ROBOT (P-30). _(S-4; was a single container)_ | v1 |
 | **O-2** · `BASE_URL` (where the service is served) is set per deployment. IRIs under it get their native paths. _(Q1c)_ | v1 |
 | **O-3** · The reserved prefix for the service's own pages is configurable, defaults to `_browl`, and must start with `_`. _(Q1d)_ | v1 |
 | **O-4** · The ordered list of name annotation properties (default: `rdfs:label` first) is configurable and is used for both display names and search. _(Q18a)_ | v1 |
@@ -171,7 +171,8 @@ Tooling and code conventions are in [`CODING-STANDARDS.md`](CODING-STANDARDS.md)
   declarations but never loaded: each fragment's OWLAPI manager has one ontology factory, which refuses to load any
   document but the fragment, so no import's IRI is ever opened, however the triple is written (P-4).
 - **ROBOT as a subprocess** runs the optional reasoning, in its own JVM so time and memory limits can be enforced and a
-  runaway run killed. Jena's TDB2 loader also runs as a subprocess, building the store for each load. _(Q7c)_
+  runaway run killed; in the Compose deployment, in the sandbox container (2.4, P-30). Jena's TDB2 loader also runs as
+  a subprocess, building the store for each load. _(Q7c)_
 - **One server worker process.** Concurrency comes from async request handling: SPARQL calls use an async HTTP client,
   and all OWLAPI calls run on one dedicated thread. Parallel threads gave no extra throughput, because each render
   alternates Java and Python work, and Python's GIL serializes the Python part
@@ -194,7 +195,7 @@ Tooling and code conventions are in [`CODING-STANDARDS.md`](CODING-STANDARDS.md)
 | Derived store and search (v1) | SQLite (Python standard library), queried in a thread pool | FTS5 later for any-word search. _(Q8, Q11)_ |
 | Reasoning | ROBOT (Java), as a subprocess | ELK and HermiT. |
 | Authentication | Authlib (OpenID Connect with Google), Starlette signed-cookie sessions | |
-| Deployment | Docker Compose: `app` and `fuseki` services, named volumes | The app image includes Java 21, `robot.jar` and Jena's command-line tools (for the TDB2 loader). _(S-4)_ |
+| Deployment | Docker Compose: `app`, `fuseki` and `sandbox` services, named volumes (2.12) | The app image includes Java 21, `robot.jar` and Jena's command-line tools (for the TDB2 loader). _(S-4)_ |
 
 ### 2.3 IRI → URL mapping
 
@@ -263,7 +264,7 @@ The database is the job state's source of truth, so nothing here ties browl to o
 
 | Stage | What happens |
 | --- | --- |
-| **uploading** | The file is streamed to the data volume, at `DATA_DIR/uploads/{generation}/ontology.{ttl,rdf,ofn}`, the suffix naming its format (an `.owl` file is taken to be RDF/XML); earlier uploads are deleted. A failed upload (e.g. the disk is full, or the client disconnects) deletes its partial file. An upload larger than `MAX_UPLOAD_BYTES`, or than the free space less a margin (from `Content-Length`), is refused before the job starts; one that receives nothing for a minute fails. The form's reasoner choice is stored with the job, as are the file's name, syntax and size, recorded as it grows so the status shows progress. The site switches to the "loading" page (U-16) and the page cache is cleared (P-6). |
+| **uploading** | The file is streamed to the jobs volume, at `DATA_DIR/uploads/{generation}/ontology.{ttl,rdf,ofn}`, the suffix naming its format (an `.owl` file is taken to be RDF/XML); earlier uploads are deleted. A failed upload (e.g. the disk is full, or the client disconnects) deletes its partial file. An upload larger than `MAX_UPLOAD_BYTES`, or than the free space less a margin (from `Content-Length`), is refused before the job starts; one that receives nothing for a minute fails. The form's reasoner choice is stored with the job, as are the file's name, syntax and size, recorded as it grows so the status shows progress. The site switches to the "loading" page (U-16) and the page cache is cleared (P-6). |
 | **imports** | Imported ontologies are fetched, and a catalog written for ROBOT (see Imports, below). An `.ofn` upload, which the TDB2 loader can't read (it reads only RDF formats), is converted to Turtle here, as `converted.ttl`, by the same OWLAPI parse that lists its imports; the Turtle stands in for it from then on. |
 | **reasoning** (optional) | One ROBOT run (see Reasoning, below) classifies the upload with ELK or HermiT. Its output, `reasoned.ttl` beside the upload, replaces the uploaded file as the ontology that gets served; the upload is kept (P-7). (Later requirements U-39 and U-40 need the asserted axioms kept too; see [Later](#later).) It reasons over the upload, or over `converted.ttl` for an `.ofn` upload. Without reasoning, the upload, or `converted.ttl`, is loaded as it is. Of the RDF syntaxes ROBOT writes, Turtle and RDF/XML load equally fast, and Turtle is the smaller file, a quarter smaller on NCBITaxon (P-8, [findings](../research/P-8/README.md)). _(Q7a)_ |
 | **loading** | Jena's `tdb2.tdbloader` builds a new store from the built ontology, in the default graph, and loads each fetched import into a named graph, in a new directory on the Fuseki volume. The store's triples are counted with `tdb2.tdbquery`; Fuseki is then switched to it, the triples counted again through Fuseki, which must match, and the previous store deleted. The counts are kept with the job, for the status and the home page. Uberon loads in about 5 s, NCBITaxon in about 65 s ([P-8 findings](../research/P-8/README.md)). _(Q15)_ |
@@ -300,7 +301,7 @@ before its restriction cases became joins); converting the ontology to Jena's in
 - Time: when `REASONER_TIMEOUT_S` is reached, the process group gets SIGTERM, then SIGKILL once ROBOT exits or after a
   few seconds, for anything left; the JVM exits on SIGTERM and leaves nothing behind. The job records "time limit".
 - Disk: the output can be far larger than the upload (e.g. EquivalentClass and ClassAssertion axioms among many
-  equivalent classes), so while ROBOT runs, browl checks the data volume's free space every second, and stops ROBOT
+  equivalent classes), so while ROBOT runs, browl checks the jobs volume's free space every second, and stops ROBOT
   once it's below the upload's margin (1 GB). The job records "disk space".
 - Memory: `-XX:+ExitOnOutOfMemoryError` makes any thread's `OutOfMemoryError` end the JVM with status 3 and the line
   `Terminating due to java.lang.OutOfMemoryError`; the job records "memory limit". Without the flag, an ELK worker's
@@ -385,9 +386,9 @@ without a reasoner, as revised in P-8's review (the OWLAPI lists OFN imports; RO
    An IRI with a character XML can't hold, such as a control character, is left out (it can't be fetched either), so
    it fails only a reasoning run that reaches it, not every load. ROBOT's catalog accepts only exact names, so for a
    file IRI it lists every spelling the OWLAPI may request: `file:/…`, `file:///…` and `file://localhost/…` (the
-   OWLAPI and Jena resolve a relative RDF import against the document differently). Until P-30, ROBOT's JVM sends
-   every HTTP(S) request to a closed port, so it fetches nothing itself, and every tool gets only a few of the app's
-   environment variables (`browl.process.ENVIRONMENT`).
+   OWLAPI and Jena resolve a relative RDF import against the document differently). ROBOT's JVM also sends every
+   HTTP(S) request to a closed port, defense in depth behind the sandbox, and every tool gets only a few of the
+   environment variables of the app or the sandbox (`browl.process.ENVIRONMENT`).
 4. The loading stage loads the ontology into the store's default graph, and each fetched import into its own named
    graph, named by the IRI it's imported by. Each triple's source stays known, e.g. to mark imported entities; merging
    into one file first (ROBOT `merge`) would lose that.
@@ -399,6 +400,26 @@ The job state keeps every import, whether it was loaded (with its triple count) 
 it. The status page lists them, and says in red how many were dropped; the ontology's home page warns the same way
 (P-17). Neither Jena nor the OWLAPI expands an RDF/XML upload's external XML entities (each reads one as empty), so a
 `DOCTYPE` can't read local files either.
+
+**The sandbox** (P-30): ROBOT and the OFN lister (`browl.ofn`) run in the `sandbox` container, so an import that gets
+past the listing reaches no network and nothing worth reading; the job fails, naming it.
+
+- The app connects to `browl.sandbox` on a Unix socket in a shared volume (mode 0600, so both run as the image's user,
+  uid 10001), sends the command, and reads its output lines and exit status. The time limit, the free-space watch and
+  cancellation stay in the app: it closes the connection, and the runner stops the process group. The app never gets
+  the Docker socket. Without `SANDBOX_SOCKET` (tests, development), the tools run in the app's container.
+- The container is the app's image with no network (`network_mode: none`, so no DNS either), a read-only file system
+  with a tmpfs `/tmp`, no capabilities, `no-new-privileges`, and only the image's environment (no `.env`). Of the app's
+  files it mounts only the jobs volume, at `DATA_DIR/uploads` as in the app, so the paths the app sends hold there
+  too. Each upload removes the earlier jobs' files, so it holds only the current job's: the upload, fetched imports,
+  catalog and outputs. Not the data volume (job database, admins, derived database) nor Fuseki's.
+- Checked in CI's Compose job (`docker/sandbox-check.py`): an import missing from the catalog, by `http:` from the
+  app's container and by `file:` of the job database, fails the run naming it, with no request received and the file
+  not found, with or without the JVM's no-network options. Run in the app's container instead, ROBOT read the file,
+  and without those options fetched the URL.
+- A container rather than Landlock in the app's container, which would be lighter: Landlock is unverified on Docker
+  Desktop's kernel and under Docker's default seccomp profile, and Linux-only, while a container gives the same
+  isolation wherever Compose runs.
 
 **Why the ontology goes in the default graph** (measured in P-3, NCBITaxon loaded with `tdb2.xloader` in the app
 container, Fuseki with a 2 GB heap): TDB2 indexes named graphs separately, so a named graph costs about 2.2× in store
@@ -728,6 +749,13 @@ validated at startup (`browl/settings.py`). Lists and mappings are given as JSON
 | `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `SEED_ADMINS` | none | required unless `AUTH_DISABLED`; O-6 |
 | `AUTH_DISABLED` | `false` | O-7 |
 
+**The Compose deployment** (`docker-compose.yml`): three services, `app`, `fuseki` and `sandbox` (2.4), and four named
+volumes: `data` (`DATA_DIR`: job state, admins, derived database), `jobs` (`DATA_DIR/uploads`: the current job's files,
+shared with the sandbox), `fuseki` (Fuseki's base, shared with the app's loader) and `sandbox` (the runner's socket).
+Compose reads a few variables of its own from `.env`, not browl settings: `BROWL_PORT`, the app's host port;
+`FUSEKI_HEAP` and `FUSEKI_MEM_LIMIT` (2.4); and `SANDBOX_MEM_LIMIT`, the sandbox's memory limit, none by default, which
+must hold `REASONER_MAX_HEAP` plus about 0.5 GiB.
+
 ### 2.13 URL space for the service's own pages
 
 Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
@@ -762,7 +790,7 @@ Pages link to the service's own routes by root-relative paths, never by URLs bui
 | A Fuseki response that fails partway returns a truncated result with HTTP 200 | Seen in P-3 and S-6: once Fuseki has sent the status, it appends the error as plain text and ends the response normally. It sends it as soon as a SPARQL JSON or TSV result is cut short (the writer flushes what it has), and once any other response outgrows the 2 MB output buffer (2.4). So browl treats any status other than 2xx as a failed query, and never discards the HTTP client's error for a body that ends early (Fuseki exiting or restarting mid-response drops the connection before the last chunk). It parses every Fuseki response strictly, as SPARQL JSON results or N-Triples, and parses each TSV cell as an RDF term, so the appended error text can't pass as a one-column row. N-Triples results may hold only triples, since Jena writes no comments or blank lines and the appended text can start with `#`, which N-Triples reads as a comment (P-4); a parse error is a failed query, never a short result. P-9, which runs the first bulk queries, checks that each bulk result is complete (e.g. a final count or sentinel), which also catches a result that breaks off cleanly at a row boundary, or an error with no text appended. The loading stage already checks that Fuseki serves as many triples as the store holds (P-8). |
 | Fuseki pauses for full garbage collections under page load | Resolved by S-6: the `System.gc()` calls P-3 saw came from Fuseki 6.2.0 allocating an unpooled 5 MB direct output buffer per response (Jena GH-4084). Fuseki's `jetty.xml` pools a 2 MB buffer instead, which removed them; pages went from 302 to 528 a second at 1 client, and from 573 to 769 at 16 (2.4). |
 | JPype quirks: thread safety of concurrent OWLAPI calls; Python–Java call overhead | Resolved by S-1: concurrent calls were safe but gave no extra throughput, so OWLAPI calls run on one thread (2.1). Call overhead is small ([S-1 findings](../research/S-1/README.md)). P-4 found three more, each handled: the JVM must start on the main thread, its signal handlers bypassed Uvicorn's graceful shutdown (`-Xrs`), and the OWLAPI fetched a fragment's `owl:imports` from their IRIs, web or `file:`, so the bridge refuses every document load but the fragment's own (2.1). |
-| An upload's `owl:imports` make ROBOT read local files (`file:`) or send requests from the app container (`http:`), and its errors can quote what it read | Found in P-7's review; narrowed by P-8: browl lists every import, fetches only `http` and `https` from public addresses, and gives ROBOT a catalog covering every import (2.4). Tested with a `file:` import and one at a local address. P-8's review showed that a crafted file can get an import past the listing, so P-30 runs ROBOT in a sandbox with no network and nothing worth reading ([load flow](LOAD-FLOW.md)). Not deployed before P-30, nor before P-22 protects the upload. |
+| An upload's `owl:imports` make ROBOT read local files (`file:`) or send requests from the app container (`http:`), and its errors can quote what it read | Found in P-7's review; narrowed by P-8: browl lists every import, fetches only `http` and `https` from public addresses, and gives ROBOT a catalog covering every import (2.4). Tested with a `file:` import and one at a local address. P-8's review showed that a crafted file can get an import past the listing; P-30 runs ROBOT and the OFN lister in a sandbox with no network and nothing worth reading, so such an import fails the job (2.4, [load flow](LOAD-FLOW.md)), checked in CI. Not deployed before P-22 protects the upload. |
 | Memory limit can't be reported reliably | Resolved by S-2: with `-XX:+ExitOnOutOfMemoryError`, a heap breach in any thread exits with status 3 and a fixed message; each other failure kind has its own ROBOT log line (2.4). |
 | Descendant counts too slow or memory-hungry at millions of classes | Resolved by S-3: roaring bitmaps, 4.2 s for NCBITaxon ([S-3 findings](../research/S-3/README.md)). |
 | Loading a very large ontology takes minutes | Accepted for uploads (Q14a), shown on the status page. Restarts don't reload (2.4). NCBITaxon: about 5 minutes, estimated; Uberon: 7 s, measured ([S-4 findings](../research/S-4/README.md)). P-24 checks whether extracting the dictionary and edges by streaming the upload file, in parallel with the TDB2 load, is worth it. |
@@ -810,7 +838,7 @@ go into this document.
 | P-6 | Upload page and streaming upload (auth not yet enforced) | A-2, A-4 | P-5 | Done | [#16](https://github.com/jclerman/browl/issues/16) |
 | P-7 | Reasoning stage: ROBOT with optional ELK/HermiT reasoning, with limits | A-3, A-6, O-8 | P-6, S-2 | Done | [#18](https://github.com/jclerman/browl/issues/18) |
 | P-8 | Fetch imports (warn on failures); bulk-load the ontology and imports into a new TDB2 store and switch Fuseki to it; no reload on restart | A-4 | P-4, P-7, S-4 | Done | [#20](https://github.com/jclerman/browl/issues/20) |
-| P-30 | Run ROBOT and the OWLAPI import lister in a sandbox: no network, only the job's files, a minimal environment ([load flow](LOAD-FLOW.md)); before any deployment | A-3, A-4 | P-8 | To do | [#72](https://github.com/jclerman/browl/issues/72) |
+| P-30 | Run ROBOT and the OWLAPI import lister in a sandbox: no network, only the job's files, a minimal environment ([load flow](LOAD-FLOW.md)); before any deployment | A-3, A-4 | P-8 | Done | [#72](https://github.com/jclerman/browl/issues/72) |
 
 ### Phase 3: Derived data
 
