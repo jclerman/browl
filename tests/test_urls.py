@@ -38,7 +38,6 @@ def fallback(iri: str, prefix: str = PREFIX, reserved: bool = False) -> EntityUR
         ("http://example.com/Rés#Ünï", ("/R%C3%A9s", "%C3%9Cn%C3%AF")),  # non-ASCII path and fragment, in URI form
         ("http://example.com/a b|c", ("/a%20b|c", None)),  # ASCII a browser escapes in a path is escaped
         ("http://example.com/a#b c", ("/a", "b%20c")),
-        ("http://example.com//x", ("//x", None)),
         ("http://example.com/_browlish", ("/_browlish", None)),  # not the reserved segment
         ("http://example.com/x/_browl", ("/x/_browl", None)),
     ],
@@ -144,6 +143,8 @@ def test_proxied(iri: str, expected: tuple[str, str | None]) -> None:
         "http://example.org/a/./b",
         "http://example.org/a/%2E%2e/b",
         "http://example.com/..",
+        "http://example.com//x",  # a native path a browser would read as another host (`//x`)
+        "http://example.com//evil.com/x",
         "relative/x",
         "",
     ],
@@ -151,6 +152,14 @@ def test_proxied(iri: str, expected: tuple[str, str | None]) -> None:
 def test_fallback(iri: str) -> None:
     """Anything else gets `/{RESERVED_PREFIX}/iri?u={percent-encoded IRI}`, its fragment in the query."""
     assert url(iri) == fallback(iri)
+
+
+def test_fallback_protocol_relative_under_base_path() -> None:
+    """A native URL path that would start with `//`, relative to `BASE_URL`'s path, gets the fallback."""
+    assert url("http://example.com/sub//evil.com/x", "http://example.com/sub") == fallback(
+        "http://example.com/sub//evil.com/x"
+    )
+    assert url("http://example.com/sub/x//y", "http://example.com/sub") == EntityURL("/x//y", None, Rule.NATIVE)
 
 
 def test_fallback_encoding() -> None:

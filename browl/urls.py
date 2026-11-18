@@ -90,8 +90,9 @@ class URLMapper:
         3. Fallback: any other IRI gets `/{RESERVED_PREFIX}/iri?u={the percent-encoded IRI}`. So do IRIs with a query
            string, even an empty one; with an empty fragment, which a URL can't be told apart from no fragment by; with
            an IP literal host (`[::1]`) unless native; whose path has a `.` or `..` segment, which a browser would
-           resolve away; with a host that isn't valid; and whose native or proxied URL would be under the reserved
-           prefix: its first path segment, percent-decoded as a router decodes it, is `RESERVED_PREFIX`.
+           resolve away; whose native URL path would start with `//`, which a browser would read as another host; with a
+           host that isn't valid; and whose native or proxied URL would be under the reserved prefix: its first path
+           segment, percent-decoded as a router decodes it, is `RESERVED_PREFIX`.
 
         IRIs are compared with `BASE_URL` in URI form (RFC 3987 §3.1): the scheme and host case-insensitively, after the
         host is normalized, and the path exactly. `http` and `https` aren't told apart, so the two forms of an IRI share
@@ -113,6 +114,8 @@ class URLMapper:
             return self._fallback(iri)
         if host == self._host and port == self._port and (path == self._path or path.startswith(self._path + "/")):
             url_path, rule = path[len(self._path) :] or "/", Rule.NATIVE
+            if url_path.startswith("//"):  # a protocol-relative URL, to another host
+                return self._fallback(iri)
         elif port is None and not host.startswith("["):
             url_path, rule = f"/{host}{path}", Rule.PROXIED
         else:
