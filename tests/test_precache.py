@@ -3,22 +3,43 @@
 import asyncio
 import functools
 import logging
+import sqlite3
 import threading
+import time
 import urllib.parse
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import closing
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx2
 import pytest
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
 
 from browl import derived
-from browl.derived import Meta, derived_path, read_meta
+from browl.derived import Meta, NotCurrentError, derived_path, read_meta
 from browl.fuseki import END_VARIABLE, TSV, UNION_FROM, FusekiClient, SparqlError
-from browl.jobs import ImportResult, JobContext, JobRunner, Reasoner, Site, Stage, StageError
+from browl.jobs import (
+    INTERRUPTED_BY_SHUTDOWN,
+    JOB_LOCK,
+    REBUILDING,
+    STATE_DB,
+    ImportResult,
+    JobContext,
+    JobLock,
+    JobRunner,
+    JobState,
+    JobStore,
+    Reasoner,
+    Site,
+    Stage,
+    StageError,
+)
 from browl.loading import dataset_name
+from browl.pages import RETRY_AFTER_S, read_derived
 from browl.precache import (
     PreCacheContext,
     batched,
@@ -30,7 +51,7 @@ from browl.precache import (
 )
 from browl.settings import Settings
 from tests.conftest import DATA
-from tests.helpers import make_settings
+from tests.helpers import make_app, make_settings
 
 pytestmark = pytest.mark.anyio
 
@@ -70,7 +91,7 @@ def fuseki(*bodies: str, queries: list[str] | None = None) -> httpx2.AsyncClient
 def job(settings: Settings, generation: int, imports: list[ImportResult] | None = None) -> JobContext:
     """Return a job's context as the loading stage leaves it."""
     upload = settings.data_dir / "uploads" / str(generation) / "ontology.ttl"
-    return JobContext(generation, settings, Reasoner.ELK, upload=upload, imports=imports or [])
+    return JobContext(generation, settings, Reasoner.ELK, upload=upload, imports=imports or [], started_at=LOADED_AT)
 
 
 def make_previous(settings: Settings, generation: int) -> Path:
@@ -117,7 +138,7 @@ async def test_stage_builds_database(settings: Settings) -> None:
         ONTOLOGY,
         VERSION,
     )
-    assert stored.loaded_at.tzinfo is not None
+    assert stored.loaded_at == LOADED_AT  # the job's start
     [query] = queries
     assert "owl:Ontology" in query and "FROM" not in query  # the ontology's IRIs come from its own graph
 
@@ -391,3 +412,180 @@ async def test_build_fails_to_start(tmp_path: Path) -> None:
     with pytest.raises(OSError, match="file"):
         async with build(data_dir, Meta(1, Reasoner.NONE, LOADED_AT)):
             pass
+
+
+STARTED = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+READY = JobState(
+    generation=2,
+    stage=Stage.READY,
+    started_at=STARTED,
+    finished_at=STARTED + timedelta(minutes=1),
+    ready_generation=2,
+    reasoner=Reasoner.ELK,
+    triples=5,
+)
+"""A job that reached ready before a restart."""
+
+
+class StubFuseki:
+    """A stubbed Fuseki that answers every query with `ONTOLOGY_RESULT`, or `status`, once released, recording them.
+
+    Attributes:
+        requests: The paths requested.
+        released: Set to let answers through.
+        status: The status of the answers.
+    """
+
+    def __init__(self, released: bool = True, status: int = 200) -> None:
+        """Answer at once if `released`, else once `released` is set."""
+        self.requests: list[str] = []
+        self.released = threading.Event()
+        if released:
+            self.released.set()
+        self.status = status
+        self.transport = httpx2.MockTransport(self.handle)
+
+    async def handle(self, request: httpx2.Request) -> httpx2.Response:
+        """Answer a request once released."""
+        self.requests.append(request.url.path)
+        while not self.released.is_set():
+            await asyncio.sleep(0.01)
+        if self.status != 200:
+            return httpx2.Response(self.status, text="boom")
+        return httpx2.Response(200, headers={"Content-Type": TSV}, content=ONTOLOGY_RESULT)
+
+
+def restart(fuseki: StubFuseki) -> FastAPI:
+    """Return an app, with the app's own stages and the stubbed Fuseki, and a route that reads the derived database."""
+    app = make_app(fuseki.transport, real_stages=True)
+
+    @app.get("/probe")
+    async def probe(request: Request) -> int:
+        return await read_derived(request, lambda connection: read_meta(connection).generation)
+
+    return app
+
+
+def status(client: TestClient) -> str:
+    """Return the admin status page."""
+    return client.get("/_browl/admin/status").text
+
+
+def test_restart_reuses_current_database(settings: Settings) -> None:
+    """Check that a restart reuses a current derived database: no query, no rebuild, and pages read it."""
+    JobStore(settings.data_dir / STATE_DB).write(READY)
+    make_previous(settings, 2)
+    fuseki = StubFuseki()
+    app = restart(fuseki)
+    with TestClient(app) as client:
+        assert app.state.jobs.state == READY
+        assert client.get("/probe").json() == 2
+    assert fuseki.requests == []
+
+
+def stale_schema(settings: Settings) -> None:
+    """Leave generation 2 a derived database of another schema version."""
+    with sqlite3.connect(make_previous(settings, 2)) as connection:
+        connection.execute("UPDATE meta SET schema_version = 0")
+
+
+@pytest.mark.parametrize(
+    "prepare",
+    [
+        pytest.param(lambda settings: None, id="missing"),
+        pytest.param(stale_schema, id="stale schema"),
+        pytest.param(lambda settings: make_previous(settings, 1), id="other generation"),
+    ],
+)
+def test_restart_rebuilds(settings: Settings, prepare: Callable[[Settings], object]) -> None:
+    """Check that a restart rebuilds a derived database that isn't current, from the same store.
+
+    The site serves "loading" meanwhile, and the database keeps the job's start as its load time.
+    """
+    JobStore(settings.data_dir / STATE_DB).write(READY)
+    prepare(settings)
+    fuseki = StubFuseki(released=False)
+    app = restart(fuseki)
+    with TestClient(app) as client:
+        response = client.get("/probe")
+        assert (response.status_code, response.headers["Retry-After"]) == (503, str(RETRY_AFTER_S))
+        assert '<li class="current" aria-current="step">pre-caching</li>' in status(client)
+        fuseki.released.set()
+        assert client.portal is not None
+        client.portal.call(app.state.jobs.wait)
+        state = app.state.jobs.state
+        assert (state.generation, state.stage, state.ready_generation, state.started_at) == (2, Stage.READY, 2, STARTED)
+        assert client.get("/probe").json() == 2
+    assert fuseki.requests == [f"/{dataset_name(2)}/sparql"]
+    assert derived_files(settings) == ["2.sqlite3"]
+    with closing(derived.connect(settings.data_dir, 2)) as connection:
+        assert read_meta(connection) == Meta(2, Reasoner.ELK, STARTED, ONTOLOGY, VERSION)
+
+
+def test_restart_rebuild_fails(settings: Settings) -> None:
+    """Check that a failed rebuild leaves the site "not available", and shows admins why."""
+    JobStore(settings.data_dir / STATE_DB).write(READY)
+    app = restart(StubFuseki(status=500))
+    with TestClient(app) as client:
+        assert client.portal is not None
+        client.portal.call(app.state.jobs.wait)
+        response = client.get("/probe")
+        assert response.status_code == 503 and "<h1>Not available</h1>" in response.text
+        assert "Failed in stage <strong>pre-caching</strong>: rebuilding after a restart: pre-caching query" in (
+            status(client)
+        )
+    assert derived_files(settings) == []
+
+
+def test_restart_rebuild_shutdown(settings: Settings) -> None:
+    """Check that a shutdown during a rebuild cancels it, recording why, and leaves no file behind."""
+    JobStore(settings.data_dir / STATE_DB).write(READY)
+    fuseki = StubFuseki(released=False)
+    with TestClient(restart(fuseki)):
+        wait_until(lambda: bool(fuseki.requests))
+    state = JobStore(settings.data_dir / STATE_DB).read()
+    assert (state.failed_stage, state.reason) == (
+        Stage.PRE_CACHING,
+        f"{REBUILDING}: {INTERRUPTED_BY_SHUTDOWN}",
+    )
+    assert derived_files(settings) == []
+
+
+def test_restart_while_another_worker_rebuilds(settings: Settings) -> None:
+    """Check that a worker that can't take the job lock doesn't rebuild.
+
+    It serves "loading" for a page that reads the derived database before it sees the other worker's rebuild.
+    """
+    JobStore(settings.data_dir / STATE_DB).write(READY)
+    fuseki = StubFuseki()
+    lock = JobLock(settings.data_dir / JOB_LOCK)
+    assert lock.acquire()
+    try:
+        with TestClient(restart(fuseki)) as client:
+            response = client.get("/probe")
+            assert (response.status_code, response.headers["Retry-After"]) == (503, str(RETRY_AFTER_S))
+            assert "The ontology is being loaded" in response.text
+    finally:
+        lock.release()
+    assert fuseki.requests == []
+    assert JobStore(settings.data_dir / STATE_DB).read() == READY
+
+
+def wait_until(condition: Callable[[], bool]) -> None:
+    """Wait up to 5 s for the condition, polling it."""
+    deadline = time.monotonic() + 5
+    while not condition():
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+
+
+async def test_read_derived_without_ready_generation() -> None:
+    """Check that a derived read with no generation ready fails as not current, which the app serves as "loading"."""
+
+    class Jobs:
+        async def current(self) -> JobState:
+            return JobState()
+
+    request = Request({"type": "http", "app": SimpleNamespace(state=SimpleNamespace(jobs=Jobs()))})
+    with pytest.raises(NotCurrentError, match="no generation is ready"):
+        await read_derived(request, read_meta)

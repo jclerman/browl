@@ -12,10 +12,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import browl
-from browl import admin, imports, loading, owlapi, precache, robot
+from browl import admin, derived, imports, loading, owlapi, precache, robot
+from browl.derived import DerivedReader, NotCurrentError
 from browl.fuseki import FusekiClient
 from browl.jobs import JobRunner, Stage, StageFunction
-from browl.pages import STATIC_DIR, SiteGate
+from browl.pages import STATIC_DIR, SiteGate, derived_not_current
 from browl.settings import Settings, load_settings
 
 FUSEKI_TIMEOUT_S = 2.0
@@ -63,15 +64,19 @@ def create_app(
     """Build the application, loading the settings from the environment unless given.
 
     On startup the app starts the JVM (DESIGN.md §2.1), on the main thread, where Uvicorn runs the startup (a test
-    client doesn't, so tests start it first); it opens its Fuseki client and the load job runner (`app.state.jobs`).
-    On shutdown a running load job is cancelled. Pages are gated on the job state (`SiteGate`, §2.13).
+    client doesn't, so tests start it first); it opens its Fuseki client, the load job runner (`app.state.jobs`) and the
+    derived database's reader (`app.state.derived`, read through `browl.pages.read_derived`). If the ready
+    generation's derived database isn't current, e.g. after an upgrade changed its schema, it's rebuilt in the
+    background (`JobRunner.rebuild`, §2.4). On shutdown a running load job, or rebuild, is cancelled. Pages are gated
+    on the job state (`SiteGate`, §2.13).
 
     Args:
         settings: The settings; loaded from the environment if not given.
         fuseki_transport: The transport for the Fuseki client, which tests replace; httpx2's default if not given.
         start_jvm: Whether to start the JVM; tests that don't need it turn it off.
         stages: The load job's background stages; tests replace them. If not given: imports, reasoning, loading
-            and pre-caching. Either way, each job that reaches ready deletes the previous derived databases.
+            and pre-caching, and the derived database is rebuilt at startup if needed; if given, it never is. Either
+            way, each job that reaches ready deletes the previous derived databases.
 
     Raises:
         pydantic.ValidationError: A setting is missing or invalid.
@@ -96,7 +101,13 @@ def create_app(
             else:
                 functions = stages
             app.state.jobs = await JobRunner.open(settings, functions, on_ready=precache.remove_previous)
+            app.state.derived = DerivedReader(settings.data_dir)
             try:
+                if stages is None:
+                    await app.state.jobs.rebuild(
+                        functools.partial(precache.pre_cache, http=client),
+                        functools.partial(derived.is_current, settings.data_dir),
+                    )
                 yield
             finally:
                 await app.state.jobs.close()
@@ -117,4 +128,5 @@ def create_app(
     app.mount(f"{reserved}/static", StaticFiles(directory=STATIC_DIR), name="static")
     exempt = [f"{reserved}/health", f"{reserved}/static", f"{reserved}/admin"]
     app.add_middleware(SiteGate, exempt=exempt)
+    app.add_exception_handler(NotCurrentError, derived_not_current)
     return app

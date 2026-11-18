@@ -17,7 +17,6 @@ from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, I
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractAsyncContextManager, AbstractContextManager, asynccontextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -137,7 +136,22 @@ async def batched[T](rows: AsyncIterable[T], size: int = BATCH_ROWS) -> AsyncIte
 
 
 async def pre_caching_stage(context: JobContext, http: httpx2.AsyncClient, hooks: Sequence[Hook] = HOOKS) -> None:
-    """Build the new generation's derived database from the store just loaded, and swap it in.
+    """Build the new generation's derived database from the store just loaded, and swap it in (`pre_cache`).
+
+    Raises:
+        StageError: A query failed or returned an incomplete result.
+    """
+    if context.ontology is None:  # nothing was loaded (as the loading stage skips it)
+        return
+    await pre_cache(context, http, hooks)
+
+
+async def pre_cache(context: JobContext, http: httpx2.AsyncClient, hooks: Sequence[Hook] = HOOKS) -> None:
+    """Build a job's derived database from the store Fuseki serves for its generation, and swap it in.
+
+    The pre-caching stage runs it, and so does a rebuild after a restart (`JobRunner.rebuild`), with a context made from
+    the stored job state: it uses only the generation, reasoner, start time (the `meta` table's load time, the same
+    for both) and imports.
 
     Args:
         context: The job.
@@ -147,14 +161,11 @@ async def pre_caching_stage(context: JobContext, http: httpx2.AsyncClient, hooks
     Raises:
         StageError: A query failed or returned an incomplete result.
     """
-    if context.ontology is None:  # nothing was loaded (as the loading stage skips it)
-        return
     sparql = FusekiClient(http)
     dataset = dataset_name(context.generation)
-    loaded_at = datetime.now(UTC)
     try:
         ontology_iri, version_iri = await ontology_iris(sparql, dataset)
-        meta = Meta(context.generation, context.reasoner, loaded_at, ontology_iri, version_iri)
+        meta = Meta(context.generation, context.reasoner, context.started_at, ontology_iri, version_iri)
         async with build(context.settings.data_dir, meta) as db:
             hook_context = PreCacheContext(context, sparql, dataset, has_loaded_imports(context.imports), db)
             for hook in hooks:

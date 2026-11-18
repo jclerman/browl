@@ -10,12 +10,13 @@ The database is rebuilt on every load, so it has no migrations: a browl whose `S
 as not current (`is_current`), and the caller rebuilds it.
 """
 
+import asyncio
 import logging
 import os
 import re
 import sqlite3
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import closing, contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
@@ -109,7 +110,7 @@ class Meta:
     Attributes:
         generation: The load job's generation number.
         reasoner: The reasoner the load ran.
-        loaded_at: When the load ran.
+        loaded_at: When the load job started; a rebuild after a restart keeps it (`browl.precache.pre_cache`).
         ontology_iri: The ontology's IRI; None if it has none.
         version_iri: Its version IRI; None if it has none.
     """
@@ -298,6 +299,14 @@ class DerivedReader:
         connection = connect(self.data_dir, generation)
         self._local.current = (generation, connection)
         return connection
+
+    async def read[T](self, generation: int, function: Callable[[sqlite3.Connection], T]) -> T:
+        """Return a function's result on a connection to a generation's derived database, run in the thread pool.
+
+        Raises:
+            NotCurrentError: The database for the generation is not current (`connect`).
+        """
+        return await asyncio.to_thread(lambda: function(self.connection(generation)))
 
     def close(self) -> None:
         """Close this thread's connection, if it has one."""

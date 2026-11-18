@@ -37,6 +37,7 @@ UPLOAD_PROGRESS_S = 1.0
 """How often a running upload's size so far is recorded, for the status to show it growing."""
 
 INTERRUPTED_BY_RESTART = "interrupted by restart"
+REBUILDING = "rebuilding after a restart"
 INTERRUPTED_BY_SHUTDOWN = "interrupted by shutdown"
 CANCELLED = "cancelled"
 STOPPED_UNRECORDED = "internal error: the job stopped without recording why"
@@ -403,6 +404,7 @@ class JobContext:
         imports: The imports, direct and indirect, listed by the imports stage.
         import_files: The RDF file to load for each import that was fetched, by its IRI.
         triples: How many triples the store's default graph holds, once loaded.
+        started_at: When the job started.
     """
 
     generation: int
@@ -416,6 +418,7 @@ class JobContext:
     imports: list[ImportResult] = field(default_factory=list)
     import_files: dict[str, Path] = field(default_factory=dict)
     triples: int | None = None
+    started_at: datetime = field(default_factory=_now)
 
     @property
     def ontology(self) -> Path | None:
@@ -517,6 +520,7 @@ class JobRunner:
             self.register(stage, function)
         self._busy = False  # this runner has a job, from claiming it until its end is stored
         self._closing = False
+        self._rebuilding = False  # this runner's job is a rebuild (`rebuild`)
         self._task: asyncio.Task[None] | None = None
         self._writes: set[asyncio.Task[None]] = set()
         self._unstored: JobState | None = None  # the end of this runner's last job, if it couldn't be stored
@@ -603,7 +607,9 @@ class JobRunner:
             raise JobRunningError(f"load job {self._state.generation} is running, in stage {self._state.stage}")
         self._busy = True  # set before any await, so a concurrent call is refused
         await self._claim(reasoner, name, syntax)
-        context = JobContext(self._state.generation or 0, self._settings, reasoner)
+        context = JobContext(
+            self._state.generation or 0, self._settings, reasoner, started_at=self._state.started_at or _now()
+        )
         logger.info("Load job %d started", context.generation)
         self._progress_at = time.monotonic()
         try:
@@ -627,6 +633,71 @@ class JobRunner:
         """
         async with self.upload(reasoner) as context:
             return context
+
+    async def rebuild(self, function: StageFunction, current: Callable[[int], bool]) -> bool:
+        """At startup, re-run the ready job's pre-caching stage in the background if its output isn't current (§2.4).
+
+        It runs only if the latest job is the ready one (after a failed job the site isn't available anyway), and only
+        in the server worker that takes the job lock, which it holds as a job's runner does. The job is recorded as
+        running in the pre-caching stage, under its own generation, so every worker serves "loading"; then ready again,
+        or failed with a reason that says it was the rebuild, so the site is "not available" and the next start tries
+        again. Its start time stays the job's.
+
+        Args:
+            function: The pre-caching stage's work, run with a context made from the stored job state.
+            current: Whether a generation's pre-caching output is current; called in a thread, under the job lock.
+
+        Returns:
+            Whether the rebuild started.
+        """
+        if self._busy or self._closing:
+            return False
+        self._busy = True
+        claim = asyncio.ensure_future(asyncio.to_thread(self._claim_rebuild, current))
+        try:
+            state = await asyncio.shield(claim)
+        except asyncio.CancelledError:
+            claim.add_done_callback(self._abandon_claim)
+            raise
+        except BaseException:
+            self._busy = False
+            raise
+        if state is None:
+            self._busy = False
+            return False
+        self._set(state)
+        assert state.generation is not None and state.started_at is not None  # a stored job has them
+        context = JobContext(
+            state.generation,
+            self._settings,
+            state.reasoner,
+            imports=list(state.imports),
+            triples=state.triples,
+            started_at=state.started_at,
+        )
+        logger.warning("Load job %d's derived data isn't current; %s", context.generation, REBUILDING)
+        self._rebuilding = True
+        self._task = asyncio.create_task(
+            self._run(context, {Stage.PRE_CACHING: function}), name=f"rebuild of load job {context.generation}"
+        )
+        return True
+
+    def _claim_rebuild(self, current: Callable[[int], bool]) -> JobState | None:
+        """Take the job lock and record the ready job as running again, if it needs a rebuild; else return None."""
+        if not self._lock.acquire():
+            return None  # a job, or another worker's rebuild, is running
+        try:
+            state = self._store.read()
+            generation = state.ready_generation
+            if generation is None or state.generation != generation or state.running or current(generation):
+                self._lock.release()
+                return None
+            state = replace(state, stage=Stage.PRE_CACHING, finished_at=None, failed_stage=None, reason=None)
+            self._store.write(state)
+        except BaseException:
+            self._lock.release()
+            raise
+        return state
 
     async def wait(self) -> None:
         """Wait for the running job, if any, to finish."""
@@ -696,11 +767,12 @@ class JobRunner:
             self._lock.release()
             raise
 
-    def _abandon_claim(self, claim: asyncio.Future[JobState]) -> None:
-        if claim.cancelled() or claim.exception() is not None:
+    def _abandon_claim(self, claim: asyncio.Future[JobState] | asyncio.Future[JobState | None]) -> None:
+        state = None if claim.cancelled() or claim.exception() is not None else claim.result()
+        if state is None:
             self._busy = False
             return
-        self._set(claim.result())
+        self._set(state)
         self._record_end(self._state.failed(CANCELLED))
 
     async def _record(self, state: JobState) -> None:
@@ -720,6 +792,8 @@ class JobRunner:
                 reason,
                 exc_info=not isinstance(error, StageError),
             )
+        if self._rebuilding:
+            reason = f"{REBUILDING}: {reason}"
         if len(reason) > MAX_REASON_CHARS:
             reason = f"{reason[:MAX_REASON_CHARS]}… (cut short; the app's log has it all)"
         # Shielded: a second cancellation, e.g. from an anyio cancel scope, mustn't stop the failure being stored.
@@ -751,6 +825,7 @@ class JobRunner:
     def _unlock(self) -> None:
         self._lock.release()
         self._busy = False
+        self._rebuilding = False
 
     def _settle(self) -> None:
         """Fail a job that stopped while still recorded as running, so the site can't stay on "loading" for good."""
@@ -764,11 +839,16 @@ class JobRunner:
         """Return the state with what the stages have found so far: the imports and the triples loaded."""
         return replace(self._state, imports=tuple(context.imports), triples=context.triples)
 
-    async def _run(self, context: JobContext) -> None:
+    async def _run(self, context: JobContext, stages: Mapping[Stage, StageFunction] | None = None) -> None:
+        """Run the job's background stages, from `stages` if given, else the registered functions, then record it ready.
+
+        `stages` gives a rebuild its only stage.
+        """
+        functions = self._stages if stages is None else stages
         try:
-            for stage in BACKGROUND_STAGES:
+            for stage in BACKGROUND_STAGES if stages is None else tuple(stages):
                 await self._record(replace(self._with_results(context), stage=stage))
-                if function := self._stages.get(stage):
+                if function := functions.get(stage):
                     logger.info("Load job %d: %s", context.generation, stage)
                     try:
                         await function(context)

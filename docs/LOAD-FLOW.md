@@ -43,9 +43,11 @@ LOAD STAGE
   │   SWITCH: register gen-N in Fuseki; count again through Fuseki; must match ── no ──► FAILED, gen-N removed
   │   remove the previous gen-* datasets
   ▼
-PRE-CACHE   (P-9: derived data, search index)
+PRE-CACHE   bulk queries, each checked complete → derived/N.sqlite3, swapped in once whole  (P-9)
+  │           (later items' hooks fill it: entities, names, hierarchies, search index)
   ▼
-READY    homepage lists every import: loaded (triple count) or dropped (reason, in red)
+READY    homepage lists every import: loaded (triple count) or dropped (reason, in red);
+         the other generations' derived files are deleted
 
 In any ROBOT step: an import missing from the catalog fails the job, naming that import.
 In the sandbox it can't reach the network or anything secret.
