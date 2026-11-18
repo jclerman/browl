@@ -378,82 +378,104 @@ async def list_imports(document: _Document, settings: Settings) -> list[str]:
     return found
 
 
+class _Closure:
+    """A walk over an upload's import closure: each document listed in turn, each new import fetched, within limits."""
+
+    def __init__(self, directory: Path, settings: Settings, client: httpx2.AsyncClient) -> None:
+        self.directory = directory
+        self.settings = settings
+        self.client = client
+        self.results: dict[str, ImportResult] = {}
+        self.files: dict[str, _Document] = {}
+        self.queue: deque[_Document] = deque()
+        self.attempts = 0
+        self.budget = settings.max_upload_bytes  # left for all imports together
+        self.deadline = asyncio.get_running_loop().time() + FETCH_ALL_TIMEOUT_S
+
+    async def walk(self, upload: _Document) -> None:
+        """List the upload's imports, fetch them, and so on for each one fetched.
+
+        Raises:
+            StageError: The upload couldn't be parsed, or the documents list more than `MAX_LISTED` imports.
+        """
+        self.queue.append(upload)
+        while self.queue:
+            document = self.queue.popleft()
+            try:
+                found = await list_imports(document, self.settings)
+            except StageError as error:
+                if document.iri is None:
+                    raise
+                self._drop(document.iri, self.results[document.iri].imported_by, str(error))
+                del self.files[document.iri]
+                await asyncio.to_thread(document.path.unlink, missing_ok=True)
+                continue
+            for iri in found:
+                if iri not in self.results:
+                    await self._add(iri, document.iri)
+
+    async def _add(self, iri: str, imported_by: str | None) -> None:
+        """Fetch a newly listed import, or drop it if it can't be, or is past a limit."""
+        if len(self.results) >= MAX_LISTED:
+            raise StageError(f"the ontology and its imports list more than {MAX_LISTED} imports")
+        remaining_s = self.deadline - asyncio.get_running_loop().time()
+        if self.attempts >= MAX_IMPORTS:
+            self._drop(iri, imported_by, f"more than {MAX_IMPORTS} imports")
+        elif remaining_s <= 0:
+            self._drop(iri, imported_by, f"fetching all imports took longer than {FETCH_ALL_TIMEOUT_S:g} s")
+        elif self.budget <= 0:
+            self._drop(iri, imported_by, "the imports fetched already add up to MAX_UPLOAD_BYTES")
+        else:
+            self.attempts += 1
+            path = self.directory / str(len(self.results) + 1)
+            logger.info("Fetching import %s", iri)
+            timeout_s = min(FETCH_TIMEOUT_S, remaining_s)
+            try:
+                syntax = await fetch(self.client, iri, path, self.settings, self.budget, timeout_s)
+            except FetchError as error:
+                logger.warning("Import %s dropped: %s", iri, error)
+                self._drop(iri, imported_by, str(error))
+                return
+            stored = await asyncio.to_thread(path.rename, path.with_suffix(STORED_SUFFIXES[syntax]))
+            self.budget -= (await asyncio.to_thread(stored.stat)).st_size
+            self.results[iri] = ImportResult(iri, imported_by)
+            self.files[iri] = _Document(stored, syntax, iri)
+            self.queue.append(self.files[iri])
+
+    def _drop(self, iri: str, imported_by: str | None, reason: str) -> None:
+        self.results[iri] = ImportResult(iri, imported_by, reason)
+
+
 async def imports_stage(context: JobContext, allowed: AddressCheck | None = None) -> None:
     """Fetch the upload's imports, recursively, and write the catalog that maps every one of them to a local file.
 
     Sets the context's `catalog`, `imports` and `import_files`, and `converted` for an OFN upload. An import that can't
-    be fetched or read is dropped, and listed as such.
+    be fetched or read, or is past a limit, is dropped, and listed as such.
 
     Args:
         context: The job.
         allowed: Whether an address may be fetched from; `is_public` if not given.
 
     Raises:
-        StageError: The upload couldn't be parsed.
+        StageError: The upload couldn't be parsed, or the documents list more than `MAX_LISTED` imports.
     """
     if context.upload is None:
         return
-    settings = context.settings
     directory = context.upload.parent / IMPORTS_DIR
     await asyncio.to_thread(shutil.rmtree, directory, ignore_errors=True)
     await asyncio.to_thread(directory.mkdir)
     syntax = next(syntax for syntax, suffix in STORED_SUFFIXES.items() if suffix == context.upload.suffix)
     upload = _Document(context.upload, syntax, None)
-    queue = deque([upload])
-    results: dict[str, ImportResult] = {}
-    files: dict[str, _Document] = {}
-    attempts = 0
-    budget = settings.max_upload_bytes  # left for all imports together
-    deadline = asyncio.get_running_loop().time() + FETCH_ALL_TIMEOUT_S
     async with fetch_client(allowed) as client:
-        while queue:
-            document = queue.popleft()
-            try:
-                found = await list_imports(document, settings)
-            except StageError as error:
-                if document.iri is None:
-                    raise
-                results[document.iri] = ImportResult(document.iri, results[document.iri].imported_by, str(error))
-                del files[document.iri]
-                await asyncio.to_thread(document.path.unlink, missing_ok=True)
-                continue
-            for iri in found:
-                if iri in results:
-                    continue
-                if len(results) >= MAX_LISTED:
-                    raise StageError(f"the ontology and its imports list more than {MAX_LISTED} imports")
-                remaining_s = deadline - asyncio.get_running_loop().time()
-                if attempts >= MAX_IMPORTS or remaining_s <= 0 or budget <= 0:
-                    reason = (
-                        f"more than {MAX_IMPORTS} imports"
-                        if attempts >= MAX_IMPORTS
-                        else f"fetching all imports took longer than {FETCH_ALL_TIMEOUT_S:g} s"
-                        if remaining_s <= 0
-                        else "the imports fetched already add up to MAX_UPLOAD_BYTES"
-                    )
-                    results[iri] = ImportResult(iri, document.iri, reason)
-                    continue
-                attempts += 1
-                path = directory / str(len(results) + 1)
-                logger.info("Fetching import %s", iri)
-                try:
-                    fetched = await fetch(client, iri, path, settings, budget, min(FETCH_TIMEOUT_S, remaining_s))
-                except FetchError as error:
-                    logger.warning("Import %s dropped: %s", iri, error)
-                    results[iri] = ImportResult(iri, document.iri, str(error))
-                    continue
-                stored = await asyncio.to_thread(path.rename, path.with_suffix(STORED_SUFFIXES[fetched]))
-                budget -= (await asyncio.to_thread(stored.stat)).st_size
-                results[iri] = ImportResult(iri, document.iri)
-                files[iri] = _Document(stored, fetched, iri)
-                queue.append(files[iri])
+        closure = _Closure(directory, context.settings, client)
+        await closure.walk(upload)
     catalog = context.upload.with_name(CATALOG)
-    entries = await asyncio.to_thread(_catalog_entries, directory, results, files)
+    entries = await asyncio.to_thread(_catalog_entries, directory, closure.results, closure.files)
     await asyncio.to_thread(write_catalog, catalog, entries)
     context.catalog = catalog
     context.converted = upload.path if upload.path != context.upload else None
-    context.imports = list(results.values())
-    context.import_files = {iri: document.path for iri, document in files.items()}
+    context.imports = list(closure.results.values())
+    context.import_files = {iri: document.path for iri, document in closure.files.items()}
 
 
 def _catalog_entries(directory: Path, results: dict[str, ImportResult], files: dict[str, _Document]) -> dict[str, Path]:
