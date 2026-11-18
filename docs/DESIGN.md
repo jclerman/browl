@@ -333,14 +333,20 @@ in the background from the same store (`gen-N`) by re-running the ready job's pr
 
 - Only when the latest job is the ready one. After a failed job the site isn't available anyway, and the next upload
   builds a new file.
+- A job, a load or a rebuild, that failed in pre-caching but whose file is current anyway, as when it failed after the
+  swap (e.g. a shutdown or crash during the build's end), is recorded ready instead, and the after-ready cleanup runs. A
+  cancellation during the build's end waits for it, so the job lock is never released while the build still writes.
 - The worker that takes the job lock, without waiting, checks the file again under it, records the job as running in
   the pre-caching stage, with its own generation and start time, and holds the lock until the end is stored, as for
   any job. So every worker serves "loading" meanwhile, no upload can start, and no new generation or store is made. A
   worker that can't take the lock does nothing: another worker is rebuilding, or a job runs.
 - A worker that read the state just before another worker's rebuild started may let a page through for up to a second
   (the state's TTL); a page that finds the derived database not current serves "loading" (`NotCurrentError`).
-- The job ends ready again, or failed in pre-caching with a reason that starts "rebuilding after a restart", so the
-  site is "not available" and admins see why; the next start tries again. A shutdown cancels it as it would a job.
+- The job ends ready again, or failed in pre-caching with a reason that starts "rebuilding after a restart", however it
+  failed, so the site is "not available" and admins see why. A shutdown cancels it as it would a job. The next start
+  tries again, unless a restart found the rebuild running ("rebuilding after a restart: interrupted by restart"): the
+  app died during it, perhaps out of memory, and retrying would crash-loop under the container's restart policy, with
+  uploads refused meanwhile. The site then stays "not available" until an upload replaces the ontology.
 - The `meta` row's load time is the job's start, for a load and a rebuild alike, so a rebuild doesn't change the load
   time the home page shows; the job's finish time becomes the rebuild's.
 

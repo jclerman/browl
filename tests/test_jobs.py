@@ -21,6 +21,7 @@ from browl.jobs import (
     INTERRUPTED_BY_RESTART,
     INTERRUPTED_BY_SHUTDOWN,
     JOB_LOCK,
+    REBUILD_INTERRUPTED_BY_RESTART,
     REBUILDING,
     STATE_DB,
     STOPPED_UNRECORDED,
@@ -1089,6 +1090,87 @@ def test_failed_reason(ready_generation: int | None, reason: str) -> None:
     """Check that a rebuild's failure, and only a rebuild's, says it was the rebuild, however it failed."""
     running = replace(READY, stage=Stage.PRE_CACHING, finished_at=None, ready_generation=ready_generation)
     assert running.failed(STOPPED_UNRECORDED).reason == reason
+
+
+FAILED_REBUILD = replace(READY, stage=Stage.PRE_CACHING, failed_stage=Stage.PRE_CACHING)
+"""A rebuild of `READY` that failed; its reason is to be set."""
+
+FAILED_LOAD = replace(FAILED_REBUILD, generation=4, reason=INTERRUPTED_BY_SHUTDOWN)
+"""The job after `READY`, which failed in its pre-caching stage."""
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        pytest.param(
+            replace(FAILED_REBUILD, reason=f"{REBUILDING}: {INTERRUPTED_BY_SHUTDOWN}"), id="rebuild, shutdown"
+        ),
+        pytest.param(replace(FAILED_REBUILD, reason=REBUILD_INTERRUPTED_BY_RESTART), id="rebuild, restart"),
+        pytest.param(replace(FAILED_REBUILD, reason=f"{REBUILDING}: internal error: OSError"), id="rebuild, error"),
+        pytest.param(FAILED_LOAD, id="load"),
+    ],
+)
+async def test_restart_failed_but_current(data_dir: Path, state: JobState) -> None:
+    """Check that a job that failed in pre-caching, but whose output is current, is recorded ready at the next start.
+
+    So a failure after the output was swapped in, e.g. a shutdown during the build's end, doesn't leave the site "not
+    available". The after-ready work runs, under the job lock, and nothing is rebuilt.
+    """
+    JobStore(data_dir / STATE_DB).write(state)
+    assert state.generation is not None
+    ran: list[int] = []
+
+    async def on_ready(context: JobContext) -> None:
+        assert not JobLock(data_dir / JOB_LOCK).acquire()
+        ran.append(context.generation)
+
+    async def pre_caching(context: JobContext) -> None:
+        raise AssertionError("not rebuilt")
+
+    runner = await JobRunner.open(make_settings(), on_ready=on_ready)
+    assert runner.state.site == Site.NOT_AVAILABLE
+    assert not await runner.rebuild(pre_caching, lambda generation: generation == state.generation)
+    assert ran == [state.generation]
+    for stored in runner.state, JobStore(data_dir / STATE_DB).read():
+        assert (stored.stage, stored.failed_stage, stored.reason, stored.ready_generation, stored.site) == (
+            Stage.READY,
+            None,
+            None,
+            state.generation,
+            Site.AVAILABLE,
+        )
+        assert (stored.generation, stored.started_at) == (state.generation, state.started_at)
+    assert (await run_job(runner)).ready_generation == state.generation + 1  # the lock was released
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        pytest.param(replace(READY, stage=Stage.PRE_CACHING, finished_at=None), id="rebuild left running"),
+        pytest.param(FAILED_LOAD, id="load failed in pre-caching"),
+    ],
+)
+async def test_restart_not_rebuilt(data_dir: Path, state: JobState) -> None:
+    """Check that a restart doesn't rebuild a rebuild that a restart interrupted, nor a load whose pre-caching failed.
+
+    The first may have crashed the app, which would crash it again on every start. Either way the site stays "not
+    available", saying why, until an upload replaces the ontology.
+    """
+    JobStore(data_dir / STATE_DB).write(state)
+
+    async def pre_caching(context: JobContext) -> None:
+        raise AssertionError("not rebuilt")
+
+    runner = await open_runner(data_dir)
+    failed = runner.state
+    assert (failed.failed_stage, failed.site) == (Stage.PRE_CACHING, Site.NOT_AVAILABLE)
+    if state.running:
+        assert failed.reason == REBUILD_INTERRUPTED_BY_RESTART
+    for _ in range(2):  # nor at the start after
+        assert not await runner.rebuild(pre_caching, not_current)
+        assert runner.state == JobStore(data_dir / STATE_DB).read() == failed
+        runner = await open_runner(data_dir)
+    assert (await run_job(runner)).ready_generation == (failed.generation or 0) + 1
 
 
 async def test_rebuild_check_fails(data_dir: Path) -> None:

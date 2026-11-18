@@ -40,6 +40,8 @@ INTERRUPTED_BY_RESTART = "interrupted by restart"
 REBUILDING = "rebuilding after a restart"
 INTERRUPTED_BY_SHUTDOWN = "interrupted by shutdown"
 CANCELLED = "cancelled"
+REBUILD_INTERRUPTED_BY_RESTART = f"{REBUILDING}: {INTERRUPTED_BY_RESTART}"
+"""A rebuild's reason when a restart found it running (`_recover`): it may have crashed the app, so isn't retried."""
 STOPPED_UNRECORDED = "internal error: the job stopped without recording why"
 
 MAX_REASON_CHARS = 2000
@@ -199,18 +201,13 @@ class JobState:
             return Site.NOT_AVAILABLE
         return Site.AVAILABLE
 
-    @property
-    def rebuilding(self) -> bool:
-        """Whether the job is a rebuild after a restart (`JobRunner.rebuild`): it runs under the ready generation."""
-        return self.generation is not None and self.generation == self.ready_generation
-
     def failed(self, reason: str) -> Self:
         """Return this state with the running job failed in its current stage.
 
-        A rebuild's reason starts with `REBUILDING`, however it failed. A reason longer than `MAX_REASON_CHARS` is cut
-        short.
+        A rebuild's reason (`JobRunner.rebuild`, a job running under the ready generation) starts with `REBUILDING`,
+        however it failed. A reason longer than `MAX_REASON_CHARS` is cut short.
         """
-        if self.rebuilding:
+        if self.generation is not None and self.generation == self.ready_generation:
             reason = f"{REBUILDING}: {reason}"
         if len(reason) > MAX_REASON_CHARS:
             reason = f"{reason[:MAX_REASON_CHARS]}… (cut short; the app's log has it all)"
@@ -647,13 +644,19 @@ class JobRunner:
             return context
 
     async def rebuild(self, function: StageFunction, current: Callable[[int], bool]) -> bool:
-        """At startup, re-run the ready job's pre-caching stage in the background if its output isn't current (§2.4).
+        """At startup, bring the latest job's derived data up to date (§2.4, App restart).
 
-        It runs only if the latest job is the ready one (after a failed job the site isn't available anyway), and only
-        in the server worker that takes the job lock, which it holds as a job's runner does. The job is recorded as
-        running in the pre-caching stage, under its own generation, so every worker serves "loading"; then ready again,
-        or failed with a reason that says it was the rebuild, so the site is "not available" and the next start tries
-        again. Its start time stays the job's.
+        It acts only in the server worker that takes the job lock, which it holds as a job's runner does, and only on:
+
+        - a job that failed in pre-caching but whose generation's output is current, as when it failed after the
+          output was swapped in (e.g. a shutdown or crash during the build's end): it's recorded ready, as it would
+          have been, and the after-ready work runs.
+        - the ready job, if its output isn't current: its pre-caching stage is re-run in the background. The job is
+          recorded as running in the pre-caching stage, under its own generation, so every worker serves "loading";
+          then ready again, or failed with a reason that says it was the rebuild (`JobState.failed`), so the site is
+          "not available" and the next start tries again. Its start time stays the job's. A rebuild interrupted by a
+          restart isn't tried again, as it may have crashed the app (e.g. out of memory), which would crash it on
+          every start; the site stays "not available" until an upload replaces the ontology.
 
         Args:
             function: The pre-caching stage's work, run with a context made from the stored job state.
@@ -677,6 +680,12 @@ class JobRunner:
             triples=state.triples,
             started_at=state.started_at,
         )
+        if not state.running:  # recorded ready
+            try:
+                await self._after_ready(context)
+            finally:
+                self._unlock()
+            return False
         logger.warning("Load job %d's derived data isn't current; %s", context.generation, REBUILDING)
         self._task = asyncio.create_task(
             self._run(context, {Stage.PRE_CACHING: function}), name=f"rebuild of load job {context.generation}"
@@ -684,17 +693,15 @@ class JobRunner:
         return True
 
     def _claim_rebuild(self, current: Callable[[int], bool]) -> JobState | None:
-        """Take the job lock and record the ready job as running again, if it needs a rebuild; else return None."""
+        """Take the job lock and record the state `_restart_state` gives, keeping the lock; else return None."""
         if not self._lock.acquire():
             return None  # a job, or another worker's rebuild, is running
         try:
-            state = self._store.read()
-            generation = state.ready_generation
-            if generation is None or state.generation != generation or state.running or current(generation):
+            state = _restart_state(self._store.read(), current)
+            if state is None:
                 self._lock.release()
-                return None
-            state = replace(state, stage=Stage.PRE_CACHING, finished_at=None, failed_stage=None, reason=None)
-            self._store.write(state)
+            else:
+                self._store.write(state)
         except BaseException:
             self._lock.release()
             raise
@@ -892,6 +899,31 @@ class JobRunner:
 def _log_ready_failure(generation: int, task: asyncio.Future[None]) -> None:
     if not task.cancelled() and (error := task.exception()) is not None:
         logger.error("Load job %d is ready, but its after-ready work failed", generation, exc_info=error)
+
+
+def _restart_state(state: JobState, current: Callable[[int], bool]) -> JobState | None:
+    """Return the state a restart records for the latest job (`JobRunner.rebuild`): ready, or rebuilding; or None."""
+    generation = state.generation
+    if generation is None or state.running:
+        return None
+    failed_pre_caching = state.failed_stage == Stage.PRE_CACHING
+    if not failed_pre_caching and (state.failed_stage is not None or generation != state.ready_generation):
+        return None  # it failed before pre-caching; the next upload builds a new generation
+    if current(generation):
+        if not failed_pre_caching:
+            return None  # ready, and current
+        logger.warning(
+            "Load job %d failed in pre-caching (%s), but its output is current: ready", generation, state.reason
+        )
+        return replace(
+            state, stage=Stage.READY, finished_at=_now(), failed_stage=None, reason=None, ready_generation=generation
+        )
+    if generation != state.ready_generation:
+        return None  # a load's own pre-caching failed; the next upload builds a new generation
+    if state.reason == REBUILD_INTERRUPTED_BY_RESTART:
+        logger.warning("Load job %d's rebuild was interrupted by a restart, so it isn't tried again", generation)
+        return None
+    return replace(state, stage=Stage.PRE_CACHING, finished_at=None, failed_stage=None, reason=None)
 
 
 def _recover(store: JobStore, lock: JobLock) -> JobState:

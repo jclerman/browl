@@ -46,6 +46,7 @@ from browl.precache import (
     build,
     has_loaded_imports,
     ontology_iris,
+    pre_cache,
     pre_caching_stage,
     remove_previous,
 )
@@ -581,6 +582,48 @@ def test_restart_rebuild_shutdown(settings: Settings) -> None:
         f"{REBUILDING}: {INTERRUPTED_BY_SHUTDOWN}",
     )
     assert derived_files(settings) == []
+
+
+async def test_restart_rebuild_shutdown_during_swap(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a shutdown while a rebuild swaps its database in waits for the swap, under the job lock.
+
+    The rebuild is recorded as interrupted, but its database is current, so the next start records the job ready.
+    """
+    JobStore(settings.data_dir / STATE_DB).write(READY)
+    renaming, release = threading.Event(), threading.Event()
+    rename = derived.os.replace
+
+    def blocked(source: Path, target: Path) -> None:
+        renaming.set()
+        release.wait(10)
+        rename(source, target)
+
+    monkeypatch.setattr(derived.os, "replace", blocked)
+    current = functools.partial(derived.is_current, settings.data_dir)
+    async with fuseki() as http:
+        function = functools.partial(pre_cache, http=http)
+        runner = await JobRunner.open(settings, on_ready=remove_previous)
+        assert await runner.rebuild(function, current)
+        assert await asyncio.to_thread(renaming.wait, 10)
+        closed = asyncio.create_task(runner.close())
+        await asyncio.sleep(0.05)
+        assert not closed.done()
+        assert not JobLock(settings.data_dir / JOB_LOCK).acquire()
+        release.set()
+        await closed
+        state = JobStore(settings.data_dir / STATE_DB).read()
+        assert (state.failed_stage, state.reason) == (Stage.PRE_CACHING, f"{REBUILDING}: {INTERRUPTED_BY_SHUTDOWN}")
+        assert derived_files(settings) == ["2.sqlite3"]
+        monkeypatch.undo()
+        restarted = await JobRunner.open(settings, on_ready=remove_previous)
+        assert restarted.state.site == Site.NOT_AVAILABLE
+        assert not await restarted.rebuild(function, current)
+    assert (restarted.state.stage, restarted.state.ready_generation, restarted.state.site) == (
+        Stage.READY,
+        2,
+        Site.AVAILABLE,
+    )
+    assert JobStore(settings.data_dir / STATE_DB).read() == restarted.state
 
 
 def test_restart_while_another_worker_rebuilds(settings: Settings) -> None:
