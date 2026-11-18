@@ -26,10 +26,11 @@ implied by its IRI.
   with SPARQL when a page is requested.
 - Manchester syntax is rendered by the [OWLAPI](https://github.com/owlcs/owlapi), which runs in the app's process
   through [JPype](https://github.com/jpype-project/jpype).
-- Reasoning runs [ROBOT](https://github.com/ontodev/robot) as a separate process, with time and memory limits.
+- Reasoning runs [ROBOT](https://github.com/ontodev/robot) as a separate process, with time and memory limits, in a
+  sandbox container with no network and none of the app's other files.
 - Data that needs the whole ontology (names, hierarchy counts, the search index) is computed once per load and stored in
   SQLite. Rendered pages are kept in a small cache.
-- Deployed with Docker Compose, as two containers: the app and Fuseki.
+- Deployed with Docker Compose, as three containers: the app, Fuseki and the sandbox.
 
 ## Development
 

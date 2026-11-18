@@ -103,6 +103,8 @@ allowed-confusables = ["–"]
 [tool.ruff.lint.per-file-ignores]
 # Spike code is throwaway: no docstrings required, and it reports by printing (see docs/CODING-STANDARDS.md).
 "research/**" = ["D", "T20"]
+# Deployment checks, run in a container, report by printing.
+"docker/**" = ["T20"]
 
 [tool.ruff.lint.pydocstyle]
 # Which docstring style D enforces (Google style, per AGENTS.md).

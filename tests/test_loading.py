@@ -102,6 +102,18 @@ async def test_loader_failure(settings: Settings, http: httpx2.AsyncClient) -> N
     assert not store_path(settings, 103).exists()
 
 
+async def test_symlink_refused(settings: Settings, http: httpx2.AsyncClient, tmp_path: Path) -> None:
+    """Check that a file that leads off the jobs volume, as a compromised sandbox could plant, isn't loaded."""
+    context = job(settings, 115, f"<{EX}a> <{EX}p> <{EX}b> .\n", {f"{EX}i": ""})
+    [path] = context.import_files.values()
+    path.unlink()
+    (tmp_path / "secret.ttl").write_text(f"<{EX}s> <{EX}p> <{EX}b> .\n")
+    path.symlink_to(tmp_path / "secret.ttl")
+    with pytest.raises(StageError, match=r"^0.ttl isn't a regular file on the jobs volume$"):
+        await loading_stage(context, http)
+    assert dataset_name(115) not in await browl_datasets(http)
+
+
 async def test_count_mismatch(settings: Settings, http: httpx2.AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that the load fails, and the new dataset is removed, if Fuseki serves other counts than the store holds."""
 

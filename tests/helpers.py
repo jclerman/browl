@@ -1,14 +1,20 @@
 """Helpers shared by the tests."""
 
+import asyncio
 import http.server
 import os
+import subprocess
 import threading
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx2
 from fastapi import FastAPI
 
 from browl.app import create_app
 from browl.imports import OWL_IMPORTS
+from browl.sandbox import Runner
 from browl.settings import Settings
 
 
@@ -83,3 +89,45 @@ def turtle(iri: str, *imports: str, extra: str = "") -> str:
     lines = [f"<{iri}> a <http://www.w3.org/2002/07/owl#Ontology> ."]
     lines += [f"<{iri}> <{OWL_IMPORTS}> <{imported}> ." for imported in imports]
     return "\n".join([*lines, extra, ""])
+
+
+@asynccontextmanager
+async def serve_runs(directory: Path) -> AsyncIterator[Path]:
+    """Serve the sandbox's runs in this process, on this event loop, on a socket in the directory, which it yields."""
+    socket = directory / "socket"
+    runner = Runner()
+    server = await asyncio.start_unix_server(runner.handle, socket)
+    try:
+        yield socket
+    finally:
+        server.close()
+        runner.kill_all()
+
+
+WAIT_S = 10.0
+"""How long `wait_for` waits."""
+
+
+async def wait_for(path: Path, run: asyncio.Future[object] | None = None) -> int:
+    """Wait for a file to hold a number, such as a pid a run writes, and return it.
+
+    Raises:
+        TimeoutError: It took longer than `WAIT_S`.
+        AssertionError: The run ended first (or its exception, if it failed).
+    """
+    async with asyncio.timeout(WAIT_S):
+        while not path.exists() or not path.read_text().strip():
+            if run is not None and run.done():
+                raise AssertionError(f"the run ended first: {run.result()!r}")  # or raises how it failed
+            await asyncio.sleep(0.02)
+    return int(path.read_text())
+
+
+def running_in_group(pgid: int) -> list[str]:
+    """Return the `ps` lines of the processes still running in the process group, ignoring zombies.
+
+    A zombie has exited, but stays in its group until its parent reaps it: here a child of the killed shell, which is
+    reparented to a process that may never reap it (as on GitHub's runners), so `os.killpg(pgid, 0)` still succeeds.
+    """
+    ps = subprocess.run(["ps", "-A", "-o", "pgid=,stat=,pid=,command="], check=True, capture_output=True, text=True)
+    return [line for line in ps.stdout.splitlines() if int(line.split()[0]) == pgid and line.split()[1][0] != "Z"]

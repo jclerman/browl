@@ -26,6 +26,7 @@ from browl.jobs import JobContext, StageError
 from browl.process import Completed, run_process
 from browl.rdf import Literal, RDFSyntaxError, Term, parse_tsv_header, parse_tsv_row
 from browl.settings import Settings
+from browl.upload import check_job_file
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +180,8 @@ async def loading_stage(context: JobContext, http: httpx2.AsyncClient) -> None:
     admin = FusekiAdmin(http)
     name = dataset_name(context.generation)
     store = store_path(settings, context.generation)
+    for file in (ontology, *context.import_files.values()):
+        await asyncio.to_thread(check_job_file, settings.data_dir, file)
     registering = False
     try:
         await remove_stale_stores(settings, admin, name)  # this also deletes any store left at `store`

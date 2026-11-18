@@ -1,7 +1,7 @@
-"""The admin upload (A-2, A-4): a multipart form streamed to the data volume, never held in memory whole.
+"""The admin upload (A-2, A-4): a multipart form streamed to the jobs volume, never held in memory whole.
 
 Starlette's own form parser spools a file to a temporary file before the handler sees it, which for a multi-gigabyte
-ontology would mean writing it twice; this parser writes each chunk to the data volume as it arrives. The job is
+ontology would mean writing it twice; this parser writes each chunk to the jobs volume as it arrives. The job is
 claimed only once the file's name has been checked and its first bytes found to look like the syntax the name says
 (`check_syntax`), so a malformed request, or a mislabelled file, leaves the served ontology alone.
 """
@@ -62,7 +62,7 @@ WRITE_BYTES = 1 << 20
 """How much of the file to buffer before each write, to keep thread hand-offs few."""
 
 FREE_SPACE_MARGIN_BYTES = 10**9
-"""Space an upload must leave free on the data volume, for the job state and the load's other files (`check_space`)."""
+"""Space an upload must leave free on the jobs volume, for the job's other files (`check_space`)."""
 
 IDLE_S = 60.0
 """How long the upload may go without receiving data before it fails, e.g. when the admin's laptop sleeps."""
@@ -85,7 +85,7 @@ class UploadError(StageError):
 
 
 class StorageError(StageError):
-    """The file couldn't be written to the data volume, e.g. it's full; the job has failed in the uploading stage.
+    """The file couldn't be written to the jobs volume, e.g. it's full; the job has failed in the uploading stage.
 
     Attributes:
         no_space: Whether the volume was full.
@@ -100,6 +100,20 @@ class StorageError(StageError):
 def upload_path(data_dir: Path, generation: int, suffix: str) -> Path:
     """Return where a job's uploaded file is stored."""
     return data_dir / UPLOADS_DIR / str(generation) / f"ontology{suffix}"
+
+
+def check_job_file(data_dir: Path, path: Path) -> None:
+    """Check that a job's file is a regular file on the jobs volume, not reached by a symlink that leads off it.
+
+    The sandbox writes to the jobs volume, so a tool that ran code there could plant a symlink to a file that only the
+    app's container has, for the app to load and serve.
+
+    Raises:
+        StageError: It isn't.
+    """
+    resolved = path.resolve()
+    if not resolved.is_relative_to((data_dir / UPLOADS_DIR).resolve()) or not resolved.is_file():
+        raise StageError(f"{path.name} isn't a regular file on the jobs volume")
 
 
 def file_syntax(filename: str) -> Syntax:
@@ -123,13 +137,18 @@ def _check_limit(size: int, max_bytes: int) -> None:
 async def check_space(size: int, max_bytes: int, data_dir: Path) -> None:
     """Check that an upload of `size` bytes is within the limit, and leaves `FREE_SPACE_MARGIN_BYTES` free.
 
+    The space is that of the uploads directory, the jobs volume in the Compose deployment; of `data_dir` if the
+    directory doesn't exist yet.
+
     Raises:
         UploadError: It isn't, with status 413 or 507.
     """
     _check_limit(size, max_bytes)
-    free = (await asyncio.to_thread(shutil.disk_usage, data_dir)).free
+    uploads = data_dir / UPLOADS_DIR
+    path = uploads if await asyncio.to_thread(uploads.is_dir) else data_dir
+    free = (await asyncio.to_thread(shutil.disk_usage, path)).free
     if size > free - FREE_SPACE_MARGIN_BYTES:
-        raise UploadError(f"the data volume has too little free space: {free:,} bytes for a {size:,}-byte upload", 507)
+        raise UploadError(f"the jobs volume has too little free space: {free:,} bytes for a {size:,}-byte upload", 507)
 
 
 _XML_ROOT = re.compile(r"<([A-Za-z_][\w.-]*:)?([A-Za-z_][\w.-]*)([^>]*)")
@@ -418,13 +437,13 @@ def _open(path: Path) -> IO[bytes]:
     if uploads.is_dir():
         for entry in uploads.iterdir():
             if entry != path.parent:
-                shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
+                shutil.rmtree(entry) if entry.is_dir() and not entry.is_symlink() else entry.unlink()
     path.parent.mkdir(parents=True, exist_ok=True)
     return path.open("wb")
 
 
 async def receive_upload(request: Request, runner: JobRunner) -> JobContext:
-    """Stream the form's file to the data volume within a new load job's uploading stage, and return the job's context.
+    """Stream the form's file to the jobs volume within a new load job's uploading stage, and return the job's context.
 
     The form has a `reasoner` field (a `Reasoner` value) and then an `ontology` file. On leaving, the job's other stages
     run in the background.

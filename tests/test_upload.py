@@ -21,12 +21,14 @@ from starlette.types import Message, Receive
 
 import browl.jobs
 import browl.upload
-from browl.jobs import JobContext, JobRunner, Reasoner, Stage
+from browl.jobs import JobContext, JobRunner, Reasoner, Stage, StageError
 from browl.upload import (
     SNIFF_BYTES,
     UPLOADS_DIR,
     Syntax,
     UploadError,
+    check_job_file,
+    check_space,
     check_syntax,
     receive_upload,
     sniff_syntax,
@@ -185,6 +187,35 @@ def test_upload_replaces(client: TestClient, app: FastAPI, data_dir: Path) -> No
     assert app.state.jobs.state.generation == 2
     assert [path.name for path in (data_dir / UPLOADS_DIR).iterdir()] == ["2"]
     assert upload_path(data_dir, 2, ".ofn").read_bytes() == b"Ontology()"
+
+
+def test_upload_removes_symlinks(client: TestClient, app: FastAPI, data_dir: Path, tmp_path: Path) -> None:
+    """Check that an upload removes a symlink left among the earlier jobs' files, not what it leads to."""
+    (tmp_path / "kept").mkdir()
+    (tmp_path / "kept" / "file").write_text("x")
+    uploads = data_dir / UPLOADS_DIR
+    uploads.mkdir()
+    (uploads / "planted").symlink_to(tmp_path / "kept")
+    post(client)
+    finish(client, app)
+    assert [path.name for path in uploads.iterdir()] == ["1"]
+    assert (tmp_path / "kept" / "file").read_text() == "x"
+
+
+def test_check_job_file(data_dir: Path, tmp_path: Path) -> None:
+    """Check that only a regular file on the jobs volume passes, even through a symlink that stays on it."""
+    job = data_dir / UPLOADS_DIR / "1"
+    job.mkdir(parents=True)
+    (job / "ontology.ttl").write_text("x")
+    (tmp_path / "secret").write_text("x")
+    (job / "inside.ttl").symlink_to(job / "ontology.ttl")
+    (job / "outside.ttl").symlink_to(tmp_path / "secret")
+    (job / "dir").symlink_to(tmp_path)
+    for name in ("ontology.ttl", "inside.ttl"):
+        check_job_file(data_dir, job / name)
+    for path in (job / "outside.ttl", job / "dir" / "secret", job, job / "missing.ttl"):
+        with pytest.raises(StageError, match=f"^{path.name} isn't a regular file on the jobs volume$"):
+            check_job_file(data_dir, path)
 
 
 def test_upload_large(client: TestClient, app: FastAPI, data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -402,7 +433,7 @@ async def test_cancelled_while_opening(data_dir: Path, monkeypatch: pytest.Monke
     ("overrides", "free", "status_code", "reason"),
     [
         ({"MAX_UPLOAD_BYTES": 100}, 10**12, 413, "the upload is larger than the limit of 100 bytes (MAX_UPLOAD_BYTES)"),
-        ({}, browl.upload.FREE_SPACE_MARGIN_BYTES + 100, 507, "the data volume has too little free space"),
+        ({}, browl.upload.FREE_SPACE_MARGIN_BYTES + 100, 507, "the jobs volume has too little free space"),
     ],
 )
 def test_refused_too_large(
@@ -422,6 +453,23 @@ def test_refused_too_large(
     assert response.status_code == status_code
     assert escape(reason) in response.text
     assert app.state.jobs.state.generation is None
+
+
+@pytest.mark.parametrize("uploads", [True, False], ids=["uploads", "no-uploads"])
+async def test_space_checked_on_uploads(data_dir: Path, monkeypatch: pytest.MonkeyPatch, uploads: bool) -> None:
+    """Check that the free space checked is the uploads directory's (the jobs volume), or DATA_DIR's without it."""
+    if uploads:
+        (data_dir / UPLOADS_DIR).mkdir()
+    checked: list[Path] = []
+    usage = shutil.disk_usage(data_dir)
+
+    def disk_usage(path: Path) -> shutil._ntuple_diskusage:
+        checked.append(path)
+        return usage._replace(free=10**12)
+
+    monkeypatch.setattr(browl.upload.shutil, "disk_usage", disk_usage)
+    await check_space(1, 100, data_dir)
+    assert checked == [data_dir / UPLOADS_DIR if uploads else data_dir]
 
 
 @pytest.mark.parametrize(("max_bytes", "claimed"), [(100, False), (len(LONG), True)], ids=["unclaimed", "claimed"])

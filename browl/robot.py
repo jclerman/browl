@@ -1,14 +1,15 @@
 """The reasoning stage (DESIGN.md §2.4): ROBOT run as a subprocess, held to the reasoner time and heap limits (O-8).
 
 ROBOT runs as `java -Xmx… -XX:+ExitOnOutOfMemoryError <no-network options> -jar robot.jar -vv …` in its own process
-group, which is stopped at the time limit, if the data volume runs low on space, or if the job is cancelled. A
-failure's reason says which limit was hit, or what else went wrong, using the output signatures S-2 found (A-6,
-`failure_reason`).
+group, in the sandbox if there is one (P-30), which is stopped at the time limit, if the job's volume runs low on
+space, or if the job is cancelled. A failure's reason says which limit was hit, or what else went wrong, using the
+output signatures S-2 found (A-6, `failure_reason`).
 """
 
 import asyncio
 import logging
 import re
+import signal
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,6 +40,8 @@ UNSATISFIABLE_SHOWN = 10
 
 OUT_OF_MEMORY = "Terminating due to java.lang.OutOfMemoryError"
 OUT_OF_MEMORY_STATUS = 3  # the JVM's exit status with -XX:+ExitOnOutOfMemoryError; ROBOT itself exits 1 on any error
+KILLED_STATUS = -signal.SIGKILL
+"""How a tool that the container's memory limit stopped ends: the kernel kills it without a word."""
 STACK_OVERFLOW = "StackOverflowError"
 INCONSISTENT = "The ontology is inconsistent"
 UNSATISFIABLE = re.compile(r"There are (\d+) unsatisfiable classes")
@@ -84,6 +87,8 @@ def failure_reason(completed: Completed, output: RobotOutput, settings: Settings
     status = completed.status
     if status == OUT_OF_MEMORY_STATUS and OUT_OF_MEMORY in output.signals:
         return f"memory limit: reasoning needed more than REASONER_MAX_HEAP ({settings.reasoner_max_heap})"
+    if status == KILLED_STATUS:
+        return killed_reason("reasoning")
     if STACK_OVERFLOW in output.signals:
         return "stack overflow: the reasoner recursed too deeply"
     if INCONSISTENT in output.signals:
@@ -95,6 +100,15 @@ def failure_reason(completed: Completed, output: RobotOutput, settings: Settings
     if PARSE_ERROR in output.signals:
         return f"parse error: ROBOT couldn't read the ontology:\n{completed.output}"
     return f"reasoner failed (ROBOT exit status {status}):\n{completed.output}"
+
+
+def killed_reason(activity: str) -> str:
+    """Return why a tool was killed with SIGKILL, which it wasn't sent at a limit: most likely, out of memory.
+
+    Args:
+        activity: What it did, as a noun, e.g. "reasoning".
+    """
+    return f"killed: {activity} most likely ran out of memory: the sandbox's (SANDBOX_MEM_LIMIT) or the host's"
 
 
 def reason_args(reasoner: Reasoner, source: Path, output: Path, settings: Settings, catalog: Path) -> list[str]:
@@ -109,8 +123,11 @@ def reason_args(reasoner: Reasoner, source: Path, output: Path, settings: Settin
     return [*args, "query", "--update", str(SHORTCUTS_QUERY), "--output", str(output)]
 
 
-async def run_robot(args: Sequence[str], settings: Settings) -> None:
+async def run_robot(args: Sequence[str], directory: Path, settings: Settings) -> None:
     """Run ROBOT with the arguments, within the reasoner limits, in a process group stopped however this ends.
+
+    It runs in the sandbox, if there is one (`SANDBOX_SOCKET`), and is stopped if `directory`, which it writes into,
+    runs low on space.
 
     Raises:
         StageError: ROBOT failed; the reason says how (`failure_reason`).
@@ -127,7 +144,12 @@ async def run_robot(args: Sequence[str], settings: Settings) -> None:
     ]
     output = RobotOutput()
     completed = await run_process(
-        command, output.add, timeout_s=settings.reasoner_timeout_s, watch=[settings.data_dir], name="ROBOT"
+        command,
+        output.add,
+        timeout_s=settings.reasoner_timeout_s,
+        watch=[directory],
+        name="ROBOT",
+        sandbox=settings.sandbox_socket,
     )
     if not completed.ok:
         raise StageError(failure_reason(completed, output, settings))
@@ -140,7 +162,7 @@ async def robot_to_file(args: Sequence[str], partial: Path, output: Path, settin
         StageError: ROBOT failed.
     """
     try:
-        await run_robot(args, settings)
+        await run_robot(args, output.parent, settings)
         await asyncio.to_thread(partial.replace, output)
     except BaseException:
         await asyncio.to_thread(partial.unlink, missing_ok=True)

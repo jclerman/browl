@@ -73,6 +73,8 @@ class Settings(BaseSettings):
         fuseki_base: Fuseki's base directory as the app mounts it; the loader builds each store under its `databases`.
         data_dir: Mounted volume for data that survives restarts (O-9).
         max_upload_bytes: The largest ontology upload accepted, in bytes (A-2).
+        sandbox_socket: The tool sandbox's socket (`browl.sandbox`), where ROBOT and the OFN lister run (P-30); without
+            it, they run in the app's container.
         oidc_client_id: Google OAuth client ID (O-6).
         oidc_client_secret: Google OAuth client secret (O-6).
         seed_admins: Admin email addresses, lowercased; they can't be removed in the UI (O-6).
@@ -100,6 +102,7 @@ class Settings(BaseSettings):
     fuseki_base: Path = Path("/fuseki")
     data_dir: Path = Path("/data")
     max_upload_bytes: int = Field(default=20 * 10**9, gt=0)
+    sandbox_socket: Path | None = None
     oidc_client_id: str | None = None
     oidc_client_secret: SecretStr | None = None
     seed_admins: list[str] = []
@@ -112,6 +115,12 @@ class Settings(BaseSettings):
         if value.query or value.fragment:
             raise ValueError("must not have a query string or fragment")
         return value
+
+    @field_validator("sandbox_socket", mode="before")
+    @classmethod
+    def empty_is_unset(cls, value: object) -> object:
+        """Read an empty value, such as `SANDBOX_SOCKET=`, as unset, not as the current directory."""
+        return None if value == "" else value
 
     @field_validator("reasoner_max_heap", "app_jvm_max_heap")
     @classmethod
@@ -197,7 +206,7 @@ class Settings(BaseSettings):
 
 
 def load_settings() -> Settings:
-    """Read and validate the settings at startup, warning if authentication is off.
+    """Read and validate the settings at startup, warning if authentication is off or there's no tool sandbox.
 
     Raises:
         pydantic.ValidationError: A setting is missing or invalid.
@@ -205,4 +214,9 @@ def load_settings() -> Settings:
     settings = Settings()  # type: ignore[call-arg]  # required fields come from the environment
     if settings.auth_disabled:
         logger.warning("AUTH_DISABLED is true: authentication is OFF. Never use this setting in production.")
+    if settings.sandbox_socket is None:
+        logger.warning(
+            "SANDBOX_SOCKET is unset: ROBOT and the OFN lister run without a sandbox. Don't run like this in "
+            "production, where a crafted import could make them read the app's files or reach its network."
+        )
     return settings

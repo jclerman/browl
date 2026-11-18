@@ -87,7 +87,8 @@ jobs:
 
       # Built with Bake from docker-compose.yml so the layers are cached in GitHub's cache, one scope per image. The
       # tags are Compose's own image names, so `docker compose up` uses these images instead of building them again.
-      - name: Build the app and Fuseki images
+      # The sandbox's image is built from the app's Dockerfile, so it reads the app's cache.
+      - name: Build the images
         uses: docker/bake-action@v7
         with:
           source: .
@@ -96,13 +97,15 @@ jobs:
           set: |
             app.tags=browl-app
             fuseki.tags=browl-fuseki
+            sandbox.tags=browl-sandbox
             app.cache-from=type=gha,scope=app
             app.cache-to=type=gha,scope=app,mode=max
             fuseki.cache-from=type=gha,scope=fuseki
             fuseki.cache-to=type=gha,scope=fuseki,mode=max
+            sandbox.cache-from=type=gha,scope=app
 
       # .env.example's settings: a local BASE_URL, authentication off.
-      - name: Start both services and wait until they're healthy
+      - name: Start the services and wait until they're healthy
         run: |
           cp .env.example .env
           docker compose up -d --no-build --wait --wait-timeout 120
@@ -116,6 +119,41 @@ jobs:
           docker compose exec -T app sh -c \
             'test -d "$JAVA_HOME" && java -version && test -f "$ROBOT_JAR" && "$JENA_HOME/bin/tdb2.tdbloader" --version'
           docker compose exec -T fuseki java -version
+
+      # P-30: ROBOT and the OFN lister run in the sandbox, which has no network (no DNS either), none of the app's files
+      # but the jobs volume, none of its settings, and the hardening docker-compose.yml gives it. Each network check
+      # passes only on the error it expects. `!` alone doesn't fail a step, hence `|| exit 1`.
+      - name: Check the sandbox's isolation
+        run: |
+          docker inspect "$(docker compose ps -q sandbox)" | jq -e '.[0] | .Config.User == "10001:10001"
+            and (.HostConfig | .NetworkMode == "none" and .ReadonlyRootfs and .CapDrop == ["ALL"]
+              and .SecurityOpt == ["no-new-privileges:true"] and .PidsLimit > 0 and .Tmpfs["/tmp"] != null)'
+          docker compose exec -T sandbox python -c '
+          import socket
+          try:
+              socket.getaddrinfo("fuseki", 3030)
+          except socket.gaierror:
+              raise SystemExit(0)
+          raise SystemExit("fuseki resolved")'
+          docker compose exec -T sandbox python -c '
+          import errno, socket
+          try:
+              socket.create_connection(("1.1.1.1", 443), 5)
+          except OSError as error:
+              raise SystemExit(0 if error.errno == errno.ENETUNREACH else f"unexpected error: {error!r}")
+          raise SystemExit("connected")'
+          docker compose exec -T app test -f /data/state.sqlite3
+          docker compose exec -T sandbox sh -c 'test "$(ls -A /data)" = uploads && test -z "$(ls -A /fuseki)"'
+          environment=$(docker compose exec -T sandbox env)
+          ! grep -E '^(BASE_URL|AUTH_DISABLED|OIDC_|SEED_ADMINS|SANDBOX_SOCKET)=' <<< "$environment" || exit 1
+
+      # The control: run in the app's container, ROBOT's imports reach their targets, so the next check can see a leak.
+      - name: Check that ROBOT's imports reach their targets without the sandbox
+        run: docker compose exec -T app python - --unsandboxed < docker/sandbox-check.py
+
+      # ROBOT and the OFN lister work in the sandbox, and ROBOT's imports reach nothing (docker/sandbox-check.py).
+      - name: Check the tools in the sandbox
+        run: docker compose exec -T app python - < docker/sandbox-check.py
 
       # Fuseki's admin protocol is open to anything that reaches it, so its port must stay inside the Compose network.
       - name: Check that Fuseki isn't reachable from the host

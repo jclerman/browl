@@ -306,7 +306,7 @@ async def fetch(
 
     Raises:
         FetchError: It isn't an `http` or `https` IRI, its host isn't public, the request failed, it's too large, the
-            data volume is low on space, or it isn't in a syntax browl reads.
+            jobs volume is low on space, or it isn't in a syntax browl reads.
     """
     if not iri.lower().startswith(("http://", "https://")):
         raise FetchError("only http and https imports are fetched")
@@ -345,7 +345,7 @@ async def _fetch(client: httpx2.AsyncClient, iri: str, path: Path, settings: Set
                     if size - checked_at > SPACE_CHECK_BYTES or not checked_at:
                         checked_at = size
                         if await asyncio.to_thread(free_bytes, path.parent) < FREE_SPACE_MARGIN_BYTES:
-                            raise FetchError("the data volume is low on space")
+                            raise FetchError("the jobs volume is low on space")
                     if len(sample) < SNIFF_BYTES:
                         sample += chunk[: SNIFF_BYTES - len(sample)]
                     buffer += chunk

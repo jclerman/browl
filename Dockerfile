@@ -41,10 +41,12 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends curl jq openjdk-21-jre-headless \
     && rm -rf /var/lib/apt/lists/* \
     && ln -s "$(dirname "$(dirname "$(readlink -f "$(command -v java)")")")" /usr/lib/jvm/java-21
-# One UID for the app and Fuseki: the app's loader writes the TDB2 stores that Fuseki then opens and deletes.
+# One UID for the app, Fuseki and the sandbox: the app's loader writes the TDB2 stores that Fuseki then opens and
+# deletes, and only the app's user can use the sandbox's socket. Mount points are made here, so a new named volume
+# mounted on one is owned by browl.
 RUN useradd --uid 10001 --user-group --create-home browl \
-    && mkdir /data /fuseki \
-    && chown browl:browl /data /fuseki
+    && mkdir -p /data/uploads /fuseki /sandbox \
+    && chown browl:browl /data /data/uploads /fuseki /sandbox
 
 COPY --from=downloads /robot.jar /opt/robot/robot.jar
 COPY --from=downloads /jena /opt/jena

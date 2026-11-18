@@ -17,7 +17,7 @@ from pathlib import Path
 
 from browl.jobs import StageError
 from browl.process import NO_NETWORK_JAVA_OPTIONS, run_process
-from browl.robot import OUT_OF_MEMORY_STATUS
+from browl.robot import KILLED_STATUS, OUT_OF_MEMORY_STATUS, killed_reason
 from browl.settings import Settings
 
 OUT_OF_MEMORY = "OutOfMemoryError"
@@ -40,7 +40,8 @@ class Listing:
 async def convert_ofn(source: Path, output: Path, settings: Settings) -> Listing:
     """Convert an OFN document to Turtle at `output`, returning its imports; on failure, nothing is left there.
 
-    Runs within the reasoner limits (`REASONER_TIMEOUT_S`, `REASONER_MAX_HEAP`), as ROBOT's conversion did.
+    Runs within the reasoner limits (`REASONER_TIMEOUT_S`, `REASONER_MAX_HEAP`), as ROBOT's conversion did, and in the
+    sandbox, if there is one (`SANDBOX_SOCKET`).
 
     Raises:
         StageError: The OWLAPI couldn't read it, or a limit was hit.
@@ -59,7 +60,11 @@ async def convert_ofn(source: Path, output: Path, settings: Settings) -> Listing
     ]
     try:
         completed = await run_process(
-            command, timeout_s=settings.reasoner_timeout_s, watch=[settings.data_dir], name="OFN conversion"
+            command,
+            timeout_s=settings.reasoner_timeout_s,
+            watch=[output.parent],
+            name="OFN conversion",
+            sandbox=settings.sandbox_socket,
         )
         limit = f"REASONER_TIMEOUT_S ({settings.reasoner_timeout_s} s)"
         if reason := completed.limit_reason("the OFN conversion", limit):
@@ -68,6 +73,8 @@ async def convert_ofn(source: Path, output: Path, settings: Settings) -> Listing
             raise StageError(
                 f"memory limit: the OFN conversion needed more than REASONER_MAX_HEAP ({settings.reasoner_max_heap})"
             )
+        if completed.status == KILLED_STATUS:
+            raise StageError(killed_reason("the OFN conversion"))
         if not completed.ok:
             raise StageError(f"parse error: the OWLAPI couldn't read it as OWL Functional Syntax:\n{completed.output}")
         found = json.loads(await asyncio.to_thread(listed.read_text, encoding="utf-8"))

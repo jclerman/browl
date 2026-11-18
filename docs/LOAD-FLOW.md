@@ -5,9 +5,8 @@ flow agreed in PR #70's review (P-8). It replaces the regex scan for OWL Functio
 OWLAPI, which converts the file to Turtle in the same parse, and adds a sandbox for ROBOT (P-30). The reasons are in
 [DESIGN.md §2.4](DESIGN.md#24-load-pipeline) and §2.14.
 
-Steps marked **[sandbox]** run in the ROBOT container planned by P-30: no network, only the current job's files, an
-almost empty environment. Until P-30, they run in the app container, with ROBOT's network fetches refused (Java's proxy
-settings pointing at a closed port) and an environment holding only what the tools need.
+Steps marked **[sandbox]** run in the Compose deployment's `sandbox` container, which has no network and of the app's
+files only the current job's ([DESIGN.md §2.4](DESIGN.md#24-load-pipeline), "The sandbox").
 
 ## Flow
 
@@ -49,7 +48,7 @@ PRE-CACHE   (P-9: derived data, search index)
 READY    homepage lists every import: loaded (triple count) or dropped (reason, in red)
 
 In any ROBOT step: an import missing from the catalog fails the job, naming that import.
-In the sandbox it can't reach the network or anything worth reading.
+In the sandbox it can't reach the network or anything secret.
 ```
 
 ## The four paths
@@ -84,7 +83,7 @@ In the sandbox it can't reach the network or anything worth reading.
 - **A listing gap fails the job, naming the import, rather than leaking.** `riot` can't promise to list exactly what the
   OWLAPI will try for an RDF file crafted to differ. ROBOT is left on its default, which fails on an import it can't
   load. It reports only the first such import, and skipping silently would report none. In the sandbox, that attempt
-  reaches no network and nothing worth reading.
+  reaches no network and nothing secret.
 
 ## Steps beyond list, reason, convert and load
 
