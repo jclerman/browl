@@ -220,6 +220,34 @@ async def test_no_status(short_dir: Path, monkeypatch: pytest.MonkeyPatch) -> No
     assert completed.status is None
 
 
+@pytest.mark.parametrize(
+    "reply",
+    [
+        b"garbage\n",
+        b'{"line": "cut',
+        b"{}\n",
+        b"[]\n",
+        b'{"status": false}\n',
+        b'{"status": null}\n',
+        b'{"line": "a", "status": 0}\n',
+    ],
+)
+async def test_malformed_reply(short_dir: Path, reply: bytes) -> None:
+    """Check that a run fails, saying so, when the sandbox's reply isn't one it sends."""
+
+    async def malformed(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        writer.write(reply)
+        writer.close()
+
+    socket = short_dir / "socket"
+    server = await asyncio.start_unix_server(malformed, socket)
+    try:
+        with pytest.raises(StageError, match=r"^the tool sandbox sent a malformed reply while process ran$"):
+            await sandboxed(socket, "true")
+    finally:
+        server.close()
+
+
 @pytest.fixture
 def runner_process(short_dir: Path) -> Iterator[tuple[subprocess.Popen[bytes], Path]]:
     """Start the runner as the sandbox does, `python -m browl.sandbox`, with an environment of its own."""

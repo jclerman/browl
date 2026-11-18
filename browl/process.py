@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, Self
 
+from pydantic import BaseModel, ConfigDict, model_validator
+
 from browl.jobs import StageError
 from browl.upload import FREE_SPACE_MARGIN_BYTES
 
@@ -193,6 +195,28 @@ async def start_process(
     )
 
 
+class Reply(BaseModel):
+    """A message from the sandbox about a run: one of an output line, its exit status, or why it couldn't run.
+
+    Attributes:
+        line: A line of its output.
+        status: Its exit status.
+        error: Why it couldn't run.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    line: str | None = None
+    status: int | None = None
+    error: str | None = None
+
+    @model_validator(mode="after")
+    def _one_field(self) -> Self:
+        if [self.line, self.status, self.error].count(None) != 2:
+            raise ValueError("a reply must have exactly one field")
+        return self
+
+
 class _Run(Protocol):
     """A process run here or in the sandbox, as `run_process` supervises it."""
 
@@ -286,14 +310,17 @@ class _Remote:
             StageError: The sandbox refused the run.
         """
         while message := await self.reader.readline():
-            reply = json.loads(message)
-            if "line" in reply:
-                self.on_line(reply["line"])
-            elif "status" in reply:
-                self.status = reply["status"]
+            try:
+                reply = Reply.model_validate_json(message)
+            except ValueError as error:  # pydantic's ValidationError is a ValueError
+                raise StageError(f"the tool sandbox sent a malformed reply while {self.name} ran") from error
+            if reply.line is not None:
+                self.on_line(reply.line)
+            elif reply.status is not None:
+                self.status = reply.status
                 return True
             else:
-                raise StageError(f"the tool sandbox couldn't run {self.name}: {reply.get('error')}")
+                raise StageError(f"the tool sandbox couldn't run {self.name}: {reply.error}")
         return False
 
 
