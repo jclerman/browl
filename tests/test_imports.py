@@ -76,6 +76,18 @@ def test_import_lines(size: int) -> None:
     assert list(found) == [f"{EX}a", f"{EX}b"]
 
 
+def test_import_lines_skip_long_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a line longer than `MAX_IMPORT_LINE_BYTES` is skipped, unheld, and the lines after it still read."""
+    monkeypatch.setattr(browl.imports, "MAX_IMPORT_LINE_BYTES", 100)
+    long_line = f"<{EX}o> <{OWL_IMPORTS}> <{EX}{'x' * 300}> .\n".encode()
+    data = long_line + f"<{EX}o> <{OWL_IMPORTS}> <{EX}after> .\n".encode()
+    found: dict[str, None] = {}
+    collect = _ImportLines(found)
+    for start in range(0, len(data), 64):
+        collect(data[start : start + 64])
+    assert list(found) == [f"{EX}after"]
+
+
 async def test_rdf_imports(settings: Settings, tmp_path: Path) -> None:
     """Check that `riot` lists the imports of Turtle and RDF/XML, with relative IRIs resolved."""
     ttl = tmp_path / "o.ttl"
@@ -258,18 +270,56 @@ async def test_stage_unreadable_import(site: Site, settings: Settings, data_dir:
     [result] = context.imports
     assert result.dropped and result.reason is not None and result.reason.startswith("parse error")
     assert context.import_files == {}
+    assert sorted(path.name for path in (data_dir / "uploads" / "1" / "imports").iterdir()) == ["empty-0.ofn"]
 
 
 async def test_stage_import_limit(
     site: Site, settings: Settings, data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Check that imports past `MAX_IMPORTS` are dropped without being fetched."""
-    monkeypatch.setattr(browl.imports, "MAX_IMPORTS", 1)
-    first, second = site.page("/1.ttl", turtle("urn:1")), site.page("/2.ttl", turtle("urn:2"))
+    """Check that imports past `MAX_IMPORTS` attempts, failed ones too, are dropped without being fetched."""
+    monkeypatch.setattr(browl.imports, "MAX_IMPORTS", 2)
+    first, second = site.url + "/missing.ttl", site.page("/2.ttl", turtle("urn:2"))
+    third = site.page("/3.ttl", turtle("urn:3"))
+    context = JobContext(1, settings, upload=store_upload(data_dir, turtle(f"{EX}o", first, second, third)))
+    await imports_stage(context, allow_all)
+    reasons = [result.reason for result in context.imports]
+    assert reasons[1:] == [None, "more than 2 imports"]
+    assert reasons[0] is not None and reasons[0].startswith("HTTP 404")
+    assert site.requested == ["/missing.ttl", "/2.ttl"]
+
+
+async def test_stage_listed_limit(
+    site: Site, settings: Settings, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Check that a load whose documents list more than `MAX_LISTED` imports fails."""
+    monkeypatch.setattr(browl.imports, "MAX_LISTED", 2)
+    context = JobContext(1, settings, upload=store_upload(data_dir, turtle(f"{EX}o", "urn:a", "urn:b", "urn:c")))
+    with pytest.raises(StageError, match=r"^the ontology and its imports list more than 2 imports$"):
+        await imports_stage(context, allow_all)
+    assert site.requested == []
+
+
+async def test_stage_byte_budget(site: Site, data_dir: Path, jena_home: Path) -> None:
+    """Check that the imports together may be no larger than `MAX_UPLOAD_BYTES`."""
+    first = site.page("/1.ttl", turtle("urn:1"))
+    second = site.page("/2.ttl", turtle("urn:2"))
+    size = len(turtle("urn:1").encode())
+    settings = make_settings(JENA_HOME=str(jena_home), MAX_UPLOAD_BYTES=str(size + 20))
     context = JobContext(1, settings, upload=store_upload(data_dir, turtle(f"{EX}o", first, second)))
     await imports_stage(context, allow_all)
-    assert [result.reason for result in context.imports] == [None, "more than 1 imports"]
-    assert site.requested == ["/1.ttl"]
+    assert [result.reason for result in context.imports] == [
+        None,
+        "larger than the 20 bytes left of MAX_UPLOAD_BYTES for all imports together",
+    ]
+
+
+async def test_stage_deadline(site: Site, settings: Settings, data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that imports not fetched within `FETCH_ALL_TIMEOUT_S` are dropped."""
+    monkeypatch.setattr(browl.imports, "FETCH_ALL_TIMEOUT_S", 0.0)
+    context = JobContext(1, settings, upload=store_upload(data_dir, turtle(f"{EX}o", site.url + "/1.ttl")))
+    await imports_stage(context, allow_all)
+    assert [result.reason for result in context.imports] == ["fetching all imports took longer than 0 s"]
+    assert site.requested == []
 
 
 async def test_stage_no_upload(settings: Settings) -> None:

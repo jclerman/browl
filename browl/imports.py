@@ -48,7 +48,14 @@ CONVERTED = "converted.ttl"
 """An OFN upload converted to Turtle, beside the upload."""
 
 MAX_IMPORTS = 100
-"""The most imports fetched for one ontology, directly or not; any more are dropped."""
+"""The most imports fetched for one ontology, directly or not, counting failed attempts; any more are dropped."""
+
+MAX_LISTED = 1000
+"""The most distinct imports one load's documents may list. More fails the load: each needs a catalog entry, and an
+ontology with that many is crafted."""
+
+FETCH_ALL_TIMEOUT_S = 2 * 3600.0
+"""The longest fetching all of one load's imports may take; imports not fetched by then are dropped."""
 
 MAX_REDIRECTS = 10
 CONNECT_TIMEOUT_S = 30.0
@@ -60,6 +67,9 @@ SCAN_TIMEOUT_S = 4 * 3600.0
 
 TAIL_LINES = 10
 """How many of `riot`'s last lines a failure's reason quotes."""
+
+MAX_IMPORT_LINE_BYTES = 2**20
+"""The longest N-Triples line read for an import; a longer one, e.g. a large literal, is skipped without being held."""
 
 ACCEPT = "text/turtle, application/rdf+xml;q=0.9, text/owl-functional;q=0.8, */*;q=0.1"
 
@@ -78,18 +88,42 @@ class _ImportLines:
 
     def __init__(self, found: dict[str, None]) -> None:
         self._found = found
-        self._rest = b""
+        self._pending: list[bytes] = []  # the current line's start, until its end arrives
+        self._pending_bytes = 0
+        self._skipping = False  # whether the current line is too long to read
 
     def __call__(self, chunk: bytes) -> None:
-        data = self._rest + chunk
-        end = data.rfind(b"\n") + 1
-        self._rest = data[end:]
-        start = data.find(self._NEEDLE, 0, end)
+        end = chunk.rfind(b"\n") + 1
+        if not end:
+            self._hold(chunk)
+            return
+        first = chunk.find(b"\n") + 1
+        if self._skipping:
+            data = chunk[first:end]  # the long line ends in this chunk
+        else:
+            data = b"".join([*self._pending, chunk[:end]])  # each byte is joined once, so this stays linear
+        self._pending, self._pending_bytes, self._skipping = [], 0, False
+        self._hold(chunk[end:])
+        self._scan(data)
+
+    def _hold(self, piece: bytes) -> None:
+        if self._skipping or not piece:
+            return
+        self._pending.append(piece)
+        self._pending_bytes += len(piece)
+        if self._pending_bytes > MAX_IMPORT_LINE_BYTES:
+            self._pending, self._pending_bytes, self._skipping = [], 0, True
+
+    def _scan(self, data: bytes) -> None:
+        end = len(data)
+        start = data.find(self._NEEDLE)
         while start >= 0:
             line_start = data.rfind(b"\n", 0, start) + 1
             line_end = data.find(b"\n", start)
             if match := _NT_IMPORT.match(data[line_start:line_end].decode("utf-8", "replace")):
                 self._found[match[1]] = None
+                if len(self._found) > MAX_LISTED:  # enough to fail the load; keep no more
+                    return
             start = data.find(self._NEEDLE, line_end, end)
 
 
@@ -211,27 +245,43 @@ class FetchError(Exception):
     """An import couldn't be fetched; the message says why, for the upload page."""
 
 
-async def fetch(client: httpx2.AsyncClient, iri: str, path: Path, settings: Settings) -> Syntax:
+async def fetch(
+    client: httpx2.AsyncClient,
+    iri: str,
+    path: Path,
+    settings: Settings,
+    max_bytes: int | None = None,
+    timeout_s: float = FETCH_TIMEOUT_S,
+) -> Syntax:
     """Fetch an import into a file, returning its syntax; the file is removed if the fetch fails.
 
+    Args:
+        client: The client to fetch with (`fetch_client`).
+        iri: The import's IRI.
+        path: Where to write it.
+        settings: The settings.
+        max_bytes: The most it may be: what's left of `MAX_UPLOAD_BYTES` for all imports; all of it if not given.
+        timeout_s: The longest it may take.
+
     Raises:
-        FetchError: It isn't an `http` or `https` IRI, its host isn't public, the request failed, it's larger than
-            `MAX_UPLOAD_BYTES`, the data volume is low on space, or it isn't in a syntax browl reads.
+        FetchError: It isn't an `http` or `https` IRI, its host isn't public, the request failed, it's too large, the
+            data volume is low on space, or it isn't in a syntax browl reads.
     """
     if not iri.lower().startswith(("http://", "https://")):
         raise FetchError("only http and https imports are fetched")
     try:
-        async with asyncio.timeout(FETCH_TIMEOUT_S):
-            return await _fetch(client, iri, path, settings)
+        async with asyncio.timeout(timeout_s):
+            return await _fetch(client, iri, path, settings, max_bytes)
     except TimeoutError as error:
         path.unlink(missing_ok=True)
-        raise FetchError(f"fetching took longer than {FETCH_TIMEOUT_S:g} s") from error
+        raise FetchError(f"fetching took longer than {timeout_s:g} s") from error
     except BaseException:
         path.unlink(missing_ok=True)
         raise
 
 
-async def _fetch(client: httpx2.AsyncClient, iri: str, path: Path, settings: Settings) -> Syntax:
+async def _fetch(client: httpx2.AsyncClient, iri: str, path: Path, settings: Settings, max_bytes: int | None) -> Syntax:
+    limit = settings.max_upload_bytes if max_bytes is None else max_bytes
     sample = b""
     size = 0
     checked_at = 0
@@ -243,8 +293,12 @@ async def _fetch(client: httpx2.AsyncClient, iri: str, path: Path, settings: Set
             with path.open("wb") as file:
                 async for chunk in response.aiter_bytes():
                     size += len(chunk)
-                    if size > settings.max_upload_bytes:
-                        raise FetchError(f"larger than {settings.max_upload_bytes:,} bytes (MAX_UPLOAD_BYTES)")
+                    if size > limit:
+                        raise FetchError(
+                            f"larger than {limit:,} bytes (MAX_UPLOAD_BYTES)"
+                            if limit == settings.max_upload_bytes
+                            else f"larger than the {limit:,} bytes left of MAX_UPLOAD_BYTES for all imports together"
+                        )
                     if size - checked_at > 64 * 2**20 or not checked_at:
                         checked_at = size
                         if await asyncio.to_thread(free_bytes, path.parent) < FREE_SPACE_MARGIN_BYTES:
@@ -341,6 +395,9 @@ async def imports_stage(context: JobContext, allowed: AddressCheck | None = None
     queue = deque([upload])
     results: dict[str, ImportResult] = {}
     files: dict[str, _Document] = {}
+    attempts = 0
+    budget = settings.max_upload_bytes  # left for all imports together
+    deadline = asyncio.get_running_loop().time() + FETCH_ALL_TIMEOUT_S
     async with fetch_client(allowed) as client:
         while queue:
             document = queue.popleft()
@@ -351,22 +408,35 @@ async def imports_stage(context: JobContext, allowed: AddressCheck | None = None
                     raise
                 results[document.iri] = ImportResult(document.iri, results[document.iri].imported_by, str(error))
                 del files[document.iri]
+                await asyncio.to_thread(document.path.unlink, missing_ok=True)
                 continue
             for iri in found:
                 if iri in results:
                     continue
-                if len(files) >= MAX_IMPORTS:
-                    results[iri] = ImportResult(iri, document.iri, f"more than {MAX_IMPORTS} imports")
+                if len(results) >= MAX_LISTED:
+                    raise StageError(f"the ontology and its imports list more than {MAX_LISTED} imports")
+                remaining_s = deadline - asyncio.get_running_loop().time()
+                if attempts >= MAX_IMPORTS or remaining_s <= 0 or budget <= 0:
+                    reason = (
+                        f"more than {MAX_IMPORTS} imports"
+                        if attempts >= MAX_IMPORTS
+                        else f"fetching all imports took longer than {FETCH_ALL_TIMEOUT_S:g} s"
+                        if remaining_s <= 0
+                        else "the imports fetched already add up to MAX_UPLOAD_BYTES"
+                    )
+                    results[iri] = ImportResult(iri, document.iri, reason)
                     continue
+                attempts += 1
                 path = directory / str(len(results) + 1)
                 logger.info("Fetching import %s", iri)
                 try:
-                    fetched = await fetch(client, iri, path, settings)
+                    fetched = await fetch(client, iri, path, settings, budget, min(FETCH_TIMEOUT_S, remaining_s))
                 except FetchError as error:
                     logger.warning("Import %s dropped: %s", iri, error)
                     results[iri] = ImportResult(iri, document.iri, str(error))
                     continue
                 stored = await asyncio.to_thread(path.rename, path.with_suffix(STORED_SUFFIXES[fetched]))
+                budget -= (await asyncio.to_thread(stored.stat)).st_size
                 results[iri] = ImportResult(iri, document.iri)
                 files[iri] = _Document(stored, fetched, iri)
                 queue.append(files[iri])
