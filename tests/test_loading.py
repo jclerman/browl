@@ -1,7 +1,7 @@
 """Tests for the loading stage: a new TDB2 store per load, Fuseki switched to it, and its triples counted (A-4)."""
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
 import httpx2
@@ -13,7 +13,8 @@ import browl.imports
 import browl.loading
 from browl.fuseki import UNION_FROM, FusekiAdmin, FusekiAdminError, FusekiClient, SparqlError, dataset_clause
 from browl.jobs import ImportResult, JobContext, Site, Stage, StageError
-from browl.loading import dataset_name, loading_stage, store_path
+from browl.loading import count_store, dataset_name, loading_stage, store_path
+from browl.process import Completed
 from browl.settings import Settings
 from tests.conftest import find_robot_jar
 from tests.helpers import StaticServer, make_app, make_settings, turtle
@@ -211,6 +212,31 @@ async def test_nothing_to_load(settings: Settings, http: httpx2.AsyncClient) -> 
     context = JobContext(106, settings)
     await loading_stage(context, http)
     assert context.triples is None
+
+
+@pytest.mark.parametrize(
+    ("output", "match"),
+    [
+        (b"", r"^tdb2.tdbquery printed no result$"),
+        (b"?g\t?n\n\xff\n", r"^tdb2.tdbquery's result isn't UTF-8: "),
+        (b"g\tn\n", r"^tdb2.tdbquery's result is malformed: not a SPARQL TSV header"),
+        (b"?g\t?n\n<urn:g>\n", r"^tdb2.tdbquery's result is malformed: expected 2 cells, got 1"),
+        (b"?n\n1\n", r"^a triple count's row has 1 cells, not 2$"),
+        (b'?g\t?n\n<urn:g>\t"x"\n', r"^a triple count isn't a number: "),
+    ],
+)
+async def test_malformed_count(
+    data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, output: bytes, match: str
+) -> None:
+    """Check that `tdb2.tdbquery` output that isn't a count's TSV result fails the stage, saying why."""
+
+    async def run_process(*args: object, on_stdout: Callable[[bytes], None], **kwargs: object) -> Completed:
+        on_stdout(output)
+        return Completed(0)
+
+    monkeypatch.setattr(browl.loading, "run_process", run_process)
+    with pytest.raises(StageError, match=match):
+        await count_store(make_settings(), tmp_path)
 
 
 async def test_admin_errors() -> None:

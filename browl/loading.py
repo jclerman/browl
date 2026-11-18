@@ -96,7 +96,13 @@ async def _query_store(settings: Settings, store: Path, query: str) -> list[tupl
     )
     if not completed.ok:
         raise _failure("tdb2.tdbquery", completed)
-    header, *lines = output.decode().splitlines()
+    try:
+        text = output.decode()
+    except UnicodeDecodeError as error:
+        raise StageError(f"tdb2.tdbquery's result isn't UTF-8: {error}") from error
+    if not text:
+        raise StageError("tdb2.tdbquery printed no result")
+    header, *lines = text.splitlines()
     try:
         width = len(parse_tsv_header(header))
         return [parse_tsv_row(line, width) for line in lines]
@@ -107,7 +113,10 @@ async def _query_store(settings: Settings, store: Path, query: str) -> list[tupl
 def _counts(rows: list[tuple[Term | None, ...]]) -> dict[str | None, int]:
     """Return the triples in each graph, by its IRI (None for the default graph), from `COUNT_TRIPLES`' rows."""
     counts: dict[str | None, int] = {}
-    for graph, count in rows:
+    for row in rows:
+        if len(row) != 2:
+            raise StageError(f"a triple count's row has {len(row)} cells, not 2")
+        graph, count = row
         if not isinstance(count, Literal) or not count.value.isdigit():
             raise StageError(f"a triple count isn't a number: {count!r}")
         counts[None if graph is None else str(graph)] = int(count.value)
