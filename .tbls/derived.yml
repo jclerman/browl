@@ -70,11 +70,10 @@ relations:
 comments:
   - table: meta
     tableComment: >-
-      What the database was built from (browl.derived.Meta), one row. Read from a file of any schema version, so
-      schema_version and generation keep their names.
+      What the database was built from (browl.derived.Meta), one row. generation is read from a file built by any
+      browl, so it keeps its name.
     columnComments:
       id: Always 1, so the table has one row.
-      schema_version: The browl.derived.SCHEMA_VERSION the file was built with; a file of another version isn't current.
       generation: The load job's generation number; the file is current only for that generation.
       ontology_iri: The ontology's IRI, from its own graph; NULL if it has none.
       version_iri: Its owl:versionIRI; NULL if it has none.
@@ -82,6 +81,20 @@ comments:
       version_info: Its owl:versionInfo; NULL if it has none.
       reasoner: The reasoner the load ran (browl.jobs.Reasoner).
       loaded_at: When the load job started, ISO 8601 with a time zone; a rebuild after a restart keeps it.
+  - table: build_key
+    tableComment: >-
+      The build keys the file was built with, one per component (browl.precache.keys, DESIGN.md 2.5). The file is
+      current only if they're the components and keys the running browl computes, so a change to the code or settings
+      that build it rebuilds it. Read from a file built by any browl, so it keeps its name and columns; a file without
+      it, built before build keys, isn't current.
+    columnComments:
+      component: >-
+        What the key covers: schema (browl.derived.SCHEMA and INDEXES), meta (the ontology header and the meta row), or
+        a pre-caching hook, by name (e.g. entities).
+      key: >-
+        A SHA-256, in hex, of what the component depends on: for schema, its SQL; for the others, their code (their
+        browl modules' syntax trees, without docstrings, the files they load through sparql_file, the third-party
+        distributions' versions, Python's version) and the values of the settings they declare.
   - table: entity
     tableComment: >-
       The ontology itself and every declared class and property, with the URL its IRI implies (DESIGN.md 2.3,

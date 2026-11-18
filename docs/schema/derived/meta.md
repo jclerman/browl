@@ -2,7 +2,7 @@
 
 ## Description
 
-What the database was built from (browl.derived.Meta), one row. Read from a file of any schema version, so schema_version and generation keep their names.
+What the database was built from (browl.derived.Meta), one row. generation is read from a file built by any browl, so it keeps its name.
 
 <details>
 <summary><strong>Table Definition</strong></summary>
@@ -10,7 +10,6 @@ What the database was built from (browl.derived.Meta), one row. Read from a file
 ```sql
 CREATE TABLE meta (
     id INTEGER PRIMARY KEY CHECK (id = 1),
-    schema_version INTEGER NOT NULL,
     generation INTEGER NOT NULL,
     ontology_iri TEXT,
     version_iri TEXT,
@@ -25,17 +24,16 @@ CREATE TABLE meta (
 
 ## Columns
 
-| Name           | Type    | Default | Nullable | Children | Parents | Comment                                                                                                 |
-| -------------- | ------- | ------- | -------- | -------- | ------- | ------------------------------------------------------------------------------------------------------- |
-| id             | INTEGER |         | true     |          |         | Always 1, so the table has one row.                                                                     |
-| schema_version | INTEGER |         | false    |          |         | The browl.derived.SCHEMA_VERSION the file was built with; a file of another version isn't current.      |
-| generation     | INTEGER |         | false    |          |         | The load job's generation number; the file is current only for that generation.                         |
-| ontology_iri   | TEXT    |         | true     |          |         | The ontology's IRI, from its own graph; NULL if it has none.                                            |
-| version_iri    | TEXT    |         | true     |          |         | Its owl:versionIRI; NULL if it has none.                                                                |
-| title          | TEXT    |         | true     |          |         | Its title (dcterms:title, dc:title, then NAME_PROPERTIES); NULL if it has none, and pages show the IRI. |
-| version_info   | TEXT    |         | true     |          |         | Its owl:versionInfo; NULL if it has none.                                                               |
-| reasoner       | TEXT    |         | false    |          |         | The reasoner the load ran (browl.jobs.Reasoner).                                                        |
-| loaded_at      | TEXT    |         | false    |          |         | When the load job started, ISO 8601 with a time zone; a rebuild after a restart keeps it.               |
+| Name         | Type    | Default | Nullable | Children | Parents | Comment                                                                                                 |
+| ------------ | ------- | ------- | -------- | -------- | ------- | ------------------------------------------------------------------------------------------------------- |
+| id           | INTEGER |         | true     |          |         | Always 1, so the table has one row.                                                                     |
+| generation   | INTEGER |         | false    |          |         | The load job's generation number; the file is current only for that generation.                         |
+| ontology_iri | TEXT    |         | true     |          |         | The ontology's IRI, from its own graph; NULL if it has none.                                            |
+| version_iri  | TEXT    |         | true     |          |         | Its owl:versionIRI; NULL if it has none.                                                                |
+| title        | TEXT    |         | true     |          |         | Its title (dcterms:title, dc:title, then NAME_PROPERTIES); NULL if it has none, and pages show the IRI. |
+| version_info | TEXT    |         | true     |          |         | Its owl:versionInfo; NULL if it has none.                                                               |
+| reasoner     | TEXT    |         | false    |          |         | The reasoner the load ran (browl.jobs.Reasoner).                                                        |
+| loaded_at    | TEXT    |         | false    |          |         | When the load job started, ISO 8601 with a time zone; a rebuild after a restart keeps it.               |
 
 ## Constraints
 
@@ -52,7 +50,6 @@ erDiagram
 
 "meta" {
   INTEGER id
-  INTEGER schema_version
   INTEGER generation
   TEXT ontology_iri
   TEXT version_iri

@@ -9,7 +9,7 @@ import threading
 import time
 import urllib.parse
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -20,7 +20,7 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from browl import derived, precache
+from browl import derived
 from browl.derived import EntityType, Meta, NotCurrentError, derived_path, entities_at, read_meta
 from browl.fuseki import END_VARIABLE, TSV, UNION_FROM, FusekiClient, SparqlError
 from browl.jobs import (
@@ -41,18 +41,12 @@ from browl.jobs import (
 )
 from browl.loading import dataset_name
 from browl.pages import RETRY_AFTER_S, read_derived
-from browl.precache import (
-    OntologyHeader,
-    PreCacheContext,
-    batched,
-    build,
-    has_loaded_imports,
-    ontology_header,
-    pre_cache,
-    pre_caching_stage,
-    rebuild,
-    remove_previous,
-)
+from browl.precache import header, stage
+from browl.precache.core import Hook, PreCacheContext, batched, has_loaded_imports, hook
+from browl.precache.entities import entities
+from browl.precache.header import OntologyHeader, ontology_header
+from browl.precache.keys import build_keys
+from browl.precache.stage import HOOKS, build, pre_cache, pre_caching_stage, rebuild, remove_previous
 from browl.settings import Settings
 from tests.conftest import DATA
 from tests.helpers import make_app, make_settings
@@ -119,9 +113,19 @@ def job(settings: Settings, generation: int, imports: list[ImportResult] | None 
     return JobContext(generation, settings, Reasoner.ELK, upload=upload, imports=imports or [], started_at=LOADED_AT)
 
 
+def connect(settings: Settings, generation: int, hooks: Sequence[Hook] = HOOKS) -> sqlite3.Connection:
+    """Open a generation's derived database, built with these settings and hooks (`derived.connect`)."""
+    return derived.connect(settings.data_dir, generation, build_keys(settings, hooks))
+
+
+def is_current(settings: Settings, generation: int, hooks: Sequence[Hook] = HOOKS) -> bool:
+    """Return whether a generation's derived database is current for these settings and hooks (`derived.is_current`)."""
+    return derived.is_current(settings.data_dir, generation, build_keys(settings, hooks))
+
+
 def make_previous(settings: Settings, generation: int) -> Path:
-    """Build an earlier generation's derived database, returning its path."""
-    with derived.build(settings.data_dir, Meta(generation, Reasoner.NONE, LOADED_AT)):
+    """Build an earlier generation's derived database, current for the app's hooks, returning its path."""
+    with derived.build(settings.data_dir, Meta(generation, Reasoner.NONE, LOADED_AT), build_keys(settings, HOOKS)):
         pass
     return derived_path(settings.data_dir, generation)
 
@@ -140,6 +144,7 @@ async def test_stage_builds_database(settings: Settings) -> None:
     seen: list[str] = []
     queries: list[str] = []
 
+    @hook()
     async def first(context: PreCacheContext) -> None:
         seen.append("first")
         assert (context.dataset, context.dataset_clause) == ("gen-7", UNION_FROM)
@@ -151,6 +156,7 @@ async def test_stage_builds_database(settings: Settings) -> None:
         await context.db.insert("INSERT INTO entity (iri, type, path) VALUES (?, 'class', '/')", [(f"{EX}a",)])
         await context.db.create_indexes("entity")
 
+    @hook()
     async def second(context: PreCacheContext) -> None:
         seen.append("second")
         assert await context.db.run(lambda db: db.execute("SELECT count(*) FROM prefix").fetchone()[0]) == 2
@@ -165,7 +171,7 @@ async def test_stage_builds_database(settings: Settings) -> None:
         await pre_caching_stage(job(settings, 7, imports), http, hooks=[first, second])
     assert seen == ["first", "second"]
     assert derived_files(settings) == ["7.sqlite3"]
-    with closing(derived.connect(settings.data_dir, 7)) as connection:
+    with closing(connect(settings, 7, [first, second])) as connection:
         stored = read_meta(connection)
         assert connection.execute("SELECT prefix FROM prefix ORDER BY prefix").fetchall() == [("ex",), ("owl",)]
     assert (stored.generation, stored.reasoner, stored.ontology_iri, stored.version_iri) == (
@@ -184,6 +190,7 @@ async def test_stage_hook_fails(settings: Settings) -> None:
     """Check that a failing hook fails the stage, leaving no new file and the previous one in place."""
     previous = make_previous(settings, 3)
 
+    @hook()
     async def failing(context: PreCacheContext) -> None:
         await context.db.insert("INSERT INTO prefix VALUES (?, ?)", [("ex", EX)])
         raise StageError("the entity list is broken")
@@ -193,13 +200,14 @@ async def test_stage_hook_fails(settings: Settings) -> None:
             await pre_caching_stage(job(settings, 4), http, hooks=[failing])
     assert derived_files(settings) == ["3.sqlite3"]
     assert previous.is_file()
-    assert derived.is_current(settings.data_dir, 3)
+    assert is_current(settings, 3)
 
 
 async def test_stage_hook_query_fails(settings: Settings) -> None:
     """Check that a hook's incomplete result fails the stage, naming the hook, and the previous database stays."""
     make_previous(settings, 4)
 
+    @hook()
     async def entities(context: PreCacheContext) -> None:
         async with context.bulk_select("SELECT ?s WHERE { ?s ?p ?o }") as stream:
             [row async for row in stream]
@@ -208,7 +216,7 @@ async def test_stage_hook_query_fails(settings: Settings) -> None:
         with pytest.raises(StageError, match=r"^pre-caching query failed \(.*entities\): the result is incomplete"):
             await pre_caching_stage(job(settings, 5), http, hooks=[entities])
     assert derived_files(settings) == ["4.sqlite3"]
-    assert derived.is_current(settings.data_dir, 4)
+    assert is_current(settings, 4)
 
 
 @pytest.mark.parametrize(
@@ -325,8 +333,8 @@ async def test_ontology_header_limits(
     settings: Settings, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Check that a header query result of too many rows fails, and that a warning lists only a few other IRIs."""
-    monkeypatch.setattr(precache, "HEADER_MAX_ROWS", 4)
-    monkeypatch.setattr(precache, "_LOGGED_IRIS", 2)
+    monkeypatch.setattr(header, "HEADER_MAX_ROWS", 4)
+    monkeypatch.setattr(header, "_LOGGED_IRIS", 2)
     rows = "".join(f"<{EX}{name}>\t\t\t\n" for name in "dcba")
     async with fuseki(f"{HEADER}{rows}{END}") as http:
         with caplog.at_level(logging.WARNING, logger="browl.precache"):
@@ -373,12 +381,12 @@ async def test_batched() -> None:
 async def test_build_runs_on_one_thread(settings: Settings) -> None:
     """Check that every write runs on the build's own thread, not the event loop's."""
     threads: set[int] = set()
-    async with build(settings.data_dir, Meta(9, Reasoner.NONE, LOADED_AT)) as db:
+    async with build(settings.data_dir, Meta(9, Reasoner.NONE, LOADED_AT), build_keys(settings, HOOKS)) as db:
         for _ in range(3):
             await db.run(lambda connection: threads.add(threading.get_ident()))
     assert len(threads) == 1
     assert threading.get_ident() not in threads
-    assert derived.is_current(settings.data_dir, 9)
+    assert is_current(settings, 9)
 
 
 async def test_build_cancelled(settings: Settings) -> None:
@@ -392,7 +400,7 @@ async def test_build_cancelled(settings: Settings) -> None:
         release.wait(10)
 
     async def run() -> None:
-        async with build(settings.data_dir, Meta(2, Reasoner.NONE, LOADED_AT)) as db:
+        async with build(settings.data_dir, Meta(2, Reasoner.NONE, LOADED_AT), build_keys(settings, HOOKS)) as db:
             await db.run(busy)
 
     task = asyncio.create_task(run())
@@ -429,7 +437,7 @@ async def test_build_cancelled_at_end(
     monkeypatch.setattr(derived.os, "replace", blocked)
 
     async def run() -> None:
-        async with build(settings.data_dir, Meta(2, Reasoner.NONE, LOADED_AT)):
+        async with build(settings.data_dir, Meta(2, Reasoner.NONE, LOADED_AT), build_keys(settings, HOOKS)):
             pass
 
     task = asyncio.create_task(run())
@@ -446,7 +454,7 @@ async def test_build_cancelled_at_end(
         assert "The cancelled derived build's end failed" in caplog.text
     else:
         assert derived_files(settings) == ["2.sqlite3"]
-        assert derived.is_current(settings.data_dir, 2)
+        assert is_current(settings, 2)
 
 
 async def test_build_failure_at_swap(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -457,7 +465,7 @@ async def test_build_failure_at_swap(settings: Settings, monkeypatch: pytest.Mon
 
     monkeypatch.setattr(derived.os, "replace", fail)
     with pytest.raises(OSError, match="disk gone"):
-        async with build(settings.data_dir, Meta(2, Reasoner.NONE, LOADED_AT)):
+        async with build(settings.data_dir, Meta(2, Reasoner.NONE, LOADED_AT), build_keys(settings, HOOKS)):
             pass
     assert derived_files(settings) == []
 
@@ -471,14 +479,15 @@ async def test_runner_cleanup_after_ready(settings: Settings) -> None:
     """Check jobs end to end: a failed pre-caching keeps the previous database; a job that reaches ready removes it."""
     fail = False
 
-    async def hook(context: PreCacheContext) -> None:
+    @hook()
+    async def flaky(context: PreCacheContext) -> None:
         if fail:
             raise SparqlError("Fuseki answered 500: boom")
 
     async with fuseki() as http:
         stages = {
             Stage.IMPORTS: upload_stage,
-            Stage.PRE_CACHING: functools.partial(pre_caching_stage, http=http, hooks=[hook]),
+            Stage.PRE_CACHING: functools.partial(pre_caching_stage, http=http, hooks=[flaky]),
         }
         runner = await JobRunner.open(settings, stages, on_ready=remove_previous)
         try:
@@ -496,9 +505,7 @@ async def test_runner_cleanup_after_ready(settings: Settings) -> None:
                 1,
                 Site.NOT_AVAILABLE,
             )
-            assert state.reason == "pre-caching query failed (test_runner_cleanup_after_ready.<locals>.hook): " + (
-                "Fuseki answered 500: boom"
-            )
+            assert state.reason == "pre-caching query failed (flaky): Fuseki answered 500: boom"
             assert derived_files(settings) == ["1.sqlite3"]
 
             fail = False
@@ -554,6 +561,7 @@ async def test_stage_on_real_fuseki(settings: Settings, loaded: tuple[httpx2.Asy
     http, generation = loaded
     counts: dict[str, int] = {}
 
+    @hook()
     async def count(context: PreCacheContext) -> None:
         queries = {
             "all": "SELECT ?s ?p ?o WHERE { ?s ?p ?o }",
@@ -579,7 +587,7 @@ async def test_stage_on_real_fuseki(settings: Settings, loaded: tuple[httpx2.Asy
     assert counts["all"] == counts["ordered"] == counts["expected"] > 20_000
     assert counts["grouped"] == counts["distinct"] > 7
     assert counts["own"] == counts["expected"] - 20_000
-    with closing(derived.connect(settings.data_dir, generation)) as connection:
+    with closing(connect(settings, generation, [count])) as connection:
         stored = read_meta(connection)
     assert (stored.ontology_iri, stored.version_iri) == ("http://example.org/family", None)
 
@@ -606,20 +614,20 @@ def pinged_fuseki(pings: list[float], *statuses: int) -> httpx2.AsyncClient:
 
 async def test_rebuild_waits_for_fuseki(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that a rebuild after a restart waits for Fuseki to answer its ping, pausing longer each time."""
-    monkeypatch.setattr(precache, "FUSEKI_RETRY_S", (0.02, 0.04))
+    monkeypatch.setattr(stage, "FUSEKI_RETRY_S", (0.02, 0.04))
     pings: list[float] = []
     async with pinged_fuseki(pings, 0, 503, 0, 0) as http:
         await rebuild(job(settings, 3), http, hooks=[])
     assert len(pings) == 5
     pauses = [later - earlier for earlier, later in itertools.pairwise(pings)]
     assert pauses[0] >= 0.02 and pauses[1] >= 0.04 and pauses[3] >= 0.04
-    assert derived.is_current(settings.data_dir, 3)
+    assert is_current(settings, 3, [])
 
 
 async def test_rebuild_fuseki_down(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that a rebuild fails, sending no query, if Fuseki doesn't answer its ping in time."""
-    monkeypatch.setattr(precache, "FUSEKI_WAIT_S", 0.1)
-    monkeypatch.setattr(precache, "FUSEKI_RETRY_S", (0.02, 0.02))
+    monkeypatch.setattr(stage, "FUSEKI_WAIT_S", 0.1)
+    monkeypatch.setattr(stage, "FUSEKI_RETRY_S", (0.02, 0.02))
     pings: list[float] = []
     async with pinged_fuseki(pings, *[0] * 1000) as http:
         with pytest.raises(StageError, match=r"^Fuseki didn't answer its ping within 0.1 s$"):
@@ -687,7 +695,7 @@ async def test_build_fails_to_start(tmp_path: Path) -> None:
     data_dir = tmp_path / "file"
     data_dir.write_text("")
     with pytest.raises(OSError, match="file"):
-        async with build(data_dir, Meta(1, Reasoner.NONE, LOADED_AT)):
+        async with build(data_dir, Meta(1, Reasoner.NONE, LOADED_AT), {}):
             pass
 
 
@@ -772,9 +780,9 @@ def test_restart_reuses_current_database(settings: Settings) -> None:
 
 
 def stale_schema(settings: Settings) -> None:
-    """Leave generation 2 a derived database of another schema version."""
+    """Leave generation 2 a derived database built with another schema."""
     with sqlite3.connect(make_previous(settings, 2)) as connection:
-        connection.execute("UPDATE meta SET schema_version = 0")
+        connection.execute("UPDATE build_key SET key = 'stale' WHERE component = 'schema'")
 
 
 @pytest.mark.parametrize(
@@ -806,7 +814,7 @@ def test_restart_rebuilds(settings: Settings, prepare: Callable[[Settings], obje
         assert client.get("/probe").json() == 2
     assert fuseki.requests == ["/$/ping", f"/{dataset_name(2)}/sparql", f"/{dataset_name(2)}/sparql"]
     assert derived_files(settings) == ["2.sqlite3"]
-    with closing(derived.connect(settings.data_dir, 2)) as connection:
+    with closing(connect(settings, 2)) as connection:
         assert read_meta(connection) == Meta(2, Reasoner.ELK, STARTED, ONTOLOGY, VERSION, "Onto", "1.0")
 
 
@@ -854,7 +862,7 @@ async def test_restart_rebuild_shutdown_during_swap(settings: Settings, monkeypa
         rename(source, target)
 
     monkeypatch.setattr(derived.os, "replace", blocked)
-    current = functools.partial(derived.is_current, settings.data_dir)
+    current = functools.partial(derived.is_current, settings.data_dir, keys=build_keys(settings, HOOKS))
     async with fuseki() as http:
         function = functools.partial(pre_cache, http=http)
         runner = await JobRunner.open(settings, on_ready=remove_previous)
@@ -923,13 +931,13 @@ async def test_read_derived_without_ready_generation() -> None:
 
 def entity_rows(settings: Settings, generation: int) -> list[tuple[str, str, str, str | None]]:
     """Return a generation's `entity` rows, as (IRI, type, path, fragment), in id order."""
-    with closing(derived.connect(settings.data_dir, generation)) as connection:
+    with closing(connect(settings, generation)) as connection:
         return connection.execute("SELECT iri, type, path, fragment FROM entity ORDER BY id").fetchall()
 
 
 def hash_prefixes(settings: Settings, generation: int) -> list[str]:
     """Return a generation's `hash_prefix` paths, in stored order."""
-    with closing(derived.connect(settings.data_dir, generation)) as connection:
+    with closing(connect(settings, generation)) as connection:
         return [row[0] for row in connection.execute("SELECT path FROM hash_prefix")]
 
 
@@ -941,7 +949,7 @@ async def test_entities(settings: Settings, caplog: pytest.LogCaptureFixture) ->
     """
     base = "http://example.org"  # make_settings's BASE_URL
     assert str(settings.base_url) == f"{base}/"
-    entities = [
+    declared = [
         (f"{base}/onto#A", "Class"),
         (f"{base}/onto#A", "ObjectProperty"),  # punning
         (f"{base}/onto#p", "DatatypeProperty"),
@@ -952,12 +960,12 @@ async def test_entities(settings: Settings, caplog: pytest.LogCaptureFixture) ->
         (f"{base}/_browl/admin", "Class"),
         ("urn:x:y", "Class"),
     ]
-    rows = "".join(f"<{iri}>\t<{OWL}{kind}>\t\n" for iri, kind in entities)
+    rows = "".join(f"<{iri}>\t<{OWL}{kind}>\t\n" for iri, kind in declared)
     queries: list[str] = []
     caplog.set_level(logging.WARNING, logger="browl.precache")
     ontology = f"{HEADER}<{base}/onto>\t\t\t\n{END}"
     async with fuseki(ontology, f"{ENTITY_HEADER}{rows}{ENTITY_END}", queries=queries) as http:
-        await pre_caching_stage(job(settings, 2, [ImportResult(f"{EX}i", triples=1)]), http, hooks=[precache.entities])
+        await pre_caching_stage(job(settings, 2, [ImportResult(f"{EX}i", triples=1)]), http, hooks=[entities])
     assert UNION_FROM in queries[1]  # the imports' entities too
     assert entity_rows(settings, 2) == [
         (f"{base}/onto", "ontology", "/onto", None),
@@ -974,7 +982,7 @@ async def test_entities(settings: Settings, caplog: pytest.LogCaptureFixture) ->
     assert hash_prefixes(settings, 2) == ["/example.net/other", "/onto"]
     warning = "1 entity IRIs would have URLs under the reserved prefix /_browl, so they get fallback URLs:"
     assert caplog.messages == [f"{warning} ['{base}/_browl/admin']"]
-    with closing(derived.connect(settings.data_dir, 2)) as connection:
+    with closing(connect(settings, 2)) as connection:
         shared = entities_at(connection, "/example.net/x")
         assert [(entity.iri, entity.type) for entity in shared] == [
             ("http://example.net/x", EntityType.CLASS),
@@ -990,7 +998,7 @@ async def test_entities_without_ontology_iri(settings: Settings, caplog: pytest.
     rows = "".join(f"<http://example.org/_browl/{n}>\t<{OWL}Class>\t\n" for n in range(12))
     caplog.set_level(logging.WARNING, logger="browl.precache")
     async with fuseki(HEADER + END, f"{ENTITY_HEADER}{rows}{ENTITY_END}") as http:
-        await pre_caching_stage(job(settings, 3), http, hooks=[precache.entities])
+        await pre_caching_stage(job(settings, 3), http, hooks=[entities])
     assert len(entity_rows(settings, 3)) == 12
     assert hash_prefixes(settings, 3) == []
     [message] = caplog.messages

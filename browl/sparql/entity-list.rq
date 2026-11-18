@@ -1,0 +1,9 @@
+# Every declared class and property, with its type, from the ontology and its imports (the entities pre-caching hook,
+# browl.precache.entities). The merge of their graphs is a set, so each (entity, type) comes once. The prologue
+# (browl.precache.core.PREFIXES) and the dataset clause are added when it's run.
+SELECT ?entity ?type
+WHERE {
+  VALUES ?type { owl:Class owl:ObjectProperty owl:DatatypeProperty owl:AnnotationProperty }
+  ?entity rdf:type ?type .
+  FILTER isIRI(?entity)
+}

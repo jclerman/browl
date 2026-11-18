@@ -374,12 +374,12 @@ uploads again. Downtime during a replace is accepted. _(Q14a)_ A timeout's reaso
 shutdown", any other cancellation "cancelled". A job that stops without recording why is still marked failed, so the
 site never stays on "loading" (P-5).
 
-**App restart:** the store stays on the Fuseki volume and the derived database on the data volume. Fuseki reopens
-the store in under a second, and the app reuses the derived database when it's current, built for the ready
-generation by this browl's schema version (its `meta` row, [2.5](#25-derived-data-pre-caching)), skipping
-pre-caching. Restarting either container doesn't reload the ontology. Otherwise, e.g. when the file was lost or an
-upgrade changed its schema, the app rebuilds it in the background from the same store (`gen-N`) by re-running the ready
-job's pre-caching stage (P-9):
+**App restart:** the store stays on the Fuseki volume and the derived database on the data volume. Fuseki reopens the
+store in under a second, and the app reuses the derived database when it's current, built for the ready generation with
+the build keys this browl computes (its `meta` and `build_key` tables, [2.5](#25-derived-data-pre-caching)), skipping
+pre-caching. Restarting either container doesn't reload the ontology. Otherwise, e.g. when the file was lost, an upgrade
+changed the code that builds it or a setting it depends on changed, the app rebuilds it in the background from the same
+store (`gen-N`) by re-running the ready job's pre-caching stage (P-9):
 
 - Only when the latest job is the ready one. After a failed job the site isn't available anyway, and the next upload
   builds a new file.
@@ -575,30 +575,53 @@ are documented in [`SCHEMA.md`](SCHEMA.md):
 | `counts` | Per node: immediate children, distinct descendants | `edge`, in Python (below) |
 | `hash_prefix` | Distinct URL paths that have hash entities under them | `entity` |
 | `prefix` | CURIE prefix → namespace | The ontology's own, built-ins, configured overrides |
-| `meta` | Ontology IRI, version IRI, title, `owl:versionInfo`, reasoner used, load time (the job's start), generation number, schema version | The ontology header query (below) and the job |
+| `meta` | Ontology IRI, version IRI, title, `owl:versionInfo`, reasoner used, load time (the job's start), generation number | The ontology header query (below) and the job |
+| `build_key` | Component → build key (below) | `browl.precache.keys` |
 
 Entities are referred to by `entity.id`, a dense integer (e.g. for descendant bitmaps); an IRI declared with several
 types (punning) has a row for each. Each table's secondary indexes are created once it's filled (below). The database is
-rebuilt on every load, so it has no migrations: a file of another schema version (`SCHEMA_VERSION`, raised with any
-change to the schema or to what the hooks store; a test checks the first) or generation isn't current, and is rebuilt
-([2.4](#24-load-pipeline), App restart). Pages read it, never Fuseki, for whole-ontology data (N-4), through
-`browl.pages.read_derived`: the file is opened read-only and immutable, so reads take no locks, in the thread pool, from
-a pool of connections. Once a newer generation is read, the older one's connections are closed, so none keeps a deleted
-file's space in use; the app closes them all at shutdown.
+rebuilt on every load, so it has no migrations: a file built for another generation, or with other build keys (below),
+isn't current, and is rebuilt ([2.4](#24-load-pipeline), App restart). Pages read it, never Fuseki, for whole-ontology
+data (N-4), through `browl.pages.read_derived`: the file is opened read-only and immutable, so reads take no locks, in
+the thread pool, from a pool of connections. Once a newer generation is read, the older one's connections are closed, so
+none keeps a deleted file's space in use; the app closes them all at shutdown.
+
+**Build keys.** A file is current exactly when the code and settings that would build it now are the ones that built it.
+It stores a key per component (`build_key`): `schema`, a hash of the SQL (`SCHEMA`, `INDEXES`); `meta`, for the ontology
+header (`browl.precache.header`); and one per hook, by name. Their code's hashes are computed once per process, and a
+file whose components or keys differ, or that has none (built before them), isn't current. The key of `meta` or a hook
+hashes its code: its module and every browl module it imports, directly or not, found by parsing their imports, each as
+its syntax tree without docstrings; the files it loads, which pre-caching code reads only through
+`browl.precache.core.sparql_file`, with a string literal, so the parse finds them; the versions of the third-party
+distributions those modules import; and Python's major and minor version. It also hashes the values of the `Settings`
+fields the hook declares (`@hook("base_url", "reserved_prefix")`; `header.SETTINGS`), and only those.
+
+- **Why computed keys:** a hand-raised schema version can be forgotten, leaving a stale file taken as current; a key
+  can't. A component's key covers only its own closure, so a hook's module imports only what it uses (one module per
+  hook, in the `browl.precache` package), and an edit elsewhere, e.g. to `browl.loading`, rebuilds nothing.
+- **Why no docstrings or comments:** on a large ontology a rebuild takes minutes, so changes that can't alter what's
+  stored don't cause one.
+- **Why settings:** a changed `BASE_URL` changes every entity's URL, so a restart with it rebuilds the file. Only the
+  declared fields count, so e.g. rotating a secret doesn't.
+- **The guarantee** is a test (`tests/test_precache_keys.py`): it runs the header and each hook against a stubbed
+  Fuseki, tracing the browl code that runs (`sys.monitoring`), the files under `browl/` it opens (audit events) and the
+  settings it reads, and fails, saying what to do, if the component's key doesn't cover one. A hook's own code paths
+  that the stub doesn't reach, and files read when its module is imported, are left to review.
 
 **Pre-caching hooks** (P-9). The stage reads the ontology's header (below), starts the file with its `meta` row, then
-runs the hooks in `browl.precache.HOOKS` in order, so a hook may read tables an earlier one filled: P-10 (entities),
-P-11 (names), P-12 (hierarchies), P-19 (search), and P-27 if it keeps a `usage` table. Each gets the Fuseki client, the
-generation's dataset, the dataset clause that merges in the imports if any were loaded, and a writer. A SQLite
-connection must stay on one thread while the queries stream on the event loop, so the build runs on a single-thread
-executor that owns the connection, and hooks hand it rows in batches (`browl.precache.batched`). Every bulk query goes
-through `PreCacheContext.bulk_select`, which checks that it's complete ([2.14](#214-risks)); hooks get the plain client
-too, for small queries, but nothing stops one using it for a bulk query, so review checks they don't. Any hook's failure
-fails the stage. A hook creates the indexes of each table it fills when it's done (`DerivedWriter.create_indexes`),
-which is faster than keeping them up to date while filling, so later hooks can use them (e.g. P-11 maps IRIs to
-`entity.id`); the build creates any left, then runs `ANALYZE`. Where it can, a hook inserts into a `WITHOUT ROWID` table
-in its key's order. The build runs with no journal or syncing until the end, a 256 MiB page cache (SQLite's default 2 MB
-thrashes on these inserts and spills the index sorts early), and up to 4 helper threads to sort.
+runs the hooks in `browl.precache.HOOKS` in order (each in a module of its own), so a hook may read tables an earlier
+one filled: P-10 (entities), P-11 (names), P-12 (hierarchies), P-19 (search), and P-27 if it keeps a `usage` table. Each
+gets the Fuseki client, the generation's dataset, the dataset clause that merges in the imports if any were loaded, and
+a writer. A SQLite connection must stay on one thread while the queries stream on the event loop, so the build runs on a
+single-thread executor that owns the connection, and hooks hand it rows in batches (`browl.precache.core.batched`).
+Every bulk query goes through `PreCacheContext.bulk_select`, which checks that it's complete ([2.14](#214-risks)); hooks
+get the plain client too, for small queries, but nothing stops one using it for a bulk query, so review checks they
+don't. Any hook's failure fails the stage. A hook creates the indexes of each table it fills when it's done
+(`DerivedWriter.create_indexes`), which is faster than keeping them up to date while filling, so later hooks can use
+them (e.g. P-11 maps IRIs to `entity.id`); the build creates any left, then runs `ANALYZE`. Where it can, a hook inserts
+into a `WITHOUT ROWID` table in its key's order. The build runs with no journal or syncing until the end, a 256 MiB page
+cache (SQLite's default 2 MB thrashes on these inserts and spills the index sorts early), and up to 4 helper threads to
+sort.
 
 **The ontology's IRI** comes from the default graph only, the ontology without its imports: an `owl:Ontology` IRI that
 nothing there imports, since an OFN upload's converted Turtle may declare the ontologies it imports. If several remain,

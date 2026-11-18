@@ -5,19 +5,13 @@
     {
       "name": "meta",
       "type": "table",
-      "comment": "What the database was built from (browl.derived.Meta), one row. Read from a file of any schema version, so schema_version and generation keep their names.",
+      "comment": "What the database was built from (browl.derived.Meta), one row. generation is read from a file built by any browl, so it keeps its name.",
       "columns": [
         {
           "name": "id",
           "type": "INTEGER",
           "nullable": true,
           "comment": "Always 1, so the table has one row."
-        },
-        {
-          "name": "schema_version",
-          "type": "INTEGER",
-          "nullable": false,
-          "comment": "The browl.derived.SCHEMA_VERSION the file was built with; a file of another version isn't current."
         },
         {
           "name": "generation",
@@ -82,7 +76,57 @@
           ]
         }
       ],
-      "def": "CREATE TABLE meta (\n    id INTEGER PRIMARY KEY CHECK (id = 1),\n    schema_version INTEGER NOT NULL,\n    generation INTEGER NOT NULL,\n    ontology_iri TEXT,\n    version_iri TEXT,\n    title TEXT,\n    version_info TEXT,\n    reasoner TEXT NOT NULL,\n    loaded_at TEXT NOT NULL\n)"
+      "def": "CREATE TABLE meta (\n    id INTEGER PRIMARY KEY CHECK (id = 1),\n    generation INTEGER NOT NULL,\n    ontology_iri TEXT,\n    version_iri TEXT,\n    title TEXT,\n    version_info TEXT,\n    reasoner TEXT NOT NULL,\n    loaded_at TEXT NOT NULL\n)"
+    },
+    {
+      "name": "build_key",
+      "type": "table",
+      "comment": "The build keys the file was built with, one per component (browl.precache.keys, DESIGN.md 2.5). The file is current only if they're the components and keys the running browl computes, so a change to the code or settings that build it rebuilds it. Read from a file built by any browl, so it keeps its name and columns; a file without it, built before build keys, isn't current.",
+      "columns": [
+        {
+          "name": "component",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "What the key covers: schema (browl.derived.SCHEMA and INDEXES), meta (the ontology header and the meta row), or a pre-caching hook, by name (e.g. entities)."
+        },
+        {
+          "name": "key",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "A SHA-256, in hex, of what the component depends on: for schema, its SQL; for the others, their code (their browl modules' syntax trees, without docstrings, the files they load through sparql_file, the third-party distributions' versions, Python's version) and the values of the settings they declare."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "sqlite_autoindex_build_key_1",
+          "def": "PRIMARY KEY (component)",
+          "table": "build_key",
+          "columns": [
+            "component"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "component",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (component)",
+          "table": "build_key",
+          "columns": [
+            "component"
+          ]
+        },
+        {
+          "name": "sqlite_autoindex_build_key_1",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (component)",
+          "table": "build_key",
+          "columns": [
+            "component"
+          ]
+        }
+      ],
+      "def": "CREATE TABLE build_key (\n    component TEXT PRIMARY KEY,\n    key TEXT NOT NULL\n) WITHOUT ROWID"
     },
     {
       "name": "entity",

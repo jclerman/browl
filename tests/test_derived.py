@@ -1,7 +1,6 @@
 """Tests for the derived database: its schema, atomic swap, cleanup and readers."""
 
 import asyncio
-import hashlib
 import sqlite3
 import sys
 import threading
@@ -14,8 +13,6 @@ import pytest
 import browl.derived
 from browl.derived import (
     DERIVED_DIR,
-    SCHEMA,
-    SCHEMA_VERSION,
     DerivedReader,
     Meta,
     NotCurrentError,
@@ -27,10 +24,10 @@ from browl.derived import (
     read_meta,
     remove_others,
 )
-from browl.derived import INDEXES as INDEX_SQL
 from browl.jobs import Reasoner
 
 COLUMNS = {
+    "build_key": [("component", "TEXT", 1, 1), ("key", "TEXT", 1, 0)],
     "counts": [
         ("hierarchy", "TEXT", 1, 1),
         ("node", "INTEGER", 1, 2),
@@ -51,7 +48,6 @@ COLUMNS = {
     "hash_prefix": [("path", "TEXT", 1, 1)],
     "meta": [
         ("id", "INTEGER", 0, 1),
-        ("schema_version", "INTEGER", 1, 0),
         ("generation", "INTEGER", 1, 0),
         ("ontology_iri", "TEXT", 0, 0),
         ("version_iri", "TEXT", 0, 0),
@@ -70,8 +66,7 @@ COLUMNS = {
     ],
     "prefix": [("prefix", "TEXT", 1, 1), ("namespace", "TEXT", 1, 0)],
 }
-"""Each table's columns, as (name, type, not null, place in the primary key), for `SCHEMA_VERSION` 3. A change to them
-must raise `SCHEMA_VERSION`, and update this."""
+"""Each table's columns, as (name, type, not null, place in the primary key)."""
 INDEXES = {
     "entity_iri_type",
     "entity_path",
@@ -82,32 +77,8 @@ INDEXES = {
 }
 
 
-SCHEMA_HASHES = {
-    2: "2ff3dcbf357551eb37ea18eaef713ea8fb794f46718ded8b1fdf35011ca32b1f",
-    3: "2ff3dcbf357551eb37ea18eaef713ea8fb794f46718ded8b1fdf35011ca32b1f",  # the same SQL; P-10 fills entity
-}
-"""The SHA-256 of the derived schema's SQL (`schema_hash`) at each `SCHEMA_VERSION`, so a schema change can't keep the
-version: a file built by the old schema would pass as current."""
-
-
-def schema_hash() -> str:
-    """Return the SHA-256 of the derived schema's SQL: `SCHEMA`, then every statement in `INDEXES`."""
-    text = SCHEMA + "".join(f"{statement};\n" for statements in INDEX_SQL.values() for statement in statements)
-    return hashlib.sha256(text.encode()).hexdigest()
-
-
-def test_schema_version_raised() -> None:
-    """The derived schema's SQL is the one recorded for its `SCHEMA_VERSION`: changing it means raising the version."""
-    current = schema_hash()
-    recorded = SCHEMA_HASHES.get(SCHEMA_VERSION)
-    if recorded is None:
-        pytest.fail(f"Record SCHEMA_VERSION {SCHEMA_VERSION}'s schema in SCHEMA_HASHES: {SCHEMA_VERSION}: {current!r}")
-    if recorded != current:
-        pytest.fail(
-            f"The derived schema (SCHEMA or INDEXES) changed, but SCHEMA_VERSION is still {SCHEMA_VERSION}. Raise it to"
-            f" {SCHEMA_VERSION + 1}, record the new schema in SCHEMA_HASHES as {SCHEMA_VERSION + 1}: {current!r},"
-            " update COLUMNS and INDEXES here, and run `make schema-docs`."
-        )
+KEYS = {"schema": "s1", "meta": "m1", "entities": "e1"}
+"""The build keys of a test build."""
 
 
 def index_names(connection: sqlite3.Connection) -> set[str]:
@@ -130,7 +101,7 @@ def meta(generation: int) -> Meta:
 
 def make(data_dir: Path, generation: int, iri: str = "http://example.org/onto#A") -> None:
     """Build a generation's derived database holding one entity."""
-    with build(data_dir, meta(generation)) as connection:
+    with build(data_dir, meta(generation), KEYS) as connection:
         connection.execute(
             "INSERT INTO entity (iri, type, path, fragment) VALUES (?, 'class', '/example.org/onto', 'A')", (iri,)
         )
@@ -138,7 +109,7 @@ def make(data_dir: Path, generation: int, iri: str = "http://example.org/onto#A"
 
 def entity_iris(data_dir: Path, generation: int) -> list[str]:
     """Return the entity IRIs in a generation's derived database."""
-    with closing(connect(data_dir, generation)) as connection:
+    with closing(connect(data_dir, generation, KEYS)) as connection:
         return [row[0] for row in connection.execute("SELECT iri FROM entity")]
 
 
@@ -146,16 +117,15 @@ def test_build_creates_schema_and_meta(tmp_path: Path) -> None:
     """A build creates every table, with its columns, and the indexes, stores its meta, and keeps the rows written."""
     make(tmp_path, 3)
     assert sorted(path.name for path in (tmp_path / DERIVED_DIR).iterdir()) == ["3.sqlite3"]
-    connection = connect(tmp_path, 3)
+    connection = connect(tmp_path, 3, KEYS)
     try:
         query = "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
         tables = [row[0] for row in connection.execute(query)]
         columns = {table: connection.execute(f"PRAGMA table_info({table})").fetchall() for table in tables}
-        assert SCHEMA_VERSION == 3
         assert {table: [(n, t, nn, pk) for _, n, t, nn, _, pk in rows] for table, rows in columns.items()} == COLUMNS
         assert index_names(connection) == INDEXES
         assert read_meta(connection) == meta(3)
-        assert connection.execute("SELECT schema_version FROM meta").fetchone()[0] == SCHEMA_VERSION
+        assert dict(connection.execute("SELECT component, key FROM build_key")) == KEYS
     finally:
         connection.close()
     assert entity_iris(tmp_path, 3) == ["http://example.org/onto#A"]
@@ -163,7 +133,7 @@ def test_build_creates_schema_and_meta(tmp_path: Path) -> None:
 
 def test_build_pragmas(tmp_path: Path) -> None:
     """A build runs with a large page cache, and helper threads to sort."""
-    with build(tmp_path, meta(1)) as connection:
+    with build(tmp_path, meta(1), KEYS) as connection:
         assert connection.execute("PRAGMA cache_size").fetchone()[0] == -256 * 1024
         assert connection.execute("PRAGMA threads").fetchone()[0] == 4
 
@@ -171,9 +141,9 @@ def test_build_pragmas(tmp_path: Path) -> None:
 def test_meta_without_iris(tmp_path: Path) -> None:
     """An ontology without IRIs stores none."""
     plain = Meta(generation=1, reasoner=Reasoner.NONE, loaded_at=datetime(2026, 1, 1, tzinfo=UTC))
-    with build(tmp_path, plain):
+    with build(tmp_path, plain, KEYS):
         pass
-    with closing(connect(tmp_path, 1)) as connection:
+    with closing(connect(tmp_path, 1, KEYS)) as connection:
         assert read_meta(connection) == plain
 
 
@@ -194,17 +164,17 @@ def test_meta_version(version_iri: str | None, version_info: str | None, expecte
 
 def test_build_commits_after_block_commits(tmp_path: Path) -> None:
     """Rows written after the block commits its own transaction are kept too."""
-    with build(tmp_path, meta(1)) as connection:
+    with build(tmp_path, meta(1), KEYS) as connection:
         connection.execute("COMMIT")
         connection.execute("INSERT INTO hash_prefix (path) VALUES ('/example.org/onto')")
-    with closing(connect(tmp_path, 1)) as connection:
+    with closing(connect(tmp_path, 1, KEYS)) as connection:
         assert connection.execute("SELECT path FROM hash_prefix").fetchall() == [("/example.org/onto",)]
 
 
 def test_failed_build_leaves_previous_file(tmp_path: Path) -> None:
     """A build that fails deletes its temporary file and leaves the file it would have replaced."""
     make(tmp_path, 1, "http://example.org/old")
-    with pytest.raises(RuntimeError, match="boom"), build(tmp_path, meta(1)) as connection:
+    with pytest.raises(RuntimeError, match="boom"), build(tmp_path, meta(1), KEYS) as connection:
         connection.execute("INSERT INTO entity (iri, type, path) VALUES ('http://example.org/new', 'class', '/x')")
         raise RuntimeError("boom")
     assert sorted(path.name for path in (tmp_path / DERIVED_DIR).iterdir()) == ["1.sqlite3"]
@@ -213,7 +183,7 @@ def test_failed_build_leaves_previous_file(tmp_path: Path) -> None:
 
 def test_failed_index_leaves_no_file(tmp_path: Path) -> None:
     """A build whose indexes can't be created, e.g. a duplicate entity, fails and leaves no file."""
-    with pytest.raises(sqlite3.IntegrityError), build(tmp_path, meta(1)) as connection:
+    with pytest.raises(sqlite3.IntegrityError), build(tmp_path, meta(1), KEYS) as connection:
         for _ in range(2):
             connection.execute("INSERT INTO entity (iri, type, path) VALUES ('http://example.org/a', 'class', '/a')")
     assert list((tmp_path / DERIVED_DIR).iterdir()) == []
@@ -221,7 +191,7 @@ def test_failed_index_leaves_no_file(tmp_path: Path) -> None:
 
 def test_create_indexes(tmp_path: Path) -> None:
     """A build can create a table's indexes once it has filled it, and use them; the build creates the rest."""
-    with build(tmp_path, meta(1)) as connection:
+    with build(tmp_path, meta(1), KEYS) as connection:
         connection.execute("INSERT INTO entity (iri, type, path) VALUES ('http://example.org/a', 'class', '/a')")
         create_indexes(connection, "entity")
         assert index_names(connection) == {"entity_iri_type", "entity_path"}
@@ -231,7 +201,7 @@ def test_create_indexes(tmp_path: Path) -> None:
         create_indexes(connection, "prefix")  # none
         with pytest.raises(ValueError, match="no table 'entities'"):
             create_indexes(connection, "entities")
-    with closing(connect(tmp_path, 1)) as connection:
+    with closing(connect(tmp_path, 1, KEYS)) as connection:
         assert index_names(connection) == INDEXES
 
 
@@ -254,7 +224,7 @@ def test_build_replaces_stale_temp(tmp_path: Path) -> None:
     path.with_name("1.sqlite3.tmp").write_text("left over")
     make(tmp_path, 1)
     assert sorted(path.name for path in path.parent.iterdir()) == ["1.sqlite3"]
-    assert is_current(tmp_path, 1)
+    assert is_current(tmp_path, 1, KEYS)
 
 
 def test_remove_others(tmp_path: Path) -> None:
@@ -285,7 +255,7 @@ def test_remove_others_without_directory(tmp_path: Path) -> None:
 def test_open_file_survives_removal(tmp_path: Path) -> None:
     """A connection open on a generation's file can still read it after cleanup deletes it."""
     make(tmp_path, 1)
-    with closing(connect(tmp_path, 1)) as connection:
+    with closing(connect(tmp_path, 1, KEYS)) as connection:
         make(tmp_path, 2)
         remove_others(tmp_path, 2)
         assert connection.execute("SELECT count(*) FROM entity").fetchone()[0] == 1
@@ -294,16 +264,16 @@ def test_open_file_survives_removal(tmp_path: Path) -> None:
 def test_connection_is_read_only(tmp_path: Path) -> None:
     """A reader can't write to the derived database."""
     make(tmp_path, 1)
-    with closing(connect(tmp_path, 1)) as connection, pytest.raises(sqlite3.OperationalError):
+    with closing(connect(tmp_path, 1, KEYS)) as connection, pytest.raises(sqlite3.OperationalError):
         connection.execute("DELETE FROM entity")
 
 
 def test_is_current(tmp_path: Path) -> None:
     """A generation's database is current once built."""
-    assert not is_current(tmp_path, 1)
+    assert not is_current(tmp_path, 1, KEYS)
     make(tmp_path, 1)
-    assert is_current(tmp_path, 1)
-    assert not is_current(tmp_path, 2)
+    assert is_current(tmp_path, 1, KEYS)
+    assert not is_current(tmp_path, 2, KEYS)
 
 
 def test_rejects_other_generation(tmp_path: Path) -> None:
@@ -311,29 +281,52 @@ def test_rejects_other_generation(tmp_path: Path) -> None:
     make(tmp_path, 1)
     derived_path(tmp_path, 1).rename(derived_path(tmp_path, 2))
     with pytest.raises(NotCurrentError, match="generation 1, not 2"):
-        connect(tmp_path, 2)
-    assert not is_current(tmp_path, 2)
+        connect(tmp_path, 2, KEYS)
+    assert not is_current(tmp_path, 2, KEYS)
 
 
-def test_rejects_other_schema_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A file built by a browl with another schema version isn't current."""
+@pytest.mark.parametrize(
+    ("keys", "match"),
+    [
+        ({**KEYS, "entities": "e2"}, "changed entities$"),
+        ({**KEYS, "names": "n1"}, "missing names$"),
+        ({"schema": "s1", "meta": "m1"}, "extra entities$"),
+        ({"schema": "s2", "meta": "m1", "names": "n1"}, "changed schema; missing names; extra entities$"),
+    ],
+    ids=["stale", "missing component", "extra component", "all"],
+)
+def test_rejects_other_build_keys(tmp_path: Path, keys: dict[str, str], match: str) -> None:
+    """A file built with other build keys, by component, isn't current: one built by other code or settings."""
     make(tmp_path, 1)
-    monkeypatch.setattr(browl.derived, "SCHEMA_VERSION", SCHEMA_VERSION + 1)
-    with pytest.raises(NotCurrentError, match="schema version"):
-        connect(tmp_path, 1)
+    with pytest.raises(NotCurrentError, match=f"built with other build keys: {match}"):
+        connect(tmp_path, 1, keys)
+    assert not is_current(tmp_path, 1, keys)
+
+
+def test_rejects_old_format(tmp_path: Path) -> None:
+    """A file built before build keys, with a schema version in its `meta` row, isn't current."""
+    path = derived_path(tmp_path, 1)
+    path.parent.mkdir(parents=True)
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.executescript(
+            "CREATE TABLE meta (id INTEGER PRIMARY KEY, schema_version INTEGER, generation INTEGER);"
+            " INSERT INTO meta VALUES (1, 3, 1);"
+        )
+    with pytest.raises(NotCurrentError, match="has no build keys, so an older browl built it"):
+        connect(tmp_path, 1, KEYS)
 
 
 def test_rejects_missing_file(tmp_path: Path) -> None:
     """A generation with no file isn't current."""
     with pytest.raises(NotCurrentError, match="doesn't exist"):
-        connect(tmp_path, 1)
+        connect(tmp_path, 1, KEYS)
 
 
 @pytest.mark.parametrize(
     ("script", "match"),
     [
-        ("CREATE TABLE other (x);", "can't be read"),
-        ("CREATE TABLE meta (schema_version, generation);", "no meta row"),
+        ("CREATE TABLE build_key (component, key);", "can't be read: no such table: meta"),
+        ("CREATE TABLE build_key (component, key); CREATE TABLE meta (generation);", "no meta row"),
     ],
 )
 def test_rejects_unreadable_file(tmp_path: Path, script: str, match: str) -> None:
@@ -344,7 +337,7 @@ def test_rejects_unreadable_file(tmp_path: Path, script: str, match: str) -> Non
         connection.executescript(script)
     connection.close()
     with pytest.raises(NotCurrentError, match=match):
-        connect(tmp_path, 1)
+        connect(tmp_path, 1, KEYS)
 
 
 def test_rejects_non_database(tmp_path: Path) -> None:
@@ -353,7 +346,7 @@ def test_rejects_non_database(tmp_path: Path) -> None:
     path.parent.mkdir(parents=True)
     path.write_text("not a database" * 100)
     with pytest.raises(NotCurrentError, match="can't be read"):
-        connect(tmp_path, 1)
+        connect(tmp_path, 1, KEYS)
 
 
 def generation_of(connection: sqlite3.Connection) -> int:
@@ -385,7 +378,7 @@ async def read_together(reader: DerivedReader, generation: int, count: int) -> l
 async def test_reader_reuses_connections(tmp_path: Path) -> None:
     """A reader gives reads that run at once their own connections, and reuses them for later reads."""
     make(tmp_path, 1)
-    reader = DerivedReader(tmp_path)
+    reader = DerivedReader(tmp_path, KEYS)
     first, second = await read_together(reader, 1, 2)
     assert first is not second
     assert generation_of(first) == generation_of(second) == 1
@@ -400,7 +393,7 @@ async def test_reader_closes_older_generation(tmp_path: Path) -> None:
     """Once a newer generation is read, every connection to an older one is closed, a busy one when its read ends."""
     make(tmp_path, 1)
     make(tmp_path, 2)
-    reader = DerivedReader(tmp_path)
+    reader = DerivedReader(tmp_path, KEYS)
     idle = await read_together(reader, 1, 2)
     started, release = threading.Event(), threading.Event()
 
@@ -433,7 +426,7 @@ async def test_reader_closes_older_generation(tmp_path: Path) -> None:
 async def test_reader_rejects_not_current(tmp_path: Path) -> None:
     """A reader asked for a generation without a current database raises, and closes the older one's connections."""
     make(tmp_path, 1)
-    reader = DerivedReader(tmp_path)
+    reader = DerivedReader(tmp_path, KEYS)
     old = await reader.read(1, lambda connection: connection)
     with pytest.raises(NotCurrentError):
         await reader.read(2, generation_of)
@@ -445,7 +438,7 @@ async def test_reader_rejects_not_current(tmp_path: Path) -> None:
 async def test_reader_closed(tmp_path: Path) -> None:
     """A read after the reader is closed still works, and closes its connection after."""
     make(tmp_path, 1)
-    reader = DerivedReader(tmp_path)
+    reader = DerivedReader(tmp_path, KEYS)
     reader.close()
     connection = await reader.read(1, lambda connection: connection)
     assert is_closed(connection)

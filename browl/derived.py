@@ -1,7 +1,8 @@
 """The derived SQLite database (DESIGN.md §2.5): whole-ontology data computed once per load.
 
-Each generation has its own file, written whole by `build` and never again (DESIGN.md §2.4, the pre-caching stage);
-a file of another `SCHEMA_VERSION` isn't current (`is_current`), and is rebuilt. On Linux, deleting an old one
+Each generation has its own file, written whole by `build` and never again (DESIGN.md §2.4, the pre-caching stage).
+It stores the build keys it was built with, one per component, and is current only if they're the ones the running
+code computes (`connect`, `browl.precache.keys`); otherwise it's rebuilt. On Linux, deleting an old one
 (`remove_others`) leaves it readable to connections already open on it; macOS's SQLite may fail their reads instead
 (`SQLITE_IOERR_VNODE`).
 """
@@ -11,7 +12,7 @@ import logging
 import os
 import sqlite3
 import threading
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import closing, contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
@@ -21,10 +22,6 @@ from pathlib import Path
 from browl.jobs import Reasoner
 
 logger = logging.getLogger(__name__)
-
-SCHEMA_VERSION = 3
-"""The derived database's schema version; raise it whenever the SQL in `SCHEMA` or `INDEXES` changes, or what the
-pre-caching hooks store does, forcing a rebuild. (3: P-10 fills `entity` and `hash_prefix`.)"""
 
 DERIVED_DIR = "derived"
 """The directory in `DATA_DIR` that holds the derived databases."""
@@ -42,7 +39,6 @@ _TEMP_SUFFIX = ".tmp"
 SCHEMA = """
 CREATE TABLE meta (
     id INTEGER PRIMARY KEY CHECK (id = 1),
-    schema_version INTEGER NOT NULL,
     generation INTEGER NOT NULL,
     ontology_iri TEXT,
     version_iri TEXT,
@@ -51,6 +47,10 @@ CREATE TABLE meta (
     reasoner TEXT NOT NULL,
     loaded_at TEXT NOT NULL
 );
+CREATE TABLE build_key (
+    component TEXT PRIMARY KEY,
+    key TEXT NOT NULL
+) WITHOUT ROWID;
 CREATE TABLE entity (
     id INTEGER PRIMARY KEY,
     iri TEXT NOT NULL,
@@ -94,8 +94,8 @@ CREATE TABLE prefix (
 ) WITHOUT ROWID;
 """
 """The tables (§2.5). Entities are referred to by `entity.id`, a dense integer (e.g. for descendant bitmaps); an IRI
-declared with several types (punning) has a row for each. The `meta` table's `schema_version` and `generation` columns
-must keep their names, since `connect` reads them from a file of any schema version."""
+declared with several types (punning) has a row for each. The `build_key` table and its columns, and `meta.generation`,
+must keep their names, since `connect` reads them from a file built by any browl."""
 
 INDEXES: dict[str, tuple[str, ...]] = {
     "entity": (
@@ -123,10 +123,10 @@ class Meta:
     Attributes:
         generation: The load job's generation number.
         reasoner: The reasoner the load ran.
-        loaded_at: When the load job started; a rebuild after a restart keeps it (`browl.precache.pre_cache`).
+        loaded_at: When the load job started; a rebuild after a restart keeps it (`browl.precache.stage.pre_cache`).
         ontology_iri: The ontology's IRI; None if it has none.
         version_iri: Its version IRI; None if it has none.
-        title: Its display name (`browl.precache.ontology_header`); None if it has none, and pages show the IRI.
+        title: Its display name (`browl.precache.header.ontology_header`); None if it has none, and pages show the IRI.
         version_info: Its `owl:versionInfo`; None if it has none.
     """
 
@@ -193,7 +193,7 @@ def entities_at(connection: sqlite3.Connection, path: str, fragment: str | None 
 
 
 class NotCurrentError(Exception):
-    """The derived database for a generation is missing, unreadable, or built for another generation or schema."""
+    """The derived database for a generation is missing, unreadable, or built for another generation or build keys."""
 
 
 def derived_dir(data_dir: Path) -> Path:
@@ -207,7 +207,7 @@ def derived_path(data_dir: Path, generation: int) -> Path:
 
 
 @contextmanager
-def build(data_dir: Path, meta: Meta) -> Iterator[sqlite3.Connection]:
+def build(data_dir: Path, meta: Meta, keys: Mapping[str, str]) -> Iterator[sqlite3.Connection]:
     """Build a generation's derived database, and swap it in atomically once the block exits cleanly.
 
     The block fills the tables through the connection yielded, which is in a transaction; it needn't commit. It creates
@@ -219,9 +219,10 @@ def build(data_dir: Path, meta: Meta) -> Iterator[sqlite3.Connection]:
     Args:
         data_dir: The data directory.
         meta: What the database is built from; stored in its `meta` table.
+        keys: Its build keys, by component (`browl.precache.keys.build_keys`); stored in its `build_key` table.
 
     Yields:
-        A connection to the new database, with its tables created and empty but for `meta`.
+        A connection to the new database, with its tables created and empty but for `meta` and `build_key`.
     """
     path = derived_path(data_dir, meta.generation)
     temp = path.with_name(path.name + _TEMP_SUFFIX)
@@ -236,10 +237,9 @@ def build(data_dir: Path, meta: Meta) -> Iterator[sqlite3.Connection]:
             )
             connection.executescript(SCHEMA)
             connection.execute(
-                "INSERT INTO meta (id, schema_version, generation, ontology_iri, version_iri, title, version_info,"
-                " reasoner, loaded_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO meta (id, generation, ontology_iri, version_iri, title, version_info, reasoner, loaded_at)"
+                " VALUES (1, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    SCHEMA_VERSION,
                     meta.generation,
                     meta.ontology_iri,
                     meta.version_iri,
@@ -249,6 +249,7 @@ def build(data_dir: Path, meta: Meta) -> Iterator[sqlite3.Connection]:
                     meta.loaded_at.isoformat(),
                 ),
             )
+            connection.executemany("INSERT INTO build_key (component, key) VALUES (?, ?)", sorted(keys.items()))
             connection.execute("BEGIN")
             yield connection
             if connection.in_transaction:
@@ -308,27 +309,34 @@ def remove_others(data_dir: Path, keep: int) -> None:
             path.unlink(missing_ok=True)
 
 
-def connect(data_dir: Path, generation: int) -> sqlite3.Connection:
+def connect(data_dir: Path, generation: int, keys: Mapping[str, str]) -> sqlite3.Connection:
     """Open a generation's derived database read-only, after checking that it's current.
 
     The file is opened as immutable, so reads take no locks: `build` never writes a file at its final name.
 
+    Args:
+        data_dir: The data directory.
+        generation: The generation.
+        keys: The build keys it must have been built with, by component: no more, no fewer.
+
     Raises:
-        NotCurrentError: The file is missing or unreadable, or was built for another generation or schema version.
+        NotCurrentError: The file is missing or unreadable, or was built for another generation or with other keys.
     """
     path = derived_path(data_dir, generation)
     if not path.is_file():
         raise NotCurrentError(f"{path} doesn't exist")
     connection = sqlite3.connect(f"{path.as_uri()}?mode=ro&immutable=1", uri=True, check_same_thread=False)
     try:
-        row = connection.execute("SELECT schema_version, generation FROM meta").fetchone()
+        if connection.execute("SELECT 1 FROM sqlite_schema WHERE name = 'build_key'").fetchone() is None:
+            raise NotCurrentError(f"{path} has no build keys, so an older browl built it")
+        row = connection.execute("SELECT generation FROM meta").fetchone()
         if row is None:
             raise NotCurrentError(f"{path} has no meta row")
-        schema_version, stored_generation = row
-        if schema_version != SCHEMA_VERSION:
-            raise NotCurrentError(f"{path} has schema version {schema_version}, not {SCHEMA_VERSION}")
-        if stored_generation != generation:
-            raise NotCurrentError(f"{path} was built for generation {stored_generation}, not {generation}")
+        if row[0] != generation:
+            raise NotCurrentError(f"{path} was built for generation {row[0]}, not {generation}")
+        stored = dict(connection.execute("SELECT component, key FROM build_key"))
+        if stored != dict(keys):
+            raise NotCurrentError(f"{path} was built with other build keys: {_differences(stored, keys)}")
     except sqlite3.Error as error:
         connection.close()
         raise NotCurrentError(f"{path} can't be read: {error}") from error
@@ -338,10 +346,24 @@ def connect(data_dir: Path, generation: int) -> sqlite3.Connection:
     return connection
 
 
-def is_current(data_dir: Path, generation: int) -> bool:
-    """Return whether a generation's derived database exists and was built for it by this schema version."""
+def _differences(stored: Mapping[str, str], keys: Mapping[str, str]) -> str:
+    """Describe how a file's build keys differ from the ones expected."""
+    differences = [
+        (label, sorted(names))
+        for label, names in [
+            ("changed", {name for name in stored.keys() & keys.keys() if stored[name] != keys[name]}),
+            ("missing", keys.keys() - stored.keys()),
+            ("extra", stored.keys() - keys.keys()),
+        ]
+        if names
+    ]
+    return "; ".join(f"{label} {', '.join(names)}" for label, names in differences)
+
+
+def is_current(data_dir: Path, generation: int, keys: Mapping[str, str]) -> bool:
+    """Return whether a generation's derived database exists and was built for it with these build keys (`connect`)."""
     try:
-        connection = connect(data_dir, generation)
+        connection = connect(data_dir, generation, keys)
     except NotCurrentError as error:
         logger.info("The derived database isn't current: %s", error)
         return False
@@ -376,11 +398,13 @@ class DerivedReader:
 
     Args:
         data_dir: The data directory.
+        keys: The build keys a file must have (`connect`).
     """
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(self, data_dir: Path, keys: Mapping[str, str]) -> None:
         """Hold no connections yet."""
         self.data_dir = data_dir
+        self.keys = dict(keys)
         self._lock = threading.Lock()
         self._generation: int | None = None  # the newest asked for
         self._idle: list[sqlite3.Connection] = []  # the newest generation's
@@ -419,7 +443,7 @@ class DerivedReader:
             elif generation == self._generation and self._idle:
                 connection = self._idle.pop()
         _close_all(stale)
-        return connection if connection is not None else connect(self.data_dir, generation)
+        return connection if connection is not None else connect(self.data_dir, generation, self.keys)
 
     def _put_back(self, generation: int, connection: sqlite3.Connection) -> None:
         """Keep the connection for the next read if its generation is still the newest; else close it."""

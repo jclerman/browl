@@ -9,16 +9,17 @@ browl builds one such SQLite file per load, `DATA_DIR/derived/{generation}.sqlit
 
 ## Tables
 
-| Name                          | Columns | Comment                                                                                                                                                                                                                                                                                                   | Type  |
-| ----------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
-| [meta](meta.md)               | 9       | What the database was built from (browl.derived.Meta), one row. Read from a file of any schema version, so schema_version and generation keep their names.                                                                                                                                                | table |
-| [entity](entity.md)           | 7       | The ontology itself and every declared class and property, with the URL its IRI implies (DESIGN.md 2.3, browl.urls), filled by the entities pre-caching hook. An IRI declared with several types (punning) has a row for each. Several IRIs can share a URL, e.g. the http and https forms of one (U-15). | table |
-| [name_value](name_value.md)   | 6       | Each entity's values of the name properties (NAME_PROPERTIES), for display names and search: one row per direct value, and one per value entailed through rdfs:subPropertyOf.                                                                                                                             | table |
-| [edge](edge.md)               | 3       | The hierarchies' named direct parent-child edges, between equivalence-group representatives, stored in key order.                                                                                                                                                                                         | table |
-| [equiv_group](equiv_group.md) | 2       | Equivalence groups of named classes, from owl:equivalentClass (union-find).                                                                                                                                                                                                                               | table |
-| [counts](counts.md)           | 4       | Each hierarchy node's numbers of children and of distinct descendants (DESIGN.md 2.5).                                                                                                                                                                                                                    | table |
-| [hash_prefix](hash_prefix.md) | 1       | Every distinct URL path that has hash entities (entity.fragment not NULL) under it, for the hash-IRI script (U-13), stored in key order.                                                                                                                                                                  | table |
-| [prefix](prefix.md)           | 2       | CURIE prefixes, for entity.curie (the ontology's own, built-ins, and EXTRA_PREFIXES overrides).                                                                                                                                                                                                           | table |
+| Name                          | Columns | Comment                                                                                                                                                                                                                                                                                                                                                                                  | Type  |
+| ----------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| [meta](meta.md)               | 8       | What the database was built from (browl.derived.Meta), one row. generation is read from a file built by any browl, so it keeps its name.                                                                                                                                                                                                                                                 | table |
+| [build_key](build_key.md)     | 2       | The build keys the file was built with, one per component (browl.precache.keys, DESIGN.md 2.5). The file is current only if they're the components and keys the running browl computes, so a change to the code or settings that build it rebuilds it. Read from a file built by any browl, so it keeps its name and columns; a file without it, built before build keys, isn't current. | table |
+| [entity](entity.md)           | 7       | The ontology itself and every declared class and property, with the URL its IRI implies (DESIGN.md 2.3, browl.urls), filled by the entities pre-caching hook. An IRI declared with several types (punning) has a row for each. Several IRIs can share a URL, e.g. the http and https forms of one (U-15).                                                                                | table |
+| [name_value](name_value.md)   | 6       | Each entity's values of the name properties (NAME_PROPERTIES), for display names and search: one row per direct value, and one per value entailed through rdfs:subPropertyOf.                                                                                                                                                                                                            | table |
+| [edge](edge.md)               | 3       | The hierarchies' named direct parent-child edges, between equivalence-group representatives, stored in key order.                                                                                                                                                                                                                                                                        | table |
+| [equiv_group](equiv_group.md) | 2       | Equivalence groups of named classes, from owl:equivalentClass (union-find).                                                                                                                                                                                                                                                                                                              | table |
+| [counts](counts.md)           | 4       | Each hierarchy node's numbers of children and of distinct descendants (DESIGN.md 2.5).                                                                                                                                                                                                                                                                                                   | table |
+| [hash_prefix](hash_prefix.md) | 1       | Every distinct URL path that has hash entities (entity.fragment not NULL) under it, for the hash-IRI script (U-13), stored in key order.                                                                                                                                                                                                                                                 | table |
+| [prefix](prefix.md)           | 2       | CURIE prefixes, for entity.curie (the ontology's own, built-ins, and EXTRA_PREFIXES overrides).                                                                                                                                                                                                                                                                                          | table |
 
 ## Relations
 
@@ -34,7 +35,6 @@ erDiagram
 
 "meta" {
   INTEGER id
-  INTEGER schema_version
   INTEGER generation
   TEXT ontology_iri
   TEXT version_iri
@@ -42,6 +42,10 @@ erDiagram
   TEXT version_info
   TEXT reasoner
   TEXT loaded_at
+}
+"build_key" {
+  TEXT component PK
+  TEXT key
 }
 "entity" {
   INTEGER id

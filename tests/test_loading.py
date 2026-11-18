@@ -17,6 +17,7 @@ from browl.derived import read_meta
 from browl.fuseki import UNION_FROM, FusekiAdmin, FusekiAdminError, FusekiClient, SparqlError, dataset_clause
 from browl.jobs import ImportResult, JobContext, Site, Stage, StageError
 from browl.loading import count_store, dataset_name, loading_stage, store_path
+from browl.precache import HOOKS, build_keys
 from browl.process import Completed
 from browl.settings import Settings
 from tests.conftest import find_robot_jar
@@ -352,7 +353,7 @@ def test_app_loads_and_restarts(
         ]
         generation = state.ready_generation
         assert "couldn't be loaded" in client.get("/_browl/admin/status").text
-        with closing(derived.connect(settings.data_dir, generation)) as connection:
+        with closing(derived.connect(settings.data_dir, generation, build_keys(settings, HOOKS))) as connection:
             assert read_meta(connection).ontology_iri == f"{EX}o"
 
         async def datasets() -> list[str]:

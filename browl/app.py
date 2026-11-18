@@ -59,9 +59,9 @@ def create_app(
     On startup the app starts the JVM (DESIGN.md §2.1), on the main thread, where Uvicorn runs the startup (a test
     client doesn't, so tests start it first); it opens its Fuseki client, the load job runner (`app.state.jobs`) and the
     derived database's reader (`app.state.derived`, read through `browl.pages.read_derived`). If the ready
-    generation's derived database isn't current, e.g. after an upgrade changed its schema, it's rebuilt in the
-    background (`JobRunner.rebuild`, §2.4). On shutdown a running load job, or rebuild, is cancelled, and the reader's
-    connections closed. Pages are gated on the job state (`SiteGate`, §2.13).
+    generation's derived database isn't current (`browl.precache.keys`), e.g. after an upgrade changed the code that
+    builds it, it's rebuilt in the background (`JobRunner.rebuild`, §2.4). On shutdown a running load job, or rebuild,
+    is cancelled, and the reader's connections closed. Pages are gated on the job state (`SiteGate`, §2.13).
 
     Args:
         settings: The settings; loaded from the environment if not given.
@@ -93,13 +93,14 @@ def create_app(
                 }
             else:
                 functions = stages
+            keys = precache.build_keys(settings, precache.HOOKS)
             app.state.jobs = await JobRunner.open(settings, functions, on_ready=precache.remove_previous)
-            app.state.derived = DerivedReader(settings.data_dir)
+            app.state.derived = DerivedReader(settings.data_dir, keys)
             try:
                 if stages is None:
                     await app.state.jobs.rebuild(
                         functools.partial(precache.rebuild, http=client),
-                        functools.partial(derived.is_current, settings.data_dir),
+                        functools.partial(derived.is_current, settings.data_dir, keys=keys),
                     )
                 yield
             finally:
