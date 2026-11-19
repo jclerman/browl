@@ -12,8 +12,8 @@ from pathlib import Path
 import pytest
 import rdflib
 from fastapi import FastAPI
+from playwright.sync_api import ConsoleMessage, Page, Route, expect
 from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import Page, Route, expect
 from rdflib.namespace import OWL, RDF
 
 import browl.admin
@@ -138,7 +138,7 @@ def test_fragment_change_without_reload(page: Page, server: LiveServer, how: str
         page.locator("header").evaluate(
             """(header) => header.insertAdjacentHTML("beforeend", '<a href="#Beta">B</a>')"""
         )
-        page.click("header a")
+        page.click("header a[href='#Beta']")
     expect(page.locator("main h1")).to_have_text(f"{EX}/onto#Beta")
     assert page.evaluate("window.marker") == 1
 
@@ -258,13 +258,17 @@ def status_server(live_server: Callable[[FastAPI], LiveServer], monkeypatch: pyt
 
 
 def test_status_polls_while_running(page: Page, status_server: LiveServer) -> None:
-    """Check that, while a job runs, the status shows each stage without a page reload, and stops polling at the end."""
+    """Check that, while a job runs, the status shows each stage without a page reload, and stops polling at the end.
+
+    htmx does this under the Content-Security-Policy, breaking none of it.
+    """
     jobs = status_server.app.state.jobs
     reasoned, loaded = asyncio.Event(), asyncio.Event()
     jobs.register(Stage.REASONING, gate(reasoned))
     jobs.register(Stage.LOADING, gate(loaded))
     jobs.register(Stage.PRE_CACHING, derived_stage())
     status_server.call(jobs.start())
+    errors = csp_errors(page)
     page.goto(f"{status_server.url}{STATUS}")
     current = page.locator("#job-status li[aria-current]")
     expect(current).to_have_text("reasoning")
@@ -278,6 +282,7 @@ def test_status_polls_while_running(page: Page, status_server: LiveServer) -> No
     page.on("request", lambda request: polls.append(request.url))
     page.wait_for_timeout(POLL_S * 3 * 1000)
     assert polls == []
+    assert errors == []  # htmx works under the Content-Security-Policy
 
 
 @NO_JS
@@ -362,3 +367,87 @@ def test_upload_from_another_site_refused(
         page.click("button")
     assert response.value.status == 403
     assert server.call(server.app.state.jobs.current()).stage is None
+
+
+# The page frame (P-14a, DESIGN.md §2.9)
+
+TREES = ["Classes", "Object properties", "Data properties", "Annotation properties"]
+WIDE = {"width": 1280, "height": 800}
+NARROW = {"width": 375, "height": 700}
+"""Viewports either side of the navigation bar's breakpoint (48rem)."""
+
+
+def csp_errors(page: Page) -> list[str]:
+    """Return a list that collects the page's console messages about its Content-Security-Policy."""
+    errors: list[str] = []
+
+    def collect(message: ConsoleMessage) -> None:
+        if "Content Security Policy" in message.text:
+            errors.append(message.text)
+
+    page.on("console", collect)
+    return errors
+
+
+def test_navigation_bar_wide(page: Page, server: LiveServer) -> None:
+    """Check that, on a wide screen, the tree links sit in the bar without a menu button, and the name links home."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{server.url}/example.org/thing")
+    nav = page.get_by_role("navigation", name="Site")
+    for label in TREES:
+        expect(nav.get_by_role("link", name=label)).to_be_visible()
+    expect(nav.locator("summary")).to_be_hidden()
+    nav.get_by_role("link", name=f"browl · {TITLE}").click()
+    expect(page.locator("main h1")).to_have_text(TITLE)
+
+
+@NO_JS
+def test_navigation_menu_narrow(page: Page, server: LiveServer) -> None:
+    """Check that, on a narrow screen, the tree links are in a menu that opens without JavaScript."""
+    page.set_viewport_size(NARROW)
+    page.goto(f"{server.url}/example.org/thing")
+    nav = page.get_by_role("navigation", name="Site")
+    classes = nav.get_by_role("link", name="Classes")
+    expect(classes).to_be_hidden()
+    nav.get_by_text("Browse").click()
+    for label in TREES:
+        expect(nav.get_by_role("link", name=label)).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+
+
+def test_navigation_bar_sticky(page: Page, server: LiveServer) -> None:
+    """Check that the navigation bar stays at the top when the page scrolls."""
+    page.set_viewport_size(NARROW)
+    page.goto(f"{server.url}/example.org/thing")
+    page.evaluate("document.querySelector('main').style.minHeight = '5000px'; window.scrollTo(0, 2000)")
+    assert page.evaluate("window.scrollY") > 0
+    box = page.locator(".site-bar").bounding_box()
+    assert box is not None
+    assert (box["x"], box["y"], box["width"]) == (0, 0, NARROW["width"])
+
+
+@pytest.mark.parametrize(("scheme", "background"), [("light", "rgb(250, 250, 247)"), ("dark", "rgb(29, 31, 33)")])
+def test_theme_follows_browser(page: Page, server: LiveServer, scheme: str, background: str) -> None:
+    """Check that the palette follows the browser's color scheme."""
+    page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
+    page.goto(f"{server.url}/example.org/thing")
+    assert page.evaluate("getComputedStyle(document.body).backgroundColor") == background
+
+
+def test_hash_script_under_policy(page: Page, server: LiveServer) -> None:
+    """Check that the hash-IRI script runs under the Content-Security-Policy, which an inline handler can't."""
+    errors = csp_errors(page)
+    page.goto(f"{server.url}/example.org/vocab#Gamma")
+    expect(page.locator("main h1")).to_have_text(f"{EX}/vocab#Gamma")
+    assert errors == []
+    page.evaluate("document.body.insertAdjacentHTML('beforeend', '<img src=x onerror=\"window.ran = 1\">')")
+    wait_until(page, lambda: bool(errors), "the policy to block the handler")
+    assert page.evaluate("window.ran") is None
+
+
+def test_hash_script_refuses_non_html(page: Page, server: LiveServer) -> None:
+    """Check that the hash-IRI script shows an error, not the response, when the hash route's answer isn't HTML."""
+    body = "<main><h1>Injected</h1></main>"
+    page.route(HASH_ROUTE, lambda route: route.fulfill(status=200, content_type="text/plain", body=body))
+    page.goto(f"{server.url}/example.org/vocab#Gamma")
+    expect(page.locator("main h1")).to_have_text("Error")

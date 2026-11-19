@@ -870,8 +870,19 @@ Every page has the same frame (U-27, U-28, U-29):
 
 - Contents: the ontology name (a link to the home page), the autocomplete search box, and links to the four tree pages.
 - The full search page with type and property filters (U-10) is reached from the search box, e.g. "All results…".
-- An admin link appears only for signed-in admins. Sign-in itself is a small link in the page footer.
-- On narrow screens, the tree links collapse into a menu.
+- An admin link appears only for signed-in admins: the base template shows it when `request.state.is_admin` is true,
+  which P-22 sets. Sign-in itself is a small link in the page footer, to the admin upload page, whose sign-in P-22 adds.
+- On narrow screens, the tree links collapse into a menu: a `<details>` element, so it opens without JS. On wide
+  screens the stylesheet shows its links in the bar (`::details-content`) and hides its button.
+- The ontology name is its title, else its IRI, capped in length; it's read once per generation (`PageFrame`). The bar
+  has no in-page (`#…`) links, such as a skip link, since on a path hash entities share the hash-IRI script would look
+  up their fragments as entities.
+
+**Content-Security-Policy** (from P-13's review): browl's pages are served with
+`script-src 'self'; object-src 'none'; base-uri 'none'`. The hash-IRI script moves a fetched page's `<main>` into the
+live page, where inline event handlers would run, so the policy backs up autoescaping there; the script also moves only
+`text/html` responses. Swagger UI (`admin/docs`), which has an inline script, is exempt. Styles aren't restricted, as
+htmx adds a `<style>` element.
 
 **Page tabs** (U-28): inside the content area, below the page header.
 
@@ -969,7 +980,7 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | Path | Purpose |
 | --- | --- |
 | `search` | Autocomplete endpoint (htmx fragment) and a full results page |
-| `tree/{hierarchy}` | Tree root page; `?node=` returns one node's children (htmx fragment) |
+| `tree/{hierarchy}` | Tree root page, `hierarchy` one of `classes`, `object-properties`, `data-properties` and `annotation-properties` (the navigation bar links them); `?node=` returns one node's children (htmx fragment) |
 | `iri?iri=…` | Fallback entity URLs (Q1b) |
 | `hash?path=…&fragment=…` | The page for a hash URL's path and fragment, for the hash-IRI script ([2.3](#23-iri--url-mapping), Lookup); marked `noindex`, as its pages are at their hash URLs |
 | `static/…` | CSS, htmx, hash-IRI script |
