@@ -211,10 +211,10 @@ containers' own file systems hold only what's lost harmlessly (last row).
 Nothing is written to the host's file system directly: the services have no bind mounts and the app never gets the
 Docker socket. The volumes live in Docker's data root (on Docker Desktop, inside its VM), so host backups don't cover
 them; Compose reads only `.env` from the host. Development and tests differ: `make test` downloads `robot.jar` and
-Jena's tools to `.cache/` in the checkout; tests point `DATA_DIR` at pytest's temporary directories, and the Fuseki the
-tests start bind-mounts one as its base, running as the tests' user. Run outside Compose, the app writes to `/data`
-and `/fuseki` unless `DATA_DIR` and `FUSEKI_BASE` are set, and without `SANDBOX_SOCKET`, ROBOT and the OFN lister run
-beside it, unsandboxed.
+Jena's tools to `.cache/` in the checkout, and Playwright's headless Chromium to Playwright's own cache; tests point
+`DATA_DIR` at pytest's temporary directories, and the Fuseki the tests start bind-mounts one as its base, running as the
+tests' user. Run outside Compose, the app writes to `/data` and `/fuseki` unless `DATA_DIR` and `FUSEKI_BASE` are set,
+and without `SANDBOX_SOCKET`, ROBOT and the OFN lister run beside it, unsandboxed.
 
 ### 2.2 Libraries and components
 
@@ -233,6 +233,7 @@ beside it, unsandboxed.
 | Reasoning | ROBOT (Java), as a subprocess | ELK and HermiT. |
 | Authentication | Authlib (OpenID Connect with Google), Starlette signed-cookie sessions | |
 | Deployment | Docker Compose: `app`, `fuseki` and `sandbox` services, named volumes (2.12) | The app image includes Java 21, `robot.jar` and Jena's command-line tools (for the TDB2 loader). _(S-4)_ |
+| Browser tests (development only) | Playwright for Python (pytest-playwright), headless Chromium | Runs the pages' scripts (`static/hash.js`, htmx) and no-JS fallbacks, from pytest; Playwright brings its own driver, so no Node or JS test runner. _(P-34)_ |
 
 ### 2.3 IRI → URL mapping
 
@@ -1051,13 +1052,13 @@ flowchart LR
         P12["P-12 Hierarchies"]
     end
     subgraph P4["Phase 4: Browsing"]
-        P13["P-13 Routing"]
         P14["P-14 Page frame"]
         P15["P-15 Manchester rendering"]
         P16["P-16 Overview tab"]
         P17["P-17 Home page"]
         P18["P-18 Hierarchy trees"]
         P27["P-27 Usage tab"]
+        P34["P-34 Browser tests"]
     end
     subgraph P5["Phase 5: Search, caching, auth"]
         P19["P-19 Search backend"]
@@ -1076,7 +1077,7 @@ flowchart LR
     end
     S5b["S-5b OLS4 comparison"]
 
-    P13 ==> P14 ==> P15 ==> P16
+    P14 ==> P15 ==> P16
     P12 ==> P16
     P14 --> P17
     P12 --> P18
@@ -1092,7 +1093,7 @@ flowchart LR
     P16 -.-> S5b
 
     classDef critical stroke-width:3px
-    class P12,P13,P14,P15,P16 critical
+    class P12,P14,P15,P16 critical
 ```
 
 ### Phase 0: Spikes
@@ -1143,6 +1144,7 @@ go into this document.
 | ID | Work item | Delivers | Depends on | Status | Tracking |
 | --- | --- | --- | --- | --- | --- |
 | P-13 | Routing: path lookup, 404, disambiguation page, hash-prefix page and script | U-2, U-13, U-14, U-15 | P-10 | Done | [#25](https://github.com/jclerman/browl/issues/25) |
+| P-34 | Browser tests with Playwright: a live-server fixture; the hash-IRI script, htmx status polling, no-JS fallbacks, and what a browser shows for an upload refused early | | P-13 | In progress | [#88](https://github.com/jclerman/browl/issues/88) |
 | P-14 | Base templates and page frame: navigation bar, page header, tab component, stylesheet and themes; links rendered from display names; IRI `<details>` | U-4, U-5, U-6, U-17, U-27, U-28, U-29 | P-11, P-13 | To do | [#27](https://github.com/jclerman/browl/issues/27) (sub-issues [#28](https://github.com/jclerman/browl/issues/28), [#33](https://github.com/jclerman/browl/issues/33), [#34](https://github.com/jclerman/browl/issues/34)) |
 | P-15 | Manchester rendering via the OWLAPI from fetched fragments, including n-ary disjointness and general class axioms; link substitution and keyword styling, in the template layer, not the renderer (2.8) | U-3 | S-1, S-4, P-14 | To do | [#36](https://github.com/jclerman/browl/issues/36) |
 | P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout; panel data built apart from its HTML (2.8) | U-3, U-9, U-30, U-31, U-32 | P-12, P-15 | To do | [#37](https://github.com/jclerman/browl/issues/37) (sub-issues [#29](https://github.com/jclerman/browl/issues/29), [#38](https://github.com/jclerman/browl/issues/38), [#39](https://github.com/jclerman/browl/issues/39)) |

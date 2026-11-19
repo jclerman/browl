@@ -9,6 +9,9 @@ and its base directory: for the Fuseki the tests start, a temporary directory mo
 `BROWL_TEST_FUSEKI_URL`, `BROWL_TEST_FUSEKI_BASE`. Locally, tests whose needs are missing are skipped; in CI (`CI` set)
 they fail instead, so CI runs every test. Mark such tests `jvm` or `fuseki`, and have them use the `jvm` or `fuseki_url`
 fixture.
+
+`browser` tests need Playwright's headless Chromium (`make browser`); they use pytest-playwright's `page` fixture, and
+are skipped or fail alike when it's missing.
 """
 
 import os
@@ -18,16 +21,20 @@ import subprocess
 import tempfile
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 
 import httpx2
 import jpype
 import pytest
+from fastapi import FastAPI
+from playwright.sync_api import Browser, BrowserType, Playwright, sync_playwright
+from playwright.sync_api import Error as PlaywrightError
 
 from browl import owlapi
 from browl.settings import Settings
-from tests.helpers import StaticServer
+from tests.helpers import LiveServer, StaticServer
 
 ROOT = Path(__file__).parent.parent
 DATA = Path(__file__).parent / "data"
@@ -69,6 +76,74 @@ def site() -> Iterator[StaticServer]:
         yield server
     finally:
         server.close()
+
+
+@pytest.fixture
+def live_server() -> Iterator[Callable[[FastAPI], LiveServer]]:
+    """Yield a function that serves an app on a free local port (`LiveServer`); each server stops after the test."""
+    servers: list[LiveServer] = []
+
+    def serve(app: FastAPI) -> LiveServer:
+        servers.append(LiveServer(app))
+        return servers[-1]
+
+    try:
+        yield serve
+    finally:
+        for server in servers:
+            server.close()
+
+
+@pytest.fixture(scope="module")
+def playwright() -> Iterator[Playwright]:
+    """Start Playwright for one test module; overrides pytest-playwright's fixture, which lasts the whole session.
+
+    Its sync API marks its event loop as running on the main thread until it stops, and async tests can't run meanwhile.
+    """
+    started = sync_playwright().start()
+    try:
+        yield started
+    finally:
+        started.stop()
+
+
+@pytest.fixture(scope="module")
+def browser_type(playwright: Playwright, browser_name: str) -> BrowserType:
+    """Return the browser type to test with, Chromium by default (pytest-playwright's `--browser`)."""
+    browser_type: BrowserType = getattr(playwright, browser_name)
+    return browser_type
+
+
+@pytest.fixture(scope="module")
+def browser_context_args(
+    pytestconfig: pytest.Config,
+    playwright: Playwright,
+    device: str | None,
+    base_url: str | None,
+    _pw_artifacts_folder: tempfile.TemporaryDirectory[str],
+) -> dict[str, Any]:
+    """Return new browser contexts' options, as pytest-playwright's fixture does, but scoped like `playwright`."""
+    args: dict[str, Any] = dict(playwright.devices[device]) if device else {}
+    if base_url:
+        args["base_url"] = base_url
+    if pytestconfig.getoption("--video") in ("on", "retain-on-failure"):
+        args["record_video_dir"] = _pw_artifacts_folder.name
+    return args
+
+
+@pytest.fixture(scope="module")
+def browser(browser_type: BrowserType, browser_type_launch_args: dict[str, Any]) -> Iterator[Browser]:
+    """Launch the browser, or skip the test if Playwright's isn't installed; overrides pytest-playwright's fixture."""
+    try:
+        launched = browser_type.launch(**browser_type_launch_args)
+    except PlaywrightError as error:
+        if "Executable doesn't exist" not in error.message:
+            raise
+        skip_or_fail("no browser for Playwright (run `make browser`)")
+    try:
+        yield launched
+    finally:
+        launched.close()
 
 
 def find_robot_jar() -> Path:

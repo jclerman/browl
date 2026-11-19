@@ -52,6 +52,11 @@ instructions specific to coding agents. Requirements and architecture are in [`D
   `BROWL_TEST_FUSEKI_IMAGE` names an image already built, as CI does). `make test` downloads the pinned `robot.jar` once
   (`make robot-jar`), and on macOS the tests find Java 21 when `JAVA_HOME` is unset. Locally, these tests are skipped
   when their needs are missing; in CI they fail instead, so CI runs every test.
+- Test what only a browser shows (scripts such as `static/hash.js`, htmx, `<noscript>` fallbacks) with Playwright
+  (pytest-playwright): mark such tests `@pytest.mark.browser`, and have them use the `page` fixture and the
+  `live_server` fixture, which serves an app on a free local port, since a browser can't reach the `TestClient`. Hold or
+  stub responses with `page.route`, so tests of ordering or failures don't depend on timing. `make test` installs the
+  headless Chromium (`make browser`); these tests are skipped or fail without it, like those above.
 - **Coverage:** CI fails below 90% line coverage of the `browl` package.
 
 ## Documentation

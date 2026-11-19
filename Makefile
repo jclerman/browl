@@ -31,8 +31,15 @@ ROBOT_JAR_CACHE := .cache/robot.jar
 JENA_STAMP := .cache/jena/bin/tdb2.tdbloader
 
 .PHONY: test
-test: $(if $(ROBOT_JAR),,$(ROBOT_JAR_CACHE)) $(if $(JENA_HOME),,$(JENA_STAMP))  ## Run tests with coverage
+test: $(if $(ROBOT_JAR),,$(ROBOT_JAR_CACHE)) $(if $(JENA_HOME),,$(JENA_STAMP)) browser  ## Run tests with coverage
 	poetry run pytest --cov
+
+# Playwright's headless Chromium for the tests marked browser, in Playwright's own cache (~/Library/Caches/ms-playwright
+# on macOS, ~/.cache/ms-playwright on Linux), at the version the locked Playwright pins; a no-op once it's there. On
+# Linux, Chromium also needs system libraries: `poetry run playwright install-deps chromium-headless-shell` (sudo).
+.PHONY: browser
+browser:  ## Install the headless Chromium the browser tests use, unless already present
+	poetry run playwright install --only-shell chromium
 
 .PHONY: robot-jar
 robot-jar: $(ROBOT_JAR_CACHE)  ## Download the pinned robot.jar for the tests, unless already present
