@@ -842,11 +842,8 @@ content as typed data (Pydantic models), with no HTML in it: annotations grouped
 direct parents and children, a page of the Usage tab. Then a Jinja template renders that data. The HTML pages are built
 this way from v1, so the JSON API (U-42) can return the same models without rework ([2.13](#213-url-space-for-the-services-own-pages)).
 A JSON axiom carries its Manchester text with full IRIs (step 1 below), the entities it mentions with their display
-names, and the axiom kind; steps 2 and 3, which make HTML, belong to the template layer. P-15's `browl.axioms.Axiom`
-is that model: the axiom's kind (its OWL 2 functional-syntax name, e.g. `SubClassOf`, or `SubPropertyChainOf`), its
-text, the syntax the text is in, its operands, each rendered alike (a `SubClassOf` axiom's subclass and superclass, a
-domain's property and class, an n-ary axiom's members; a property chain is one operand), so P-16 can show frame-style
-"SubClass Of  Organ", and the IRIs it mentions, which P-33 turns into names.
+names, and the axiom kind; steps 2 and 3, which make HTML, belong to the template layer. `browl.axioms.Axiom` is that
+model; P-16 uses its operands for frame-style display ("SubClass Of  Organ").
 
 **Manchester rendering** _(post-log; supersedes Q6's hand-written renderer)_: the OWLAPI's own Manchester syntax
 renderer, the one Protégé uses, covers all of OWL 2. It renders from a fragment of the ontology fetched for each page
@@ -883,14 +880,11 @@ axioms of each.
    | Uberon (454 entities) | 3.1 / 4.0 ms | 1.0 / 1.7 ms | 91–117 ms: GO_0065007, in 2.6 K class expressions |
    | NCBITaxon (333 entities) | 3.2 / 4.0 ms | 1.1 / 1.5 ms | 44–57 ms: NCBITaxon_500585, 47.8 K subclasses |
 
-   Against the N-3 target of 300 ms. The lookup of blank-node roots adds about 0.3 ms at p50; walking back from the
-   entity costs in proportion to the class expressions it's in and its subclasses, so heavily used classes take
-   tens of milliseconds. It never steps back over `owl:onProperty`, since general class axioms that mention a property
-   are its usage: walking back from `part_of` over its 21 K restrictions took 2.3 s, but `part_of`'s page now takes
-   5 ms. Walking forward from every candidate root instead, as first planned, means finding them first: that took
-   0.3–0.45 s per page on Uberon, and grows with the number of subclass axioms. If heavily used classes become too
-   slow, the roots that reach each IRI can be listed at load time instead: TDB2 keeps blank-node labels stable, and a
-   query can name one as `<_:label>`.
+   Against the N-3 target of 300 ms. Walking back from the entity costs in proportion to the class expressions it's in
+   and its subclasses, so heavily used classes take tens of milliseconds. The walk never steps back over
+   `owl:onProperty`, since general class axioms that mention a property are its usage (P-27), not its own axioms. If
+   heavily used classes become too slow, the roots that reach each IRI can be listed at load time instead
+   ([P-15 findings](../research/P-15/README.md)).
 
 Entity names become links like this:
 
@@ -934,7 +928,7 @@ A stored IRI with an escaped illegal character, which Jena accepts and writes ba
 browl's Fuseki client checks every IRI it reads (2.14).
 
 **Until P-16**, the Overview tab lists the axioms one per line, sorted by kind and text, under "Logical axioms", below
-the annotations' placeholder.
+the annotations' placeholder (`browl.overview`).
 
 **Base directions** (RDF 1.2's `"…"@ar--rtl`): Fuseki stores and returns them, and browl's Fuseki client reads them as
 `rdf:dirLangString` literals. The OWLAPI 4.5 predates RDF 1.2: its N-Triples parser accepts them but reads `ar--rtl`
@@ -1163,7 +1157,7 @@ To settle when it's built:
 | A dense or adversarial hierarchy makes descendant counting hold too much memory | Found in P-12's review: merging a node's children only once it had them all held memory quadratic in a chain whose members all share one more parent, which a few MB of upload (or a host serving an import) can supply; the build runs in the app process, with no memory limit. P-12 merges each set into its parents as soon as it's complete, which makes that shape linear, and fails the stage once the sets hold more than `DESCENDANT_BUDGET` members (2.5, Distinct descendant counts). |
 | Loading a very large ontology takes minutes | Accepted for uploads (Q14a), shown on the status page. Restarts don't reload (2.4). NCBITaxon: about 5 minutes, estimated; Uberon: 7 s, measured ([S-4 findings](../research/S-4/README.md)). P-24 checks whether extracting the dictionary and edges by streaming the upload file, in parallel with the TDB2 load, is worth it. |
 | Fragment rendering misses axioms a full-ontology render would show | Resolved by P-15: a fragment adds the axioms rooted at blank nodes that reach the entity (n-ary disjointness and difference, negative property assertions, general class axioms), and the symmetric axioms other entities state. A test compares fragment with full-ontology rendering for every entity of a test ontology holding every kind of OWL 2 axiom; 598 of 598 Uberon entities and 305 of 305 NCBITaxon ones matched too (2.8). |
-| Heavily used classes make their pages slow | Finding a class's general class axioms walks back through every class expression it's in, and its subclasses: 44–117 ms for the worst P-15 found in Uberon and NCBITaxon, against 4–7 ms for most (2.8). If an ontology's hubs are much worse, list the blank-node roots that reach each IRI at load time. |
+| Heavily used classes make their pages slow | Finding a class's general class axioms walks back through every class expression it's in, and its subclasses; P-15 measured the cost, and the fallback if an ontology's hubs are much worse (2.8). |
 | Usage misses references inside class expressions | P-27 tests walking from the blank node up to the owning axiom before building the tab. |
 
 ---
