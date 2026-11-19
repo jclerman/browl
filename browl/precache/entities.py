@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 from browl.derived import EntityType
 from browl.precache.core import PreCacheContext, batched, hook, sparql_file
-from browl.rdf import Term
+from browl.rdf import OWL, Term
 from browl.urls import URLMapper
 
 logger = logging.getLogger(__name__)
@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 _LOGGED_IRIS = 10  # the most reserved IRIs a warning lists
 _LOGGED_IRI_CHARS = 300  # the most characters of each it shows, so a huge IRI can't give a huge log line
 
-OWL = "http://www.w3.org/2002/07/owl#"
 
 ENTITY_TYPES = {
     f"{OWL}Class": EntityType.CLASS,

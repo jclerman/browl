@@ -16,12 +16,10 @@ from scipy.sparse.csgraph import connected_components
 from browl.derived import EntityType
 from browl.jobtypes import StageError
 from browl.precache.core import PreCacheContext, batched, hook
-from browl.rdf import Term
+from browl.rdf import OWL, RDFS, Term
 
 logger = logging.getLogger(__name__)
 
-OWL = "http://www.w3.org/2002/07/owl#"
-RDFS = "http://www.w3.org/2000/01/rdf-schema#"
 
 EDGES = """SELECT ?child ?relation ?parent
 WHERE {

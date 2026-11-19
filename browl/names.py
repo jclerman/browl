@@ -4,16 +4,16 @@ import logging
 import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 
-from browl.rdf import IRI, Literal, RDFSyntaxError
+from browl.rdf import IRI, OWL, RDF, RDFS, XSD, Literal, RDFSyntaxError
 from browl.settings import UNTAGGED, Settings
 
 logger = logging.getLogger(__name__)
 
 BUILTIN_PREFIXES = {
-    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
-    "owl": "http://www.w3.org/2002/07/owl#",
-    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "rdf": RDF,
+    "rdfs": RDFS,
+    "owl": OWL,
+    "xsd": XSD,
     "skos": "http://www.w3.org/2004/02/skos/core#",
     "obo": "http://purl.obolibrary.org/obo/",
     "dc": "http://purl.org/dc/elements/1.1/",
