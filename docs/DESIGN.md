@@ -1102,9 +1102,6 @@ item's status or dependencies change.
 
 ```mermaid
 flowchart LR
-    subgraph P3["Phase 3: Derived data"]
-        P12["P-12 Hierarchies"]
-    end
     subgraph P4["Phase 4: Browsing"]
         P15["P-15 Manchester rendering"]
         P16["P-16 Overview tab"]
@@ -1130,8 +1127,6 @@ flowchart LR
     S5b["S-5b OLS4 comparison"]
 
     P15 ==> P16
-    P12 ==> P16
-    P12 --> P18
     P16 --> P27
     P16 --> P21
     P19 --> P20
@@ -1142,7 +1137,7 @@ flowchart LR
     P16 -.-> S5b
 
     classDef critical stroke-width:3px
-    class P12,P15,P16 critical
+    class P15,P16 critical
 ```
 
 ### Phase 0: Spikes
@@ -1186,7 +1181,7 @@ go into this document.
 | P-9 | Derived database schema; atomic swap; generation number; reuse on restart when current; completeness check for bulk query results (2.14) | N-4 | P-8 | Done | [#21](https://github.com/jclerman/browl/issues/21) |
 | P-10 | Entities (entity-list query), IRI → URL mapping, hash prefixes, collision warnings | U-2, U-13, U-15, O-3 | P-9 | Done | [#22](https://github.com/jclerman/browl/issues/22) |
 | P-11 | Name values, direct and entailed through sub-properties (first decide: property path or Fuseki-configured RDFS), display names, CURIE prefixes; measure whether reading the next batch while the last is inserted pays | U-6, O-4, O-5, O-11 | P-10 | Done | [#23](https://github.com/jclerman/browl/issues/23) |
-| P-12 | Hierarchies (edges query), equivalence groups, distinct descendant counts | U-7, U-8, U-9 | P-10, S-3 | To do | [#24](https://github.com/jclerman/browl/issues/24) |
+| P-12 | Hierarchies (edges query), equivalence groups, distinct descendant counts | U-7, U-8, U-9 | P-10, S-3 | Done | [#24](https://github.com/jclerman/browl/issues/24) |
 
 ### Phase 4: Browsing
 
