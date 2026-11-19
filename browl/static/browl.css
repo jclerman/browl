@@ -51,8 +51,7 @@ a {
   color: var(--accent);
 }
 
-p,
-.prose {
+p {
   max-width: var(--measure);
 }
 
@@ -104,6 +103,10 @@ code {
   flex: 1 1 12rem;
 }
 
+.site-search:empty {
+  display: none; /* until P-20 fills it */
+}
+
 .site-nav a {
   padding: calc(var(--space) / 4) 0;
 }
@@ -119,10 +122,6 @@ code {
   margin: 0;
   padding: 0;
   list-style: none;
-}
-
-.site-search:empty {
-  display: none; /* until P-20 fills it */
 }
 
 /* Narrow screens: the name and the menu button share the top row, the search box gets its own, and the menu opens as
@@ -161,26 +160,28 @@ code {
 }
 
 /* Wide screens: the menu's links sit in the bar, and its button is hidden. A browser without ::details-content
-   keeps the button, which still works. */
+   keeps the menu's button, which still opens the links. */
 @media (width >= 48rem) {
-  .site-menu::details-content {
-    display: contents;
-    content-visibility: visible;
-  }
+  @supports selector(::details-content) {
+    .site-menu::details-content {
+      display: contents;
+      content-visibility: visible;
+    }
 
-  .site-menu summary {
-    display: none;
-  }
+    .site-menu summary {
+      display: none;
+    }
 
-  .site-menu ul {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0 var(--space);
-  }
+    .site-menu ul {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0 var(--space);
+    }
 
-  .admin-link {
-    padding-left: var(--space);
-    border-left: 1px solid var(--border);
+    .admin-link {
+      padding-left: var(--space);
+      border-left: 1px solid var(--border);
+    }
   }
 }
 

@@ -8,16 +8,17 @@ Pages read whole-ontology data only from the derived database (N-4), through `re
 
 import logging
 import sqlite3
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 
 import jinja2
 from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.templating import Jinja2Templates
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from browl.derived import DerivedReader, EntityType, NotCurrentError, entities_with_iri, read_meta
 from browl.jobs import Site
@@ -42,16 +43,18 @@ TREES = (
 )
 """Each tree page's path segment under `tree/` (DESIGN.md §2.13) and its link text, in the navigation bar's order."""
 
-CONTENT_SECURITY_POLICY = "script-src 'self'; object-src 'none'; base-uri 'none'"
-"""The `Content-Security-Policy` of browl's own pages: no inline scripts or event handlers.
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none';"
+    " form-action 'self'; frame-ancestors 'none'"
+)
+"""The `Content-Security-Policy` of browl's own pages (DESIGN.md §2.9)."""
 
-The hash-IRI script moves a fetched page's `<main>` into the live page, where inline handlers in it would run, so this
-backs up autoescaping there.
-"""
+SECURITY_HEADERS = {"X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY"}
+"""Headers every response gets, including those the policy exempts."""
 
 
 @dataclass(frozen=True)
-class Home:
+class OntologyLink:
     """The served ontology's name and home page, for the navigation bar.
 
     Attributes:
@@ -65,40 +68,39 @@ class Home:
     fragment: str | None = None
 
 
-NO_HOME = Home()
+NO_LINK = OntologyLink()
 
 
-def read_home(connection: sqlite3.Connection) -> Home:
+def read_ontology_link(connection: sqlite3.Connection) -> OntologyLink:
     """Return the served ontology's name and home page from its derived database."""
     meta = read_meta(connection)
     name = meta.title or meta.ontology_iri
     if name is not None and len(name) > MAX_NAME_CHARS:
         name = f"{name[: MAX_NAME_CHARS - 1]}…"
-    if meta.ontology_iri is None:
-        return Home(name)
-    pages = [
-        entity for entity in entities_with_iri(connection, meta.ontology_iri) if entity.type == EntityType.ONTOLOGY
-    ]
-    return Home(name, pages[0].path, pages[0].fragment) if pages else Home(name)
+    entities = entities_with_iri(connection, meta.ontology_iri) if meta.ontology_iri is not None else []
+    page = next((entity for entity in entities if entity.type == EntityType.ONTOLOGY), None)
+    return OntologyLink(name) if page is None else OntologyLink(name, page.path, page.fragment)
+
+
+def href(request: Request, path: str, fragment: str | None = None) -> str:
+    """Return a root-relative link to a path from the app's root, with a fragment if given."""
+    root = link_root(request.scope)
+    return f"{root}{path}" if fragment is None else f"{root}{path}#{fragment}"
 
 
 def frame_context(request: Request) -> dict[str, object]:
     """Return what the base template's frame needs: the navigation bar's links, and whether the user is an admin.
 
-    The home page comes from `PageFrame`. P-22 marks requests from admins by setting `request.state.is_admin`.
+    The ontology's link comes from `PageFrame`. P-22 marks requests from admins by setting `request.state.is_admin`.
     """
-    root = link_root(request.scope)
-    reserved = f"{root}/{request.app.state.settings.reserved_prefix}"
-    home: Home = getattr(request.state, "home", NO_HOME)
-    home_link = None
-    if home.path is not None:
-        home_link = f"{root}{home.path}" if home.fragment is None else f"{root}{home.path}#{home.fragment}"
+    reserved = f"/{request.app.state.settings.reserved_prefix}"
+    link: OntologyLink = getattr(request.state, "ontology_link", NO_LINK)
     return {
         "frame": {
-            "name": home.name,
-            "home": home_link,
-            "trees": [(f"{reserved}/tree/{slug}", label) for slug, label in TREES],
-            "admin": f"{reserved}/admin/upload",
+            "name": link.name,
+            "home": None if link.path is None else href(request, link.path, link.fragment),
+            "trees": [(href(request, f"{reserved}/tree/{slug}"), label) for slug, label in TREES],
+            "admin": href(request, f"{reserved}/admin/upload"),
             "is_admin": getattr(request.state, "is_admin", False) is True,
         }
     }
@@ -169,6 +171,11 @@ def app_path(scope: Scope) -> str:
     return path[len(root) :] if root and is_under(path, root) else path
 
 
+def is_under_any(path: str, prefixes: Iterable[str]) -> bool:
+    """Return whether a path is under any of the prefixes (`is_under`)."""
+    return any(is_under(path, prefix) for prefix in prefixes)
+
+
 def is_under(path: str, prefix: str) -> bool:
     """Return whether a path is a prefix, such as `/_browl`, or under it: whole path segments only."""
     return path == prefix or path.startswith(f"{prefix}/")
@@ -193,7 +200,7 @@ class SiteGate:
 
     def is_exempt(self, path: str) -> bool:
         """Return whether a path, relative to the app's root, is passed through whatever the job state."""
-        return any(is_under(path, prefix) for prefix in self.exempt)
+        return is_under_any(path, self.exempt)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Serve the request, or the page for the site's state."""
@@ -209,58 +216,62 @@ class SiteGate:
 
 
 class PageFrame:
-    """Give each request the ontology's home (`request.state.home`), and each HTML response a `Content-Security-Policy`.
+    """Give each request the ontology's link (`request.state.ontology_link`), and each response the security headers.
 
-    The home is the navigation bar's ontology name and link, read once per generation. While no generation's derived
-    database is current, there's none, and the navigation bar shows only browl's name.
+    The link is read once per generation; while it can't be read, the navigation bar shows only browl's name, and it's
+    tried again after `RETRY_AFTER_S`. HTML responses also get `CONTENT_SECURITY_POLICY`.
 
     Args:
         app: The application it wraps.
-        bare: Path prefixes passed straight through, as for `SiteGate`: routes that serve no pages, e.g. static files.
+        passthrough: Path prefixes that serve no pages, e.g. static files, so need no link.
         csp_exempt: Path prefixes whose pages get no policy: pages browl doesn't build, such as the API docs.
     """
 
-    def __init__(self, app: ASGIApp, bare: list[str], csp_exempt: list[str]) -> None:
+    def __init__(self, app: ASGIApp, passthrough: list[str], csp_exempt: list[str]) -> None:
         """Wrap the app."""
         self.app = app
-        self.bare = bare
+        self.passthrough = passthrough
         self.csp_exempt = csp_exempt
-        self._homes: dict[int, Home] = {}  # the newest generation's only
+        self._cached: tuple[int, OntologyLink | None, float] | None = None  # generation, link or failure, retry time
 
-    async def home(self, request: Request) -> Home:
-        """Return the ready generation's ontology home, or `NO_HOME` if no generation's derived database is current."""
+    async def ontology_link(self, request: Request) -> OntologyLink:
+        """Return the ready generation's ontology link, or `NO_LINK` if there's none or it can't be read."""
         generation = (await request.app.state.jobs.current()).ready_generation
         if generation is None:
-            return NO_HOME
-        home = self._homes.get(generation)
-        if home is None:
-            try:
-                home = await read_derived(request, read_home)
-            except NotCurrentError:
-                return NO_HOME
-            self._homes = {generation: home}
-        return home
+            return NO_LINK
+        cached = self._cached
+        if cached is not None and cached[0] == generation and (cached[1] is not None or monotonic() < cached[2]):
+            return cached[1] or NO_LINK
+        reader: DerivedReader = request.app.state.derived
+        link: OntologyLink | None = None
+        try:
+            link = await reader.read(generation, read_ontology_link)
+        except NotCurrentError:
+            pass
+        except Exception:
+            # The name is decoration: failing to read it mustn't fail the page, such as the admin's upload page.
+            logger.exception("Couldn't read the ontology's name and home page for the navigation bar")
+        self._cached = (generation, link, monotonic() + RETRY_AFTER_S)
+        return link or NO_LINK
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """Serve the request, with the home in its state, adding the policy to an HTML response."""
+        """Serve the request, with the ontology's link in its state, adding the security headers."""
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
         path = app_path(scope)
-        if any(is_under(path, prefix) for prefix in self.bare):
-            await self.app(scope, receive, send)
-            return
-        request = Request(scope)
-        request.state.home = await self.home(request)
-        if any(is_under(path, prefix) for prefix in self.csp_exempt):
-            await self.app(scope, receive, send)
-            return
+        if not is_under_any(path, self.passthrough):
+            request = Request(scope)
+            request.state.ontology_link = await self.ontology_link(request)
+        policy = not is_under_any(path, self.csp_exempt)
 
-        async def send_with_policy(message: Mapping[str, object]) -> None:
+        async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
-                headers = MutableHeaders(scope=message)  # type: ignore[arg-type]
-                if headers.get("content-type", "").startswith("text/html"):
+                headers = MutableHeaders(scope=message)
+                for name, value in SECURITY_HEADERS.items():
+                    headers.setdefault(name, value)
+                if policy and headers.get("content-type", "").startswith("text/html"):
                     headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
-            await send(message)  # type: ignore[arg-type]
+            await send(message)
 
-        await self.app(scope, receive, send_with_policy)
+        await self.app(scope, receive, send_with_headers)

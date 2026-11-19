@@ -19,7 +19,7 @@ from starlette.routing import Match
 from starlette.types import Scope
 
 from browl.derived import Entity, EntityType, Meta, entities_at, entities_with_iri, is_hash_prefix, read_meta
-from browl.pages import app_path, is_under, link_root, read_derived, templates
+from browl.pages import app_path, href, is_under, link_root, read_derived, templates
 from browl.urls import FALLBACK_PATH, fallback_path
 
 HASH_PATH = "hash"
@@ -94,12 +94,6 @@ def request_path(request: Request) -> str:
     if root and text.startswith(root) and urllib.parse.unquote(text) == scope["path"]:
         text = text[len(root) :]
     return text
-
-
-def href(request: Request, path: str, fragment: str | None = None) -> str:
-    """Return a root-relative link to a path from the app's root, with a fragment if given."""
-    root = link_root(request.scope)
-    return f"{root}{path}" if fragment is None else f"{root}{path}#{fragment}"
 
 
 def not_found(request: Request) -> Response:

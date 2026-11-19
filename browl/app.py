@@ -125,9 +125,9 @@ def create_app(
     app.include_router(lookup.reserved_router, prefix=reserved)
     app.mount(f"{reserved}/static", StaticFiles(directory=STATIC_DIR), name="static")
     app.include_router(lookup.catch_all_router)  # last, so every other route comes first (§2.3, Lookup)
-    exempt = [f"{reserved}/health", f"{reserved}/static", f"{reserved}/admin"]
-    app.add_middleware(SiteGate, exempt=exempt)
+    no_pages = [f"{reserved}/health", f"{reserved}/static"]
+    app.add_middleware(SiteGate, exempt=[*no_pages, f"{reserved}/admin"])
     # Outside the gate, so its "loading" and "not available" pages have the frame too.
-    app.add_middleware(PageFrame, bare=exempt[:2], csp_exempt=[f"{reserved}/admin/docs"])
+    app.add_middleware(PageFrame, passthrough=no_pages, csp_exempt=[f"{reserved}/admin/docs"])
     app.add_exception_handler(NotCurrentError, derived_not_current)
     return app
