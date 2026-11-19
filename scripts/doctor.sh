@@ -116,6 +116,14 @@ else
     ok "$(docker --version | sed 's/,.*//'), with Compose"
 fi
 
+if poetry run python -c 'from playwright.sync_api import sync_playwright
+with sync_playwright() as playwright:
+    playwright.chromium.launch().close()' >/dev/null 2>&1; then
+    ok "Playwright's headless Chromium"
+else
+    warn "Playwright's headless Chromium (run \`make browser\`; on Linux, also its system libraries, CONTRIBUTING.md): the browser tests will be skipped"
+fi
+
 if command -v shellcheck >/dev/null 2>&1; then
     ok "ShellCheck"
 else

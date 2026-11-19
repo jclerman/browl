@@ -6,13 +6,16 @@ import os
 import sqlite3
 import subprocess
 import threading
+import time
 import urllib.parse
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Coroutine, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import httpx2
+import uvicorn
 from fastapi import FastAPI
 
 from browl import derived
@@ -94,6 +97,48 @@ class StaticServer:
         """Stop serving."""
         self._server.shutdown()
         self._server.server_close()
+
+
+class LiveServer:
+    """An app served by Uvicorn on a free local port, in a thread with its own event loop, for browser tests.
+
+    A browser can't reach the in-process `TestClient`. The server runs in this process, so tests can still reach into
+    the app, running its coroutines with `call`.
+
+    Attributes:
+        app: The app.
+        url: Its base URL, with no trailing slash.
+    """
+
+    def __init__(self, app: FastAPI) -> None:
+        """Start serving the app, and return once it's ready."""
+        self.app = app
+        config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", timeout_graceful_shutdown=1)
+        self._server = uvicorn.Server(config)
+        self._loop = asyncio.new_event_loop()
+        # A daemon, so a server that won't stop can't keep pytest from exiting.
+        self._thread = threading.Thread(target=self._loop.run_until_complete, args=(self._server.serve(),), daemon=True)
+        self._thread.start()
+        deadline = time.monotonic() + WAIT_S
+        while not self._server.started:
+            if not self._thread.is_alive() or time.monotonic() > deadline:
+                self.close()
+                raise RuntimeError("the live server didn't start")
+            time.sleep(0.01)
+        port = self._server.servers[0].sockets[0].getsockname()[1]
+        self.url = f"http://127.0.0.1:{port}"
+
+    def call[T](self, coroutine: Coroutine[Any, Any, T]) -> T:
+        """Run a coroutine on the server's event loop, as the app's own code runs, and return its result."""
+        return asyncio.run_coroutine_threadsafe(coroutine, self._loop).result(WAIT_S)
+
+    def close(self) -> None:
+        """Stop serving, running the app's shutdown."""
+        self._server.should_exit = True
+        self._thread.join(WAIT_S)
+        if self._thread.is_alive():
+            raise RuntimeError("the live server didn't stop")
+        self._loop.close()
 
 
 def turtle(iri: str, *imports: str, extra: str = "") -> str:

@@ -1,0 +1,28 @@
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+# An ontology with one entity of each kind of URL (DESIGN.md §2.3, Lookup), for checking routing and the hash-IRI
+# script in a browser: by hand (PR #87), and by the browser tests (#88). Unless BASE_URL is under http://example.org/,
+# every http(s) IRI here is proxied: its URL is /example.org/<path>.
+
+# The ontology, at /example.org/onto; hash entities share its path, so the home page carries the hash script.
+<http://example.org/onto> a owl:Ontology ; rdfs:label "Manual test ontology" .
+<http://example.org/onto#Alpha> a owl:Class ; rdfs:label "Alpha" .
+<http://example.org/onto#Beta> a owl:Class ; rdfs:label "Beta" .
+
+# Hash entities only: /example.org/vocab is a hash prefix with no entity of its own.
+<http://example.org/vocab#Gamma> a owl:Class ; rdfs:label "Gamma" .
+<http://example.org/vocab#Epsilon> a owl:Class ; rdfs:label "Epsilon (http)" .
+<https://example.org/vocab#Epsilon> a owl:Class ; rdfs:label "Epsilon (https)" .
+
+# An entity whose path is also a hash prefix.
+<http://example.org/thing> a owl:Class ; rdfs:label "Thing" .
+<http://example.org/thing#Delta> a owl:Class ; rdfs:label "Delta" .
+
+# http and https forms of one IRI: a choose page.
+<http://example.org/shared> a owl:Class ; rdfs:label "Shared (http)" .
+<https://example.org/shared> a owl:Class ; rdfs:label "Shared (https)" .
+
+# A plain entity, and one with a fallback URL.
+<http://example.org/plain> a owl:Class ; rdfs:label "Plain" .
+<urn:example:fallback> a owl:Class ; rdfs:label "Fallback" .

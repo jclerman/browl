@@ -33,6 +33,7 @@ mypy = "^2.4.1"
 pre-commit = "^4.7.0"
 pytest = "^9.2.0"
 pytest-cov = "^7.1.0"
+pytest-playwright = "^0.10.0"
 pytest-sugar = "^1.1.1"
 rdflib = "^7.6.0"
 
@@ -44,9 +45,14 @@ addopts = ["--cov-context=test", "--strict-markers", "--durations=15"]
 markers = [
     "jvm: needs a JVM and robot.jar; skipped when Java is not available (fails in CI)",
     "fuseki: needs Fuseki, from BROWL_TEST_FUSEKI_URL or started with Docker; skipped when neither is available (fails in CI)",
+    "browser: needs Playwright's headless Chromium (make browser); skipped when it's not installed (fails in CI)",
 ]
 # Show full assertion diffs (as with -vv) without making other output verbose.
 verbosity_assertions = 2
+filterwarnings = [
+    # pytest-base-url, which pytest-playwright uses, defines a session fixture as a method.
+    "ignore:Session-scoped fixtures defined as instance methods:pytest.PytestRemovedIn10Warning",
+]
 
 [tool.coverage.run]
 # Measure the browl package, including modules no test imports.

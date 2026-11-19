@@ -102,8 +102,26 @@ jobs:
           tags: ${{ env.BROWL_TEST_FUSEKI_IMAGE }}
           cache-from: type=gha,scope=fuseki
 
-      - name: Install dependencies, lint, and test
-        run: make install ci
+      - name: Install dependencies
+        run: make install
+
+      # Cache the Chromium that `make browser` installs, keyed by the Playwright version that pins it. Its system
+      # libraries can't be cached, so apt installs them each run.
+      - name: Read the locked Playwright version
+        id: playwright
+        run: echo "version=$(poetry run playwright --version | cut -d ' ' -f 2)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright's browser
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ steps.playwright.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install the browser's system libraries
+        run: poetry run playwright install-deps chromium-headless-shell
+
+      - name: Lint and test
+        run: make ci
 
   images:
     name: Build and start the Docker images

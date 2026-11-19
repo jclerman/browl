@@ -31,8 +31,17 @@ ROBOT_JAR_CACHE := .cache/robot.jar
 JENA_STAMP := .cache/jena/bin/tdb2.tdbloader
 
 .PHONY: test
-test: $(if $(ROBOT_JAR),,$(ROBOT_JAR_CACHE)) $(if $(JENA_HOME),,$(JENA_STAMP))  ## Run tests with coverage
+test: $(if $(ROBOT_JAR),,$(ROBOT_JAR_CACHE)) $(if $(JENA_HOME),,$(JENA_STAMP)) browser  ## Run tests with coverage
 	poetry run pytest --cov
+
+# Playwright's headless Chromium for the tests marked browser, at the version the locked Playwright pins, in
+# Playwright's own cache; a no-op once it's there. Unlike the downloads below, it has no checksum here: Playwright picks
+# the build, and it comes over TLS from Playwright's CDN, named by the hash-pinned wheel. A failed download only warns,
+# except in CI, so `make test` still runs offline, the browser tests skipped. Linux setup: CONTRIBUTING.md.
+.PHONY: browser
+browser:  ## Install the headless Chromium the browser tests use, unless already present
+	poetry run playwright install --only-shell chromium || { \
+		test -z "$$CI" && echo "warning: Chromium not installed; the browser tests will be skipped" >&2; }
 
 .PHONY: robot-jar
 robot-jar: $(ROBOT_JAR_CACHE)  ## Download the pinned robot.jar for the tests, unless already present
