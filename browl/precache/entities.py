@@ -7,14 +7,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from browl.derived import EntityType
-from browl.precache.core import PreCacheContext, batched, hook, sparql_file
+from browl.precache.core import PreCacheContext, batched, hook, logged_iri, sparql_file
 from browl.rdf import OWL, Term
 from browl.urls import URLMapper
 
 logger = logging.getLogger(__name__)
 
 _LOGGED_IRIS = 10  # the most reserved IRIs a warning lists
-_LOGGED_IRI_CHARS = 300  # the most characters of each it shows, so a huge IRI can't give a huge log line
 
 
 ENTITY_TYPES = {
@@ -94,7 +93,7 @@ def insert_entities(
         if url.reserved:
             reserved.count += 1
             if len(reserved.iris) < _LOGGED_IRIS:
-                reserved.iris.append(iri if len(iri) <= _LOGGED_IRI_CHARS else f"{iri[:_LOGGED_IRI_CHARS]}…")
+                reserved.iris.append(logged_iri(iri))
         values.append((iri, kind, url.path, url.fragment))  # an EntityType is stored as TEXT, as a str is
     connection.executemany("INSERT INTO entity (iri, type, path, fragment) VALUES (?, ?, ?, ?)", values)
 

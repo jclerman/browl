@@ -15,7 +15,7 @@ from scipy.sparse.csgraph import connected_components
 
 from browl.derived import EntityType
 from browl.jobtypes import StageError
-from browl.precache.core import PreCacheContext, batched, hook
+from browl.precache.core import PreCacheContext, batched, hook, logged_iri
 from browl.rdf import OWL, RDFS, Term
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ EQUIVALENT_CLASS = f"{OWL}equivalentClass"
 
 RELATION_TYPES = {
     f"{RDFS}subClassOf": (EntityType.CLASS,),
-    f"{RDFS}subPropertyOf": HIERARCHIES[1:],
+    f"{RDFS}subPropertyOf": (EntityType.OBJECT_PROPERTY, EntityType.DATA_PROPERTY, EntityType.ANNOTATION_PROPERTY),
     EQUIVALENT_CLASS: (EntityType.CLASS,),
 }
 """The hierarchies each of the edges query's relations links entities in."""
@@ -60,6 +60,12 @@ DESCENDANT_BUDGET = 300_000_000
 
 NCBITaxon, a tree, needs 3 M, as its root's set holds every class. A dense or adversarial hierarchy might otherwise
 need tens of GB (DESIGN.md §2.14)."""
+
+LOGGED_CYCLES = 3
+"""The most cycles the cycle warning lists."""
+
+LOGGED_MEMBERS = 5
+"""The most members of each cycle the cycle warning lists."""
 
 Edges = npt.NDArray[np.int64]
 """Edges between node numbers, as an array of shape (n, 2): a row is (child, parent)."""
@@ -120,7 +126,11 @@ def _fill(hierarchy: EntityType, connection: sqlite3.Connection) -> None:
     number[ids] = np.arange(count)
 
     def edges(*relations: str) -> Edges:
-        """Return the staged edges for these relations between the hierarchy's nodes, by node number."""
+        """Return the staged edges for these relations between the hierarchy's nodes.
+
+        Returns:
+            The (child, parent) edges, by node number, as an `Edges` array; empty if no relation links the hierarchy.
+        """
         codes = [RELATION_CODES[relation] for relation in relations if hierarchy in RELATION_TYPES[relation]]
         if not codes:
             return np.empty((0, 2), np.int64)
@@ -137,7 +147,12 @@ def _fill(hierarchy: EntityType, connection: sqlite3.Connection) -> None:
     nodes = group_nodes(count, edges(*sub), edges(EQUIVALENT_CLASS))
     if nodes.cycles:
         logger.warning(
-            "The %s hierarchy has %d cycles; each one's members are shown as one node", hierarchy, nodes.cycles
+            "The %s hierarchy has %d %s of edges: %s. A cycle's members are equivalent, so each cycle is shown as one"
+            " node",
+            hierarchy,
+            len(nodes.cycles),
+            "cycle" if len(nodes.cycles) == 1 else "cycles",
+            _describe_cycles(connection, ids, nodes.cycles),
         )
     numbers = np.arange(count)
     grouped = np.isin(nodes.representative, nodes.representative[nodes.representative != numbers])
@@ -160,6 +175,32 @@ def _fill(hierarchy: EntityType, connection: sqlite3.Connection) -> None:
     )
 
 
+def _describe_cycles(
+    connection: sqlite3.Connection, ids: npt.NDArray[np.int64], cycles: list[npt.NDArray[np.int64]]
+) -> str:
+    """Describe the first `LOGGED_CYCLES` cycles for a log line, each by its first `LOGGED_MEMBERS` members' IRIs.
+
+    Args:
+        connection: The database, to look up the IRIs.
+        ids: Each node number's `entity.id`.
+        cycles: The cycles, each as its members' node numbers (`Nodes.cycles`).
+
+    Returns:
+        The cycles as `{IRI, IRI, …}`, separated by `; `, each IRI shortened (`logged_iri`); `…` marks a cycle with
+        more members, and `and N more` more cycles.
+    """
+    described = []
+    for members in cycles[:LOGGED_CYCLES]:
+        iris = [
+            logged_iri(connection.execute("SELECT iri FROM entity WHERE id = ?", (entity,)).fetchone()[0])
+            for entity in ids[members[:LOGGED_MEMBERS]].tolist()
+        ]
+        more = ", …" if len(members) > LOGGED_MEMBERS else ""
+        described.append(f"{{{', '.join(iris)}{more}}}")
+    more = f" and {len(cycles) - LOGGED_CYCLES} more" if len(cycles) > LOGGED_CYCLES else ""
+    return "; ".join(described) + more
+
+
 def _insert(connection: sqlite3.Connection, table: str, *columns: str | npt.NDArray[np.int64]) -> None:
     """Insert rows into a table, given as its columns: a string is the same in every row, an array a column's values.
 
@@ -180,12 +221,13 @@ class Nodes(NamedTuple):
     Attributes:
         representative: Each entity's group's representative, by entity number: the group's lowest number.
         edges: The (child, parent) edges between representatives, each once, without self-loops, sorted.
-        cycles: How many groups merged cycles of edges.
+        cycles: The groups that merge a cycle of edges, by representative, each as its members' numbers, ascending.
+            A group also holds any entities equivalent to the cycle's members.
     """
 
     representative: npt.NDArray[np.int64]
     edges: Edges
-    cycles: int
+    cycles: list[npt.NDArray[np.int64]]
 
 
 def group_nodes(count: int, edges: Iterable[tuple[int, int]], equivalent: Iterable[tuple[int, int]]) -> Nodes:
@@ -199,20 +241,35 @@ def group_nodes(count: int, edges: Iterable[tuple[int, int]], equivalent: Iterab
         count: How many entities there are, numbered from 0.
         edges: The (child, parent) edges.
         equivalent: The pairs of equivalent entities.
+
+    Returns:
+        Each entity's representative, the edges between representatives, and the groups that merge cycles.
     """
     edge_array = np.asarray(edges, np.int64).reshape(-1, 2)
     representative = _lowest(count, np.asarray(equivalent, np.int64).reshape(-1, 2), directed=False)
     merged = _distinct(count, representative[edge_array])
     found = _lowest(count, merged, directed=True)
-    cycles = len(np.unique(found[found != np.arange(count)]))
-    if cycles:
-        representative = found[representative]
-        merged = _distinct(count, representative[edge_array])
-    return Nodes(representative, merged, cycles)
+    in_cycles = np.unique(found[found != np.arange(count)])  # the representatives of the cycles' groups
+    if not len(in_cycles):
+        return Nodes(representative, merged, [])
+    representative = found[representative]
+    members = np.flatnonzero(np.isin(representative, in_cycles))  # ascending
+    members = members[np.argsort(representative[members], kind="stable")]
+    _, starts = np.unique(representative[members], return_index=True)
+    return Nodes(representative, _distinct(count, representative[edge_array]), np.split(members, starts[1:]))
 
 
 def _lowest(count: int, edges: Edges, directed: bool) -> npt.NDArray[np.int64]:
-    """Return each node's component's lowest number: weakly connected components if not directed, else strongly."""
+    """Find a graph's connected components: weakly connected if not directed, else strongly.
+
+    Args:
+        count: How many nodes there are, numbered from 0.
+        edges: The edges.
+        directed: Whether to find strongly connected components rather than weakly connected ones.
+
+    Returns:
+        Each node's component's lowest number, by node number: the node's own number if it's alone.
+    """
     if not len(edges):
         return np.arange(count)
     graph = coo_array((np.ones(len(edges), np.int8), (edges[:, 0], edges[:, 1])), shape=(count, count)).tocsr()
@@ -222,7 +279,12 @@ def _lowest(count: int, edges: Edges, directed: bool) -> npt.NDArray[np.int64]:
 
 
 def _distinct(count: int, edges: Edges) -> Edges:
-    """Return the edges each once, sorted, without self-loops."""
+    """Return the edges each once, sorted by child then parent, without self-loops.
+
+    Args:
+        count: How many nodes there are, numbered from 0.
+        edges: The edges, perhaps with duplicates and self-loops.
+    """
     keys = np.unique(edges[edges[:, 0] != edges[:, 1]] @ np.array([count, 1], np.int64))
     return np.stack(np.divmod(keys, count), axis=1)
 
@@ -240,6 +302,9 @@ def count_descendants(
         count: How many node numbers there are, from 0.
         edges: The (child, parent) edges, each once, with no cycles (`group_nodes`).
         budget: The most members to hold at once across the sets being built; `DESCENDANT_BUDGET` if not given.
+
+    Returns:
+        Two arrays by node number: each node's number of children, and its number of distinct descendants.
 
     Raises:
         ValueError: The edges have a cycle.

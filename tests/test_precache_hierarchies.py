@@ -49,8 +49,9 @@ Tables = tuple[set[tuple[str, str, str]], dict[str, str], dict[tuple[str, str], 
 def tables(settings: Settings, generation: int, hooks: Sequence[Hook] = HOOKS_USED) -> Tables:
     """Return the `edge`, `equiv_group` and `counts` tables, by IRI.
 
-    The edges are (hierarchy, parent, child); the groups {member: representative}; the counts
-    {(hierarchy, node): (children, descendants)}.
+    Returns:
+        The edges, as a set of (hierarchy, parent, child); the groups, as {member: representative}; and the counts, as
+        {(hierarchy, node): (children, descendants)}.
     """
     with closing(connect(settings, generation, hooks)) as connection:
         iri = dict(connection.execute("SELECT id, iri FROM entity"))
@@ -130,8 +131,15 @@ def test_group_nodes_equivalent() -> None:
     nodes = group_nodes(5, [(1, 0), (2, 3), (4, 1), (4, 3)], [(3, 1)])
     assert nodes.representative.tolist() == [0, 1, 2, 1, 4]
     assert nodes.edges.tolist() == [[1, 0], [2, 1], [4, 1]]  # each once
-    assert nodes.cycles == 0
+    assert nodes.cycles == []
     assert count_descendants(5, nodes.edges)[1].tolist() == [3, 2, 0, 0, 0]  # 1 and 3 count once under 0
+
+
+def test_group_nodes_equivalent_chain() -> None:
+    """Check that a chain of equivalences is one node, however each is stated: 0 ≡ 1 both ways, and 2 ≡ 1."""
+    nodes = group_nodes(4, [(3, 2)], [(1, 0), (0, 1), (2, 1)])
+    assert nodes.representative.tolist() == [0, 0, 0, 3]
+    assert (nodes.edges.tolist(), nodes.cycles) == ([[3, 0]], [])
 
 
 def test_group_nodes_cycles() -> None:
@@ -140,7 +148,7 @@ def test_group_nodes_cycles() -> None:
     nodes = group_nodes(7, [(0, 1), (1, 2), (2, 0), (3, 5), (5, 4), (6, 2)], [(3, 4)])
     assert nodes.representative.tolist() == [0, 0, 0, 3, 3, 3, 6]
     assert nodes.edges.tolist() == [[6, 0]]
-    assert nodes.cycles == 2
+    assert [members.tolist() for members in nodes.cycles] == [[0, 1, 2], [3, 4, 5]]  # 4 is equivalent to a member
 
 
 def test_group_nodes_deep() -> None:
@@ -148,10 +156,11 @@ def test_group_nodes_deep() -> None:
     count = 50_000
     chain = [(n, n + 1) for n in range(count - 1)]
     nodes = group_nodes(count, [*chain, (count - 1, 0)], [])
-    assert (not nodes.representative.any(), len(nodes.edges), nodes.cycles) == (True, 0, 1)
+    assert (not nodes.representative.any(), len(nodes.edges), len(nodes.cycles)) == (True, 0, 1)
+    assert np.array_equal(nodes.cycles[0], np.arange(count))
     nodes = group_nodes(count, chain, [])
     assert np.array_equal(nodes.representative, np.arange(count))
-    assert (np.array_equal(nodes.edges, chain), nodes.cycles) == (True, 0)
+    assert (np.array_equal(nodes.edges, chain), nodes.cycles) == (True, [])
 
 
 def test_count_descendants_chain_under_common_parent() -> None:
@@ -222,7 +231,8 @@ async def test_hierarchies(data_dir: Path) -> None:
     queries: list[str] = []
     async with fuseki(HEADER + END, entity_result(*classes, *properties), edge_result(*edges), queries=queries) as http:
         await pre_caching_stage(job(settings, 1, [ImportResult(f"{EX}i", triples=1)]), http, hooks=HOOKS_USED)
-    assert UNION_FROM in queries[2]  # the imports' edges too
+    [edges_query] = [query for query in queries if "?relation" in query]
+    assert UNION_FROM in edges_query  # the imports' edges too
     found_edges, groups, counts = tables(settings, 1)
     top, left, right, bottom, same, alias, child, free = ex(
         "Top", "Left", "Right", "Bottom", "Same", "Alias", "Child", "Free"
@@ -313,7 +323,41 @@ async def test_cycle(data_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
         await pre_caching_stage(job(settings, 1), http, hooks=HOOKS_USED)
     a, b, c = ex("A", "B", "C")
     assert tables(settings, 1) == ({("class", a, c)}, {a: a, b: a}, {("class", a): (1, 1), ("class", c): (0, 0)})
-    assert "The class hierarchy has 1 cycles" in caplog.text
+    assert f"The class hierarchy has 1 cycle of edges: {{{a}, {b}}}. A cycle's members are equivalent" in caplog.text
+
+
+async def test_property_cycles(data_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Check that object properties in sub-property cycles form nodes, and that the warning lists only a few."""
+    settings = make_settings()
+    names = "abcdefghijkl"
+    properties = [(name, "ObjectProperty") for name in names]
+    rings = ["ab", "cdefgh", "ij", "kl"]  # each a cycle: a ⊑ b ⊑ a, and so on
+    edges = [(ring[n], SUB_PROPERTY, ring[(n + 1) % len(ring)]) for ring in rings for n in range(len(ring))]
+    async with fuseki(HEADER + END, entity_result(*properties), edge_result(*edges)) as http:
+        await pre_caching_stage(job(settings, 1), http, hooks=HOOKS_USED)
+    iri = dict(zip(names, ex(*names), strict=True))
+    groups = {iri[member]: iri[ring[0]] for ring in rings for member in ring}
+    counts = {("object_property", iri[ring[0]]): (0, 0) for ring in rings}
+    assert tables(settings, 1) == (set(), groups, counts)
+    listed = "; ".join(
+        "{" + ", ".join(iri[member] for member in ring[:5]) + (", …" if len(ring) > 5 else "") + "}"
+        for ring in rings[:3]
+    )
+    assert f"The object_property hierarchy has 4 cycles of edges: {listed} and 1 more. A cycle's" in caplog.text
+
+
+async def test_punned_equivalent_classes(data_dir: Path) -> None:
+    """Check that `owl:equivalentClass` between IRIs that are also properties groups only the classes."""
+    settings = make_settings()
+    entities = [("P", "Class"), ("Q", "Class"), ("P", "ObjectProperty"), ("Q", "ObjectProperty")]
+    entities.append(("R", "ObjectProperty"))
+    edges = [("P", EQUIVALENT, "Q"), ("R", SUB_PROPERTY, "P")]
+    async with fuseki(HEADER + END, entity_result(*entities), edge_result(*edges)) as http:
+        await pre_caching_stage(job(settings, 1), http, hooks=HOOKS_USED)
+    p, q, r = ex("P", "Q", "R")
+    counts = {("class", p): (0, 0), ("object_property", p): (1, 1), ("object_property", q): (0, 0)}
+    counts[("object_property", r)] = (0, 0)
+    assert tables(settings, 1) == ({("object_property", p, r)}, {p: p, q: p}, counts)
 
 
 # The hook, on a real Fuseki.

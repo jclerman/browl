@@ -628,6 +628,10 @@ one filled: P-10 (entities), P-11 (names), P-12 (hierarchies), P-19 (search), an
 gets the Fuseki client, the generation's dataset, the dataset clause that merges in the imports if any were loaded, and
 a writer. A SQLite connection must stay on one thread while the queries stream on the event loop, so the build runs on a
 single-thread executor that owns the connection, and hooks hand it rows in batches (`browl.precache.core.batched`).
+So a hook's work never blocks the event loop, but its Python work holds the GIL, slowing requests served meanwhile:
+e.g. on NCBITaxon, the names hook's normalizing and the hierarchies hook's turning rows into arrays and counting
+descendants. That's accepted, as loads are rare and pages are still served. (The `sqlite3` module releases the GIL
+while SQLite runs a statement.)
 Every bulk query goes through `PreCacheContext.bulk_select`, which checks that it's complete ([2.14](#214-risks)); hooks
 get the plain client too, for small queries, but nothing stops one using it for a bulk query, so review checks they
 don't. Any hook's failure fails the stage. A hook creates the indexes of each table it fills when it's done
@@ -657,14 +661,17 @@ triples with an IRI on both sides (asserted, or inferred if a reasoner ran), fro
 `owl:equivalentClass` triples, over the imports too. An edge counts only between two entities declared with the
 hierarchy's type, so a punned IRI is in each of its types' hierarchies, and a sub-property edge between an object and a
 data property is dropped. Roots are nodes with no named parent. `owl:Thing`, `owl:Nothing` and the top and bottom
-properties are in no hierarchy, even if declared, so the children of `owl:Thing` are roots.
+properties are in no hierarchy, even if declared, so the children of `owl:Thing` are roots. Without a reasoner, only
+asserted edges count: a class whose only named parent is inside a logical definition, as in `A ≡ B and (r some C)`, is
+a root, though a reasoner would put it under B. Unreasoned OBO editors' files often look like this; choosing a
+reasoner at upload (A-3) avoids it.
 
-- **Nodes:** classes linked by `owl:equivalentClass` form one group (union-find), shown as one node (U-9); so do the
-  members of a cycle of edges, which OWL makes equivalent, with a warning. The cycles are found once the equivalences
-  are merged, as strongly connected components (SciPy's `connected_components`, on the edges as NumPy arrays), and
-  merging them leaves none. A group's representative is its first IRI, and stands for it in `edge` and `counts`;
-  `equiv_group` holds only groups of more than one entity, since most have one. `owl:equivalentProperty` isn't
-  grouped yet.
+- **Nodes:** classes linked by `owl:equivalentClass` form one group (a weakly connected component of the equivalences),
+  shown as one node (U-9); so do the members of a cycle of edges, which OWL makes equivalent, with a warning that names
+  a few of them. The cycles are found once the equivalences are merged, as strongly connected components, and merging
+  them leaves none. Both use SciPy's `connected_components`, on the edges as NumPy arrays. A group's representative is
+  its first IRI, and stands for it in `edge` and `counts`; `equiv_group` holds only groups of more than one entity,
+  since most have one. `owl:equivalentProperty` isn't grouped yet.
 
 **Distinct descendant counts.** These need a transitive closure, not a sum over edges. _(Q19a)_ They are computed
 (`count_descendants`) in a bottom-up pass in topological order, merging descendant sets. Each set is a

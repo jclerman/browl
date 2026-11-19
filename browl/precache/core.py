@@ -1,4 +1,4 @@
-"""What pre-caching hooks share: their context, the writer, batching, the `Hook` type and `sparql_file`.
+"""What pre-caching hooks share: their context, the writer, batching, the `Hook` type, `sparql_file` and `logged_iri`.
 
 A hook's module imports only what it uses, for its build key (`browl.precache.keys`).
 """
@@ -30,6 +30,14 @@ PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 
 SPARQL_DIR = Path(__file__).parent.parent / "sparql"
 """Where `sparql_file` finds its files."""
+
+LOGGED_IRI_CHARS = 300
+"""The most characters of an IRI a log line shows (`logged_iri`)."""
+
+
+def logged_iri(iri: str) -> str:
+    """Return an IRI as a log line shows it: cut short, with "…", so a huge IRI can't give a huge log line."""
+    return iri if len(iri) <= LOGGED_IRI_CHARS else f"{iri[:LOGGED_IRI_CHARS]}…"
 
 
 def sparql_file(name: str) -> str:
