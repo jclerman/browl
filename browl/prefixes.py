@@ -11,7 +11,7 @@ import xml.parsers.expat
 from pathlib import Path
 from typing import BinaryIO
 
-from browl.rdf import IRI, RDFSyntaxError
+from browl.rdf import IRI, PREFIX_NAME, RDFSyntaxError
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,11 @@ HEAD_BYTES = 4 * 1024 * 1024
 """The most of a file's start read for its prefixes: plenty for any header, little for a multi-GB file."""
 
 _CHUNK_BYTES = 64 * 1024
+_LOGGED_WARNINGS = 10  # the most warnings one file's prefixes log, so a hostile header can't flood the log
+_LOGGED_CHARS = 200  # the most characters of a name or IRI a warning shows
+
+_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
+_URL_SCHEMES = frozenset({"http", "https", "ftp", "file", "urn", "mailto", "data", "javascript"})
 
 _TURTLE_DIRECTIVE = re.compile(
     r"""(?:\s|\#[^\n]*(?:\n|$))*  # whitespace and comments
@@ -38,8 +43,8 @@ def read_prefixes(path: Path) -> dict[str, str]:
     """Return the prefixes a Turtle or RDF/XML file declares at its start, name → namespace IRI.
 
     The syntax is the one its suffix names: `.ttl` is Turtle, any other RDF/XML (`browl.upload.STORED_SUFFIXES`). A
-    namespace that isn't an absolute IRI, once resolved against a Turtle base, is left out. A file that can't be read
-    or parsed has none; a warning says why.
+    namespace that isn't an absolute IRI, once resolved against a Turtle base, is left out, as is a name that isn't a
+    prefix name (`PREFIX_NAME`) or is a URL scheme. A file that can't be read or parsed has none; a warning says why.
     """
     try:
         with path.open("rb") as file:
@@ -53,17 +58,38 @@ def read_prefixes(path: Path) -> dict[str, str]:
 
 def _turtle_prefixes(text: str) -> dict[str, str]:
     """Return the prefixes declared by the directives at the start of a Turtle document, until its first statement."""
-    prefixes: dict[str, str] = {}
+    prefixes = _Prefixes()
     base: str | None = None
-    position = 1 if text.startswith("﻿") else 0
+    position = 1 if text.startswith("\ufeff") else 0
     while match := _TURTLE_DIRECTIVE.match(text, position):
         position = match.end()
-        iri = urllib.parse.urljoin(base, match["iri"]) if base else match["iri"]
+        try:
+            iri = _resolve(base, match["iri"])
+        except ValueError as error:  # urljoin's, e.g. for a malformed IPv6 host
+            message = "The ontology's %s <%s> doesn't resolve (%s); it's left out"
+            prefixes.warn(message, match["keyword"], match["iri"], str(error))
+            continue
         if match["keyword"].lower() == "base":
             base = iri
         elif match["name"] is not None:
-            _add(prefixes, match["name"], iri)
-    return prefixes
+            prefixes.add(match["name"], iri)
+    return prefixes.found
+
+
+def _resolve(base: str | None, reference: str) -> str:
+    """Return an IRI reference resolved against the base, if it's relative and there is one.
+
+    `urljoin` drops an empty fragment or query, so a namespace's trailing "#" or "?" is put back.
+
+    Raises:
+        ValueError: The base or reference doesn't parse as a URL.
+    """
+    if base is None or _SCHEME.match(reference):
+        return reference
+    resolved = urllib.parse.urljoin(base, reference)
+    if reference.endswith(("#", "?")) and not resolved.endswith(reference[-1]):
+        resolved += reference[-1]
+    return resolved
 
 
 class _RootReachedError(Exception):
@@ -72,16 +98,13 @@ class _RootReachedError(Exception):
 
 def _xml_prefixes(file: BinaryIO) -> dict[str, str]:
     """Return the namespaces declared on the root element of an XML document; the default namespace's name is ""."""
-    prefixes: dict[str, str] = {}
+    prefixes = _Prefixes()
     parser = xml.parsers.expat.ParserCreate(namespace_separator=" ")
+    parser.StartNamespaceDeclHandler = lambda name, uri: prefixes.add(name or "", uri)
 
-    def declare(name: str | None, uri: str) -> None:
-        _add(prefixes, name or "", uri)
-
-    def start(name: str, attributes: dict[str, str]) -> None:
+    def start(*_: object) -> None:
         raise _RootReachedError
 
-    parser.StartNamespaceDeclHandler = declare
     parser.StartElementHandler = start
     remaining = HEAD_BYTES
     try:
@@ -89,7 +112,7 @@ def _xml_prefixes(file: BinaryIO) -> dict[str, str]:
             remaining -= len(chunk)
             parser.Parse(chunk, False)
     except _RootReachedError:
-        return prefixes
+        return prefixes.found
     except xml.parsers.expat.ExpatError as error:
         logger.warning("Couldn't read the ontology's prefixes: its XML doesn't parse (%s)", error)
         return {}
@@ -97,8 +120,32 @@ def _xml_prefixes(file: BinaryIO) -> dict[str, str]:
     return {}
 
 
-def _add(prefixes: dict[str, str], name: str, namespace: str) -> None:
-    try:
-        prefixes[name] = IRI(namespace)
-    except RDFSyntaxError:
-        logger.warning("The ontology's prefix %r stands for %r, not an absolute IRI; it's left out", name, namespace)
+class _Prefixes:
+    """The prefixes found so far, and the warnings about those left out, of which only the first few are logged."""
+
+    def __init__(self) -> None:
+        self.found: dict[str, str] = {}
+        self._warnings = 0
+
+    def add(self, name: str, namespace: str) -> None:
+        """Add a prefix, unless its name isn't a prefix name or is a URL scheme, or its namespace isn't an IRI."""
+        if not PREFIX_NAME.fullmatch(name) or name.lower() in _URL_SCHEMES:
+            # A scheme as a prefix makes CURIEs that look like URLs (`http://…`); other names may not parse as CURIEs.
+            self.warn("The ontology's prefix name %r isn't allowed; it's left out", name)
+            return
+        try:
+            self.found[name] = IRI(namespace)
+        except RDFSyntaxError:
+            self.warn("The ontology's prefix %r stands for %r, not an absolute IRI; it's left out", name, namespace)
+
+    def warn(self, message: str, *args: str) -> None:
+        """Log a warning, its values cut short, unless `_LOGGED_WARNINGS` have been; then say once that more follow."""
+        self._warnings += 1
+        if self._warnings <= _LOGGED_WARNINGS:
+            logger.warning(message, *(_shorten(arg) for arg in args))
+        elif self._warnings == _LOGGED_WARNINGS + 1:
+            logger.warning("More of the ontology's prefixes are left out; their warnings aren't logged")
+
+
+def _shorten(text: str) -> str:
+    return text if len(text) <= _LOGGED_CHARS else f"{text[:_LOGGED_CHARS]}…"

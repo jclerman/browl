@@ -27,7 +27,7 @@ def test_turtle(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     path = write(
         tmp_path,
         "o.ttl",
-        "﻿# A comment\n"
+        "\ufeff# A comment\n"
         f"@prefix : <{EX}o#> .\n"
         f"@prefix obo:<http://purl.obolibrary.org/obo/>.  # no spaces\n"
         f"PREFIX sparql: <{EX}s/>\n"
@@ -104,3 +104,68 @@ def test_missing_file(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """A file that can't be read has no prefixes, with a warning."""
     assert read_prefixes(tmp_path / "missing.ttl") == {}
     assert "Couldn't read the ontology's prefixes from" in caplog.text
+
+
+def test_turtle_base_keeps_trailing_hash(tmp_path: Path) -> None:
+    """After a base, a namespace keeps its trailing "#" or "?", absolute or relative (M1)."""
+    path = write(
+        tmp_path,
+        "o.ttl",
+        f"@base <{EX}onto> .\n"
+        f"@prefix : <{EX}onto#> .\n"
+        "@prefix rel: <#> .\n"
+        "@prefix sub: <sub#> .\n"
+        "@prefix q: <q?> .\n"
+        f"@prefix abs: <{EX}abs/> .\n",
+    )
+    assert read_prefixes(path) == {
+        "": f"{EX}onto#",
+        "rel": f"{EX}onto#",
+        "sub": f"{EX}sub#",
+        "q": f"{EX}q?",
+        "abs": f"{EX}abs/",
+    }
+
+
+def test_turtle_base_unresolvable(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """A namespace that doesn't resolve against a malformed base is left out with a warning, not an error (S1)."""
+    path = write(tmp_path, "o.ttl", f"@base <http://[bad/> .\n@prefix rel: <foo#> .\n@prefix ex: <{EX}> .\n")
+    assert read_prefixes(path) == {"ex": EX}
+    assert "The ontology's prefix <foo#> doesn't resolve (" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("name", "syntax"),
+    [
+        ('x"onerror=alert(1)//', "ttl"),
+        ("a/b", "ttl"),
+        ("a#b", "ttl"),
+        ("a?b", "ttl"),
+        ("1a", "ttl"),
+        ("é", "ttl"),
+        ("http", "ttl"),
+        ("HTTPS", "ttl"),
+        ("javascript", "ttl"),
+        ("http", "rdf"),
+    ],
+)
+def test_bad_prefix_names(tmp_path: Path, caplog: pytest.LogCaptureFixture, name: str, syntax: str) -> None:
+    """A declared name that isn't a prefix name, or is a URL scheme, is left out with a warning (S3)."""
+    if syntax == "ttl":
+        path = write(tmp_path, "o.ttl", f"@prefix {name}: <{EX}bad/> .\n@prefix ex: <{EX}> .\n")
+    else:
+        path = write(tmp_path, "o.rdf", f'<rdf:RDF xmlns:{name}="{EX}bad/" xmlns:ex="{EX}" xmlns:rdf="{EX}rdf#"/>')
+    assert read_prefixes(path).keys() == ({"ex"} if syntax == "ttl" else {"ex", "rdf"})
+    assert f"The ontology's prefix name {name!r} isn't allowed" in caplog.text
+
+
+def test_warnings_limited(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Only the first few prefixes left out are logged, each value cut short (C3)."""
+    long_iri = "rel/" + "x" * 1000
+    lines = [f"@prefix p{n}: <{long_iri}> .\n" for n in range(prefixes._LOGGED_WARNINGS + 5)]
+    assert read_prefixes(write(tmp_path, "o.ttl", "".join(lines))) == {}
+    warnings = [record.getMessage() for record in caplog.records]
+    assert len(warnings) == prefixes._LOGGED_WARNINGS + 1
+    assert warnings[-1] == "More of the ontology's prefixes are left out; their warnings aren't logged"
+    assert all(len(warning) < prefixes._LOGGED_CHARS + 100 for warning in warnings)
+    assert f"'{long_iri[: prefixes._LOGGED_CHARS]}…'" in warnings[0]
