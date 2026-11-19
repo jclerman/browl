@@ -19,13 +19,14 @@ from browl import derived
 from browl.app import create_app
 from browl.fuseki import END_VARIABLE, TSV
 from browl.imports import OWL_IMPORTS
-from browl.jobs import JobContext
+from browl.jobs import JobContext, StageFunction
 from browl.jobtypes import ImportResult, Reasoner
 from browl.precache.core import Hook
 from browl.precache.keys import build_keys
 from browl.precache.stage import HOOKS
 from browl.sandbox import Runner
 from browl.settings import Settings
+from browl.urls import URLMapper
 
 
 def make_settings(**overrides: object) -> Settings:
@@ -213,3 +214,31 @@ def job(settings: Settings, generation: int, imports: list[ImportResult] | None 
 def connect(settings: Settings, generation: int, hooks: Sequence[Hook] = HOOKS) -> sqlite3.Connection:
     """Open a generation's derived database, built with these settings and hooks (`derived.connect`)."""
     return derived.connect(settings.data_dir, generation, build_keys(settings, hooks))
+
+
+def derived_stage(
+    entities: Sequence[tuple[str, derived.EntityType]] = (), ontology_iri: str | None = None, title: str | None = None
+) -> StageFunction:
+    """Return a load job stage that builds the job's derived database with these entities, and the ontology if given.
+
+    Their URLs come from the job's settings (`URLMapper`), and `hash_prefix` from them, as pre-caching would give them.
+    """
+
+    def build(context: JobContext) -> None:
+        settings = context.settings
+        mapper = URLMapper(settings.base_url, settings.reserved_prefix)
+        meta = derived.Meta(context.generation, context.reasoner, LOADED_AT, ontology_iri=ontology_iri, title=title)
+        rows = [*([(ontology_iri, derived.EntityType.ONTOLOGY)] if ontology_iri else []), *entities]
+        with derived.build(settings.data_dir, meta, build_keys(settings, HOOKS)) as connection:
+            for iri, kind in rows:
+                url = mapper(iri)
+                connection.execute(
+                    "INSERT INTO entity (iri, type, path, fragment) VALUES (?, ?, ?, ?)",
+                    (iri, kind, url.path, url.fragment),
+                )
+            connection.execute("INSERT INTO hash_prefix SELECT DISTINCT path FROM entity WHERE fragment IS NOT NULL")
+
+    async def stage(context: JobContext) -> None:
+        await asyncio.to_thread(build, context)
+
+    return stage

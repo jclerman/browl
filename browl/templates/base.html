@@ -4,9 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   {% block head %}{% endblock %}
+  {% if noindex is defined and noindex %}<meta name="robots" content="noindex">{% endif %}
   <title>{% block title %}{% endblock %} · browl</title>
   <link rel="stylesheet" href="{{ url_for('static', path='browl.css').path }}">
   <script src="{{ url_for('static', path='htmx.min.js').path }}" defer></script>
+  {% if hash_script is defined and hash_script %}
+  <script src="{{ url_for('static', path='hash.js').path }}" data-lookup="{{ hash_script.lookup }}"
+          data-path="{{ hash_script.path }}" data-prefix-only="{{ hash_script.prefix_only }}" defer></script>
+  {% endif %}
 </head>
 <body>
   <header class="site-bar">

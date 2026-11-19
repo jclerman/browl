@@ -17,8 +17,8 @@ from browl import admin
 from browl.admin import SWAGGER_UI_URL
 from browl.app import create_app
 from browl.fuseki import FusekiClient
-from browl.jobs import JobRunner, Site
-from tests.helpers import make_app, make_settings
+from browl.jobs import JobRunner, Site, Stage
+from tests.helpers import derived_stage, make_app, make_settings
 
 UNREACHABLE = "http://127.0.0.1:1"  # nothing listens on port 1, so connections are refused at once
 
@@ -145,10 +145,11 @@ def test_api_docs_servers(root_path: str, servers: list[dict[str, str]] | None) 
 def test_api_docs_are_under_admin(prefix: str) -> None:
     """Check that the API docs are admin routes, using a pinned Swagger UI, and nothing is at FastAPI's default paths.
 
-    An ontology is loaded, so the gate passes requests through and the default paths reach the router.
+    An ontology is loaded, so the gate passes requests through and the default paths reach the catch-all route.
     """
     with TestClient(make_app(RESERVED_PREFIX=prefix)) as client:
         jobs = client.app.state.jobs  # type: ignore[attr-defined]
+        jobs.register(Stage.PRE_CACHING, derived_stage())
         client.portal.call(jobs.start)
         client.portal.call(jobs.wait)
         page = client.get(f"/{prefix}/admin/docs").text

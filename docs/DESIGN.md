@@ -279,9 +279,14 @@ fragment). A request is resolved by looking up the path (`browl.derived.entities
 | --- | --- |
 | the ontology IRI | Home page. If hash entities share this path, the page also includes the hash script below. |
 | one entity (non-hash) | That entity's page. An IRI declared with several types (punning) has a row for each, but is one entity here. |
-| several IRIs | Disambiguation page. _(Q1a)_ Mostly the `http` and `https` forms of an IRI (U-15); also IRIs whose hosts differ only in case, or that differ only in a default port or an empty path, and a native IRI whose URL is a proxied one's (`BASE_URL`/`example.org/x` and `http://example.org/x`). |
-| a hash prefix only | A small page with a script that reads the fragment and loads that entity, or shows "not found" when there is no fragment or no such entity. HTTP status 200, since the server can't see the fragment. _(Q2a)_ |
+| several IRIs | Disambiguation page. _(Q1a)_ Mostly the `http` and `https` forms of an IRI (U-15); also IRIs whose hosts differ only in case, or that differ only in a default port or an empty path, and a native IRI whose URL is a proxied one's (`BASE_URL`/`example.org/x` and `http://example.org/x`). It links each IRI by its `iri?u=…` URL. |
+| a hash prefix only | A small page with a script that reads the fragment and loads that entity, or shows "not found" when there is no fragment or no such entity. HTTP status 200, since the server can't see the fragment. _(Q2a)_ The script (`static/hash.js`) fetches the page from `hash?path=…&fragment=…` ([2.13](#213-url-space-for-the-services-own-pages)), passing on the URL's query (e.g. the tab), and shows its main content and title in place of its own page's. It runs again on `hashchange`, since a link between two hash entities under one path changes only the fragment. _(P-13)_ |
 | nothing | HTTP 404. |
+
+The catch-all route (`browl.lookup`) comes after every other route, and looks the path up as the request sent it (the
+raw path, less any root path), in URI form as the table stores it, not as the router percent-decodes it. `iri?u=…`
+serves an entity whose URL is a fallback URL or shared by several IRIs; any other entity it redirects (302) to its own
+URL, so each page has one URL. _(P-13)_
 
 A path can be both an ordinary entity and a hash prefix; then the entity page is served with the hash script included.
 Hash entities that share a path and fragment are found the same way, with the fragment.
@@ -964,6 +969,7 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | `search` | Autocomplete endpoint (htmx fragment) and a full results page |
 | `tree/{hierarchy}` | Tree root page; `?node=` returns one node's children (htmx fragment) |
 | `iri?u=…` | Fallback entity URLs (Q1b) |
+| `hash?path=…&fragment=…` | The page for a hash URL's path and fragment, for the hash-IRI script ([2.3](#23-iri--url-mapping), Lookup); marked `noindex`, as its pages are at their hash URLs |
 | `static/…` | CSS, htmx, hash-IRI script |
 | `admin/…` | Upload, status, admin list, sign-in/out |
 | `admin/upload` | The upload form (A-2, A-3) and the load job's status. The form is parsed as it streams in, the file written straight to the jobs volume, never held whole in memory or spooled to a temporary file; its reasoner field must come before its file. The job is claimed only once the file's name has been checked and its first 8 KiB found to look like the syntax the name says, so a malformed request or a mislabelled, OWL/XML or compressed file leaves the served ontology alone. A post a browser sent from another site's page (by `Sec-Fetch-Site`) is refused, against CSRF (P-6) |
@@ -1135,7 +1141,7 @@ go into this document.
 
 | ID | Work item | Delivers | Depends on | Status | Tracking |
 | --- | --- | --- | --- | --- | --- |
-| P-13 | Routing: path lookup, 404, disambiguation page, hash-prefix page and script | U-2, U-13, U-14, U-15 | P-10 | To do | [#25](https://github.com/jclerman/browl/issues/25) |
+| P-13 | Routing: path lookup, 404, disambiguation page, hash-prefix page and script | U-2, U-13, U-14, U-15 | P-10 | Done | [#25](https://github.com/jclerman/browl/issues/25) |
 | P-14 | Base templates and page frame: navigation bar, page header, tab component, stylesheet and themes; links rendered from display names; IRI `<details>` | U-4, U-5, U-6, U-17, U-27, U-28, U-29 | P-11, P-13 | To do | [#27](https://github.com/jclerman/browl/issues/27) (sub-issues [#28](https://github.com/jclerman/browl/issues/28), [#33](https://github.com/jclerman/browl/issues/33), [#34](https://github.com/jclerman/browl/issues/34)) |
 | P-15 | Manchester rendering via the OWLAPI from fetched fragments, including n-ary disjointness and general class axioms; link substitution and keyword styling, in the template layer, not the renderer (2.8) | U-3 | S-1, S-4, P-14 | To do | [#36](https://github.com/jclerman/browl/issues/36) |
 | P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout; panel data built apart from its HTML (2.8) | U-3, U-9, U-30, U-31, U-32 | P-12, P-15 | To do | [#37](https://github.com/jclerman/browl/issues/37) (sub-issues [#29](https://github.com/jclerman/browl/issues/29), [#38](https://github.com/jclerman/browl/issues/38), [#39](https://github.com/jclerman/browl/issues/39)) |

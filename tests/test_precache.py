@@ -717,6 +717,7 @@ def restart(fuseki: StubFuseki) -> FastAPI:
     async def probe(request: Request) -> int:
         return await read_derived(request, lambda connection: read_meta(connection).generation)
 
+    app.router.routes.insert(0, app.router.routes.pop())  # ahead of the catch-all route for entity URLs
     return app
 
 

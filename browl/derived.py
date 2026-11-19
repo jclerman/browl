@@ -192,6 +192,19 @@ def entities_at(connection: sqlite3.Connection, path: str, fragment: str | None 
     return [Entity(number, iri, EntityType(kind), *rest) for number, iri, kind, *rest in rows]
 
 
+def entities_with_iri(connection: sqlite3.Connection, iri: str) -> list[Entity]:
+    """Return the entities with this IRI, one for each of its types, by type (the `entity_iri_type` index)."""
+    rows = connection.execute(
+        "SELECT id, iri, type, path, fragment, display_name, curie FROM entity WHERE iri = ? ORDER BY type", (iri,)
+    )
+    return [Entity(number, iri, EntityType(kind), *rest) for number, iri, kind, *rest in rows]
+
+
+def is_hash_prefix(connection: sqlite3.Connection, path: str) -> bool:
+    """Return whether hash entities have URLs with this path (the `hash_prefix` table)."""
+    return connection.execute("SELECT 1 FROM hash_prefix WHERE path = ?", (path,)).fetchone() is not None
+
+
 class NotCurrentError(Exception):
     """The derived database for a generation is missing, unreadable, or built for another generation or build keys."""
 

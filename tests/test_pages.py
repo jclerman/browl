@@ -23,7 +23,7 @@ from browl.jobs import (
 )
 from browl.jobtypes import StageError
 from browl.pages import RETRY_AFTER_S, SiteGate, templates
-from tests.helpers import make_app
+from tests.helpers import derived_stage, make_app
 
 pytestmark = pytest.mark.usefixtures("data_dir")
 
@@ -59,13 +59,14 @@ def client(app: FastAPI) -> Iterator[TestClient]:
 
 
 def run_job(client: TestClient, app: FastAPI, reasoning: str | None = None) -> None:
-    """Run a load job to its end, whose reasoning stage fails with this reason if given."""
+    """Run a load job to its end, building an empty derived database, unless its reasoning stage fails with a reason."""
 
     async def fail(context: JobContext) -> None:
         raise StageError(reasoning)
 
     if reasoning is not None:
         app.state.jobs.register(Stage.REASONING, fail)
+    app.state.jobs.register(Stage.PRE_CACHING, derived_stage())
     client.portal.call(app.state.jobs.start)
     client.portal.call(app.state.jobs.wait)
 
@@ -141,7 +142,7 @@ def test_available(client: TestClient, app: FastAPI) -> None:
     assert app.state.jobs.state.site == Site.AVAILABLE
     response = client.get("/no/such/page")
     assert response.status_code == 404
-    assert response.json() == {"detail": "Not Found"}
+    assert "<h1>Not found</h1>" in response.text
 
 
 @pytest.mark.parametrize("path", EXEMPT)

@@ -121,8 +121,12 @@ class URLMapper:
         return EntityURL(url_path, None if fragment is None else _to_uri(fragment, _FRAGMENT_SAFE))
 
     def _fallback(self, iri: str, reserved: bool = False) -> EntityURL:
-        path = f"/{self.reserved_prefix}/{FALLBACK_PATH}?u={urllib.parse.quote(iri, safe='')}"
-        return EntityURL(path, None, reserved)
+        return EntityURL(fallback_path(self.reserved_prefix, iri), None, reserved)
+
+
+def fallback_path(reserved_prefix: str, iri: str) -> str:
+    """Return an IRI's fallback URL, the path and query string `/{RESERVED_PREFIX}/iri?u={the percent-encoded IRI}`."""
+    return f"/{reserved_prefix}/{FALLBACK_PATH}?u={urllib.parse.quote(iri, safe='')}"
 
 
 def _split_authority(authority: str, default_port: int) -> tuple[str | None, int | None]:
