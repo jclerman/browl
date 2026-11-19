@@ -154,6 +154,16 @@ class EntityType(StrEnum):
     ANNOTATION_PROPERTY = "annotation_property"
 
 
+TYPE_LABELS = {
+    EntityType.ONTOLOGY: "Ontology",
+    EntityType.CLASS: "Class",
+    EntityType.OBJECT_PROPERTY: "Object property",
+    EntityType.DATA_PROPERTY: "Data property",
+    EntityType.ANNOTATION_PROPERTY: "Annotation property",
+}
+"""Each entity type's name, as pages show it."""
+
+
 @dataclass(frozen=True)
 class Entity:
     """A row of the `entity` table.

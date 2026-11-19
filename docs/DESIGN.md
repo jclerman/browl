@@ -766,8 +766,10 @@ no CURIE. _(Q18b)_
 
 Header, above the tabs (U-5):
 
-- Display name as the title, and the entity type.
-- A `<details>` element with the full IRI and CURIE.
+- Display name as the title, and the entity type. An IRI with several types (punning) lists them all, e.g.
+  "Class · Object property". _(P-14c)_
+- A `<details>` element with the full IRI and CURIE, closed at first. The IRI is text, not a link: on a browl site it
+  often resolves to the page it's on. _(P-14c)_
 
 Tabs (U-28; see [2.9](#29-page-layout)):
 
@@ -934,6 +936,15 @@ JSON, scripts or unquoted attributes.
 - Labels can be huge, so rendered names are capped in length, with the rest elided.
 - Labels can hold bidirectional-text overrides, so each name is isolated (`<bdi>`, or `dir="auto"`) from the text
   around it.
+- A page reads the links of the entities it mentions in one query (`browl.links.read_entity_links`), and templates
+  render each with one macro (`entity_link` in `templates/links.html`), so every mention looks and behaves the same
+  (U-4, U-6). An entity whose URL other IRIs share links to its fallback URL, not to the disambiguation page; an IRI
+  with no page is shown as text. _(P-14c)_
+- Names in links, headings, page titles and the navigation bar are cut to 100 characters (`MAX_NAME_CHARS`). _(P-14c)_
+- Page titles are the page's name, then the ontology's title: `Heart · Foo Ontology`. Without a title, they end with
+  `browl` rather than the ontology's IRI, which a tab would mostly cut off; the home page's ends with `browl` too, as
+  its name is already the ontology's. A title can't hold `<bdi>`, so its names are isolated with U+2068 … U+2069
+  instead. IRIs and CURIEs are shown in `<code dir="ltr">`, which isolates them too. _(P-14c)_
 
 ### 2.10 Page cache
 
@@ -1085,13 +1096,11 @@ flowchart LR
         P12["P-12 Hierarchies"]
     end
     subgraph P4["Phase 4: Browsing"]
-        P14["P-14 Page frame"]
         P15["P-15 Manchester rendering"]
         P16["P-16 Overview tab"]
         P17["P-17 Home page"]
         P18["P-18 Hierarchy trees"]
         P27["P-27 Usage tab"]
-        P34["P-34 Browser tests"]
     end
     subgraph P5["Phase 5: Search, caching, auth"]
         P19["P-19 Search backend"]
@@ -1110,15 +1119,12 @@ flowchart LR
     end
     S5b["S-5b OLS4 comparison"]
 
-    P14 ==> P15 ==> P16
+    P15 ==> P16
     P12 ==> P16
-    P14 --> P17
     P12 --> P18
-    P14 --> P18
     P16 --> P27
     P16 --> P21
     P19 --> P20
-    P14 --> P20
     P16 & P17 & P18 & P19 & P27 --> P33
     P18 & P20 --> P25
     P22 --> P23
@@ -1126,7 +1132,7 @@ flowchart LR
     P16 -.-> S5b
 
     classDef critical stroke-width:3px
-    class P12,P14,P15,P16 critical
+    class P12,P15,P16 critical
 ```
 
 ### Phase 0: Spikes
@@ -1177,8 +1183,8 @@ go into this document.
 | ID | Work item | Delivers | Depends on | Status | Tracking |
 | --- | --- | --- | --- | --- | --- |
 | P-13 | Routing: path lookup, 404, disambiguation page, hash-prefix page and script | U-2, U-13, U-14, U-15 | P-10 | Done | [#25](https://github.com/jclerman/browl/issues/25) |
-| P-34 | Browser tests with Playwright: a live-server fixture; the hash-IRI script, htmx status polling, no-JS fallbacks, and what a browser shows for an upload refused early | | P-13 | In progress | [#88](https://github.com/jclerman/browl/issues/88) |
-| P-14 | Base templates and page frame: navigation bar, page header, tab component, stylesheet and themes; links rendered from display names; IRI `<details>` | U-4, U-5, U-6, U-17, U-27, U-28, U-29 | P-11, P-13 | To do | [#27](https://github.com/jclerman/browl/issues/27) (sub-issues [#28](https://github.com/jclerman/browl/issues/28), [#33](https://github.com/jclerman/browl/issues/33), [#34](https://github.com/jclerman/browl/issues/34)) |
+| P-34 | Browser tests with Playwright: a live-server fixture; the hash-IRI script, htmx status polling, no-JS fallbacks, and what a browser shows for an upload refused early | | P-13 | Done | [#88](https://github.com/jclerman/browl/issues/88) |
+| P-14 | Base templates and page frame: navigation bar, page header, tab component, stylesheet and themes; links rendered from display names; IRI `<details>` | U-4, U-5, U-6, U-17, U-27, U-28, U-29 | P-11, P-13 | Done | [#27](https://github.com/jclerman/browl/issues/27) (sub-issues [#28](https://github.com/jclerman/browl/issues/28), [#33](https://github.com/jclerman/browl/issues/33), [#34](https://github.com/jclerman/browl/issues/34)) |
 | P-15 | Manchester rendering via the OWLAPI from fetched fragments, including n-ary disjointness and general class axioms; link substitution and keyword styling, in the template layer, not the renderer (2.8) | U-3 | S-1, S-4, P-14 | To do | [#36](https://github.com/jclerman/browl/issues/36) |
 | P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout; panel data built apart from its HTML (2.8) | U-3, U-9, U-30, U-31, U-32 | P-12, P-15 | To do | [#37](https://github.com/jclerman/browl/issues/37) (sub-issues [#29](https://github.com/jclerman/browl/issues/29), [#38](https://github.com/jclerman/browl/issues/38), [#39](https://github.com/jclerman/browl/issues/39)) |
 | P-17 | Ontology home page, with the dropped-imports warning and the triple counts the job state keeps (P-8); link the ontology and version IRIs only if `http` or `https` (`browl.derived.Meta`) | U-1 | P-14 | To do | [#30](https://github.com/jclerman/browl/issues/30) |

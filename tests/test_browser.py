@@ -22,7 +22,7 @@ from browl.derived import EntityType
 from browl.jobs import JobContext, Stage, StageFunction
 from browl.jobtypes import StageError
 from tests.conftest import DATA
-from tests.helpers import WAIT_S, LiveServer, derived_stage, make_app
+from tests.helpers import WAIT_S, LiveServer, derived_stage, iso, make_app
 
 pytestmark = [pytest.mark.browser, pytest.mark.usefixtures("data_dir")]
 
@@ -107,7 +107,7 @@ def test_hash_prefix_shows_entity(page: Page, server: LiveServer) -> None:
     """Check that a hash prefix's page with a fragment shows that entity, and takes its title."""
     page.goto(f"{server.url}/example.org/vocab#Gamma")
     expect(page.locator("main h1")).to_have_text(f"{EX}/vocab#Gamma")
-    expect(page).to_have_title(f"{EX}/vocab#Gamma · browl")
+    expect(page).to_have_title(f"{iso(EX + '/vocab#Gamma')} · {iso('Routing tests')}")
 
 
 @pytest.mark.parametrize("fragment", ["", "#Nope"])
@@ -115,7 +115,7 @@ def test_hash_prefix_not_found(page: Page, server: LiveServer, fragment: str) ->
     """Check that a hash prefix's page shows "not found" without a fragment, or with one no entity has."""
     page.goto(f"{server.url}/example.org/vocab{fragment}")
     expect(page.locator("main h1")).to_have_text("Not found")
-    expect(page).to_have_title("Not found · browl")
+    expect(page).to_have_title(f"Not found · {iso('Routing tests')}")
 
 
 @NO_JS
@@ -150,10 +150,10 @@ def test_entity_and_hash_prefix(page: Page, server: LiveServer) -> None:
     expect(page.locator("main h1")).to_have_text(f"{EX}/thing")
     page.evaluate("location.hash = 'Delta'")
     expect(page.locator("main h1")).to_have_text(f"{EX}/thing#Delta")
-    expect(page).to_have_title(f"{EX}/thing#Delta · browl")
+    expect(page).to_have_title(f"{iso(EX + '/thing#Delta')} · {iso('Routing tests')}")
     page.evaluate("location.hash = ''")
     expect(page.locator("main h1")).to_have_text(f"{EX}/thing")
-    expect(page).to_have_title(f"{EX}/thing · browl")
+    expect(page).to_have_title(f"{iso(EX + '/thing')} · {iso('Routing tests')}")
 
 
 def test_shared_hash_entity(page: Page, server: LiveServer) -> None:
@@ -497,6 +497,7 @@ def box(locator: Locator) -> FloatRect:
 # Page tabs (P-14b, DESIGN.md §2.9, U-28, U-17)
 
 PANEL = re.compile(r"[?&]panel=1(&|$)")
+OVERVIEW_TEXT = "annotations and axioms will be shown here"
 USAGE_TEXT = "Where other entities use this one"
 
 
@@ -523,7 +524,7 @@ def test_tabs_without_javascript(page: Page, server: LiveServer) -> None:
     expect(page.get_by_role("tabpanel")).to_contain_text(USAGE_TEXT)
     tab(page, "Overview").click()
     expect(page).to_have_url(f"{server.url}/example.org/plain")
-    expect(page.get_by_role("tabpanel")).to_contain_text(f"{EX}/plain")
+    expect(page.get_by_role("tabpanel")).to_contain_text(OVERVIEW_TEXT)
 
 
 def test_tab_swaps_panel(page: Page, server: LiveServer) -> None:
@@ -540,7 +541,7 @@ def test_tab_swaps_panel(page: Page, server: LiveServer) -> None:
     assert page.evaluate("[window.marker, history.length]") == [1, length]
     expect(page.locator("main h1")).to_have_count(1)  # the panel alone, not a page inside the page
     tab(page, "Overview").click()
-    expect(page.get_by_role("tabpanel")).to_contain_text(f"{EX}/plain")
+    expect(page.get_by_role("tabpanel")).to_contain_text(OVERVIEW_TEXT)
     expect(page).to_have_url(f"{server.url}/example.org/plain")
 
 
@@ -602,7 +603,7 @@ def test_tab_click_while_loading(page: Page, server: LiveServer) -> None:
             response.finished()
     page.wait_for_timeout(100)  # time for htmx to handle a response, if one arrived
     expect_selected(page, "Overview")
-    expect(page.get_by_role("tabpanel")).to_contain_text(f"{EX}/plain")
+    expect(page.get_by_role("tabpanel")).to_contain_text(OVERVIEW_TEXT)
     expect(page).to_have_url(f"{server.url}/example.org/plain")
     assert page.evaluate("window.marker") == 1
 
@@ -613,7 +614,7 @@ def test_tab_keyboard(page: Page, server: LiveServer) -> None:
     Only the selected tab is in the Tab sequence, and focus entering the list lands on it.
     """
     page.goto(f"{server.url}/example.org/plain?tab=usage")
-    page.locator("main h1").click()  # puts the Tab sequence's start just before the tabs
+    page.locator(".entity-iri summary").focus()  # the last stop before the tabs
     page.keyboard.press("Tab")
     expect(tab(page, "Usage")).to_be_focused()
     requests = record_panels(page)
@@ -751,3 +752,32 @@ def test_tabs_look(page: Page, server: LiveServer, scheme: str) -> None:
     assert selected[1] == page.evaluate("getComputedStyle(document.querySelector('.brand')).color")  # the accent
     assert other[1] == "rgba(0, 0, 0, 0)"
     assert selected[3] != other[3]
+
+
+# The entity page header (P-14c, U-5)
+
+
+def test_entity_header_iri_folded(page: Page, server: LiveServer) -> None:
+    """Check that the header's IRI is folded away until its <details> is opened."""
+    page.goto(f"{server.url}/example.org/plain")
+    iri = page.locator(".entity-iri dd code")
+    expect(page.locator(".entity-type")).to_have_text("Class")
+    expect(iri).to_be_hidden()
+    page.locator(".entity-iri summary").click()
+    expect(iri).to_have_text(f"{EX}/plain")
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_entity_header_look(page: Page, server: LiveServer, scheme: str) -> None:
+    """Check that the header's type line and the IRI's summary are muted, unlike the heading."""
+    page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
+    page.goto(f"{server.url}/example.org/plain")
+    color = "(element) => getComputedStyle(element).color"
+    muted = page.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--muted').trim()")
+    probe = page.evaluate(
+        f"""() => {{ const probe = document.createElement('span'); probe.style.color = '{muted}';
+        document.body.append(probe); const value = getComputedStyle(probe).color; probe.remove(); return value; }}"""
+    )
+    heading = page.locator("main h1").evaluate(color)
+    assert page.locator(".entity-type").evaluate(color) == probe != heading
+    assert page.locator(".entity-iri summary").evaluate(color) == probe

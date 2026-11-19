@@ -1,8 +1,10 @@
 {% extends "base.html" %}
-{% block title %}{{ meta.title or meta.ontology_iri }}{% endblock %}
+{% block title %}{{ name | isolate }}{% endblock %}
+{# The ontology is the page's subject, so its title isn't repeated. #}
+{% block title_suffix %} · {{ frame.site_name }}{% endblock %}
 {% block content %}
 {# A placeholder until P-17. #}
-<h1>{{ meta.title or meta.ontology_iri }}</h1>
-<p><code>{{ meta.ontology_iri }}</code></p>
-{% if meta.version %}<p>Version: <code>{{ meta.version }}</code></p>{% endif %}
+<h1><bdi>{{ name }}</bdi></h1>
+<p><code dir="ltr">{{ meta.ontology_iri }}</code></p>
+{% if meta.version %}<p>Version: <code dir="ltr">{{ meta.version }}</code></p>{% endif %}
 {% endblock %}

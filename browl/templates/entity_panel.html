@@ -2,6 +2,5 @@
 {% if tab.slug == "usage" %}
 <p class="note">Where other entities use this one will be shown here.</p>
 {% else %}
-<p><code>{{ entity.iri }}</code></p>
-<p>{% for type in types %}{{ type }}{% if not loop.last %}, {% endif %}{% endfor %}</p>
+<p class="note">The entity's annotations and axioms will be shown here.</p>
 {% endif %}

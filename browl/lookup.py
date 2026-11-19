@@ -18,8 +18,18 @@ from fastapi.routing import APIRoute
 from starlette.routing import Match
 from starlette.types import Scope
 
-from browl.derived import Entity, EntityType, Meta, entities_at, entities_with_iri, is_hash_prefix, read_meta
-from browl.pages import app_path, href, is_under, link_root, read_derived, templates
+from browl.derived import (
+    TYPE_LABELS,
+    Entity,
+    EntityType,
+    Meta,
+    entities_at,
+    entities_with_iri,
+    is_hash_prefix,
+    read_meta,
+)
+from browl.links import EntityLink, entity_name
+from browl.pages import app_path, cut_name, href, is_under, link_root, read_derived, templates
 from browl.tabs import TAB_PARAM, Tab, TabNotFoundError, TabQuery, choose_tab, read_tab_query, tab_links, with_query
 from browl.urls import FALLBACK_PATH, fallback_path
 
@@ -153,9 +163,9 @@ def _page(
     """
     hash_script = None if hash_path is None else _hash_script(request, prefix, hash_path, prefix_only=False)
     common = {"hash_script": hash_script, "noindex": noindex}
-    names: dict[str, str] = {}  # each IRI's display name, in order
+    names: dict[str, str] = {}  # each IRI's name, in order
     for entity in entities:
-        names.setdefault(entity.iri, entity.display_name or entity.iri)
+        names.setdefault(entity.iri, entity_name(entity))
     is_home = any(entity.type == EntityType.ONTOLOGY for entity in entities)
     tabs = ENTITY_TABS if len(names) == 1 and not is_home else ()
     try:
@@ -163,13 +173,17 @@ def _page(
     except TabNotFoundError:
         return not_found(request)
     if len(names) > 1:
-        choices = [(iri, href(request, fallback_path(prefix, iri)), name) for iri, name in names.items()]
+        choices = [EntityLink(iri, name, href(request, fallback_path(prefix, iri))) for iri, name in names.items()]
         return templates.TemplateResponse(request, "choose.html", {"choices": choices} | common)
     if is_home:
-        return templates.TemplateResponse(request, "home.html", {"meta": meta} | common)
+        assert meta is not None  # read for the home page (`_found`)
+        name = cut_name(meta.title or meta.ontology_iri or "")
+        return templates.TemplateResponse(request, "home.html", {"meta": meta, "name": name} | common)
     assert tab is not None  # an entity page has tabs
     links = tab_links(tabs, tab, href(request, at.page), at.fragment, href(request, at.panel or at.page))
-    context = {"entity": entities[0], "types": [entity.type for entity in entities], "tab": tab, "tabs": links}
+    entity = entities[0]
+    types = [TYPE_LABELS[each.type] for each in entities]
+    context = {"entity": entity, "name": names[entity.iri], "types": types, "tab": tab, "tabs": links}
     if query.panel:
         return templates.TemplateResponse(request, "entity_panel.html", context, headers=PANEL_HEADERS)
     return templates.TemplateResponse(request, "entity.html", context | common)

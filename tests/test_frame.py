@@ -95,6 +95,13 @@ def run(
     client.portal.call(app.state.jobs.wait)
 
 
+def title(client: TestClient, path: str = "/example.org/x") -> str:
+    """Return the `<title>` of the page at a path, with entities decoded."""
+    match = re.search(r"<title>(.*?)</title>", client.get(path).text)
+    assert match is not None
+    return html.unescape(match[1])
+
+
 def frame(client: TestClient, path: str = "/example.org/x", **kwargs: object) -> Frame:
     """Return the frame of the page at a path."""
     return Frame(client.get(path, **kwargs).text)  # type: ignore[arg-type]
@@ -200,6 +207,7 @@ def test_ontology_without_page(client: TestClient, monkeypatch: pytest.MonkeyPat
     page = frame(client)
     assert page.nav == TREE_LINKS
     assert "browl · Unlinked" in page.nav_text
+    assert title(client).endswith(" · \u2068Unlinked\u2069")
 
 
 @pytest.mark.parametrize("root", ["", "/site"])
@@ -216,6 +224,7 @@ def test_long_name_cut(app: FastAPI) -> None:
     with TestClient(app) as client:
         run(client, app, title="x" * (MAX_NAME_CHARS + 1))
         assert frame(client).nav[0][1] == f"browl · {'x' * (MAX_NAME_CHARS - 1)}…"
+        assert title(client).endswith(f" · \u2068{'x' * (MAX_NAME_CHARS - 1)}…\u2069")
 
 
 def test_new_generation_renamed(client: TestClient, app: FastAPI) -> None:
@@ -223,6 +232,7 @@ def test_new_generation_renamed(client: TestClient, app: FastAPI) -> None:
     assert frame(client).nav[0][1] == "browl · The <Onto>"
     run(client, app, title="Second")
     assert frame(client).nav[0][1] == "browl · Second"
+    assert title(client).endswith(" · \u2068Second\u2069")
 
 
 def test_under_root_path(app: FastAPI) -> None:
@@ -263,6 +273,7 @@ def test_unreadable_name(
             response = client.get(path)
             assert response.status_code == 200
             assert Frame(response.text).nav == TREE_LINKS
+            assert " · browl</title>" in response.text
     assert len(calls) == 1  # the failure is kept until RETRY_AFTER_S has passed
     assert bool(caplog.records) is not isinstance(error, NotCurrentError)
     monkeypatch.setattr(reader, "read", real_read)
