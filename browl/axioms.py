@@ -33,6 +33,17 @@ _ENTITY = "$entity"
 _WHERE = "\nWHERE {"
 _NO_IRIS = "VALUES ?iri { }"
 
+MAX_FRAGMENT_IRIS = 5_000
+"""The most IRIs an entity's fragment may mention before its types are fetched (`fetch_fragment`): more, and the page
+says the entity has too many axioms to show, rather than fetch, parse, render and link them all (DESIGN.md §2.8)."""
+
+MAX_AXIOMS = 1_000
+"""The most axioms an entity may have for its page to render them (`entity_axioms`), as for `MAX_FRAGMENT_IRIS`."""
+
+
+class TooManyAxiomsError(Exception):
+    """An entity's axioms are too many, or mention too many IRIs, to show on its page (DESIGN.md §2.8)."""
+
 
 def _filled(query: str, dataset_clause: str, parts: dict[str, str]) -> str:
     """Return a query with its dataset clause before `WHERE`, and each of its placeholders replaced.
@@ -99,6 +110,7 @@ async def fetch_fragment(sparql: FusekiClient, dataset: str, iri: str, dataset_c
     Raises:
         SparqlError: A query failed.
         RDFSyntaxError: The IRI isn't valid.
+        TooManyAxiomsError: The triples mention more than `MAX_FRAGMENT_IRIS` IRIs.
     """
     entity = {_ENTITY: f"<{IRI(iri)}>"}
     try:
@@ -110,6 +122,8 @@ async def fetch_fragment(sparql: FusekiClient, dataset: str, iri: str, dataset_c
         raise errors.exceptions[0]  # noqa: B904 -- the query's own error, with the group as its context
     triples = own.result() + symmetric.result()
     mentioned = ntriples_iris(triples)
+    if len(mentioned) > MAX_FRAGMENT_IRIS:
+        raise TooManyAxiomsError(f"the fragment mentions {len(mentioned)} IRIs, more than {MAX_FRAGMENT_IRIS}")
     if not mentioned:
         return triples
     values = f"VALUES ?iri {{ {' '.join(f'<{each}>' for each in sorted(mentioned))} }}"
@@ -332,9 +346,13 @@ def entity_axioms(ntriples: bytes, iri: str) -> list[Axiom]:
 
     Raises:
         FragmentError: The OWLAPI couldn't parse the fragment, or failed on it with any other Java exception.
+        TooManyAxiomsError: The entity has more than `MAX_AXIOMS` axioms.
     """
     try:
         with ntriples_ontology(ntriples) as ontology:
-            return render_axioms(entity_closure(ontology, iri))
+            closure = entity_closure(ontology, iri)
+            if len(closure) > MAX_AXIOMS:
+                raise TooManyAxiomsError(f"the entity has {len(closure)} axioms, more than {MAX_AXIOMS}")
+            return render_axioms(closure)
     except jpype.JException as error:
         raise FragmentError(f"the OWLAPI failed on the fragment: {error}") from error

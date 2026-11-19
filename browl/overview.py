@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from fastapi import Request
 
-from browl.axioms import Axiom, entity_axioms, fetch_fragment
+from browl.axioms import Axiom, TooManyAxiomsError, entity_axioms, fetch_fragment
 from browl.derived import NotCurrentError
 from browl.fuseki import UNION_FROM, SparqlError, dataset_clause
 from browl.jobs import JobState
@@ -28,12 +28,15 @@ class AxiomsPanel:
     """The entity's axioms, and how the page shows each IRI they mention.
 
     Attributes:
-        axioms: The axioms (`browl.axioms.entity_axioms`); None if they couldn't be read, when the page says so.
+        axioms: The axioms (`browl.axioms.entity_axioms`); None if they couldn't be read, or are too many to show, when
+            the page says so.
         links: Each IRI the axioms mention, by IRI (`browl.links.read_entity_links`).
+        too_many: Whether the axioms are too many to show (`browl.axioms.TooManyAxiomsError`).
     """
 
     axioms: list[Axiom] | None
     links: dict[str, EntityLink]
+    too_many: bool = False
 
 
 async def read_axioms_panel(request: Request, state: JobState, iri: str) -> AxiomsPanel:
@@ -59,6 +62,9 @@ async def read_axioms_panel(request: Request, state: JobState, iri: str) -> Axio
     try:
         fragment = await fetch_fragment(request.app.state.sparql, dataset_name(generation), iri, clause)
         axioms = await run_java(entity_axioms, fragment, iri)
+    except TooManyAxiomsError as error:
+        logger.warning("Not showing the axioms of %s: %s", logged_iri(iri), error)
+        return AxiomsPanel(None, {}, too_many=True)
     except (SparqlError, RDFSyntaxError, FragmentError):
         logger.exception("Couldn't show the axioms of %s", logged_iri(iri))
         return AxiomsPanel(None, {})

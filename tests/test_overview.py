@@ -246,3 +246,28 @@ async def test_failed_query_cancels_other() -> None:
         with pytest.raises(SparqlError):
             await fetch_fragment(FusekiClient(http), "ds", IRI)
         assert cancelled.is_set()
+
+
+def test_too_many(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a fragment that mentions too many IRIs isn't fetched further, and the panel says so."""
+    queries = []
+
+    def fuseki(request: httpx2.Request) -> httpx2.Response:
+        queries.append(request)
+        line = f"<{IRI}> <http://example.org/p> <http://example.org/o> .\n"
+        return httpx2.Response(200, text=line, headers={"Content-Type": "application/n-triples"})
+
+    monkeypatch.setattr(browl.axioms, "MAX_FRAGMENT_IRIS", 2)
+    app = make_app(httpx2.MockTransport(fuseki))
+    with TestClient(app) as test_client:
+        app.state.jobs.register(Stage.PRE_CACHING, derived_stage([(IRI, EntityType.CLASS)]))
+        test_client.portal.call(app.state.jobs.start)
+        test_client.portal.call(app.state.jobs.wait)
+        with caplog.at_level(logging.WARNING, logger="browl.overview"):
+            page = test_client.get("/_browl/hash", params=PANEL)
+    assert page.status_code == 200
+    assert "This entity has too many axioms to show here." in page.text
+    assert MESSAGE not in page.text
+    assert len(queries) == 2  # not the types query
+    [record] = caplog.records
+    assert record.getMessage() == f"Not showing the axioms of {IRI}: the fragment mentions 3 IRIs, more than 2"

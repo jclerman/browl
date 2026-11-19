@@ -7,7 +7,7 @@ import pytest
 from browl import manchester
 from browl.links import EntityLink, no_link
 from browl.manchester import Segment, SegmentKind
-from browl.pages import templates
+from browl.pages import MAX_IRI_CHARS, MAX_LITERAL_CHARS, templates
 from browl.rdf import OWL, RDF, RDFS, XSD
 
 A = "http://example.org/A"
@@ -189,4 +189,19 @@ def test_html_standard_names() -> None:
         f'<code dir="ltr">&lt;{P}&gt;</code> <span class="keyword">some</span> <code dir="ltr">xsd:integer</code> '
         '<span class="keyword">and</span> <a href="/Thing"><bdi>Thing</bdi></a> '
         f'<span class="keyword">or</span> <code dir="ltr">&lt;{A}&gt;</code>'
+    )
+
+
+def test_html_long() -> None:
+    """Check that long literals, IRIs shown as text, and other text are cut short; linked IRIs show their names."""
+    literal = f'"{"x" * (MAX_LITERAL_CHARS + 50)}"'
+    iri = f"http://example.org/{'i' * MAX_IRI_CHARS}"
+    other = f"http://example.org/{'o' * MAX_LITERAL_CHARS}"
+    html = render(f"<{A}> <{iri}> {literal} and <{other}>", {A: EntityLink(A, "A", "/A")}, iris=[A, iri])
+    assert html == (
+        '<a href="/A"><bdi>A</bdi></a> '
+        f'<code dir="ltr">&lt;{iri[: MAX_IRI_CHARS - 2]}…</code> '
+        f"<bdi>&#34;{'x' * (MAX_LITERAL_CHARS - 2)}…</bdi> "
+        '<span class="keyword">and</span> '
+        f"&lt;{other[: MAX_LITERAL_CHARS - 2]}…"
     )

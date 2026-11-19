@@ -260,6 +260,15 @@ def test_valid_unquoted(datatype: str, lexical: str, shown: str) -> None:
     assert axiom.iris == (f"{NS}i", f"{NS}p", f"{XSD}{datatype}")
 
 
+def test_too_many(ntriples: bytes, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that an entity with more than `MAX_AXIOMS` axioms isn't rendered."""
+    monkeypatch.setattr(axioms, "MAX_AXIOMS", 1)
+    with pytest.raises(axioms.TooManyAxiomsError, match="the entity has 2 axioms, more than 1"):
+        asyncio.run(owlapi.run_java(axioms.entity_axioms, ntriples, f"{NS}Cat"))
+    monkeypatch.setattr(axioms, "MAX_AXIOMS", 2)
+    assert len(asyncio.run(owlapi.run_java(axioms.entity_axioms, ntriples, f"{NS}Cat"))) == 2
+
+
 @pytest.mark.fuseki
 @pytest.mark.anyio
 @pytest.mark.parametrize("clause", ["", UNION_FROM], ids=["default-graph", "union"])

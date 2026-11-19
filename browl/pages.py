@@ -36,6 +36,12 @@ RETRY_AFTER_S = 10
 MAX_NAME_CHARS = 100
 """The longest name pages show; a longer one is cut short (`cut_name`, DESIGN.md §2.9)."""
 
+MAX_IRI_CHARS = 200
+"""The longest IRI an axiom shows as text, not as a link; a longer one is cut short (`cut_text`, DESIGN.md §2.8)."""
+
+MAX_LITERAL_CHARS = 1_000
+"""The longest literal an axiom shows, or other text between its IRIs and keywords; a longer one is cut short."""
+
 SITE_NAME = "browl"
 """browl's name, which page titles end with when the ontology has no title."""
 
@@ -77,9 +83,14 @@ class OntologyLink:
 NO_LINK = OntologyLink()
 
 
+def cut_text(text: str, limit: int) -> str:
+    """Return text cut to `limit` characters, ending with `…` if it was longer."""
+    return text if len(text) <= limit else f"{text[: limit - 1]}…"
+
+
 def cut_name(name: str) -> str:
     """Return a name cut to `MAX_NAME_CHARS`, ending with `…` if it was longer: labels can be huge (DESIGN.md §2.9)."""
-    return name if len(name) <= MAX_NAME_CHARS else f"{name[: MAX_NAME_CHARS - 1]}…"
+    return cut_text(name, MAX_NAME_CHARS)
 
 
 def read_ontology_link(connection: sqlite3.Connection) -> OntologyLink:
@@ -144,6 +155,8 @@ templates = Jinja2Templates(
 )
 templates.env.filters["isolate"] = isolate
 templates.env.filters["manchester_segments"] = manchester.segments
+templates.env.filters["cut_text"] = cut_text
+templates.env.globals.update(MAX_IRI_CHARS=MAX_IRI_CHARS, MAX_LITERAL_CHARS=MAX_LITERAL_CHARS)
 
 
 def unavailable_page(request: Request, site: Site) -> Response:

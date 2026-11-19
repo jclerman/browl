@@ -904,7 +904,9 @@ Entity names become links like this:
    `rdf:`, `rdfs:`, `owl:`), such as a built-in datatype, by its prefixed name (`xsd:integer`), the rest in full; a
    literal as text, isolated in `<bdi>`. Only the axiom's own IRIs (`Axiom.iris`, from the OWLAPI's signature of the
    axiom) are taken for IRIs; any other `<…>` is plain text.
-   Autoescaping does all the escaping: nothing is marked safe.
+   Autoescaping does all the escaping: nothing is marked safe. Literals can be huge, as labels can (2.9), so a literal,
+   or other plain text, is cut to 1,000 characters (`MAX_LITERAL_CHARS`), and an IRI shown as text to 200
+   (`MAX_IRI_CHARS`), with the rest elided.
 3. Manchester keywords are wrapped in `<span class="keyword">` for light styling ([2.9](#29-page-layout)). They're the
    words of the OWLAPI's own keyword list (`ManchesterOWLSyntax`), copied into `browl.manchester.KEYWORDS` so the
    template layer needs no JVM; a test checks the copy.
@@ -919,10 +921,17 @@ No Java code is needed, and no Python code runs inside the renderer. Spike S-1 a
 short-form provider returning placeholder tokens: it worked but was slower, and missed IRIs the renderer prints without
 asking the provider ([S-1 findings](../research/S-1/README.md)).
 
-**When the axioms can't be read** (from P-4's review): a fragment the OWLAPI can't parse (`FragmentError`), or a query
-that fails, fails only the axioms panel. The full error is logged, with the OWLAPI's parser log and stack trace, and
-the panel says only that the axioms can't be shown. A stored IRI with an escaped illegal character, which Jena accepts
-and writes back escaped, fails the fetch already: browl's Fuseki client checks every IRI it reads (2.14).
+**Too many axioms** (from P-15's review): until the page cache (2.10) keeps a page's work from being repeated on every
+view, an entity whose fragment mentions more than 5,000 IRIs (`MAX_FRAGMENT_IRIS`), such as a member of a huge
+`AllDisjointClasses` axiom, or that has more than 1,000 axioms (`MAX_AXIOMS`), gets a note that it has too many axioms
+to show, not its axioms. The first is checked before the types query, the second before rendering, so neither the
+fetch nor the renderer does that work. Both are far above what the entities P-15 measured need.
+
+**When the axioms can't be read** (from P-4's review): a fragment the OWLAPI can't parse, or any other Java exception
+while reading or rendering it (both `FragmentError`), or a query that fails, fails only the axioms panel. The full
+error is logged, with the OWLAPI's parser log and stack trace, and the panel says only that the axioms can't be shown.
+A stored IRI with an escaped illegal character, which Jena accepts and writes back escaped, fails the fetch already:
+browl's Fuseki client checks every IRI it reads (2.14).
 
 **Until P-16**, the Overview tab lists the axioms one per line, sorted by kind and text, under "Logical axioms", below
 the annotations' placeholder.
