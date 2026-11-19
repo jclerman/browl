@@ -2,7 +2,7 @@
 
 import html.parser
 import urllib.parse
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 
 import pytest
 from fastapi import FastAPI
@@ -13,7 +13,7 @@ import browl.lookup
 from browl.derived import EntityType, read_meta
 from browl.jobs import Stage
 from browl.lookup import request_path
-from browl.pages import STATIC_DIR
+from browl.pages import MAX_NAME_CHARS, STATIC_DIR
 from tests.helpers import derived_stage, make_app
 
 pytestmark = pytest.mark.usefixtures("data_dir")
@@ -49,9 +49,14 @@ def run(
     app: FastAPI,
     entities: Sequence[tuple[str, EntityType]] = ENTITIES,
     ontology: str | None = ONTOLOGY,
+    title: str | None = "The <Onto>",
+    names: Mapping[str, tuple[str | None, str | None]] | None = None,
 ) -> None:
-    """Run a load job whose derived database holds the ontology and the entities, by default `ENTITIES`."""
-    app.state.jobs.register(Stage.PRE_CACHING, derived_stage(entities, ontology, title="The <Onto>"))
+    """Run a load job whose derived database holds the ontology and the entities, by default `ENTITIES`.
+
+    `names` gives IRIs' display names and CURIEs.
+    """
+    app.state.jobs.register(Stage.PRE_CACHING, derived_stage(entities, ontology, title, names))
     client.portal.call(app.state.jobs.start)
     client.portal.call(app.state.jobs.wait)
 
@@ -89,7 +94,7 @@ def test_entity(client: TestClient) -> None:
     response = client.get("/other.org/y")
     assert response.status_code == 200
     assert "<code>http://other.org/y</code>" in response.text
-    assert "class, object_property" in response.text
+    assert "Class · Object property" in response.text
     assert HASH_SCRIPT not in response.text
     assert "noindex" not in response.text
 
@@ -152,8 +157,8 @@ def test_hash_prefix(client: TestClient) -> None:
 @pytest.mark.parametrize(
     ("path", "fragment", "expected"),
     [
-        ("/other.org/vocab", "C", "<h1>http://other.org/vocab#C</h1>"),
-        ("/onto", "A", "<h1>http://example.org/onto#A</h1>"),
+        ("/other.org/vocab", "C", "<h1><bdi>http://other.org/vocab#C</bdi></h1>"),
+        ("/onto", "A", "<h1><bdi>http://example.org/onto#A</bdi></h1>"),
         ("/other.org/vocab", "E", "<h1>Choose an entity</h1>"),
     ],
 )
@@ -189,7 +194,7 @@ def test_fallback_punned(client: TestClient) -> None:
     """Check that an IRI with several types and a fallback URL is served there as one entity."""
     response = client.get(iri_link("urn:example:p"))
     assert response.status_code == 200
-    assert "class, object_property" in response.text
+    assert "Class · Object property" in response.text
 
 
 @pytest.mark.parametrize("iri", ["http://other.org/vocab#E", "https://other.org/vocab#E"])
@@ -397,7 +402,7 @@ def test_entity_tabs(client: TestClient, query: str, selected: str) -> None:
     assert selected_tab(response.text) == selected
     assert page.panel is not None
     assert page.panel["aria-labelledby"] == selected
-    assert ("<code>http://other.org/y</code>" in response.text) == (selected == "tab-overview")
+    assert ("annotations and axioms" in response.text) == (selected == "tab-overview")
 
 
 @pytest.mark.parametrize(
@@ -461,7 +466,7 @@ def test_panel_alone_default_tab(client: TestClient) -> None:
     """Check that `panel=1` without `tab` serves the first tab's panel."""
     response = client.get("/other.org/y?panel=1")
     assert response.status_code == 200
-    assert "<code>http://other.org/y</code>" in response.text
+    assert "annotations and axioms" in response.text
 
 
 HASH_C = "/_browl/hash?path=/other.org/vocab&fragment=C"
@@ -524,3 +529,70 @@ def test_fallback_redirect_keeps_tab(client: TestClient, tab: str, query: str) -
     response = client.get(iri_link("http://other.org/vocab#C") + f"&tab={tab}", follow_redirects=False)
     assert response.status_code == 302
     assert response.headers["Location"] == f"/other.org/vocab{query}#C"
+
+
+NAMES = {
+    "http://other.org/y": ("Why <y>", "oth:y"),
+    "http://other.org/x": ("Ex", None),
+    f"{ONTOLOGY}#A": ("a" * 300, None),
+}
+
+
+def test_entity_header(app: FastAPI) -> None:
+    """Check the entity page's header (U-5): the display name, the types, and the IRI and CURIE in a <details>."""
+    with TestClient(app) as client:
+        run(client, app, names=NAMES)
+        text = client.get("/other.org/y").text
+    assert "<title>Why &lt;y&gt; · The &lt;Onto&gt;</title>" in text
+    assert "<h1><bdi>Why &lt;y&gt;</bdi></h1>" in text
+    assert '<p class="entity-type">Class · Object property</p>' in text
+    start = text.index('<details class="entity-iri">')
+    details = text[start : text.index("</details>", start)]
+    assert "<dd><code>http://other.org/y</code></dd>" in details
+    assert "<dt>CURIE</dt>" in details
+    assert "<dd><code>oth:y</code></dd>" in details
+
+
+def test_entity_header_without_names(client: TestClient) -> None:
+    """Check that an entity without a display name is named by its IRI, and that one without a CURIE shows none."""
+    text = client.get("/other.org/y").text
+    assert "<h1><bdi>http://other.org/y</bdi></h1>" in text
+    assert "<title>http://other.org/y · The &lt;Onto&gt;</title>" in text
+    assert "<dd><code>http://other.org/y</code></dd>" in text
+    assert "CURIE" not in text
+
+
+def test_entity_long_name(app: FastAPI) -> None:
+    """Check that a long display name is cut short in the heading and the title."""
+    with TestClient(app) as client:
+        run(client, app, names=NAMES)
+        text = client.get("/_browl/hash?path=/onto&fragment=A").text
+    cut = "a" * (MAX_NAME_CHARS - 1) + "…"
+    assert f"<h1><bdi>{cut}</bdi></h1>" in text
+    assert f"<title>{cut} · The &lt;Onto&gt;</title>" in text
+
+
+@pytest.mark.parametrize(
+    ("title", "path", "expected"),
+    [
+        ("The <Onto>", "/onto", "<title>The &lt;Onto&gt; · browl</title>"),
+        (None, "/onto", f"<title>{ONTOLOGY} · browl</title>"),
+        (None, "/other.org/y", "<title>http://other.org/y · browl</title>"),
+        (None, "/no/such/page", "<title>Not found · browl</title>"),
+    ],
+)
+def test_page_titles(app: FastAPI, title: str | None, path: str, expected: str) -> None:
+    """Check that titles end with the ontology's title only if it has one, and the home page's doesn't repeat it."""
+    with TestClient(app) as client:
+        run(client, app, title=title)
+        assert expected in client.get(path).text
+
+
+def test_disambiguation_names(app: FastAPI) -> None:
+    """Check that the disambiguation page links each IRI by its display name, else its IRI."""
+    with TestClient(app) as client:
+        run(client, app, names=NAMES)
+        text = client.get("/other.org/x").text
+    assert f'<a href="{iri_link("http://other.org/x")}"><bdi>Ex</bdi></a> <code>http://other.org/x</code>' in text
+    link = iri_link("https://other.org/x")
+    assert f'<a href="{link}"><bdi>https://other.org/x</bdi></a> <code>https://other.org/x</code>' in text

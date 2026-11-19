@@ -236,6 +236,43 @@ code {
   color: var(--muted);
 }
 
+/* An entity page's header (U-5): its name, its type below in muted text, and its IRI and CURIE folded away. */
+
+.entity-header h1 {
+  margin-bottom: 0;
+}
+
+.entity-type {
+  margin: 0;
+  color: var(--muted);
+}
+
+.entity-iri {
+  margin-top: calc(var(--space) / 2);
+  font-size: 0.9rem;
+}
+
+.entity-iri summary {
+  width: fit-content;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.entity-iri dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: calc(var(--space) / 4) var(--space);
+  margin: calc(var(--space) / 2) 0 0;
+}
+
+.entity-iri dt {
+  color: var(--muted);
+}
+
+.entity-iri dd {
+  margin: 0;
+}
+
 /* Page tabs (U-28): underlined text on the page background, unlike the tinted navigation bar. */
 
 .tabs {

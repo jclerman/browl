@@ -766,8 +766,10 @@ no CURIE. _(Q18b)_
 
 Header, above the tabs (U-5):
 
-- Display name as the title, and the entity type.
-- A `<details>` element with the full IRI and CURIE.
+- Display name as the title, and the entity type. An IRI with several types (punning) lists them all, e.g.
+  "Class · Object property". _(P-14c)_
+- A `<details>` element with the full IRI and CURIE, closed at first. The IRI is text, not a link: on a browl site it
+  often resolves to the page it's on. _(P-14c)_
 
 Tabs (U-28; see [2.9](#29-page-layout)):
 
@@ -934,6 +936,14 @@ JSON, scripts or unquoted attributes.
 - Labels can be huge, so rendered names are capped in length, with the rest elided.
 - Labels can hold bidirectional-text overrides, so each name is isolated (`<bdi>`, or `dir="auto"`) from the text
   around it.
+- A page reads the links of the entities it mentions in one query (`browl.links.read_entity_links`), and templates
+  render each with one macro (`entity_link` in `templates/links.html`), so every mention looks and behaves the same
+  (U-4, U-6). An entity whose URL other IRIs share links to its fallback URL, not to the disambiguation page; an IRI
+  with no page is shown as text. _(P-14c)_
+- Names in links, headings, page titles and the navigation bar are cut to 100 characters (`MAX_NAME_CHARS`). _(P-14c)_
+- Page titles are the page's name, then the ontology's title: `Heart · Foo Ontology`. Without a title, they end with
+  `browl` rather than the ontology's IRI, which a tab would mostly cut off; the home page's ends with `browl` too, as
+  its name is already the ontology's. _(P-14c)_
 
 ### 2.10 Page cache
 

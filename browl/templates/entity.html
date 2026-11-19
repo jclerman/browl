@@ -1,9 +1,23 @@
 {% extends "base.html" %}
 {% from "tabs.html" import tab_list, tab_panel %}
-{% block title %}{{ entity.display_name or entity.iri }}{% endblock %}
+{% block title %}{{ name }}{% endblock %}
 {% block content %}
-{# The page header is a placeholder until P-14c. #}
-<h1>{{ entity.display_name or entity.iri }}</h1>
+{# The entity page's header (U-5, DESIGN.md §2.8): display name, type, and the IRI and CURIE, folded away. #}
+<div class="entity-header">
+  <h1><bdi>{{ name }}</bdi></h1>
+  <p class="entity-type">{{ types | join(" · ") }}</p>
+  <details class="entity-iri">
+    <summary>IRI</summary>
+    <dl>
+      <dt>IRI</dt>
+      <dd><code>{{ entity.iri }}</code></dd>
+      {% if entity.curie %}
+      <dt>CURIE</dt>
+      <dd><code>{{ entity.curie }}</code></dd>
+      {% endif %}
+    </dl>
+  </details>
+</div>
 {{ tab_list(tabs, "Entity") }}
 {% call tab_panel(tabs) %}{% include "entity_panel.html" %}{% endcall %}
 {% endblock %}

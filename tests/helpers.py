@@ -8,7 +8,7 @@ import subprocess
 import threading
 import time
 import urllib.parse
-from collections.abc import AsyncIterator, Coroutine, Sequence
+from collections.abc import AsyncIterator, Coroutine, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -263,12 +263,15 @@ def connect(settings: Settings, generation: int, hooks: Sequence[Hook] = HOOKS) 
 
 
 def derived_stage(
-    entities: Sequence[tuple[str, derived.EntityType]] = (), ontology_iri: str | None = None, title: str | None = None
+    entities: Sequence[tuple[str, derived.EntityType]] = (),
+    ontology_iri: str | None = None,
+    title: str | None = None,
+    names: Mapping[str, tuple[str | None, str | None]] | None = None,
 ) -> StageFunction:
     """Return a load job stage that builds the job's derived database with these entities, and the ontology if given.
 
     Their URLs come from the job's settings (`URLMapper`), and the rows and `hash_prefix` are written as the entities
-    hook writes them (`browl.precache.entities`).
+    hook writes them (`browl.precache.entities`). `names` gives IRIs' display names and CURIEs.
     """
 
     def build(context: JobContext) -> None:
@@ -279,6 +282,10 @@ def derived_stage(
         with derived.build(settings.data_dir, meta, build_keys(settings, HOOKS)) as connection:
             insert_entities(rows, mapper, Reserved(), connection)
             fill_hash_prefix(connection)
+            for iri, (display_name, curie) in (names or {}).items():
+                connection.execute(
+                    "UPDATE entity SET display_name = ?, curie = ? WHERE iri = ?", (display_name, curie, iri)
+                )
 
     async def stage(context: JobContext) -> None:
         await asyncio.to_thread(build, context)

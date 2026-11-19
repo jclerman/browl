@@ -1,0 +1,6 @@
+{# An entity a page mentions (`browl.links.EntityLink`): a link to its page, labeled with its display name, or text if
+   it has none. The name is isolated from the text around it, since labels can hold bidirectional overrides. #}
+{% macro entity_link(link) -%}
+{% if link.href is not none %}<a href="{{ link.href }}"><bdi>{{ link.name }}</bdi></a>
+{%- else %}<bdi>{{ link.name }}</bdi>{% endif %}
+{%- endmacro %}

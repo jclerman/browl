@@ -7,7 +7,8 @@
   <meta name="htmx-config" content='{"allowEval": false, "allowScriptTags": false}'>
   {% block head %}{% endblock %}
   {% if noindex is defined and noindex %}<meta name="robots" content="noindex">{% endif %}
-  <title>{% block title %}{% endblock %} · browl</title>
+  {# Titles end with the ontology's title, else browl's name. #}
+  <title>{% block title %}{% endblock %}{% block title_suffix %} · {{ frame.site }}{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', path='browl.css').path }}">
   <script src="{{ url_for('static', path='htmx.min.js').path }}" defer></script>
   <script src="{{ url_for('static', path='tabs.js').path }}" defer></script>

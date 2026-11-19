@@ -1,5 +1,7 @@
 {% extends "base.html" %}
-{% block title %}{{ meta.title or meta.ontology_iri }}{% endblock %}
+{% block title %}{{ frame.name }}{% endblock %}
+{# The ontology is the page's subject, so its title isn't repeated. #}
+{% block title_suffix %} · browl{% endblock %}
 {% block content %}
 {# A placeholder until P-17. #}
 <h1>{{ meta.title or meta.ontology_iri }}</h1>
