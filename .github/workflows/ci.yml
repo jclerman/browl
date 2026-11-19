@@ -105,8 +105,8 @@ jobs:
       - name: Install dependencies
         run: make install
 
-      # Playwright's headless Chromium for the tests marked browser, which `make test` downloads (`make browser`) on a
-      # cache miss, keyed by the locked Playwright release that pins it. Its system libraries come from apt each run.
+      # Cache the Chromium that `make browser` installs, keyed by the Playwright version that pins it. Its system
+      # libraries can't be cached, so apt installs them each run.
       - name: Read the locked Playwright version
         id: playwright
         run: echo "version=$(poetry run playwright --version | cut -d ' ' -f 2)" >> "$GITHUB_OUTPUT"

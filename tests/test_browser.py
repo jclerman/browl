@@ -6,21 +6,20 @@ They drive headless Chromium through Playwright against the app on a live server
 import asyncio
 import re
 import urllib.parse
-from collections.abc import Callable, Coroutine, Iterator
-from contextlib import suppress
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 import pytest
 import rdflib
 from fastapi import FastAPI
-from playwright.sync_api import Browser, Page, Route, expect
 from playwright.sync_api import Error as PlaywrightError
+from playwright.sync_api import Page, Route, expect
 from rdflib.namespace import OWL, RDF
 
 import browl.admin
 from browl.derived import EntityType
-from browl.jobs import Stage
+from browl.jobs import JobContext, Stage, StageFunction
+from browl.jobtypes import StageError
 from tests.conftest import DATA
 from tests.helpers import WAIT_S, LiveServer, derived_stage, make_app
 
@@ -34,6 +33,9 @@ TITLE = "Routing tests"
 """The ontology's title, its home page's heading."""
 
 HASH_ROUTE = re.compile(r"/_browl/hash\?")
+
+NO_JS = pytest.mark.browser_context_args(java_script_enabled=False)
+"""Run a test's `page` with JavaScript disabled; its parser then shows `<noscript>`'s content."""
 
 
 def routing_entities() -> tuple[str, list[tuple[str, EntityType]]]:
@@ -52,9 +54,24 @@ def run_job(server: LiveServer) -> None:
     server.call(server.app.state.jobs.wait())
 
 
-async def wait_forever(context: object) -> None:
-    """Wait until the app shuts down: a job stage that never ends."""
-    await asyncio.Event().wait()
+def gate(event: asyncio.Event) -> StageFunction:
+    """Return a job stage that waits for an event, set on the server's loop (`release`)."""
+
+    async def stage(context: JobContext) -> None:
+        await event.wait()
+
+    return stage
+
+
+async def release(event: asyncio.Event) -> None:
+    """Set an event, on the server's loop."""
+    event.set()
+
+
+def start_endless_job(server: LiveServer) -> None:
+    """Start a load job that stays in its loading stage until the app shuts down."""
+    server.app.state.jobs.register(Stage.LOADING, gate(asyncio.Event()))
+    server.call(server.app.state.jobs.start())
 
 
 @pytest.fixture
@@ -68,28 +85,18 @@ def server(live_server: Callable[[FastAPI], LiveServer]) -> LiveServer:
     return server
 
 
-@pytest.fixture
-def no_js_page(browser: Browser) -> Iterator[Page]:
-    """Yield a page in a browser context with JavaScript disabled, whose parser shows `<noscript>`'s content."""
-    context = browser.new_context(java_script_enabled=False)
-    try:
-        yield context.new_page()
-    finally:
-        context.close()
-
-
-def wait_until(page: Page, condition: Callable[[], bool]) -> None:
+def wait_until(page: Page, condition: Callable[[], bool], what: str) -> None:
     """Handle the page's events until a condition holds, failing after `WAIT_S`."""
     for _ in range(int(WAIT_S / 0.01)):
         if condition():
             return
         page.wait_for_timeout(10)
-    raise AssertionError("timed out")
+    raise AssertionError(f"timed out waiting for {what}")
 
 
-def fragment_of(url: str) -> str:
-    """Return the `fragment` parameter of a hash route URL."""
-    return urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get("fragment", [""])[0]
+def query_of(url: str) -> dict[str, list[str]]:
+    """Return a URL's query parameters."""
+    return urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
 
 
 # The hash-IRI script (DESIGN.md §2.3, U-13, U-14)
@@ -110,20 +117,28 @@ def test_hash_prefix_not_found(page: Page, server: LiveServer, fragment: str) ->
     expect(page).to_have_title("Not found · browl")
 
 
-def test_hash_prefix_without_javascript(no_js_page: Page, server: LiveServer) -> None:
+@NO_JS
+def test_hash_prefix_without_javascript(page: Page, server: LiveServer) -> None:
     """Check that, without JavaScript, a hash prefix's page says it needs it."""
-    no_js_page.goto(f"{server.url}/example.org/vocab#Gamma")
-    message = no_js_page.locator("main noscript p")  # Playwright's text matching skips <noscript>
+    page.goto(f"{server.url}/example.org/vocab#Gamma")
+    message = page.locator("main noscript p")  # Playwright's text matching skips <noscript>
     expect(message).to_be_visible()
     assert "needs JavaScript" in message.inner_text()
 
 
-def test_fragment_change_without_reload(page: Page, server: LiveServer) -> None:
-    """Check that changing only the fragment shows the new entity without loading the page again."""
+@pytest.mark.parametrize("how", ["assign", "click"])
+def test_fragment_change_without_reload(page: Page, server: LiveServer, how: str) -> None:
+    """Check that changing only the fragment, or following a link that does, shows the new entity without a reload."""
     page.goto(f"{server.url}/example.org/onto#Alpha")
     expect(page.locator("main h1")).to_have_text(f"{EX}/onto#Alpha")
     page.evaluate("window.marker = 1")
-    page.evaluate("location.hash = 'Beta'")
+    if how == "assign":
+        page.evaluate("location.hash = 'Beta'")
+    else:  # the link sits outside <main>, which the script replaces
+        page.locator("header").evaluate(
+            """(header) => header.insertAdjacentHTML("beforeend", '<a href="#Beta">B</a>')"""
+        )
+        page.click("header a")
     expect(page.locator("main h1")).to_have_text(f"{EX}/onto#Beta")
     assert page.evaluate("window.marker") == 1
 
@@ -151,8 +166,7 @@ def test_query_passed_on(page: Page, server: LiveServer) -> None:
     """Check that the script passes the page's own query, such as the tab, on to the hash route."""
     with page.expect_request(HASH_ROUTE) as request:
         page.goto(f"{server.url}/example.org/vocab?tab=usage#Gamma")
-    query = urllib.parse.parse_qs(urllib.parse.urlsplit(request.value.url).query)
-    assert query == {"tab": ["usage"], "path": ["/example.org/vocab"], "fragment": ["Gamma"]}
+    assert query_of(request.value.url) == {"tab": ["usage"], "path": ["/example.org/vocab"], "fragment": ["Gamma"]}
 
 
 @pytest.mark.parametrize("new", ["Beta", ""])
@@ -162,31 +176,62 @@ def test_stale_response_ignored(page: Page, server: LiveServer, new: str) -> Non
     The responses are held until the test lets them through, so the order doesn't depend on timing.
     """
     held: dict[str, Route] = {}
-    page.route(HASH_ROUTE, lambda route: held.__setitem__(fragment_of(route.request.url), route))
+    page.route(HASH_ROUTE, lambda route: held.__setitem__(query_of(route.request.url)["fragment"][0], route))
     page.goto(f"{server.url}/example.org/onto#Alpha")
-    wait_until(page, lambda: "Alpha" in held)
+    wait_until(page, lambda: "Alpha" in held, "the request for #Alpha")
     page.evaluate(f"location.hash = '{new}'")
+    shown = f"{EX}/onto#Beta" if new else TITLE
     if new:
-        wait_until(page, lambda: new in held)
-        page.evaluate("new Promise((resolve) => setTimeout(resolve, 100))")
+        wait_until(page, lambda: new in held, f"the request for #{new}")
+        page.wait_for_timeout(100)  # time for the aborted request's handler to run
         expect(page.locator("main h1")).to_have_text(TITLE)  # the served page, not an error
         held[new].continue_()
-    expect(page.locator("main h1")).to_have_text(f"{EX}/onto#Beta" if new else TITLE)
-    with suppress(PlaywrightError):  # the script aborted it
-        held["Alpha"].continue_()
-    page.evaluate("new Promise((resolve) => setTimeout(resolve, 500))")
-    expect(page.locator("main h1")).to_have_text(f"{EX}/onto#Beta" if new else TITLE)
+    expect(page.locator("main h1")).to_have_text(shown)
+    stale = held["Alpha"]
+    try:
+        stale.continue_()
+    except PlaywrightError:
+        pass  # the script aborted it, so nothing arrives
+    else:
+        if response := stale.request.response():
+            response.finished()
+        page.wait_for_timeout(100)  # time for the script to handle it
+    expect(page.locator("main h1")).to_have_text(shown)
 
 
 def test_loading_reloads(page: Page, server: LiveServer) -> None:
     """Check that a fragment change while a load job runs reloads the page, which then shows "loading" (#87, C1)."""
     page.goto(f"{server.url}/example.org/onto")
-    server.app.state.jobs.register(Stage.LOADING, wait_forever)
-    server.call(server.app.state.jobs.start())
-    with page.expect_navigation(timeout=WAIT_S * 1000):
-        page.evaluate("location.hash = 'Alpha'")
+    page.evaluate("window.marker = 1")
+    start_endless_job(server)
+    page.evaluate("location.hash = 'Alpha'")
     expect(page.locator("main h1")).to_have_text("Loading the ontology")
     expect(page.locator('meta[http-equiv="refresh"]')).to_have_count(1)
+    assert page.evaluate("window.marker") is None  # reloaded, not swapped in
+
+
+def test_not_available_reloads(page: Page, server: LiveServer) -> None:
+    """Check that a fragment change once a later load has failed reloads the page, which then shows "not available"."""
+
+    async def fail(context: JobContext) -> None:
+        raise StageError("boom")
+
+    page.goto(f"{server.url}/example.org/onto")
+    page.evaluate("window.marker = 1")
+    server.app.state.jobs.register(Stage.LOADING, fail)
+    server.call(server.app.state.jobs.start())
+    server.call(server.app.state.jobs.wait())
+    page.evaluate("location.hash = 'Alpha'")
+    expect(page.locator("main h1")).to_have_text("Not available")
+    assert page.evaluate("window.marker") is None
+
+
+def test_fetch_error(page: Page, server: LiveServer) -> None:
+    """Check that a hash route request that fails shows an error in place of the content."""
+    page.route(HASH_ROUTE, lambda route: route.abort())
+    page.goto(f"{server.url}/example.org/vocab#Gamma")
+    expect(page.locator("main h1")).to_have_text("Error")
+    expect(page).to_have_title("Error")
 
 
 def test_iri_redirect_special_fragment(page: Page, server: LiveServer) -> None:
@@ -198,8 +243,11 @@ def test_iri_redirect_special_fragment(page: Page, server: LiveServer) -> None:
 # htmx on the admin status (P-5, A-5)
 
 STATUS = "/_browl/admin/status"
-POLL_S = 0.5
-"""The status's poll interval in these tests, shorter than the app's."""
+UPLOAD = "/_browl/admin/upload"
+POLL_S = 0.25
+"""How often the status polls in these tests, more often than the app's."""
+REFRESH_S = 1
+"""How often the no-JS pages refresh in these tests: a meta refresh reads only whole seconds."""
 
 
 @pytest.fixture
@@ -207,20 +255,6 @@ def status_server(live_server: Callable[[FastAPI], LiveServer], monkeypatch: pyt
     """Return a live server for an app whose status polls every `POLL_S`, with no job yet."""
     monkeypatch.setattr(browl.admin, "STATUS_POLL_S", POLL_S)
     return live_server(make_app())
-
-
-def gate(event: asyncio.Event) -> Callable[[object], Coroutine[Any, Any, None]]:
-    """Return a job stage that waits for an event, set on the server's loop (`release`)."""
-
-    async def stage(context: object) -> None:
-        await event.wait()
-
-    return stage
-
-
-async def release(event: asyncio.Event) -> None:
-    """Set an event, on the server's loop."""
-    event.set()
 
 
 def test_status_polls_while_running(page: Page, status_server: LiveServer) -> None:
@@ -242,18 +276,32 @@ def test_status_polls_while_running(page: Page, status_server: LiveServer) -> No
     assert page.evaluate("window.marker") == 1
     polls: list[str] = []
     page.on("request", lambda request: polls.append(request.url))
-    page.wait_for_timeout(POLL_S * 4 * 1000)
+    page.wait_for_timeout(POLL_S * 3 * 1000)
     assert polls == []
 
 
-@pytest.mark.parametrize("path", [STATUS, "/_browl/admin/upload"])
-def test_status_refreshes_without_javascript(no_js_page: Page, status_server: LiveServer, path: str) -> None:
+@NO_JS
+@pytest.mark.parametrize("path", [STATUS, UPLOAD])
+def test_status_refreshes_without_javascript(
+    page: Page, status_server: LiveServer, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
     """Check that, without JavaScript, the status and upload pages refresh themselves while a job runs."""
-    status_server.app.state.jobs.register(Stage.LOADING, wait_forever)
+    monkeypatch.setattr(browl.admin, "STATUS_POLL_S", REFRESH_S)
+    start_endless_job(status_server)
+    page.goto(f"{status_server.url}{path}")
+    page.wait_for_event("request", lambda request: request.is_navigation_request())
+
+
+@NO_JS
+@pytest.mark.parametrize("path", [STATUS, UPLOAD])
+def test_no_refresh_once_finished(page: Page, status_server: LiveServer, path: str) -> None:
+    """Check that, without JavaScript, the status and upload pages don't refresh once the job has ended."""
+    status_server.app.state.jobs.register(Stage.PRE_CACHING, derived_stage())
     status_server.call(status_server.app.state.jobs.start())
-    no_js_page.goto(f"{status_server.url}{path}")
-    with no_js_page.expect_request(lambda request: request.is_navigation_request(), timeout=WAIT_S * 1000):
-        pass
+    status_server.call(status_server.app.state.jobs.wait())
+    page.goto(f"{status_server.url}{path}")
+    expect(page.locator("#job-status")).to_contain_text("is ready")
+    expect(page.locator('meta[http-equiv="refresh"]')).to_have_count(0)
 
 
 # Upload refusal (#67; PR #65's review, C3)
@@ -287,9 +335,30 @@ def test_upload_refused_early(
     with upload.open("wb") as file:
         file.write(b'<?xml version="1.0"?>\n<rdf:RDF ')
         file.truncate(UPLOAD_MB * 2**20)
-    page.goto(f"{server.url}/_browl/admin/upload")
+    page.goto(f"{server.url}{UPLOAD}")
     page.set_input_files("#ontology", upload)
     with page.expect_response(lambda response: response.request.method == "POST") as response:
         page.click("button[type=submit]")
     assert response.value.status == status
     expect(page.get_by_role("alert")).to_have_text(re.compile(f"The upload was refused: {re.escape(reason)}"))
+
+
+@pytest.mark.parametrize("origin", ["http://attacker.test", "http://127.0.0.1:59999"])
+def test_upload_from_another_site_refused(
+    page: Page, live_server: Callable[[FastAPI], LiveServer], origin: str
+) -> None:
+    """Check that the upload refuses a form submitted from another site's page, or another port's (CSRF).
+
+    The check reads `Sec-Fetch-Site`, which only a browser sets; the page is the test's, served by `page.route`.
+    """
+    server = live_server(make_app())
+    form = (
+        f'<form method="post" action="{server.url}{UPLOAD}" enctype="multipart/form-data">'
+        '<input name="reasoner" value="none"><button>Upload</button></form>'
+    )
+    page.route(f"{origin}/", lambda route: route.fulfill(body=form, content_type="text/html"))
+    page.goto(f"{origin}/")
+    with page.expect_response(lambda response: response.request.method == "POST") as response:
+        page.click("button")
+    assert response.value.status == 403
+    assert server.call(server.app.state.jobs.current()).stage is None

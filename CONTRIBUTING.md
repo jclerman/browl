@@ -32,9 +32,9 @@ make help      # list all targets
 
 The first `make test` downloads `robot.jar` and Jena's tools into `.cache/`, at the versions the `Dockerfile` pins, and
 Playwright's headless Chromium (`make browser`, about 100 MB) into Playwright's own cache, for the tests marked
-`browser`. The first `make ci` (or `make tbls`) downloads tbls, at the version the `Makefile` pins, for the SQLite
-schema docs ([`docs/SCHEMA.md`](docs/SCHEMA.md)). The git hook runs the linters on each commit; `make lint` runs them on
-every file.
+`browser`; if that download fails, `make test` warns and runs without them. The first `make ci` (or `make tbls`)
+downloads tbls, at the version the `Makefile` pins, for the SQLite schema docs ([`docs/SCHEMA.md`](docs/SCHEMA.md)). The
+git hook runs the linters on each commit; `make lint` runs them on every file.
 
 On Linux, Chromium also needs system libraries: `poetry run playwright install-deps chromium-headless-shell` (it asks
 for sudo). `make doctor` says whether the browser tests can run.

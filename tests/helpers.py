@@ -116,7 +116,8 @@ class LiveServer:
         config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", timeout_graceful_shutdown=1)
         self._server = uvicorn.Server(config)
         self._loop = asyncio.new_event_loop()
-        self._thread = threading.Thread(target=self._loop.run_until_complete, args=(self._server.serve(),))
+        # A daemon, so a server that won't stop can't keep pytest from exiting.
+        self._thread = threading.Thread(target=self._loop.run_until_complete, args=(self._server.serve(),), daemon=True)
         self._thread.start()
         deadline = time.monotonic() + WAIT_S
         while not self._server.started:

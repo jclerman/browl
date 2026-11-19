@@ -14,6 +14,7 @@ fixture.
 are skipped or fail alike when it's missing.
 """
 
+import json
 import os
 import shlex
 import shutil
@@ -87,20 +88,31 @@ def live_server() -> Iterator[Callable[[FastAPI], LiveServer]]:
         servers.append(LiveServer(app))
         return servers[-1]
 
-    try:
-        yield serve
-    finally:
-        for server in servers:
+    yield serve
+    errors = []
+    for server in servers:
+        try:
             server.close()
+        except RuntimeError as error:
+            errors.append(error)
+    if errors:
+        raise errors[0]
+
+
+# pytest-playwright (0.10) keeps one Playwright for the whole session, but its sync API marks its event loop as running
+# on the main thread until it stops, and async tests can't run meanwhile. These overrides scope it, and the fixtures
+# that depend on it, to the test module, otherwise as the plugin's own: keep them in step with the plugin's.
+
+BROWSER_MISSING = ("Executable doesn't exist", "Host system is missing dependencies")
+"""What Playwright's launch errors say when the browser, or on Linux its system libraries, aren't installed."""
 
 
 @pytest.fixture(scope="module")
-def playwright() -> Iterator[Playwright]:
-    """Start Playwright for one test module; overrides pytest-playwright's fixture, which lasts the whole session.
-
-    Its sync API marks its event loop as running on the main thread until it stops, and async tests can't run meanwhile.
-    """
+def playwright(_pw_api_request_contexts: Any) -> Iterator[Playwright]:
+    """Start Playwright for one test module."""
     started = sync_playwright().start()
+    if _pw_api_request_contexts:
+        _pw_api_request_contexts.instrument(started)
     try:
         yield started
     finally:
@@ -115,6 +127,22 @@ def browser_type(playwright: Playwright, browser_name: str) -> BrowserType:
 
 
 @pytest.fixture(scope="module")
+def launch_browser(
+    browser_type_launch_args: dict[str, Any], browser_type: BrowserType, connect_options: dict[str, Any] | None
+) -> Callable[..., Browser]:
+    """Return a function that launches the browser, or connects to one if `connect_options` says where."""
+
+    def launch(**kwargs: Any) -> Browser:
+        options = {**browser_type_launch_args, **kwargs}
+        if not connect_options:
+            return browser_type.launch(**options)
+        headers = {"x-playwright-launch-options": json.dumps(options), **(connect_options.get("headers") or {})}
+        return browser_type.connect(**{**connect_options, "headers": headers})
+
+    return launch
+
+
+@pytest.fixture(scope="module")
 def browser_context_args(
     pytestconfig: pytest.Config,
     playwright: Playwright,
@@ -122,7 +150,7 @@ def browser_context_args(
     base_url: str | None,
     _pw_artifacts_folder: tempfile.TemporaryDirectory[str],
 ) -> dict[str, Any]:
-    """Return new browser contexts' options, as pytest-playwright's fixture does, but scoped like `playwright`."""
+    """Return new browser contexts' options: the device's, the base URL, and where to record video."""
     args: dict[str, Any] = dict(playwright.devices[device]) if device else {}
     if base_url:
         args["base_url"] = base_url
@@ -132,14 +160,14 @@ def browser_context_args(
 
 
 @pytest.fixture(scope="module")
-def browser(browser_type: BrowserType, browser_type_launch_args: dict[str, Any]) -> Iterator[Browser]:
-    """Launch the browser, or skip the test if Playwright's isn't installed; overrides pytest-playwright's fixture."""
+def browser(launch_browser: Callable[[], Browser]) -> Iterator[Browser]:
+    """Launch the browser, or skip the test if it, or its system libraries, aren't installed."""
     try:
-        launched = browser_type.launch(**browser_type_launch_args)
+        launched = launch_browser()
     except PlaywrightError as error:
-        if "Executable doesn't exist" not in error.message:
+        if not any(text in error.message for text in BROWSER_MISSING):
             raise
-        skip_or_fail("no browser for Playwright (run `make browser`)")
+        skip_or_fail(f"no browser for Playwright (run `make browser`; see CONTRIBUTING.md): {error.message[:200]}")
     try:
         yield launched
     finally:
