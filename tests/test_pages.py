@@ -230,7 +230,7 @@ def test_status_running(client: TestClient, app: FastAPI) -> None:
 
 
 def test_status_ready(client: TestClient, app: FastAPI) -> None:
-    """Check that after a load the status shows it ready, highlighted after the stages done, and stops polling (#85)."""
+    """Check that after a load the status shows Ready highlighted, and stops polling (#85)."""
     run_job(client, app)
     html = fragment(client)
     assert "Load 1 is ready, started" in html
