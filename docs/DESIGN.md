@@ -902,7 +902,8 @@ Entity names become links like this:
    an IRI that is a declared entity as its link (`entity_link`, 2.9), labeled with its display name
    ([2.7](#27-display-names)); any other IRI as text, in `<code dir="ltr">`: one in a standard vocabulary (`xsd:`,
    `rdf:`, `rdfs:`, `owl:`), such as a built-in datatype, by its prefixed name (`xsd:integer`), the rest in full; a
-   literal as text, isolated in `<bdi>`.
+   literal as text, isolated in `<bdi>`. Only the axiom's own IRIs (`Axiom.iris`, from the OWLAPI's signature of the
+   axiom) are taken for IRIs; any other `<…>` is plain text.
    Autoescaping does all the escaping: nothing is marked safe.
 3. Manchester keywords are wrapped in `<span class="keyword">` for light styling ([2.9](#29-page-layout)). They're the
    words of the OWLAPI's own keyword list (`ManchesterOWLSyntax`), copied into `browl.manchester.KEYWORDS` so the
@@ -910,7 +911,9 @@ Entity names become links like this:
 4. A `HasKey` axiom's text is built from its operands (`<Person> HasKey <hasSSN>, <ssn>`), since OWLAPI 4's renderer
    writes its properties with nothing between them.
 5. An axiom that renders as an empty string (OWLAPI 4 does this for `DatatypeDefinition`) is shown in functional
-   syntax instead.
+   syntax instead. So is one with an ill-typed literal that OWLAPI 4 writes unquoted (`xsd:integer`, `xsd:decimal`,
+   `xsd:float`, `xsd:boolean`), whose text could otherwise pass for IRIs and keywords; functional syntax quotes every
+   literal.
 
 No Java code is needed, and no Python code runs inside the renderer. Spike S-1 also tried the earlier plan, a Python
 short-form provider returning placeholder tokens: it worked but was slower, and missed IRIs the renderer prints without

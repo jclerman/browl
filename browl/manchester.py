@@ -5,11 +5,13 @@ and set keywords apart (§2.9). Splitting the text here, rather than making HTML
 templates render each segment as text, a link or a keyword.
 
 IRIs and keywords are found only outside quoted literals, so `<…>` in a literal's text stays part of the literal; an
-unclosed literal runs to the end of the text. An IRI in a standard vocabulary (`xsd:`, `rdf:`, `rdfs:`, `owl:`), such as
-a built-in datatype, has its prefixed name, which a template shows unless the IRI has a page.
+unclosed literal runs to the end of the text. Given the IRIs an axiom is about, `segments` takes no other `<…>` for an
+IRI. An IRI in a standard vocabulary (`xsd:`, `rdf:`, `rdfs:`, `owl:`), such as a built-in datatype, has its prefixed
+name, which a template shows unless the IRI has a page.
 """
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -152,10 +154,20 @@ def _split(text: str) -> list[tuple[SegmentKind, str]]:
     return pieces
 
 
-def segments(text: str) -> list[Segment]:
-    """Return Manchester text split into segments: literals, IRIs, keywords, and the text between."""
+def segments(text: str, own: Iterable[str] | None = None) -> list[Segment]:
+    """Return Manchester text split into segments: literals, IRIs, keywords, and the text between.
+
+    Args:
+        text: The text.
+        own: The IRIs of the entities and datatypes the text is about (`browl.axioms.Axiom.iris`); any other `<…>` is a
+            text segment. None takes every `<…>` for an IRI.
+    """
+    known = None if own is None else frozenset(own)
     result = []
     for kind, piece in _split(text):
+        if kind == SegmentKind.IRI and known is not None and piece[1:-1] not in known:
+            result.append(Segment(SegmentKind.TEXT, piece))
+            continue
         if kind != SegmentKind.TEXT:
             result.append(Segment(kind, piece))
             continue

@@ -54,6 +54,14 @@ _ABBREVIATED = {
     f"{XSD}double": re.compile(r"[+-]?(?:[0-9]+\.[0-9]*|\.[0-9]+|[0-9]+)[eE][+-]?[0-9]+"),
     f"{XSD}boolean": re.compile(r"true|false"),
 }
+_XSD_DECIMAL = r"[+-]?+(?:[0-9]++(?:\.[0-9]*+)?+|\.[0-9]++)"
+XSD_LEXICAL_FORMS = {
+    f"{XSD}integer": _ABBREVIATED[f"{XSD}integer"],
+    f"{XSD}decimal": re.compile(_XSD_DECIMAL),
+    f"{XSD}float": re.compile(rf"{_XSD_DECIMAL}(?:[eE][+-]?+[0-9]++)?+|[+-]?+INF|NaN"),
+    f"{XSD}boolean": re.compile(r"true|false|1|0"),
+}
+"""XSD 1.1's lexical forms for the datatypes OWLAPI 4's Manchester renderer writes unquoted (`browl.axioms`)."""
 _NT_SUBJECT = rf"(?:{_IRI}|{_BLANK_NODE})"
 _NT_OBJECT = rf"(?:{_IRI}|{_BLANK_NODE}|{_LITERAL})"
 _NT_TRIPLE = re.compile(rf"[ \t]*{_NT_SUBJECT}[ \t]*{_IRI}[ \t]*{_NT_OBJECT}[ \t]*\.[ \t]*")

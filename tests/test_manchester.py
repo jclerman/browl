@@ -94,6 +94,18 @@ def test_linear() -> None:
     assert found == ([Segment(SegmentKind.LITERAL, quotes)], quotes, spaces)
 
 
+def test_segments_own() -> None:
+    """Check that, given the IRIs an axiom is about, any other `<…>` is text, not an IRI, and has no keywords."""
+    other = "http://example.org/and"
+    assert manchester.segments(f"<{A}> and <{other}>", own=[A]) == [
+        Segment(SegmentKind.IRI, f"<{A}>"),
+        Segment(SegmentKind.TEXT, " "),
+        Segment(SegmentKind.KEYWORD, "and"),
+        Segment(SegmentKind.TEXT, " "),
+        Segment(SegmentKind.TEXT, f"<{other}>"),
+    ]
+
+
 def test_iris_once() -> None:
     """Check that `iris` lists each IRI once, in order of first appearance."""
     assert manchester.iris(f"<{P}> <{A}> <{P}>") == [P, A]
@@ -105,10 +117,12 @@ def test_one_line() -> None:
     assert manchester.one_line(text) == f'<{A}> SubClassOf <{P}> some (<{A}> and <{P}> value "two\n  lines")'
 
 
-def render(text: str, links: dict[str, EntityLink]) -> str:
-    """Return Manchester text as the axioms template renders it."""
-    template = templates.env.from_string('{% from "axioms.html" import manchester %}{{ manchester(text, links) }}')
-    return template.render(text=text, links=links)
+def render(text: str, links: dict[str, EntityLink], iris: list[str] | None = None) -> str:
+    """Return Manchester text as the axioms template renders it, by default with every IRI in it the axiom's own."""
+    source = '{% from "axioms.html" import manchester %}{{ manchester(text, links, iris) }}'
+    return templates.env.from_string(source).render(
+        text=text, links=links, iris=manchester.iris(text) if iris is None else iris
+    )
 
 
 def test_html() -> None:
@@ -155,6 +169,16 @@ def test_standard_name(iri: str, name: str | None) -> None:
     """Check that only IRIs in the standard vocabularies, with a plain local name, have a prefixed name."""
     assert manchester.standard_name(iri) == name
     assert Segment(SegmentKind.IRI, f"<{iri}>").standard_name == name
+
+
+def test_html_not_own() -> None:
+    """Check that an IRI the axiom isn't about is plain text, even if it has a page or a prefixed name."""
+    links = {A: EntityLink(A, "A", "/A"), P: EntityLink(P, "P", "/P")}
+    html = render(f"<{A}> SubClassOf <{P}> and <{XSD}integer>", links, iris=[A])
+    assert html == (
+        '<a href="/A"><bdi>A</bdi></a> <span class="keyword">SubClassOf</span> '
+        f'&lt;{P}&gt; <span class="keyword">and</span> &lt;{XSD}integer&gt;'
+    )
 
 
 def test_html_standard_names() -> None:

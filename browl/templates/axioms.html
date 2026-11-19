@@ -1,10 +1,10 @@
 {% from "links.html" import entity_link %}
 {# Manchester text with full IRIs (DESIGN.md §2.8, `browl.manchester`), from `links` (IRI → `browl.links.EntityLink`):
-   each IRI with a page as a link to it, any other as text: a standard vocabulary's by its prefixed name
-   (`xsd:integer`), the rest in full; keywords styled lightly (§2.9). IRIs and literals, which
-   come from the ontology, are isolated from the text around them, as names are in links. #}
-{% macro manchester(text, links) -%}
-{%- for segment in text | manchester_segments -%}
+   each of the axiom's own IRIs (`iris`) with a page as a link to it, any other as text: a standard vocabulary's by its
+   prefixed name (`xsd:integer`), the rest in full; any other `<…>` as plain text; keywords styled lightly (§2.9). IRIs
+   and literals, which come from the ontology, are isolated from the text around them, as names are in links. #}
+{% macro manchester(text, links, iris) -%}
+{%- for segment in text | manchester_segments(iris) -%}
 {%- set link = links.get(segment.iri) if segment.kind == "iri" else none -%}
 {%- if link is not none and link.href is not none %}{{ entity_link(link) }}
 {%- elif segment.standard_name is not none %}<code dir="ltr">{{ segment.standard_name }}</code>
@@ -26,7 +26,7 @@
   {% else %}
   <ul class="axiom-list">
     {% for axiom in panel.axioms %}
-    <li dir="ltr">{{ manchester(axiom.text, panel.links) }}</li>
+    <li dir="ltr">{{ manchester(axiom.text, panel.links, axiom.iris) }}</li>
     {% endfor %}
   </ul>
   {% endif %}

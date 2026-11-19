@@ -16,6 +16,8 @@ from browl.axioms import Axiom, Syntax
 from browl.derived import EntityType
 from browl.fuseki import UNION_FROM, FusekiClient
 from browl.jobs import Stage
+from browl.manchester import SegmentKind
+from browl.rdf import RDF, XSD, XSD_LEXICAL_FORMS
 from tests.helpers import derived_stage, make_app
 
 pytestmark = [pytest.mark.jvm, pytest.mark.usefixtures("jvm")]
@@ -163,7 +165,99 @@ def test_operands(rendered: tuple[list[Axiom], dict[str, list[Axiom]]]) -> None:
     ]
     assert operands("Person", "HasKey") == [("<Person>", "<hasSSN>", "<ssn>")]
     [person] = [axiom for axiom in closures[f"{NS}Person"] if "nickname" in axiom.text]
-    assert person.iris == (f"{NS}Person", f"{NS}nickname")  # not the IRI in the literal
+    # Not the IRI in the literal; the literal's datatype, not in the text, comes last.
+    assert person.iris == (f"{NS}Person", f"{NS}nickname", f"{RDF}PlainLiteral")
+
+
+HOSTILE = '5 " <http://example.org/B> \u202e and'
+"""A literal's text that would forge an IRI, a keyword, a bidi override and a quote if written unquoted."""
+DATA_PROPERTY = f"<{NS}p> <{RDF}type> <http://www.w3.org/2002/07/owl#DatatypeProperty> .\n"
+
+
+def hostile_assertions() -> tuple[set[str], list[tuple[str, Axiom]]]:
+    """Return the built-in datatypes whose literals the renderer writes unquoted, and `HOSTILE` in each datatype.
+
+    The built-in datatypes are OWLAPI's `OWL2Datatype`; `HOSTILE` is rendered in a data property assertion, for each of
+    them and one that isn't built in.
+    """
+    factory = jpype.JClass("org.semanticweb.owlapi.apibinding.OWLManager").getOWLDataFactory()
+    create = jpype.JClass("org.semanticweb.owlapi.model.IRI").create
+    built_in = [
+        each.getDatatype(factory) for each in jpype.JClass("org.semanticweb.owlapi.vocab.OWL2Datatype").values()
+    ]
+    renderer = axioms._Renderer()
+    unquoted = {
+        str(datatype.getIRI())
+        for datatype in built_in
+        if not renderer.manchester(factory.getOWLLiteral("1", datatype)).startswith('"')
+    }
+    prop, individual = factory.getOWLDataProperty(create(f"{NS}p")), factory.getOWLNamedIndividual(create(f"{NS}i"))
+    rendered = []
+    for datatype in [*built_in, factory.getOWLDatatype(create(f"{NS}Adulthood"))]:
+        literal = factory.getOWLLiteral(HOSTILE, datatype)
+        [axiom] = axioms.render_axioms([factory.getOWLDataPropertyAssertionAxiom(prop, individual, literal)])
+        rendered.append((str(datatype.getIRI()), axiom))
+    return unquoted, rendered
+
+
+def check_quoted(axiom: Axiom) -> None:
+    """Check that no text of `HOSTILE` is outside a literal in an axiom's text, nor its IRI in the axiom's IRIs."""
+    for segment in manchester.segments(axiom.text):
+        if segment.kind != SegmentKind.LITERAL:
+            assert not any(mark in segment.text for mark in ('"', "\u202e", "example.org/B")), axiom.text
+            assert segment.kind != SegmentKind.KEYWORD or segment.text != "and", axiom.text
+    assert "http://example.org/B" not in axiom.iris
+
+
+def test_unquoted_literals() -> None:
+    """Check that, for every datatype, an ill-typed literal can't escape its quotes.
+
+    Either the renderer quotes it, or the axiom is shown in functional syntax, which quotes every literal (DESIGN.md
+    §2.8).
+    """
+    unquoted, rendered = asyncio.run(owlapi.run_java(hostile_assertions))
+    assert unquoted == set(XSD_LEXICAL_FORMS)
+    for _, axiom in rendered:
+        check_quoted(axiom)
+    # The data factory reads an ill-typed boolean as false, which is valid.
+    functional = {datatype for datatype, axiom in rendered if axiom.syntax == Syntax.FUNCTIONAL}
+    assert functional == {f"{XSD}integer", f"{XSD}decimal", f"{XSD}float"}
+    for datatype, axiom in rendered:
+        if datatype in functional:
+            assert axiom.iris == (f"{NS}p", f"{NS}i", datatype)  # the datatype isn't in `<…>` in functional syntax
+            assert axiom.operands == (f"<{NS}i>", f"<{NS}p>", axiom.operands[2])
+            assert axiom.operands[2].startswith('"5 \\"')
+
+
+def test_ill_typed_from_ntriples() -> None:
+    """Check ill-typed literals read from N-Triples, in an assertion and nested in a class expression."""
+    escaped = HOSTILE.replace('"', '\\"')
+    ntriples = f"""<{NS}i> <{NS}p> "{escaped}"^^<{XSD}integer> .
+{DATA_PROPERTY}<{NS}A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:r .
+_:r <{RDF}type> <http://www.w3.org/2002/07/owl#Restriction> .
+_:r <http://www.w3.org/2002/07/owl#onProperty> <{NS}p> .
+_:r <http://www.w3.org/2002/07/owl#hasValue> "1 \\" and <http://example.org/B>"^^<{XSD}decimal> .
+""".encode()
+    found = [
+        *asyncio.run(owlapi.run_java(axioms.entity_axioms, ntriples, f"{NS}i")),
+        *asyncio.run(owlapi.run_java(axioms.entity_axioms, ntriples, f"{NS}A")),
+    ]
+    assert [axiom.kind for axiom in found] == ["DataPropertyAssertion", "SubClassOf"]
+    for axiom in found:
+        assert axiom.syntax == Syntax.FUNCTIONAL
+        check_quoted(axiom)
+
+
+@pytest.mark.parametrize(
+    ("datatype", "lexical", "shown"),
+    [("integer", "-5", "-5"), ("decimal", "1.5", "1.5"), ("float", "2.0", "2.0f"), ("boolean", "true", "true")],
+)
+def test_valid_unquoted(datatype: str, lexical: str, shown: str) -> None:
+    """Check that valid literals the renderer writes unquoted stay in Manchester syntax."""
+    ntriples = f'<{NS}i> <{NS}p> "{lexical}"^^<{XSD}{datatype}> .\n{DATA_PROPERTY}'.encode()
+    [axiom] = asyncio.run(owlapi.run_java(axioms.entity_axioms, ntriples, f"{NS}i"))
+    assert (axiom.syntax, axiom.text) == (Syntax.MANCHESTER, f"<{NS}i> <{NS}p> {shown}")
+    assert axiom.iris == (f"{NS}i", f"{NS}p", f"{XSD}{datatype}")
 
 
 @pytest.mark.fuseki

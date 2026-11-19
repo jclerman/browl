@@ -12,7 +12,7 @@ super-properties; not its annotation assertions, nor its usage in other entities
 
 import asyncio
 import functools
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from browl import manchester
 from browl.fuseki import FusekiClient
 from browl.owlapi import check_java_thread, ntriples_ontology
-from browl.rdf import IRI, ntriples_iris
+from browl.rdf import IRI, XSD_LEXICAL_FORMS, ntriples_iris
 
 _SPARQL_DIR = Path(__file__).parent / "sparql"
 _PROLOGUE = """PREFIX owl: <http://www.w3.org/2002/07/owl#>
@@ -72,14 +72,17 @@ class Axiom(BaseModel, frozen=True):
     Attributes:
         kind: Its kind, by its OWL 2 functional-syntax name (`SubClassOf`, `ObjectPropertyDomain`, …), but for a
             property chain, `SubPropertyChainOf`.
-        syntax: The syntax of `text`: Manchester, unless the OWLAPI renders the axiom as nothing (it does for
-            `DatatypeDefinition`), when it's functional syntax.
+        syntax: The syntax of `text`: Manchester, but functional syntax when the OWLAPI renders the axiom as nothing
+            (it does for `DatatypeDefinition`), or when the axiom has a literal that the OWLAPI writes unquoted and
+            whose lexical form isn't valid for its datatype (`_unquoted_ill_typed`).
         text: The axiom, every entity in it written as its full IRI, `<…>`; a `HasKey` axiom's properties separated by
             commas, which OWLAPI 4's renderer leaves out.
         operands: What the axiom relates, each in Manchester syntax like `text`, in functional-syntax order: e.g. a
             `SubClassOf` axiom's subclass and superclass, a property domain's property and class, an n-ary axiom's
-            members. A property chain is one operand, its properties joined by `o`.
-        iris: The IRIs in `text` and `operands`, outside literals, in order of first appearance.
+            members. A property chain is one operand, its properties joined by `o`. In functional syntax, as `text`
+            is, if an ill-typed literal puts `text` in it.
+        iris: The IRIs of the entities and datatypes in the axiom (its signature): those in `text` and `operands`
+            in order of first appearance, then the rest sorted. Only these become links (DESIGN.md §2.8).
     """
 
     kind: str
@@ -125,10 +128,14 @@ class _Java:
 
     AxiomType: Any
     Collection: Any
+    Collections: Any
     DefaultPrefixManager: Any
     IRI: Any
     ManchesterOWLSyntaxOWLObjectRendererImpl: Any
     OWLHasKeyAxiom: Any
+    OWLLiteral: Any
+    OWLObjectVisitorEx: Any
+    OWLObjectWalker: Any
     excluded: Any  # Imports.EXCLUDED: a fragment's imports are never loaded
     operands: tuple[tuple[Any, tuple[str, ...]], ...]  # `_OPERANDS`, with the interfaces
 
@@ -172,12 +179,16 @@ def _java() -> _Java:
     return _Java(
         AxiomType=jpype.JClass(f"{model}.AxiomType"),
         Collection=jpype.JClass("java.util.Collection"),
+        Collections=jpype.JClass("java.util.Collections"),
         DefaultPrefixManager=jpype.JClass("org.semanticweb.owlapi.util.DefaultPrefixManager"),
         IRI=jpype.JClass(f"{model}.IRI"),
         ManchesterOWLSyntaxOWLObjectRendererImpl=jpype.JClass(
             "org.semanticweb.owlapi.manchestersyntax.renderer.ManchesterOWLSyntaxOWLObjectRendererImpl"
         ),
         OWLHasKeyAxiom=jpype.JClass(f"{model}.OWLHasKeyAxiom"),
+        OWLLiteral=jpype.JClass(f"{model}.OWLLiteral"),
+        OWLObjectVisitorEx=jpype.JClass(f"{model}.OWLObjectVisitorEx"),
+        OWLObjectWalker=jpype.JClass("org.semanticweb.owlapi.util.OWLObjectWalker"),
         excluded=jpype.JClass(f"{model}.parameters.Imports").EXCLUDED,
         operands=tuple((jpype.JClass(f"{model}.{name}"), methods) for name, methods in _OPERANDS),
     )
@@ -214,6 +225,37 @@ def entity_closure(ontology: Any, iri: str) -> list[Any]:
     return sorted(found, key=str)
 
 
+class _Literals:
+    """Collects the literals an `OWLObjectWalker` visits: an `OWLObjectVisitorEx`, through `jpype.JProxy`."""
+
+    def __init__(self) -> None:
+        self.found: list[Any] = []
+
+    def visit(self, owl_object: Any) -> None:
+        """Visit an OWL object, any kind: Java's overloads of `visit` all come here."""
+        if isinstance(owl_object, _java().OWLLiteral):
+            self.found.append(owl_object)
+
+
+def _unquoted_ill_typed(axiom: Any) -> bool:
+    """Return whether an axiom has an ill-typed literal that OWLAPI 4's Manchester renderer writes unquoted.
+
+    The renderer writes literals of `XSD_LEXICAL_FORMS`' datatypes unquoted without checking their lexical form, so an
+    ill-typed one's text could pass for IRIs and keywords.
+    """
+    java = _java()
+    if not any(str(datatype.getIRI()) in XSD_LEXICAL_FORMS for datatype in axiom.getDatatypesInSignature()):
+        return False
+    literals = _Literals()
+    walker = java.OWLObjectWalker(java.Collections.singleton(axiom))
+    walker.walkStructure(jpype.JProxy(java.OWLObjectVisitorEx, inst=literals))
+    for literal in literals.found:
+        pattern = XSD_LEXICAL_FORMS.get(str(literal.getDatatype().getIRI()))
+        if pattern is not None and not pattern.fullmatch(str(literal.getLiteral())):
+            return True
+    return False
+
+
 class _Renderer:
     """Renders OWL objects in Manchester syntax with full IRIs.
 
@@ -238,20 +280,31 @@ class _Renderer:
 
     def axiom(self, axiom: Any) -> Axiom:
         """Return an axiom as data."""
-        operands = self.operands(axiom)
+        if _unquoted_ill_typed(axiom):
+            operands = self.operands(axiom, str)
+            text, syntax = str(axiom), Syntax.FUNCTIONAL
+        else:
+            operands = self.operands(axiom, self.operand)
+            text, syntax = self.manchester_text(axiom, operands)
+        own = {str(entity.getIRI()) for entity in axiom.getSignature()}
+        found = dict.fromkeys(iri for each in (text, *operands) for iri in manchester.iris(each) if iri in own)
+        iris = (*found, *sorted(own.difference(found)))
+        name = str(axiom.getAxiomType().getName())
+        return Axiom(kind=_KIND_NAMES.get(name, name), syntax=syntax, text=text, operands=operands, iris=iris)
+
+    def manchester_text(self, axiom: Any, operands: tuple[str, ...]) -> tuple[str, Syntax]:
+        """Return an axiom's text, in Manchester syntax unless the OWLAPI renders it as nothing, and its syntax."""
         if isinstance(axiom, _java().OWLHasKeyAxiom):
             # OWLAPI 4's renderer writes a key's properties with nothing between them (`<A> HasKey <p><q>`).
-            text, syntax = f"{operands[0]} HasKey {', '.join(operands[1:])}", Syntax.MANCHESTER
-        else:
-            text, syntax = self.manchester(axiom), Syntax.MANCHESTER
-        if not text:
-            text, syntax = str(axiom), Syntax.FUNCTIONAL
-        iris = dict.fromkeys(iri for each in (text, *operands) for iri in manchester.iris(each))
-        name = str(axiom.getAxiomType().getName())
-        return Axiom(kind=_KIND_NAMES.get(name, name), syntax=syntax, text=text, operands=operands, iris=tuple(iris))
+            return f"{operands[0]} HasKey {', '.join(operands[1:])}", Syntax.MANCHESTER
+        text = self.manchester(axiom)
+        return (text, Syntax.MANCHESTER) if text else (str(axiom), Syntax.FUNCTIONAL)
 
-    def operands(self, axiom: Any) -> tuple[str, ...]:
-        """Return an axiom's operands; none for an axiom of a kind `_OPERANDS` lacks, such as a SWRL rule."""
+    def operands(self, axiom: Any, render: Callable[[Any], str]) -> tuple[str, ...]:
+        """Return an axiom's operands, each rendered by `render`.
+
+        None for an axiom of a kind `_OPERANDS` lacks, such as a SWRL rule.
+        """
         java = _java()
         for interface, methods in java.operands:
             if isinstance(axiom, interface):
@@ -259,11 +312,11 @@ class _Renderer:
                 for method in methods:
                     value = getattr(axiom, method)()
                     if method == "getPropertyChain":
-                        operands.append(" o ".join(map(self.operand, value)))
+                        operands.append(" o ".join(map(render, value)))
                     elif isinstance(value, java.Collection):
-                        operands += map(self.operand, value)
+                        operands += map(render, value)
                     else:
-                        operands.append(self.operand(value))
+                        operands.append(render(value))
                 return tuple(operands)
         return ()
 
