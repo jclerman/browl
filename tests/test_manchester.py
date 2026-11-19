@@ -1,5 +1,7 @@
 """Tests for Manchester text as templates show it: segments, IRIs, one-line text, and the axioms template's HTML."""
 
+import time
+
 import pytest
 
 from browl import manchester
@@ -65,6 +67,31 @@ def test_keywords(text: str, keywords: list[str]) -> None:
     found = manchester.segments(text)
     assert [segment.text for segment in found if segment.kind == SegmentKind.KEYWORD] == keywords
     assert not [segment for segment in found if segment.kind == SegmentKind.IRI]
+
+
+@pytest.mark.parametrize(
+    ("text", "literal"),
+    [
+        (f'<{A}> value "x <{P}> and', f'"x <{P}> and'),
+        (f'<{A}> value "x \\" <{P}> and', f'"x \\" <{P}> and'),
+        (f'<{A}> value "x \\', '"x \\'),
+    ],
+    ids=["unclosed", "escaped-quote", "trailing-backslash"],
+)
+def test_unclosed_literal(text: str, literal: str) -> None:
+    """Check that a literal left unclosed runs to the end of the text."""
+    assert manchester.segments(text)[-1] == Segment(SegmentKind.LITERAL, literal)
+    assert manchester.iris(text) == [A]
+
+
+def test_linear() -> None:
+    """Check that text with 50 K unclosed quotes, or a long run of spaces, takes linear time, not quadratic."""
+    quotes = '"\\' * 50_000
+    spaces = "x" + " " * 50_000 + "x"
+    start = time.perf_counter()
+    found = manchester.segments(quotes), manchester.one_line(quotes), manchester.one_line(spaces)
+    assert time.perf_counter() - start < 0.5
+    assert found == ([Segment(SegmentKind.LITERAL, quotes)], quotes, spaces)
 
 
 def test_iris_once() -> None:

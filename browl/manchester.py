@@ -4,9 +4,9 @@ The renderer writes every entity as its full IRI, `<…>`, so a template can sho
 and set keywords apart (§2.9). Splitting the text here, rather than making HTML, leaves escaping to Jinja's autoescape:
 templates render each segment as text, a link or a keyword.
 
-IRIs and keywords are found only outside quoted literals, so `<…>` in a literal's text stays part of the literal. An IRI
-in a standard vocabulary (`xsd:`, `rdf:`, `rdfs:`, `owl:`), such as a built-in datatype, has its prefixed name, which a
-template shows unless the IRI has a page.
+IRIs and keywords are found only outside quoted literals, so `<…>` in a literal's text stays part of the literal; an
+unclosed literal runs to the end of the text. An IRI in a standard vocabulary (`xsd:`, `rdf:`, `rdfs:`, `owl:`), such as
+a built-in datatype, has its prefixed name, which a template shows unless the IRI has a page.
 """
 
 import re
@@ -88,11 +88,12 @@ them against the OWLAPI's own list, so the template layer needs no JVM."""
 STANDARD_PREFIXES = {XSD: "xsd", RDF: "rdf", RDFS: "rdfs", OWL: "owl"}
 """The standard vocabularies' namespaces, and the prefix each IRI in them is shown with."""
 
-_IRI = r"<[^\x00-\x20<>\"{}|^`\\]*>"
-_LITERAL = r'"(?:[^"\\]|\\.)*"(?:@[A-Za-z0-9-]+)?'
+_IRI = r"<[^\x00-\x20<>\"{}|^`\\]*+>"
+# A literal left unclosed runs to the end of the text, so the scan stays linear.
+_LITERAL = r'"(?:[^"\\]++|\\[\s\S]?)*+(?:"|\Z)(?:@[A-Za-z0-9-]+)?'
 _TOKEN = re.compile(rf"(?P<literal>{_LITERAL})|(?P<iri>{_IRI})")
 _KEYWORD = re.compile(rf"\b(?:{'|'.join(sorted(KEYWORDS, key=len, reverse=True))})\b:?")
-_LINE_BREAK = re.compile(r"\s*\n\s*")
+_LINE_BREAK = re.compile(r"(?<!\s)\s*\n\s*")  # matched only from the start of a run of spaces, so linear
 _LOCAL_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
 
 
