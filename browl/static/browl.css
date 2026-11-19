@@ -121,23 +121,42 @@ code {
   list-style: none;
 }
 
-/* Narrow screens: the menu opens below the bar, its links one per line. */
+.site-search:empty {
+  display: none; /* until P-20 fills it */
+}
+
+/* Narrow screens: the name and the menu button share the top row, the search box gets its own, and the menu opens as
+   a panel under its button. */
 @media (width < 48rem) {
+  .site-name {
+    flex: 1 1 0;
+  }
+
   .site-menu {
-    margin-left: auto;
+    order: 1;
+  }
+
+  .site-search {
+    order: 2;
+    flex-basis: 100%;
   }
 
   .site-menu[open] ul {
     position: absolute;
-    right: 0;
-    left: 0;
-    padding: calc(var(--space) / 2) var(--space);
+    top: 100%;
+    right: var(--space);
+    min-width: 12rem;
+    padding: calc(var(--space) / 4) 0;
     background: var(--bar-bg);
-    border-bottom: 1px solid var(--border);
+    border: 1px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 4px 4px;
+    box-shadow: 0 4px 8px rgb(0 0 0 / 15%);
   }
 
-  .site-menu li {
-    padding: calc(var(--space) / 4) 0;
+  .site-menu li a {
+    display: block;
+    padding: calc(var(--space) / 4) var(--space);
   }
 }
 
