@@ -12,6 +12,7 @@ from fastapi import Request
 from browl.axioms import Axiom, entity_axioms, fetch_fragment
 from browl.derived import NotCurrentError
 from browl.fuseki import UNION_FROM, SparqlError, dataset_clause
+from browl.jobs import JobState
 from browl.links import EntityLink, read_entity_links
 from browl.loading import dataset_name
 from browl.owlapi import FragmentError, run_java
@@ -35,16 +36,20 @@ class AxiomsPanel:
     links: dict[str, EntityLink]
 
 
-async def read_axioms_panel(request: Request, iri: str) -> AxiomsPanel:
-    """Return an entity's axioms, from the ready generation's store, and their links.
+async def read_axioms_panel(request: Request, state: JobState, iri: str) -> AxiomsPanel:
+    """Return an entity's axioms, from the store of the job state's ready generation, and their links.
 
     A failure to fetch or parse them fails only this panel, not the page: the full error is logged (for a fragment the
     OWLAPI couldn't parse, with its parser's log and stack trace), and the page shows a short message instead.
 
+    Args:
+        request: The request.
+        state: The job state the page read its entity with, so the panel shows the same generation.
+        iri: The entity's IRI.
+
     Raises:
         NotCurrentError: No generation is ready, or its derived database isn't current (`browl.pages.read_derived`).
     """
-    state = await request.app.state.jobs.current()
     generation = state.ready_generation
     if generation is None:
         raise NotCurrentError("no generation is ready")
@@ -60,5 +65,7 @@ async def read_axioms_panel(request: Request, iri: str) -> AxiomsPanel:
     prefix: str = request.app.state.settings.reserved_prefix
     root = link_root(request.scope)
     mentioned = [each for axiom in axioms for each in axiom.iris]
-    links = await read_derived(request, lambda connection: read_entity_links(connection, mentioned, prefix, root))
+    links = await read_derived(
+        request, lambda connection: read_entity_links(connection, mentioned, prefix, root), state
+    )
     return AxiomsPanel(axioms, links)

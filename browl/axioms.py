@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 from browl import manchester
 from browl.fuseki import FusekiClient
-from browl.owlapi import check_java_thread, ntriples_ontology
+from browl.owlapi import FragmentError, check_java_thread, ntriples_ontology
 from browl.precache.core import PREFIXES, sparql_file
 from browl.rdf import IRI, XSD_LEXICAL_FORMS, ntriples_iris
 
@@ -101,11 +101,14 @@ async def fetch_fragment(sparql: FusekiClient, dataset: str, iri: str, dataset_c
         RDFSyntaxError: The IRI isn't valid.
     """
     entity = {_ENTITY: f"<{IRI(iri)}>"}
-    own, symmetric = await asyncio.gather(
-        sparql.construct(dataset, _filled(_AXIOMS, dataset_clause, entity)),
-        sparql.construct(dataset, _filled(_SYMMETRIC, dataset_clause, entity)),
-    )
-    triples = own + symmetric
+    try:
+        # A task group, unlike `gather`, cancels the other query when one fails.
+        async with asyncio.TaskGroup() as group:
+            own = group.create_task(sparql.construct(dataset, _filled(_AXIOMS, dataset_clause, entity)))
+            symmetric = group.create_task(sparql.construct(dataset, _filled(_SYMMETRIC, dataset_clause, entity)))
+    except ExceptionGroup as errors:
+        raise errors.exceptions[0]  # noqa: B904 -- the query's own error, with the group as its context
+    triples = own.result() + symmetric.result()
     mentioned = ntriples_iris(triples)
     if not mentioned:
         return triples
@@ -328,7 +331,10 @@ def entity_axioms(ntriples: bytes, iri: str) -> list[Axiom]:
     Call this on the Java thread (`browl.owlapi.run_java`).
 
     Raises:
-        FragmentError: The OWLAPI couldn't parse the fragment.
+        FragmentError: The OWLAPI couldn't parse the fragment, or failed on it with any other Java exception.
     """
-    with ntriples_ontology(ntriples) as ontology:
-        return render_axioms(entity_closure(ontology, iri))
+    try:
+        with ntriples_ontology(ntriples) as ontology:
+            return render_axioms(entity_closure(ontology, iri))
+    except jpype.JException as error:
+        raise FragmentError(f"the OWLAPI failed on the fragment: {error}") from error

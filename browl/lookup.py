@@ -29,6 +29,7 @@ from browl.derived import (
     is_hash_prefix,
     read_meta,
 )
+from browl.jobs import JobState
 from browl.links import EntityLink, entity_name
 from browl.overview import read_axioms_panel
 from browl.pages import app_path, cut_name, href, is_under, link_root, read_derived, templates
@@ -141,6 +142,7 @@ def not_found(request: Request) -> Response:
 
 async def _page(
     request: Request,
+    state: JobState,
     prefix: str,
     entities: list[Entity],
     meta: Meta | None,
@@ -156,6 +158,7 @@ async def _page(
 
     Args:
         request: The request.
+        state: The job state the entities were read with, whose ready generation the page shows.
         prefix: The reserved prefix.
         entities: The entities at the URL, by IRI then type; at least one.
         meta: What the derived database was built from; not None if the ontology is among the entities.
@@ -196,7 +199,7 @@ async def _page(
         "tabs": links,
     }
     if tab.slug == OVERVIEW:
-        context["axioms_panel"] = await read_axioms_panel(request, entity.iri)
+        context["axioms_panel"] = await read_axioms_panel(request, state, entity.iri)
     if query.panel:
         return templates.TemplateResponse(request, "entity_panel.html", context, headers=PANEL_HEADERS)
     return templates.TemplateResponse(request, "entity.html", context | common)
@@ -221,13 +224,14 @@ async def entity_by_iri(request: Request, iri: str = "") -> Response:
     query = read_tab_query(request)
     if query is None:
         return not_found(request)
-    found = await read_derived(request, lambda connection: _find_iri(connection, iri))
+    state = await request.app.state.jobs.current()
+    found = await read_derived(request, lambda connection: _find_iri(connection, iri), state)
     own = [entity for entity in found.entities if entity.iri == iri]
     if not own:
         return not_found(request)
     entity = own[0]
     if entity.path == fallback_path(prefix, iri) or len(own) < len(found.entities):
-        return await _page(request, prefix, own, found.meta, query, _TabUrls(fallback_path(prefix, iri)))
+        return await _page(request, state, prefix, own, found.meta, query, _TabUrls(fallback_path(prefix, iri)))
     # Not a RedirectResponse, which would percent-encode characters such as `|` that stored URLs keep. A known tab is
     # kept.
     known = query.tab in {tab.slug for tab in ENTITY_TABS}
@@ -245,14 +249,15 @@ async def hash_entity(request: Request, path: str = "", fragment: str = "") -> R
     query = read_tab_query(request)
     if not path or not fragment or query is None:
         return not_found(request)
-    found = await read_derived(request, lambda connection: _find(connection, path, fragment))
+    state = await request.app.state.jobs.current()
+    found = await read_derived(request, lambda connection: _find(connection, path, fragment), state)
     if not found.entities:
         return not_found(request)
     prefix: str = request.app.state.settings.reserved_prefix
     panel = with_query(f"/{prefix}/{HASH_PATH}", [("path", path), ("fragment", fragment)])
     # Lenient, as the page with the script is: one query serves every fragment on the path.
     at = _TabUrls(path, fragment, panel)
-    return await _page(request, prefix, found.entities, found.meta, query, at, noindex=True, lenient=True)
+    return await _page(request, state, prefix, found.entities, found.meta, query, at, noindex=True, lenient=True)
 
 
 @catch_all_router.api_route("/{_:path}", methods=["GET", "HEAD"], include_in_schema=False)
@@ -263,10 +268,11 @@ async def entity_page(request: Request) -> Response:
     query = read_tab_query(request)
     if query is None:
         return not_found(request)
-    found = await read_derived(request, lambda connection: _find(connection, path, None))
+    state = await request.app.state.jobs.current()
+    found = await read_derived(request, lambda connection: _find(connection, path, None), state)
     if found.entities:
         hash_path = path if found.hash_prefix else None
-        return await _page(request, prefix, found.entities, found.meta, query, _TabUrls(path), hash_path)
+        return await _page(request, state, prefix, found.entities, found.meta, query, _TabUrls(path), hash_path)
     if found.hash_prefix and not query.panel:
         context = {"hash_script": _hash_script(request, prefix, path, prefix_only=True)}
         return templates.TemplateResponse(request, "hash.html", context)

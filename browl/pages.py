@@ -22,7 +22,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from browl import manchester
 from browl.derived import DerivedReader, EntityType, NotCurrentError, entities_with_iri, read_meta
-from browl.jobs import Site
+from browl.jobs import JobState, Site
 
 logger = logging.getLogger(__name__)
 
@@ -157,14 +157,24 @@ def unavailable_page(request: Request, site: Site) -> Response:
     return templates.TemplateResponse(request, template, context, status_code=503, headers=headers)
 
 
-async def read_derived[T](request: Request, function: Callable[[sqlite3.Connection], T]) -> T:
+async def read_derived[T](
+    request: Request, function: Callable[[sqlite3.Connection], T], state: JobState | None = None
+) -> T:
     """Call a function with a connection to the ready generation's derived database, in the thread pool.
+
+    Args:
+        request: The request.
+        function: The function.
+        state: The job state whose ready generation to read, so that a page's reads all see one generation; else the
+            current one.
 
     Raises:
         NotCurrentError: No generation is ready, or its derived database isn't current, which the app serves as
             "loading" (`derived_not_current`).
     """
-    generation = (await request.app.state.jobs.current()).ready_generation
+    if state is None:
+        state = await request.app.state.jobs.current()
+    generation = state.ready_generation
     if generation is None:
         raise NotCurrentError("no generation is ready")
     reader: DerivedReader = request.app.state.derived
