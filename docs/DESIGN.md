@@ -943,7 +943,8 @@ JSON, scripts or unquoted attributes.
 - Names in links, headings, page titles and the navigation bar are cut to 100 characters (`MAX_NAME_CHARS`). _(P-14c)_
 - Page titles are the page's name, then the ontology's title: `Heart · Foo Ontology`. Without a title, they end with
   `browl` rather than the ontology's IRI, which a tab would mostly cut off; the home page's ends with `browl` too, as
-  its name is already the ontology's. _(P-14c)_
+  its name is already the ontology's. A title can't hold `<bdi>`, so its names are isolated with U+2068 … U+2069
+  instead. IRIs and CURIEs are shown in `<code dir="ltr">`, which isolates them too. _(P-14c)_
 
 ### 2.10 Page cache
 

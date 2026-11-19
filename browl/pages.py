@@ -33,11 +33,10 @@ RETRY_AFTER_S = 10
 
 
 MAX_NAME_CHARS = 100
-"""The longest name pages show, in links, headings, titles and the navigation bar; a longer one is cut short
-(`cut_name`, DESIGN.md §2.9)."""
+"""The longest name pages show; a longer one is cut short (`cut_name`, DESIGN.md §2.9)."""
 
 SITE_NAME = "browl"
-"""What page titles end with when the ontology has no title."""
+"""browl's name, which page titles end with when the ontology has no title."""
 
 TREES = (
     ("classes", "Classes"),
@@ -86,13 +85,20 @@ def read_ontology_link(connection: sqlite3.Connection) -> OntologyLink:
     """Return the served ontology's name and home page from its derived database."""
     meta = read_meta(connection)
     title = cut_name(meta.title) if meta.title else None
-    name = meta.title or meta.ontology_iri
-    name = None if name is None else cut_name(name)
+    name = title or (cut_name(meta.ontology_iri) if meta.ontology_iri else None)
     entities = entities_with_iri(connection, meta.ontology_iri) if meta.ontology_iri is not None else []
     page = next((entity for entity in entities if entity.type == EntityType.ONTOLOGY), None)
     if page is None:
         return OntologyLink(name, title=title)
     return OntologyLink(name, page.path, page.fragment, title)
+
+
+def isolate(text: str) -> str:
+    """Return text wrapped in U+2068 … U+2069, isolating it from the text around it (DESIGN.md §2.9).
+
+    For plain text, such as `<title>`, which can't hold `<bdi>`.
+    """
+    return f"\u2068{text}\u2069"
 
 
 def join_link(root: str, path: str, fragment: str | None = None) -> str:
@@ -108,7 +114,7 @@ def href(request: Request, path: str, fragment: str | None = None) -> str:
 def frame_context(request: Request) -> dict[str, object]:
     """Return what the base template's frame needs: the navigation bar's links, the title's end, and the user's role.
 
-    Page titles end with the ontology's title, else `SITE_NAME`.
+    Page titles end with the ontology's title, isolated, else `SITE_NAME` (`site_name`).
 
     The ontology's link comes from `PageFrame`. P-22 marks requests from admins by setting `request.state.is_admin`.
     """
@@ -121,7 +127,8 @@ def frame_context(request: Request) -> dict[str, object]:
             "trees": [(href(request, f"{reserved}/tree/{slug}"), label) for slug, label in TREES],
             "admin": href(request, f"{reserved}/admin/upload"),
             "is_admin": getattr(request.state, "is_admin", False) is True,
-            "site": link.title if link.title is not None else SITE_NAME,
+            "title_end": isolate(link.title) if link.title is not None else SITE_NAME,
+            "site_name": SITE_NAME,
         }
     }
 
@@ -134,6 +141,7 @@ templates = Jinja2Templates(
     ),
     context_processors=[frame_context],
 )
+templates.env.filters["isolate"] = isolate
 
 
 def unavailable_page(request: Request, site: Site) -> Response:

@@ -1,6 +1,7 @@
 """Tests for the routing of entity URLs: home, entity, disambiguation and hash pages, the fallback route, and 404."""
 
 import html.parser
+import sqlite3
 import urllib.parse
 from collections.abc import Iterator, Mapping, Sequence
 
@@ -10,11 +11,12 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 import browl.lookup
+import browl.pages
 from browl.derived import EntityType, read_meta
 from browl.jobs import Stage
 from browl.lookup import request_path
 from browl.pages import MAX_NAME_CHARS, STATIC_DIR
-from tests.helpers import derived_stage, make_app
+from tests.helpers import derived_stage, iso, make_app
 
 pytestmark = pytest.mark.usefixtures("data_dir")
 
@@ -42,6 +44,10 @@ ENTITIES = [
 """Proxied entities, under http://other.org/; fallback URNs, one punned; one whose URL would be under the prefix."""
 
 HASH_SCRIPT = '<script src="/_browl/static/hash.js"'
+CODE = '<code dir="ltr">'
+"""How pages open an IRI or CURIE, isolated left to right."""
+ONTO_TITLE = iso("The &lt;Onto&gt;")
+"""How titles end with the test ontology's title."""
 
 
 def run(
@@ -84,7 +90,7 @@ def test_home(client: TestClient) -> None:
     """Check that the ontology IRI's path serves the home page, with the hash script, as hash entities share it."""
     response = client.get("/onto")
     assert response.status_code == 200
-    assert "<h1>The &lt;Onto&gt;</h1>" in response.text
+    assert "<h1><bdi>The &lt;Onto&gt;</bdi></h1>" in response.text
     assert f'{HASH_SCRIPT} data-lookup="/_browl/hash"' in response.text
     assert 'data-path="/onto" data-prefix-only="false"' in response.text
 
@@ -93,7 +99,7 @@ def test_entity(client: TestClient) -> None:
     """Check that an entity's path serves its page, one page for all its types, without the hash script."""
     response = client.get("/other.org/y")
     assert response.status_code == 200
-    assert "<code>http://other.org/y</code>" in response.text
+    assert f"{CODE}http://other.org/y</code>" in response.text
     assert "Class · Object property" in response.text
     assert HASH_SCRIPT not in response.text
     assert "noindex" not in response.text
@@ -118,7 +124,7 @@ def test_entity_and_hash_prefix(client: TestClient) -> None:
     """Check that an entity's path that's also a hash prefix serves the entity's page with the hash script."""
     response = client.get("/other.org/z")
     assert response.status_code == 200
-    assert "<code>http://other.org/z</code>" in response.text
+    assert f"{CODE}http://other.org/z</code>" in response.text
     assert 'data-path="/other.org/z" data-prefix-only="false"' in response.text
 
 
@@ -129,7 +135,7 @@ def test_path_in_uri_form(client: TestClient, path: str, iri: str) -> None:
     """Check that paths are looked up as sent, percent-encoded, not as the router decodes them."""
     response = client.get(path)
     assert response.status_code == 200
-    assert f"<code>{iri}</code>" in response.text
+    assert f"{CODE}{iri}</code>" in response.text
     assert client.get("/other.org/a/b").status_code == 404
 
 
@@ -143,7 +149,7 @@ def test_disambiguation(client: TestClient) -> None:
         assert f'href="{iri_link(iri)}"' in response.text
         page = client.get(iri_link(iri), follow_redirects=False)
         assert page.status_code == 200
-        assert f"<code>{iri}</code>" in page.text
+        assert f"{CODE}{iri}</code>" in page.text
 
 
 def test_hash_prefix(client: TestClient) -> None:
@@ -187,7 +193,7 @@ def test_fallback(client: TestClient, iri: str) -> None:
     """Check that an entity with a fallback URL is served there."""
     response = client.get(iri_link(iri))
     assert response.status_code == 200
-    assert f"<code>{iri}</code>" in response.text
+    assert f"{CODE}{iri}</code>" in response.text
 
 
 def test_fallback_punned(client: TestClient) -> None:
@@ -202,7 +208,7 @@ def test_fallback_route_shared_hash_url(client: TestClient, iri: str) -> None:
     """Check that the fallback route serves each hash IRI that shares a URL, rather than redirecting to it."""
     response = client.get(iri_link(iri), follow_redirects=False)
     assert response.status_code == 200
-    assert f"<code>{iri}</code>" in response.text
+    assert f"{CODE}{iri}</code>" in response.text
     assert "Choose an entity" not in response.text
 
 
@@ -227,7 +233,7 @@ def test_unescaped_path(client: TestClient) -> None:
     """Check that a path with a character stored unescaped, as the fallback route redirects to it, is served."""
     response = client.get("/other.org/a|b")
     assert response.status_code == 200
-    assert "<code>http://other.org/a|b</code>" in response.text
+    assert f"{CODE}http://other.org/a|b</code>" in response.text
 
 
 @pytest.mark.parametrize("path", ["/_browl/iri", iri_link("http://other.org/nothing")])
@@ -271,7 +277,7 @@ def test_reserved_prefix_setting() -> None:
         run(client, app)
         for path in ("/_site/x", "/%5Fsite/x"):
             assert client.get(path).json() == {"detail": "Not Found"}
-        assert "<code>http://_browl/x</code>" in client.get("/_browl/x").text  # no longer reserved
+        assert f"{CODE}http://_browl/x</code>" in client.get("/_browl/x").text  # no longer reserved
         response = client.get("/_browl/nothing")
         assert response.status_code == 404
         assert "<h1>Not found</h1>" in response.text
@@ -288,7 +294,7 @@ def test_ontology_iri_shared() -> None:
         response = client.get("/onto")
         assert response.status_code == 200
         assert "<h1>Choose an entity</h1>" in response.text
-        assert client.get(iri_link(ONTOLOGY)).text.count("<h1>The &lt;Onto&gt;</h1>") == 1
+        assert client.get(iri_link(ONTOLOGY)).text.count("<h1><bdi>The &lt;Onto&gt;</bdi></h1>") == 1
 
 
 def test_base_url_with_path() -> None:
@@ -296,8 +302,8 @@ def test_base_url_with_path() -> None:
     app = make_app(BASE_URL="http://example.org/base/")
     with TestClient(app) as client:
         run(client, app, [("http://example.org/base/A", EntityType.CLASS)], ontology="http://example.org/base/onto")
-        assert "<code>http://example.org/base/A</code>" in client.get("/A").text
-        assert "<h1>The &lt;Onto&gt;</h1>" in client.get("/onto").text
+        assert f"{CODE}http://example.org/base/A</code>" in client.get("/A").text
+        assert "<h1><bdi>The &lt;Onto&gt;</bdi></h1>" in client.get("/onto").text
         assert client.get("/base/A").status_code == 404
 
 
@@ -313,8 +319,8 @@ def test_under_root_path(app: FastAPI) -> None:
     """Check that paths are looked up, and links made, within the app's root path, whether or not the path has it."""
     with TestClient(app, root_path="/site") as client:
         run(client, app)
-        assert "<code>http://other.org/y</code>" in client.get("/site/other.org/y").text
-        assert "<code>http://other.org/café</code>" in client.get("/site/other.org/caf%C3%A9").text
+        assert f"{CODE}http://other.org/y</code>" in client.get("/site/other.org/y").text
+        assert f"{CODE}http://other.org/café</code>" in client.get("/site/other.org/caf%C3%A9").text
         choose = client.get("/site/other.org/x").text
         assert f'href="{iri_link("http://other.org/x", "/site")}"' in choose
         redirect = client.get(iri_link("http://other.org/y", "/site"), follow_redirects=False)
@@ -355,7 +361,7 @@ def test_meta_read_for_home_only(client: TestClient, monkeypatch: pytest.MonkeyP
     for path in ("/other.org/y", "/other.org/x", iri_link("urn:example:fallback"), "/other.org/vocab"):
         assert client.get(path).status_code == 200
     assert reads == []
-    assert "<h1>The &lt;Onto&gt;</h1>" in client.get("/onto").text
+    assert "<h1><bdi>The &lt;Onto&gt;</bdi></h1>" in client.get("/onto").text
     assert len(reads) == 1
 
 
@@ -543,22 +549,22 @@ def test_entity_header(app: FastAPI) -> None:
     with TestClient(app) as client:
         run(client, app, names=NAMES)
         text = client.get("/other.org/y").text
-    assert "<title>Why &lt;y&gt; · The &lt;Onto&gt;</title>" in text
+    assert f"<title>{iso('Why &lt;y&gt;')} · {ONTO_TITLE}</title>" in text
     assert "<h1><bdi>Why &lt;y&gt;</bdi></h1>" in text
     assert '<p class="entity-type">Class · Object property</p>' in text
     start = text.index('<details class="entity-iri">')
     details = text[start : text.index("</details>", start)]
-    assert "<dd><code>http://other.org/y</code></dd>" in details
+    assert f"<dd>{CODE}http://other.org/y</code></dd>" in details
     assert "<dt>CURIE</dt>" in details
-    assert "<dd><code>oth:y</code></dd>" in details
+    assert f"<dd>{CODE}oth:y</code></dd>" in details
 
 
 def test_entity_header_without_names(client: TestClient) -> None:
     """Check that an entity without a display name is named by its IRI, and that one without a CURIE shows none."""
     text = client.get("/other.org/y").text
     assert "<h1><bdi>http://other.org/y</bdi></h1>" in text
-    assert "<title>http://other.org/y · The &lt;Onto&gt;</title>" in text
-    assert "<dd><code>http://other.org/y</code></dd>" in text
+    assert f"<title>{iso('http://other.org/y')} · {ONTO_TITLE}</title>" in text
+    assert f"<dd>{CODE}http://other.org/y</code></dd>" in text
     assert "CURIE" not in text
 
 
@@ -569,15 +575,15 @@ def test_entity_long_name(app: FastAPI) -> None:
         text = client.get("/_browl/hash?path=/onto&fragment=A").text
     cut = "a" * (MAX_NAME_CHARS - 1) + "…"
     assert f"<h1><bdi>{cut}</bdi></h1>" in text
-    assert f"<title>{cut} · The &lt;Onto&gt;</title>" in text
+    assert f"<title>{iso(cut)} · {ONTO_TITLE}</title>" in text
 
 
 @pytest.mark.parametrize(
     ("title", "path", "expected"),
     [
-        ("The <Onto>", "/onto", "<title>The &lt;Onto&gt; · browl</title>"),
-        (None, "/onto", f"<title>{ONTOLOGY} · browl</title>"),
-        (None, "/other.org/y", "<title>http://other.org/y · browl</title>"),
+        ("The <Onto>", "/onto", f"<title>{iso('The &lt;Onto&gt;')} · browl</title>"),
+        (None, "/onto", f"<title>{iso(ONTOLOGY)} · browl</title>"),
+        (None, "/other.org/y", f"<title>{iso('http://other.org/y')} · browl</title>"),
         (None, "/no/such/page", "<title>Not found · browl</title>"),
     ],
 )
@@ -588,11 +594,51 @@ def test_page_titles(app: FastAPI, title: str | None, path: str, expected: str) 
         assert expected in client.get(path).text
 
 
+def test_title_isolates_names(app: FastAPI) -> None:
+    """Check that a name with a right-to-left override can't reorder the rest of the title (DESIGN.md §2.9)."""
+    with TestClient(app) as client:
+        run(client, app, title="Onto\u202e", names={"http://other.org/y": ("Heart\u202e", None)})
+        text = client.get("/other.org/y").text
+    assert "<title>\u2068Heart\u202e\u2069 · \u2068Onto\u202e\u2069</title>" in text
+
+
+def test_home_long_title(app: FastAPI) -> None:
+    """Check that the home page's heading and title cut a long ontology title, and isolate it."""
+    with TestClient(app) as client:
+        run(client, app, title="t" * 300)
+        text = client.get("/onto").text
+    cut = "t" * (MAX_NAME_CHARS - 1) + "…"
+    assert f"<h1><bdi>{cut}</bdi></h1>" in text
+    assert f"<title>{iso(cut)} · browl</title>" in text
+
+
+def test_home_title_without_frame(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that the home page names the ontology in its title even while the navigation bar can't read its name."""
+
+    def unreadable(connection: object) -> None:
+        raise sqlite3.DatabaseError("database disk image is malformed")
+
+    monkeypatch.setattr(browl.pages, "read_ontology_link", unreadable)
+    with TestClient(app) as client:
+        run(client, app)
+        text = client.get("/onto").text
+    assert f"<title>{ONTO_TITLE} · browl</title>" in text
+    assert "None" not in text
+
+
 def test_disambiguation_names(app: FastAPI) -> None:
     """Check that the disambiguation page links each IRI by its display name, else its IRI."""
     with TestClient(app) as client:
         run(client, app, names=NAMES)
         text = client.get("/other.org/x").text
-    assert f'<a href="{iri_link("http://other.org/x")}"><bdi>Ex</bdi></a> <code>http://other.org/x</code>' in text
+    assert f'<a href="{iri_link("http://other.org/x")}"><bdi>Ex</bdi></a> {CODE}http://other.org/x</code>' in text
     link = iri_link("https://other.org/x")
-    assert f'<a href="{link}"><bdi>https://other.org/x</bdi></a> <code>https://other.org/x</code>' in text
+    assert f'<a href="{link}"><bdi>https://other.org/x</bdi></a> {CODE}https://other.org/x</code>' in text
+
+
+def test_disambiguation_long_name(app: FastAPI) -> None:
+    """Check that the disambiguation page cuts a long display name."""
+    with TestClient(app) as client:
+        run(client, app, names={"https://other.org/x": ("b" * 300, None)})
+        text = client.get("/other.org/x").text
+    assert f"<bdi>{'b' * (MAX_NAME_CHARS - 1)}…</bdi></a>" in text

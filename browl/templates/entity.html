@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% from "tabs.html" import tab_list, tab_panel %}
-{% block title %}{{ name }}{% endblock %}
+{% block title %}{{ name | isolate }}{% endblock %}
 {% block content %}
-{# The entity page's header (U-5, DESIGN.md §2.8): display name, type, and the IRI and CURIE, folded away. #}
+{# The header (DESIGN.md §2.8). #}
 <div class="entity-header">
   <h1><bdi>{{ name }}</bdi></h1>
   <p class="entity-type">{{ types | join(" · ") }}</p>
@@ -10,10 +10,10 @@
     <summary>IRI</summary>
     <dl>
       <dt>IRI</dt>
-      <dd><code>{{ entity.iri }}</code></dd>
+      <dd><code dir="ltr">{{ entity.iri }}</code></dd>
       {% if entity.curie %}
       <dt>CURIE</dt>
-      <dd><code>{{ entity.curie }}</code></dd>
+      <dd><code dir="ltr">{{ entity.curie }}</code></dd>
       {% endif %}
     </dl>
   </details>

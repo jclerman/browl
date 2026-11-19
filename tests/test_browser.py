@@ -22,7 +22,7 @@ from browl.derived import EntityType
 from browl.jobs import JobContext, Stage, StageFunction
 from browl.jobtypes import StageError
 from tests.conftest import DATA
-from tests.helpers import WAIT_S, LiveServer, derived_stage, make_app
+from tests.helpers import WAIT_S, LiveServer, derived_stage, iso, make_app
 
 pytestmark = [pytest.mark.browser, pytest.mark.usefixtures("data_dir")]
 
@@ -107,7 +107,7 @@ def test_hash_prefix_shows_entity(page: Page, server: LiveServer) -> None:
     """Check that a hash prefix's page with a fragment shows that entity, and takes its title."""
     page.goto(f"{server.url}/example.org/vocab#Gamma")
     expect(page.locator("main h1")).to_have_text(f"{EX}/vocab#Gamma")
-    expect(page).to_have_title(f"{EX}/vocab#Gamma · Routing tests")
+    expect(page).to_have_title(f"{iso(EX + '/vocab#Gamma')} · {iso('Routing tests')}")
 
 
 @pytest.mark.parametrize("fragment", ["", "#Nope"])
@@ -115,7 +115,7 @@ def test_hash_prefix_not_found(page: Page, server: LiveServer, fragment: str) ->
     """Check that a hash prefix's page shows "not found" without a fragment, or with one no entity has."""
     page.goto(f"{server.url}/example.org/vocab{fragment}")
     expect(page.locator("main h1")).to_have_text("Not found")
-    expect(page).to_have_title("Not found · Routing tests")
+    expect(page).to_have_title(f"Not found · {iso('Routing tests')}")
 
 
 @NO_JS
@@ -150,10 +150,10 @@ def test_entity_and_hash_prefix(page: Page, server: LiveServer) -> None:
     expect(page.locator("main h1")).to_have_text(f"{EX}/thing")
     page.evaluate("location.hash = 'Delta'")
     expect(page.locator("main h1")).to_have_text(f"{EX}/thing#Delta")
-    expect(page).to_have_title(f"{EX}/thing#Delta · Routing tests")
+    expect(page).to_have_title(f"{iso(EX + '/thing#Delta')} · {iso('Routing tests')}")
     page.evaluate("location.hash = ''")
     expect(page.locator("main h1")).to_have_text(f"{EX}/thing")
-    expect(page).to_have_title(f"{EX}/thing · Routing tests")
+    expect(page).to_have_title(f"{iso(EX + '/thing')} · {iso('Routing tests')}")
 
 
 def test_shared_hash_entity(page: Page, server: LiveServer) -> None:
@@ -614,8 +614,7 @@ def test_tab_keyboard(page: Page, server: LiveServer) -> None:
     Only the selected tab is in the Tab sequence, and focus entering the list lands on it.
     """
     page.goto(f"{server.url}/example.org/plain?tab=usage")
-    page.locator("main .entity-type").click()  # puts the Tab sequence's start just before the IRI and the tabs
-    page.keyboard.press("Tab")  # the IRI's <details>
+    page.locator(".entity-iri summary").focus()  # the last stop before the tabs
     page.keyboard.press("Tab")
     expect(tab(page, "Usage")).to_be_focused()
     requests = record_panels(page)
@@ -766,3 +765,19 @@ def test_entity_header_iri_folded(page: Page, server: LiveServer) -> None:
     expect(iri).to_be_hidden()
     page.locator(".entity-iri summary").click()
     expect(iri).to_have_text(f"{EX}/plain")
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_entity_header_look(page: Page, server: LiveServer, scheme: str) -> None:
+    """Check that the header's type line and the IRI's summary are muted, unlike the heading."""
+    page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
+    page.goto(f"{server.url}/example.org/plain")
+    color = "(element) => getComputedStyle(element).color"
+    muted = page.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--muted').trim()")
+    probe = page.evaluate(
+        f"""() => {{ const probe = document.createElement('span'); probe.style.color = '{muted}';
+        document.body.append(probe); const value = getComputedStyle(probe).color; probe.remove(); return value; }}"""
+    )
+    heading = page.locator("main h1").evaluate(color)
+    assert page.locator(".entity-type").evaluate(color) == probe != heading
+    assert page.locator(".entity-iri summary").evaluate(color) == probe

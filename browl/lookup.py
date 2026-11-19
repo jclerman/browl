@@ -18,9 +18,18 @@ from fastapi.routing import APIRoute
 from starlette.routing import Match
 from starlette.types import Scope
 
-from browl.derived import Entity, EntityType, Meta, entities_at, entities_with_iri, is_hash_prefix, read_meta
-from browl.links import TYPE_LABELS, EntityLink, entity_name
-from browl.pages import app_path, href, is_under, link_root, read_derived, templates
+from browl.derived import (
+    TYPE_LABELS,
+    Entity,
+    EntityType,
+    Meta,
+    entities_at,
+    entities_with_iri,
+    is_hash_prefix,
+    read_meta,
+)
+from browl.links import EntityLink, entity_name
+from browl.pages import app_path, cut_name, href, is_under, link_root, read_derived, templates
 from browl.tabs import TAB_PARAM, Tab, TabNotFoundError, TabQuery, choose_tab, read_tab_query, tab_links, with_query
 from browl.urls import FALLBACK_PATH, fallback_path
 
@@ -167,7 +176,9 @@ def _page(
         choices = [EntityLink(iri, name, href(request, fallback_path(prefix, iri))) for iri, name in names.items()]
         return templates.TemplateResponse(request, "choose.html", {"choices": choices} | common)
     if is_home:
-        return templates.TemplateResponse(request, "home.html", {"meta": meta} | common)
+        assert meta is not None  # read for the home page (`_found`)
+        name = cut_name(meta.title or meta.ontology_iri or "")
+        return templates.TemplateResponse(request, "home.html", {"meta": meta, "name": name} | common)
     assert tab is not None  # an entity page has tabs
     links = tab_links(tabs, tab, href(request, at.page), at.fragment, href(request, at.panel or at.page))
     entity = entities[0]

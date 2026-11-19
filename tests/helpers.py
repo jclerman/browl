@@ -262,6 +262,17 @@ def connect(settings: Settings, generation: int, hooks: Sequence[Hook] = HOOKS) 
     return derived.connect(settings.data_dir, generation, build_keys(settings, hooks))
 
 
+def iso(text: str) -> str:
+    """Return text as titles isolate it, between U+2068 and U+2069."""
+    return f"\u2068{text}\u2069"
+
+
+def set_names(connection: sqlite3.Connection, names: Mapping[str, tuple[str | None, str | None]]) -> None:
+    """Set IRIs' display names and CURIEs in a derived database's `entity` table."""
+    for iri, (display_name, curie) in names.items():
+        connection.execute("UPDATE entity SET display_name = ?, curie = ? WHERE iri = ?", (display_name, curie, iri))
+
+
 def derived_stage(
     entities: Sequence[tuple[str, derived.EntityType]] = (),
     ontology_iri: str | None = None,
@@ -282,10 +293,7 @@ def derived_stage(
         with derived.build(settings.data_dir, meta, build_keys(settings, HOOKS)) as connection:
             insert_entities(rows, mapper, Reserved(), connection)
             fill_hash_prefix(connection)
-            for iri, (display_name, curie) in (names or {}).items():
-                connection.execute(
-                    "UPDATE entity SET display_name = ?, curie = ? WHERE iri = ?", (display_name, curie, iri)
-                )
+            set_names(connection, names or {})
 
     async def stage(context: JobContext) -> None:
         await asyncio.to_thread(build, context)

@@ -6,16 +6,21 @@ from collections.abc import Iterator
 import pytest
 from pydantic import HttpUrl
 
-from browl.derived import SCHEMA, EntityType, create_indexes
-from browl.links import TYPE_LABELS, EntityLink, read_entity_links
+from browl.derived import SCHEMA, TYPE_LABELS, EntityType, create_indexes
+from browl.links import EntityLink, read_entity_links
 from browl.pages import MAX_NAME_CHARS, templates
 from browl.precache.entities import Reserved, insert_entities
 from browl.urls import URLMapper
+from tests.helpers import set_names
 
 ENTITIES = [
     ("http://example.org/a", EntityType.CLASS),
     ("http://example.org/a", EntityType.OBJECT_PROPERTY),  # punned
-    ("http://example.org/vocab#B", EntityType.CLASS),  # a hash entity
+    ("http://example.org/vocab#B", EntityType.CLASS),  # hash entities, and a slash entity at the same path
+    ("http://example.org/vocab#C", EntityType.CLASS),
+    ("http://example.org/vocab", EntityType.CLASS),
+    ("http://other.org/v#E", EntityType.CLASS),  # with the next, at /other.org/v#E
+    ("https://other.org/v#E", EntityType.CLASS),
     ("http://other.org/c", EntityType.CLASS),  # with the next, at /other.org/c
     ("https://other.org/c", EntityType.CLASS),
     ("urn:example:d", EntityType.DATA_PROPERTY),  # at a fallback URL
@@ -30,8 +35,7 @@ def connection() -> Iterator[sqlite3.Connection]:
         connection.executescript(SCHEMA)
         insert_entities(ENTITIES, URLMapper(HttpUrl("http://example.org/"), "_browl"), Reserved(), connection)
         create_indexes(connection, "entity")
-        for iri, name in NAMES.items():
-            connection.execute("UPDATE entity SET display_name = ? WHERE iri = ?", (name, iri))
+        set_names(connection, {iri: (name, None) for iri, name in NAMES.items()})
         yield connection
 
 
@@ -73,7 +77,7 @@ def test_read_entity_links_many(connection: sqlite3.Connection) -> None:
 
 def test_read_entity_links_long_name(connection: sqlite3.Connection) -> None:
     """Check that a long display name is cut short."""
-    connection.execute("UPDATE entity SET display_name = ? WHERE iri = ?", ("x" * 500, "http://example.org/a"))
+    set_names(connection, {"http://example.org/a": ("x" * 500, None)})
     name = read_entity_links(connection, ["http://example.org/a"], "_browl", "")["http://example.org/a"].name
     assert name == "x" * (MAX_NAME_CHARS - 1) + "…"
 
@@ -99,3 +103,22 @@ def test_entity_link_macro(link: EntityLink, expected: str) -> None:
 def test_type_labels() -> None:
     """Check that every entity type has a label."""
     assert set(TYPE_LABELS) == set(EntityType)
+
+
+def test_read_entity_links_hash(connection: sqlite3.Connection) -> None:
+    """Check that hash entities on one path, and the slash entity at it, keep their URLs; a shared hash URL doesn't."""
+    iris = [
+        "http://example.org/vocab#B",
+        "http://example.org/vocab#C",
+        "http://example.org/vocab",
+        "http://other.org/v#E",
+        "https://other.org/v#E",
+    ]
+    links = read_entity_links(connection, iris, "_browl", "/r")
+    assert [link.href for link in links.values()] == [
+        "/r/vocab#B",
+        "/r/vocab#C",
+        "/r/vocab",
+        "/r/_browl/iri?iri=http%3A%2F%2Fother.org%2Fv%23E",
+        "/r/_browl/iri?iri=https%3A%2F%2Fother.org%2Fv%23E",
+    ]

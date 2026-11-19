@@ -7,7 +7,7 @@
   Which one do you want?</p>
 <ul>
   {% for link in choices %}
-  <li>{{ entity_link(link) }} <code>{{ link.iri }}</code></li>
+  <li>{{ entity_link(link) }} <code dir="ltr">{{ link.iri }}</code></li>
   {% endfor %}
 </ul>
 {% endblock %}

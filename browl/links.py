@@ -1,27 +1,13 @@
-"""Links to entity pages (U-4), labeled with display names (U-6), and the names of entity types.
-
-A page that mentions entities reads their links in one query (`read_entity_links`), and templates render each with the
-`entity_link` macro (`templates/links.html`), so every mention looks and behaves the same (DESIGN.md §2.9, Rendering
-names and IRIs).
-"""
+"""Links to entity pages (U-4), labeled with display names (U-6); see DESIGN.md §2.9, Rendering names and IRIs."""
 
 import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
 from itertools import batched
 
-from browl.derived import Entity, EntityType
+from browl.derived import Entity
 from browl.pages import cut_name, join_link
 from browl.urls import fallback_path
-
-TYPE_LABELS = {
-    EntityType.ONTOLOGY: "Ontology",
-    EntityType.CLASS: "Class",
-    EntityType.OBJECT_PROPERTY: "Object property",
-    EntityType.DATA_PROPERTY: "Data property",
-    EntityType.ANNOTATION_PROPERTY: "Annotation property",
-}
-"""Each entity type's name, as pages show it."""
 
 _BATCH = 500
 """The most IRIs one query looks up, well under SQLite's limit on a statement's parameters."""
@@ -42,9 +28,14 @@ class EntityLink:
     href: str | None
 
 
-def entity_name(entity: Entity) -> str:
+def _name(display_name: str | None, iri: str) -> str:
     """Return the name a page shows for an entity: its display name, else its IRI, cut short."""
-    return cut_name(entity.display_name or entity.iri)
+    return cut_name(display_name or iri)
+
+
+def entity_name(entity: Entity) -> str:
+    """Return the name a page shows for an entity (`_name`)."""
+    return _name(entity.display_name, entity.iri)
 
 
 def no_link(iri: str) -> EntityLink:
@@ -70,12 +61,12 @@ def read_entity_links(
     links: dict[str, EntityLink] = {}
     for batch in batched(wanted, _BATCH):
         rows = connection.execute(
-            "SELECT e.iri, e.path, e.fragment, e.display_name, EXISTS (SELECT 1 FROM entity AS o"
+            "SELECT DISTINCT e.iri, e.path, e.fragment, e.display_name, EXISTS (SELECT 1 FROM entity AS o"
             "  WHERE o.path = e.path AND o.fragment IS e.fragment AND o.iri != e.iri)"
             f" FROM entity AS e WHERE e.iri IN ({', '.join('?' * len(batch))})",
             batch,
         )
         for iri, path, fragment, display_name, shared in rows:
             link = join_link(root, fallback_path(prefix, iri)) if shared else join_link(root, path, fragment)
-            links[iri] = EntityLink(iri, cut_name(display_name or iri), link)
+            links[iri] = EntityLink(iri, _name(display_name, iri), link)
     return {iri: links.get(iri) or no_link(iri) for iri in wanted}
