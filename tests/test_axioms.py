@@ -1,6 +1,7 @@
 """Tests for entities' axioms: fragments fetched from Fuseki, closures, Manchester rendering, and the entity page."""
 
 import asyncio
+import contextlib
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -96,18 +97,45 @@ def rendered(ntriples: bytes) -> tuple[list[Axiom], dict[str, list[Axiom]]]:
     return asyncio.run(owlapi.run_java(whole, ntriples))
 
 
-@pytest.fixture(scope="module")
-def dataset(fuseki_url: str, ntriples: bytes) -> Iterator[str]:
-    """Yield the name of an in-memory Fuseki dataset holding the test ontology, removed afterwards."""
+@contextlib.contextmanager
+def fuseki_dataset(fuseki_url: str, graphs: dict[str | None, bytes]) -> Iterator[str]:
+    """Yield the name of an in-memory Fuseki dataset holding N-Triples by graph (None: the default), then remove it."""
     name = f"test-{uuid.uuid4().hex[:8]}"
     with httpx2.Client(base_url=fuseki_url, timeout=30) as client:
         client.post("/$/datasets", data={"dbName": name, "dbType": "mem"}).raise_for_status()
         try:
             headers = {"Content-Type": "application/n-triples"}
-            client.post(f"/{name}/data", content=ntriples, headers=headers).raise_for_status()
+            for graph, triples in graphs.items():
+                params = {"default": ""} if graph is None else {"graph": graph}
+                client.post(f"/{name}/data", params=params, content=triples, headers=headers).raise_for_status()
             yield name
         finally:
             client.delete(f"/$/datasets/{name}")
+
+
+@pytest.fixture(scope="module")
+def dataset(fuseki_url: str, ntriples: bytes) -> Iterator[str]:
+    """Yield the name of an in-memory Fuseki dataset holding the test ontology, removed afterwards."""
+    with fuseki_dataset(fuseki_url, {None: ntriples}) as name:
+        yield name
+
+
+SPLIT = (f"<{NS}Dog> ", f"<{NS}Cat> ", f"<{NS}likes> ")
+"""The subjects of the triples `split_dataset` puts in a named graph: their declarations, punning and axioms, such as
+`DisjointClasses(:Dog :Cat)`. Other entities' fragments, such as `:loves`'s, need `:likes`'s type, which only the
+types query fetches. Blank nodes are left in the default graph, since each load names its own."""
+
+
+@pytest.fixture(scope="module")
+def split_dataset(fuseki_url: str, ntriples: bytes) -> Iterator[str]:
+    """Yield the name of a dataset holding the test ontology, `SPLIT`'s triples in a named graph, as an import's."""
+    lines = ntriples.decode().splitlines(keepends=True)
+    named = [line for line in lines if line.startswith(SPLIT)]
+    rest = [line for line in lines if not line.startswith(SPLIT)]
+    assert len(named) >= 6
+    graphs = {None: "".join(rest).encode(), "http://example.org/imported": "".join(named).encode()}
+    with fuseki_dataset(fuseki_url, graphs) as name:
+        yield name
 
 
 def test_keywords() -> None:
@@ -136,7 +164,13 @@ def test_closure(rendered: tuple[list[Axiom], dict[str, list[Axiom]]]) -> None:
     def texts(name: str) -> list[str]:
         return [axiom.text.replace(NS, "") for axiom in closures[f"{NS}{name}"]]
 
-    assert texts("Cat") == ["<Cat> DisjointWith <Dog>", "<Cat> SubClassOf <Animal>"]  # its annotation stripped
+    general = "<partOf> only (<Dog> or (not (<Cat>))) SubClassOf <Pet>"  # through unionOf and complementOf
+    assert texts("Cat") == ["<Cat> DisjointWith <Dog>", "<Cat> SubClassOf <Animal>", general]  # annotation stripped
+    # Punned, so it has a class's axioms and an individual's.
+    assert texts("Dog") == ["<Dog> Type <Animal>", "<Cat> DisjointWith <Dog>", "<Dog> SubClassOf <Animal>", general]
+    assert general in texts("Pet")
+    assert "<hasPart> min 2 <Liver> SubClassOf <Vertebrate>" in texts("Liver")  # through onClass
+    assert "<hasPart> some <Heart> SubClassOf <Vertebrate>" in texts("Heart")  # annotated
     assert "DisjointClasses: <Animal>, <Fungus>, <Plant>" in texts("Plant")
     assert "<Organ> and (<partOf> some <Plant>) SubClassOf <http://www.w3.org/2002/07/owl#Nothing>" in texts("Plant")
     assert "<Person> HasKey <hasSSN>, <ssn>" in texts("Person")  # an object and a data property
@@ -262,20 +296,63 @@ def test_valid_unquoted(datatype: str, lexical: str, shown: str) -> None:
 
 def test_too_many(ntriples: bytes, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that an entity with more than `MAX_AXIOMS` axioms isn't rendered."""
-    monkeypatch.setattr(axioms, "MAX_AXIOMS", 1)
-    with pytest.raises(axioms.TooManyAxiomsError, match="the entity has 2 axioms, more than 1"):
-        asyncio.run(owlapi.run_java(axioms.entity_axioms, ntriples, f"{NS}Cat"))
     monkeypatch.setattr(axioms, "MAX_AXIOMS", 2)
-    assert len(asyncio.run(owlapi.run_java(axioms.entity_axioms, ntriples, f"{NS}Cat"))) == 2
+    with pytest.raises(axioms.TooManyAxiomsError, match="the entity has 3 axioms, more than 2"):
+        asyncio.run(owlapi.run_java(axioms.entity_axioms, ntriples, f"{NS}Cat"))
+    monkeypatch.setattr(axioms, "MAX_AXIOMS", 3)
+    assert len(asyncio.run(owlapi.run_java(axioms.entity_axioms, ntriples, f"{NS}Cat"))) == 3
+
+
+def annotated_twice() -> list[Axiom]:
+    """Return the axioms of `:Cat` in an ontology with `SubClassOf(:Cat :Animal)` with an annotation and without."""
+    manager = jpype.JClass("org.semanticweb.owlapi.apibinding.OWLManager").createOWLOntologyManager()
+    factory = manager.getOWLDataFactory()
+    create = jpype.JClass("org.semanticweb.owlapi.model.IRI").create
+    cat, animal = factory.getOWLClass(create(f"{NS}Cat")), factory.getOWLClass(create(f"{NS}Animal"))
+    note = factory.getOWLAnnotation(factory.getOWLAnnotationProperty(create(f"{NS}note")), factory.getOWLLiteral("n"))
+    plain = factory.getOWLSubClassOfAxiom(cat, animal)
+    annotated = factory.getOWLSubClassOfAxiom(cat, animal, jpype.JClass("java.util.Collections").singleton(note))
+    ontology = manager.createOntology()
+    for axiom in (plain, annotated):
+        manager.addAxiom(ontology, axiom)
+    assert ontology.getAxiomCount() == 2
+    return axioms.render_axioms(axioms.entity_closure(ontology, f"{NS}Cat"))
+
+
+def test_annotations_collapse() -> None:
+    """Check that an axiom stated with an annotation and without is one of the entity's axioms."""
+    assert [axiom.text for axiom in asyncio.run(owlapi.run_java(annotated_twice))] == [
+        f"<{NS}Cat> SubClassOf <{NS}Animal>"
+    ]
 
 
 @pytest.mark.fuseki
 @pytest.mark.anyio
-@pytest.mark.parametrize("clause", ["", UNION_FROM], ids=["default-graph", "union"])
+async def test_empty_fragment(fuseki_url: str, dataset: str) -> None:
+    """Check that an IRI the store doesn't hold has an empty fragment, and no axioms."""
+    async with httpx2.AsyncClient(base_url=fuseki_url) as http:
+        fragment = await axioms.fetch_fragment(FusekiClient(http), dataset, f"{NS}Nobody")
+    assert fragment == b""
+    assert await owlapi.run_java(axioms.entity_axioms, fragment, f"{NS}Nobody") == []
+
+
+@pytest.mark.fuseki
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("fixture", "clause"), [("dataset", ""), ("split_dataset", UNION_FROM)], ids=["default-graph", "union"]
+)
 async def test_fragment_matches_whole(
-    fuseki_url: str, dataset: str, rendered: tuple[list[Axiom], dict[str, list[Axiom]]], clause: str
+    fuseki_url: str,
+    rendered: tuple[list[Axiom], dict[str, list[Axiom]]],
+    request: pytest.FixtureRequest,
+    fixture: str,
+    clause: str,
 ) -> None:
-    """Check that, for every entity, the axioms rendered from its fragment are those from the whole ontology."""
+    """Check that, for every entity, the axioms rendered from its fragment are those from the whole ontology.
+
+    With imports, the dataset clause makes the queries see the named graphs too, where some of the triples are.
+    """
+    dataset = request.getfixturevalue(fixture)
     _, closures = rendered
     assert sum(map(len, closures.values())) > 90
     async with httpx2.AsyncClient(base_url=fuseki_url) as http:
@@ -295,6 +372,7 @@ ENTITIES = [
     (f"{NS}partOf", EntityType.OBJECT_PROPERTY),
     (f"{NS}hasPart", EntityType.OBJECT_PROPERTY),
     (f"{NS}nickname", EntityType.DATA_PROPERTY),
+    (f"{NS}comment", EntityType.ANNOTATION_PROPERTY),
 ]
 NAMES = {
     f"{NS}Heart": ('<b>Heart</b> & "soul"', None),
@@ -315,6 +393,7 @@ def test_page(fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) ->
         client.portal.call(app.state.jobs.wait)
         page = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "Heart"}).text
         person = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "Person", "panel": "1"}).text
+        comment = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "comment", "panel": "1"}).text
     heart_link = '<a href="/axioms#Heart"><bdi>&lt;b&gt;Heart&lt;/b&gt; &amp; &#34;soul&#34;</bdi></a>'
     keyword = '<span class="keyword">{}</span>'.format
     assert (
@@ -329,3 +408,5 @@ def test_page(fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) ->
     assert f'{keyword("some")} <code dir="ltr">xsd:integer</code>[&gt;= ' in person  # a built-in datatype
     code = '<code dir="ltr">&lt;{}&gt;</code>'.format
     assert f"{keyword('HasKey')} {code(f'{NS}hasSSN')}, {code(f'{NS}ssn')}</li>" in person
+    assert '<p class="note">None.</p>' in comment  # it has no logical axioms
+    assert "axiom-list" not in comment and "None." not in page

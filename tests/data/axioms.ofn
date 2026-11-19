@@ -58,6 +58,8 @@ Declaration(NamedIndividual(:alice))
 Declaration(NamedIndividual(:bob))
 Declaration(NamedIndividual(:carol))
 Declaration(NamedIndividual(:dave))
+# Punned: also a class.
+Declaration(NamedIndividual(:Dog))
 
 # Display names with HTML special characters.
 AnnotationAssertion(rdfs:label :Heart "<b>Heart</b> & \"soul\"")
@@ -87,13 +89,15 @@ SubClassOf(:Tricky :Animal)
 EquivalentClasses(:Parent ObjectIntersectionOf(:Person ObjectSomeValuesFrom(:hasChild :Person)))
 EquivalentClasses(:Adult :Vertebrate :LivingThing)
 DisjointClasses(:Dog :Cat)
-DisjointClasses(:Animal :Plant :Fungus)
+DisjointClasses(Annotation(:note "n-ary") :Animal :Plant :Fungus)
 DisjointClasses(:Mineral ObjectSomeValuesFrom(:partOf :Animal))
 DisjointUnion(:LivingThing :Animal :Plant)
 
 # General class axioms.
 SubClassOf(ObjectIntersectionOf(:Organ ObjectSomeValuesFrom(:partOf :Plant)) owl:Nothing)
-SubClassOf(ObjectSomeValuesFrom(:hasPart :Heart) :Vertebrate)
+SubClassOf(Annotation(:note "general") ObjectSomeValuesFrom(:hasPart :Heart) :Vertebrate)
+SubClassOf(ObjectAllValuesFrom(:partOf ObjectUnionOf(:Dog ObjectComplementOf(:Cat))) :Pet)
+SubClassOf(ObjectMinCardinality(2 :hasPart :Liver) :Vertebrate)
 EquivalentClasses(ObjectSomeValuesFrom(:loves :Pet) ObjectSomeValuesFrom(:likes :Pet))
 DisjointClasses(ObjectSomeValuesFrom(:partOf :Fungus) ObjectSomeValuesFrom(:partOf :Mineral))
 
@@ -134,6 +138,7 @@ DatatypeDefinition(:Grade DataOneOf("A" "B" "C"))
 
 # Assertions.
 ClassAssertion(:Dog :rex)
+ClassAssertion(:Animal :Dog)
 ClassAssertion(ObjectSomeValuesFrom(:likes :Pet) :alice)
 ObjectPropertyAssertion(:likes :alice :rex)
 ObjectPropertyAssertion(:hasChild :alice :bob)
