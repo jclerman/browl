@@ -230,13 +230,13 @@ def test_status_running(client: TestClient, app: FastAPI) -> None:
 
 
 def test_status_ready(client: TestClient, app: FastAPI) -> None:
-    """Check that after a load the status shows it ready, with every stage done, and stops polling."""
+    """Check that after a load the status shows Ready highlighted, and stops polling (#85)."""
     run_job(client, app)
     html = fragment(client)
     assert "Load 1 is ready, started" in html
     assert "hx-trigger" not in html
-    assert re.findall(r'<li class="(\w+)"', html) == ["done"] * 6
-    assert 'aria-current="step">ready' in html
+    assert re.findall(r'<li class="(\w+)"', html) == ["done"] * 5 + ["current"]
+    assert '<li class="current" aria-current="step">ready' in html
 
 
 def test_status_failed(client: TestClient, app: FastAPI) -> None:

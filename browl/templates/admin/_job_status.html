@@ -49,7 +49,7 @@
     {% elif job.failed_stage is not none %}
     <li class="failed" aria-current="step">{{ stage }} (failed)</li>
     {% else %}
-    <li class="{{ 'current' if job.running else 'done' }}" aria-current="step">{{ stage }}</li>
+    <li class="current" aria-current="step">{{ stage }}</li>
     {% endif %}
     {% endfor %}
   </ol>
