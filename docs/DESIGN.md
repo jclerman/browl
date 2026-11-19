@@ -578,7 +578,7 @@ are documented in [`SCHEMA.md`](SCHEMA.md):
 | --- | --- | --- |
 | `entity` | The ontology and every declared class and property: its IRI, type, URL path and fragment (2.3), display name and CURIE | The entity-list query (every declared class and property with its type; the ontology's IRI comes from the header query): 22–29 s on NCBITaxon, 3.03 M rows. The whole hook, which computes each batch's URLs and inserts it before reading the next, takes 25–26 s, and the table and its indexes 530–650 MiB (P-10) |
 | `name_value` | Name-property values, one row per direct and per RDFS-entailed property | The name values query, through a property path (below): 41–48 s on NCBITaxon, 3.56 M rows. The whole hook, which also sets each entity's CURIE and display name, takes about 85 s ([P-11 findings](../research/P-11/README.md)) |
-| `edge` | Parent → child per hierarchy (classes; each property type), between equivalence-group representatives | The edges query: 18–19 s on NCBITaxon |
+| `edge` | Parent → child per hierarchy (classes; each property type), between equivalence-group representatives | The edges query (subclass, sub-property and equivalent-class triples): 20–21 s on NCBITaxon, 3.02 M rows. The whole hook, which also groups, counts and inserts `equiv_group` and `counts`, takes about 57 s, and `edge`, `counts` and their index 164 MiB; on Uberon, 0.5 s ([P-12 findings](../research/P-12/README.md)) |
 | `equiv_group` | Entity → group representative, for groups of more than one | Union-find over `owl:equivalentClass` between named classes, and over cycles of edges (below) |
 | `counts` | Per node: immediate children, distinct descendants | `edge`, in Python (below) |
 | `hash_prefix` | Distinct URL paths that have hash entities under them | `entity` |
@@ -665,12 +665,13 @@ properties are in no hierarchy, even if declared, so the children of `owl:Thing`
   `equiv_group` holds only groups of more than one entity, since most have one. `owl:equivalentProperty` isn't
   grouped yet.
 
-**Distinct descendant counts.** These need a transitive closure, not a sum over edges. _(Q19a)_ The plan is to compute
-them in a bottom-up pass in topological order, merging descendant sets. Each set is a
+**Distinct descendant counts.** These need a transitive closure, not a sum over edges. _(Q19a)_ They are computed
+(`count_descendants`) in a bottom-up pass in topological order, merging descendant sets. Each set is a
 [roaring bitmap](https://roaringbitmap.org/) (a compressed integer set with fast unions, via `pyroaring`), freed once
 all its parents have merged it. Only the counts are stored, not the full closure. On NCBITaxon (3.0 M classes) this
-takes 4.2 s ([S-3 findings](../research/S-3/README.md)). Python `int` bitsets are unsuitable: their size grows with the
-highest index.
+took 4.2 s in S-3 and 5.0–5.2 s in the hook ([S-3 findings](../research/S-3/README.md),
+[P-12 findings](../research/P-12/README.md)). Python `int` bitsets are unsuitable: their size grows with the highest
+index.
 
 **RDFS entailment** _(Q7)_. browl needs only a few RDFS entailment rules:
 
