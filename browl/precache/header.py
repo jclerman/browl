@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from browl.derived import Meta
 from browl.fuseki import FusekiClient
 from browl.jobtypes import StageError
-from browl.names import best_values, name_property_iris
+from browl.names import BLANK, best_values, name_property_iris
 from browl.precache.core import PREFIXES
 from browl.rdf import IRI, Literal, Term
 from browl.settings import Settings
@@ -127,7 +127,8 @@ async def ontology_header(sparql: FusekiClient, dataset: str, settings: Settings
     title = None
     ranking = settings.language_ranking
     for title_property in titles:
-        best = best_values(_literals(values.get(title_property, [])), ranking)
+        literals = [literal for literal in _literals(values.get(title_property, [])) if literal.value.strip(BLANK)]
+        best = best_values(literals, ranking)
         if best:
             title = best[0]
             if len(best) > 1:

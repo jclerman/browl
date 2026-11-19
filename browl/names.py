@@ -21,6 +21,9 @@ BUILTIN_PREFIXES = {
 }
 """The built-in CURIE prefixes (§2.7), which `EXTRA_PREFIXES` overrides."""
 
+BLANK = " \t\n\r"
+"""The characters of a blank name value or title, which is never a display name: its links would have no text."""
+
 
 def expand_curie(name: str, prefixes: Mapping[str, str]) -> str:
     """Return the IRI a CURIE stands for, or the name itself if its prefix isn't known (it's taken to be an IRI)."""
@@ -51,6 +54,8 @@ def normalize(text: str) -> str:
 
     Search's queries are normalized with it too, so a query matches a value whatever its accents and case.
     """
+    # Unicode's compatibility caseless matching (D146) normalizes again after folding, as folding can leave a string
+    # unnormalized (U+0345, a combining mark, folds to a letter that may need reordering against the marks around it).
     folded = unicodedata.normalize("NFKD", unicodedata.normalize("NFKD", text).casefold())
     return "".join(char for char in folded if not unicodedata.combining(char))
 

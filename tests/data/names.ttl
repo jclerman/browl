@@ -1,5 +1,5 @@
 # Name values for the names pre-caching hook's tests (tests/test_precache_names.py): sub-property chains and cycles,
-# several languages, punning, and entities without names.
+# several languages, punning, entities without names, and two name properties, one a sub-property of the other.
 @prefix : <http://example.org/names#> .
 @prefix ex: <http://example.org/names#> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
@@ -16,7 +16,7 @@
     rdfs:subPropertyOf :label2 .
 :alias a owl:AnnotationProperty ;
     rdfs:subPropertyOf skos:prefLabel .
-skos:prefLabel rdfs:subPropertyOf :alias .
+skos:prefLabel rdfs:subPropertyOf :alias, rdfs:label .
 
 :Heart a owl:Class ;
     rdfs:label "Heart"@en, "Herz"@de ;
@@ -28,7 +28,8 @@ skos:prefLabel rdfs:subPropertyOf :alias .
     :label2 "Café" .
 :Dumpling a owl:Class ;
     :alias "餃子"@zh-Hant-TW .
-:Nameless a owl:Class .
+:Nameless a owl:Class ;
+    rdfs:label :Heart .  # not a literal, so not a name
 :Pun a owl:Class, owl:ObjectProperty ;
     skos:prefLabel "pun"@en .
 :someone rdfs:label "not an entity"@en .

@@ -637,9 +637,10 @@ The result is read as it streams, keeping only that ontology's values, and one o
 fails pre-caching, so an upload that declares millions of ontologies can't hold the job lock while they're all read.
 The same query reads that ontology's title and `owl:versionInfo`, literals only. The title is the first property's
 value among `dcterms:title`, `dc:title`, then `NAME_PROPERTIES`, chosen by language ranking ([2.7](#27-display-names))
-then lexical order, with a warning if several tie; without one, pages show the IRI. Several `owl:versionInfo` values are
-chosen the same way, with a warning. The version shown is the version IRI, else the version info (`Meta.version`). The
-rest of the ontology's annotations aren't stored: the home page (P-17) queries Fuseki for them.
+then lexical order, with a warning if several tie; a blank value (only spaces, tabs and line breaks) isn't one; without
+one, pages show the IRI. Several `owl:versionInfo` values are chosen the same way, with a warning. The version shown is
+the version IRI, else the version info (`Meta.version`). The rest of the ontology's annotations aren't stored: the home
+page (P-17) queries Fuseki for them.
 
 An earlier design also had a `usage` table, because the OWLAPI can't find annotation assertions by value. Fuseki can
 (`?s ?p <entity>`), so P-27 decides whether any part of it is still needed ([2.8](#28-entity-pages)).
@@ -715,6 +716,8 @@ ranking. _(Q18, Q18a)_ For each entity, the display name is the first value foun
 4. then shortest value,
 5. then alphabetical (by code point),
 6. with the CURIE as the fallback, then the full IRI.
+
+A blank value (only spaces, tabs and line breaks) is skipped, as its links would have no text.
 
 The ontology's display name is its title (2.5, The ontology's IRI) if it has one. It is computed during pre-caching, so
 link text costs nothing at render time.

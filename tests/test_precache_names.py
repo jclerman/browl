@@ -23,6 +23,8 @@ from browl.settings import Settings
 from tests.conftest import DATA
 from tests.helpers import make_settings
 from tests.test_precache import (
+    DC_TITLE,
+    DCTERMS_TITLE,
     END,
     ENTITY_END,
     ENTITY_HEADER,
@@ -84,7 +86,8 @@ async def test_display_names(data_dir: Path) -> None:
     """Check the display name ranking: property, language, direct, length, then lexical order; then CURIE, then IRI."""
     settings = make_settings(NAME_PROPERTIES=["rdfs:label", "skos:prefLabel"], LANGUAGE_RANKING=["fr", "en"])
     sub = f"<{EX}sub>"
-    classes = [(f"{EX}{name}", "Class") for name in ["property", "language", "direct", "length", "lexical", "x"]]
+    names = ["property", "language", "direct", "length", "lexical", "blank", "x"]
+    classes = [(f"{EX}{name}", "Class") for name in names]
     values = [
         (f"{EX}property", PREF_LABEL, PREF_LABEL, '"a"@fr'),
         (f"{EX}property", LABEL, LABEL, '"second property"@de'),
@@ -96,6 +99,9 @@ async def test_display_names(data_dir: Path) -> None:
         (f"{EX}length", LABEL, LABEL, '"short"'),
         (f"{EX}lexical", LABEL, LABEL, '"b"@en'),
         (f"{EX}lexical", LABEL, LABEL, '"a"@en-US'),
+        (f"{EX}blank", LABEL, LABEL, '""@fr'),  # blank values are skipped (C1)
+        (f"{EX}blank", LABEL, LABEL, '" \\t\\n"@fr'),
+        (f"{EX}blank", PREF_LABEL, PREF_LABEL, '"not blank"'),
         ("http://example.org/undeclared", LABEL, LABEL, '"left out"'),
     ]
     queries: list[str] = []
@@ -113,6 +119,7 @@ async def test_display_names(data_dir: Path) -> None:
         f"{EX}direct": "direct",
         f"{EX}length": "short",
         f"{EX}lexical": "a",
+        f"{EX}blank": "not blank",
         f"{EX}x": f"{EX}x",  # no CURIE: example.org isn't a built-in prefix
     }
     assert (f"{EX}undeclared", "class") not in found
@@ -151,10 +158,12 @@ async def test_curies(data_dir: Path) -> None:
     """
     settings = make_settings(EXTRA_PREFIXES={"mine": f"{EX}a/", "obo": f"{EX}obo/"})
     iris = [f"{EX}a/b/c", f"{EX}a/x", f"{EX}a/", f"{EX}d#e", f"{EX}obo/f", "http://purl.obolibrary.org/obo/g", "urn:x"]
+    iris.append(f"{SKOS}x")
     context = job(settings, 1)
     context.upload.write_text(  # type: ignore[union-attr]
         f"@prefix ab: <{EX}a/b/> .\n@prefix : <{EX}d#> .\n@prefix d: <{EX}d#> .\n@prefix mine: <{EX}ignored/> .\n"
         "@prefix owl: <http://example.org/not-owl#> .\n"
+        f"@prefix zz: <{SKOS}> .\n"  # declared, for a built-in prefix's namespace
     )
     context.prefixes = read_upload_prefixes(settings.data_dir, 1)  # as the loading stage does
     async with fuseki(HEADER + END, entity_result(*((iri, "Class") for iri in iris)), name_result()) as http:
@@ -165,6 +174,7 @@ async def test_curies(data_dir: Path) -> None:
         "d": f"{EX}d#",
         "mine": f"{EX}ignored/",
         "owl": "http://example.org/not-owl#",
+        "zz": SKOS,
     }
     found = entity_names(settings, 1)
     assert {iri: curie for (iri, _), (_, curie) in found.items()} == {
@@ -175,6 +185,7 @@ async def test_curies(data_dir: Path) -> None:
         f"{EX}obo/f": "obo:f",
         "http://purl.obolibrary.org/obo/g": None,  # the built-in obo prefix is overridden
         "urn:x": None,
+        f"{SKOS}x": "zz:x",  # the declared prefix, not the built-in skos, though it's later alphabetically
     }
     assert found[(f"{EX}d#e", "class")] == ("d:e", "d:e")  # the CURIE is the display name without a name value
     with closing(connect(settings, 1, HOOKS_USED)) as connection:
@@ -195,7 +206,11 @@ async def test_no_valid_name_property(data_dir: Path) -> None:
 
 @pytest.mark.fuseki
 async def test_names_on_real_fuseki(fuseki_url: str, data_dir: Path) -> None:
-    """Check the names hook on a real Fuseki: sub-property chains and cycles, languages, punning, and the imports."""
+    """Check the names hook on a real Fuseki: sub-property chains and cycles, languages, punning, and the imports.
+
+    Of two name properties, one a sub-property of the other, each stores its own values; a value that isn't a literal
+    isn't a name.
+    """
     settings = make_settings(NAME_PROPERTIES=["rdfs:label", "skos:prefLabel"])
     generation = 900_000 + uuid.uuid4().int % 100_000
     name = dataset_name(generation)
@@ -248,8 +263,11 @@ async def test_names_on_real_fuseki(fuseki_url: str, data_dir: Path) -> None:
             (f"{ns}Bee", "class", label, "Bee", "bee", "en-gb", 0),
             (f"{ns}Cafe", "class", label, "Café", "cafe", None, 1),
             (f"{ns}Dumpling", "class", pref, "餃子", "餃子", "zh-hant-tw", 0),  # through a cycle
+            (f"{ns}Dumpling", "class", label, "餃子", "餃子", "zh-hant-tw", 0),  # prefLabel ⊑ label, both configured
             (f"{ns}Pun", "class", pref, "pun", "pun", "en", 1),
+            (f"{ns}Pun", "class", label, "pun", "pun", "en", 0),
             (f"{ns}Pun", "object_property", pref, "pun", "pun", "en", 1),
+            (f"{ns}Pun", "object_property", label, "pun", "pun", "en", 0),
             (f"{EX}imported#C", "class", label, "imported", "imported", "en", 1),
         ],
         key=repr,
@@ -260,7 +278,7 @@ async def test_names_on_real_fuseki(fuseki_url: str, data_dir: Path) -> None:
         (f"{ns}Bee", "class"): ("Bee", "ex:Bee"),
         (f"{ns}Cafe", "class"): ("Café", "ex:Cafe"),
         (f"{ns}Dumpling", "class"): ("餃子", "ex:Dumpling"),
-        (f"{ns}Nameless", "class"): ("ex:Nameless", "ex:Nameless"),
+        (f"{ns}Nameless", "class"): ("ex:Nameless", "ex:Nameless"),  # its rdfs:label isn't a literal
         (f"{ns}Pun", "class"): ("pun", "ex:Pun"),
         (f"{ns}Pun", "object_property"): ("pun", "ex:Pun"),
         (f"{ns}label2", "annotation_property"): ("ex:label2", "ex:label2"),
@@ -268,3 +286,12 @@ async def test_names_on_real_fuseki(fuseki_url: str, data_dir: Path) -> None:
         (f"{ns}alias", "annotation_property"): ("ex:alias", "ex:alias"),
         (f"{EX}imported#C", "class"): ("imported", None),
     }
+
+
+async def test_blank_title_skipped(data_dir: Path) -> None:
+    """Check that a blank title isn't the ontology's display name: the next title property's is (C1)."""
+    settings = make_settings()
+    header = f'{HEADER}<{EX}onto>\t{DCTERMS_TITLE}\t" "@en\t\n<{EX}onto>\t{DC_TITLE}\t"Onto"\t\n{END}'
+    async with fuseki(header, entity_result(), name_result()) as http:
+        await pre_caching_stage(job(settings, 1), http, hooks=HOOKS_USED)
+    assert entity_names(settings, 1)[(f"{EX}onto", "ontology")] == ("Onto", None)
