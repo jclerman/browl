@@ -1,5 +1,6 @@
 """Tests for the routing of entity URLs: home, entity, disambiguation and hash pages, the fallback route, and 404."""
 
+import html.parser
 import urllib.parse
 from collections.abc import Iterator, Sequence
 
@@ -151,8 +152,8 @@ def test_hash_prefix(client: TestClient) -> None:
 @pytest.mark.parametrize(
     ("path", "fragment", "expected"),
     [
-        ("/other.org/vocab", "C", "<code>http://other.org/vocab#C</code>"),
-        ("/onto", "A", "<code>http://example.org/onto#A</code>"),
+        ("/other.org/vocab", "C", "<h1>http://other.org/vocab#C</h1>"),
+        ("/onto", "A", "<h1>http://example.org/onto#A</h1>"),
         ("/other.org/vocab", "E", "<h1>Choose an entity</h1>"),
     ],
 )
@@ -351,3 +352,175 @@ def test_meta_read_for_home_only(client: TestClient, monkeypatch: pytest.MonkeyP
     assert reads == []
     assert "<h1>The &lt;Onto&gt;</h1>" in client.get("/onto").text
     assert len(reads) == 1
+
+
+# Page tabs (DESIGN.md §2.9, U-28)
+
+
+class _TabParser(html.parser.HTMLParser):
+    """Collects a page's tabs' attributes and its tab panel's."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.tabs: list[dict[str, str | None]] = []
+        self.panel: dict[str, str | None] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        if attributes.get("role") == "tab":
+            self.tabs.append(attributes)
+        elif attributes.get("role") == "tabpanel":
+            self.panel = attributes
+
+
+def parse_tabs(text: str) -> _TabParser:
+    """Return a page's tabs and tab panel, as parsed."""
+    parser = _TabParser()
+    parser.feed(text)
+    return parser
+
+
+def selected_tab(text: str) -> str | None:
+    """Return the id of a page's selected tab; None if it has no tabs."""
+    return next((tab["id"] for tab in parse_tabs(text).tabs if tab["aria-selected"] == "true"), None)
+
+
+@pytest.mark.parametrize(
+    ("query", "selected"), [("", "tab-overview"), ("?tab=overview", "tab-overview"), ("?tab=usage", "tab-usage")]
+)
+def test_entity_tabs(client: TestClient, query: str, selected: str) -> None:
+    """Check that an entity page has tabs, the first by default, and shows the one its query names."""
+    response = client.get(f"/other.org/y{query}")
+    assert response.status_code == 200
+    page = parse_tabs(response.text)
+    assert [tab["id"] for tab in page.tabs] == ["tab-overview", "tab-usage"]
+    assert selected_tab(response.text) == selected
+    assert page.panel is not None
+    assert page.panel["aria-labelledby"] == selected
+    assert ("<code>http://other.org/y</code>" in response.text) == (selected == "tab-overview")
+
+
+@pytest.mark.parametrize(
+    ("path", "hrefs", "panels"),
+    [
+        (
+            "/other.org/y?x=1",
+            ["/other.org/y", "/other.org/y?tab=usage"],
+            ["/other.org/y?panel=1", "/other.org/y?tab=usage&panel=1"],
+        ),
+        (
+            iri_link("urn:example:fallback"),
+            [iri_link("urn:example:fallback"), iri_link("urn:example:fallback") + "&tab=usage"],
+            [iri_link("urn:example:fallback") + "&panel=1", iri_link("urn:example:fallback") + "&tab=usage&panel=1"],
+        ),
+        (
+            "/_browl/hash?path=/other.org/vocab&fragment=C",
+            ["/other.org/vocab#C", "/other.org/vocab?tab=usage#C"],
+            [
+                "/_browl/hash?path=%2Fother.org%2Fvocab&fragment=C&panel=1",
+                "/_browl/hash?path=%2Fother.org%2Fvocab&fragment=C&tab=usage&panel=1",
+            ],
+        ),
+    ],
+)
+def test_tab_links(client: TestClient, path: str, hrefs: list[str], panels: list[str]) -> None:
+    """Check that each tab links its page's URL, with a hash URL's fragment, and its panel's, dropping other params.
+
+    The first tab's URL is the page's own, without `tab`. A hash URL's panels come from the hash route.
+    """
+    tabs = parse_tabs(client.get(path).text).tabs
+    assert [tab["href"] for tab in tabs] == hrefs
+    assert [tab["hx-get"] for tab in tabs] == panels
+
+
+def test_tab_links_under_root_path(app: FastAPI) -> None:
+    """Check that the tabs' links include the root path the app is served under."""
+    with TestClient(app, root_path="/root") as client:
+        run(client, app)
+        tabs = parse_tabs(client.get("/root/other.org/y").text).tabs
+    assert [tab["href"] for tab in tabs] == ["/root/other.org/y", "/root/other.org/y?tab=usage"]
+    assert tabs[1]["hx-get"] == "/root/other.org/y?tab=usage&panel=1"
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/other.org/y?tab=usage&panel=1", "/_browl/hash?path=/other.org/vocab&fragment=C&tab=usage&panel=1"],
+)
+def test_panel_alone(client: TestClient, path: str) -> None:
+    """Check that `panel=1` serves the tab panel's content alone, with no page frame, and not indexed."""
+    response = client.get(path)
+    assert response.status_code == 200
+    assert response.headers["X-Robots-Tag"] == "noindex"
+    assert response.headers["Content-Type"].startswith("text/html")
+    assert "Where other entities use this one" in response.text
+    for frame in ["<html", "<main", 'role="tablist"', 'role="tabpanel"', "site-bar"]:
+        assert frame not in response.text
+
+
+def test_panel_alone_default_tab(client: TestClient) -> None:
+    """Check that `panel=1` without `tab` serves the first tab's panel."""
+    response = client.get("/other.org/y?panel=1")
+    assert response.status_code == 200
+    assert "<code>http://other.org/y</code>" in response.text
+
+
+HASH_C = "/_browl/hash?path=/other.org/vocab&fragment=C"
+"""The hash route's URL for an entity page."""
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/other.org/y?tab=nope",
+        "/other.org/y?tab=nope&panel=1",
+        "/other.org/y?tab=usage&tab=overview",
+        "/other.org/y?panel=2",
+        "/other.org/y?panel=1&panel=1",
+        "/other.org/y?tab=",
+        "/onto?panel=1",
+        "/other.org/x?panel=1",
+        "/other.org/z?tab=nope&panel=1",
+        "/other.org/vocab?panel=1",
+        "/other.org/vocab?tab=usage&tab=overview",
+        f"{HASH_C}&tab=nope&panel=1",
+        f"{HASH_C}&tab=usage&tab=overview",
+        f"{HASH_C}&panel=1&panel=1",
+        "/_browl/hash?path=/other.org/vocab&fragment=E&panel=1",
+        iri_link("urn:example:fallback") + "&tab=nope",
+        iri_link("urn:example:fallback") + "&panel=2",
+        iri_link("http://other.org/y") + "&tab=usage&tab=overview",
+    ],
+)
+def test_tab_not_found(client: TestClient, path: str) -> None:
+    """Check that a tab the page lacks, a malformed tab query, or a panel of a page without tabs, is a 404."""
+    response = client.get(path)
+    assert response.status_code == 404
+    assert "<h1>Not found</h1>" in response.text
+
+
+@pytest.mark.parametrize(
+    ("path", "selected"),
+    [
+        ("/onto?tab=nope", None),
+        ("/other.org/z?tab=nope", "tab-overview"),
+        ("/other.org/x?tab=usage", None),
+        (f"{HASH_C}&tab=nope", "tab-overview"),
+        ("/_browl/hash?path=/other.org/vocab&fragment=E&tab=usage", None),
+    ],
+)
+def test_tab_ignored(client: TestClient, path: str, selected: str | None) -> None:
+    """Check that a page without tabs, a hash entity's, or one with the hash script, serves a tab it lacks, not a 404.
+
+    Their query may be meant for another fragment's entity, or carried on to the choose page.
+    """
+    response = client.get(path)
+    assert response.status_code == 200
+    assert selected_tab(response.text) == selected
+
+
+@pytest.mark.parametrize(("tab", "query"), [("usage", "?tab=usage"), ("nope", "")])
+def test_fallback_redirect_keeps_tab(client: TestClient, tab: str, query: str) -> None:
+    """Check that the fallback route's redirect to an entity's own URL keeps a known tab, before any fragment."""
+    response = client.get(iri_link("http://other.org/vocab#C") + f"&tab={tab}", follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["Location"] == f"/other.org/vocab{query}#C"

@@ -5,7 +5,7 @@ up in the derived database. Two routes under the reserved prefix serve what a pa
 by its IRI (fallback URLs, and each of the IRIs that share a URL), and `hash?path=…&fragment=…`, which the hash-IRI
 script (`static/hash.js`) fetches for the entity named by the URL's fragment, which the server never sees.
 
-The entity and home pages are placeholders until P-16 and P-17.
+Entity pages have tabs (`browl.tabs`). Their panels are placeholders until P-16, and the home page until P-17.
 """
 
 import sqlite3
@@ -20,10 +20,17 @@ from starlette.types import Scope
 
 from browl.derived import Entity, EntityType, Meta, entities_at, entities_with_iri, is_hash_prefix, read_meta
 from browl.pages import app_path, href, is_under, link_root, read_derived, templates
+from browl.tabs import TAB_PARAM, Tab, TabNotFoundError, TabQuery, choose_tab, read_tab_query, tab_links, with_query
 from browl.urls import FALLBACK_PATH, fallback_path
 
 HASH_PATH = "hash"
 """The hash-IRI script's lookup route's path under the reserved prefix."""
+
+ENTITY_TABS = (Tab("overview", "Overview"), Tab("usage", "Usage"))
+"""An entity page's tabs (U-28); the first is shown by default."""
+
+PANEL_HEADERS = {"X-Robots-Tag": "noindex"}
+"""The headers of a tab panel served alone, which isn't a page."""
 
 
 class _EntityRoute(APIRoute):
@@ -96,6 +103,22 @@ def request_path(request: Request) -> str:
     return text
 
 
+@dataclass(frozen=True)
+class _TabUrls:
+    """Where a page is served, for its tabs' links.
+
+    Attributes:
+        page: The page's URL, from the app's root, without `tab` or a fragment.
+        fragment: The page's fragment, in URI form, if it has one.
+        panel: The URL its tab panels are fetched from, from the app's root, without `tab` or `panel`; None if the
+            page's own.
+    """
+
+    page: str
+    fragment: str | None = None
+    panel: str | None = None
+
+
 def not_found(request: Request) -> Response:
     """Return the "not found" page (U-14), with status 404."""
     return templates.TemplateResponse(request, "not_found.html", {}, status_code=404)
@@ -106,31 +129,50 @@ def _page(
     prefix: str,
     entities: list[Entity],
     meta: Meta | None,
+    query: TabQuery,
+    at: _TabUrls,
     hash_path: str | None = None,
     noindex: bool = False,
+    lenient: bool = False,
 ) -> Response:
     """Return the page for the entities at a URL: one IRI's page, or the disambiguation page for several (U-15).
+
+    An entity page shows the tab the query asks for, or only its panel (`browl.tabs`).
 
     Args:
         request: The request.
         prefix: The reserved prefix.
         entities: The entities at the URL, by IRI then type; at least one.
         meta: What the derived database was built from; not None if the ontology is among the entities.
+        query: What the request's query asks of the page's tabs.
+        at: Where the page is served.
         hash_path: The URL's path, when hash entities share it, so the page includes the hash-IRI script.
         noindex: Whether to ask search engines not to index the page, which is also at another URL.
+        lenient: Whether to show the first tab rather than 404 a tab the page lacks (`choose_tab`); always so for a
+            page with the hash-IRI script.
     """
     hash_script = None if hash_path is None else _hash_script(request, prefix, hash_path, prefix_only=False)
     common = {"hash_script": hash_script, "noindex": noindex}
     names: dict[str, str] = {}  # each IRI's display name, in order
     for entity in entities:
         names.setdefault(entity.iri, entity.display_name or entity.iri)
+    is_home = any(entity.type == EntityType.ONTOLOGY for entity in entities)
+    tabs = ENTITY_TABS if len(names) == 1 and not is_home else ()
+    try:
+        tab = choose_tab(tabs, query, lenient=lenient or hash_path is not None)
+    except TabNotFoundError:
+        return not_found(request)
     if len(names) > 1:
         choices = [(iri, href(request, fallback_path(prefix, iri)), name) for iri, name in names.items()]
         return templates.TemplateResponse(request, "choose.html", {"choices": choices} | common)
-    if any(entity.type == EntityType.ONTOLOGY for entity in entities):
+    if is_home:
         return templates.TemplateResponse(request, "home.html", {"meta": meta} | common)
-    context = {"entity": entities[0], "types": [entity.type for entity in entities]} | common
-    return templates.TemplateResponse(request, "entity.html", context)
+    assert tab is not None  # an entity page has tabs
+    links = tab_links(tabs, tab, href(request, at.page), at.fragment, href(request, at.panel or at.page))
+    context = {"entity": entities[0], "types": [entity.type for entity in entities], "tab": tab, "tabs": links}
+    if query.panel:
+        return templates.TemplateResponse(request, "entity_panel.html", context, headers=PANEL_HEADERS)
+    return templates.TemplateResponse(request, "entity.html", context | common)
 
 
 def _hash_script(request: Request, prefix: str, path: str, prefix_only: bool) -> dict[str, str]:
@@ -149,15 +191,21 @@ async def entity_by_iri(request: Request, iri: str = "") -> Response:
     Any other entity is redirected to its own URL, so its page has one URL.
     """
     prefix: str = request.app.state.settings.reserved_prefix
+    query = read_tab_query(request)
+    if query is None:
+        return not_found(request)
     found = await read_derived(request, lambda connection: _find_iri(connection, iri))
     own = [entity for entity in found.entities if entity.iri == iri]
     if not own:
         return not_found(request)
     entity = own[0]
     if entity.path == fallback_path(prefix, iri) or len(own) < len(found.entities):
-        return _page(request, prefix, own, found.meta)
-    # Not a RedirectResponse, which would percent-encode characters such as `|` that stored URLs keep.
-    return Response(status_code=302, headers={"Location": href(request, entity.path, entity.fragment)})
+        return _page(request, prefix, own, found.meta, query, _TabUrls(fallback_path(prefix, iri)))
+    # Not a RedirectResponse, which would percent-encode characters such as `|` that stored URLs keep. A known tab is
+    # kept.
+    known = query.tab in {tab.slug for tab in ENTITY_TABS}
+    location = with_query(entity.path, [(TAB_PARAM, query.tab)] if known and query.tab is not None else [])
+    return Response(status_code=302, headers={"Location": href(request, location, entity.fragment)})
 
 
 @reserved_router.api_route(f"/{HASH_PATH}", methods=["GET", "HEAD"], include_in_schema=False)
@@ -167,12 +215,17 @@ async def hash_entity(request: Request, path: str = "", fragment: str = "") -> R
     The script shows the page's main content in place of its own page's. Other query parameters, such as the tab, are
     the hash URL's own.
     """
-    if not path or not fragment:
+    query = read_tab_query(request)
+    if not path or not fragment or query is None:
         return not_found(request)
     found = await read_derived(request, lambda connection: _find(connection, path, fragment))
     if not found.entities:
         return not_found(request)
-    return _page(request, request.app.state.settings.reserved_prefix, found.entities, found.meta, noindex=True)
+    prefix: str = request.app.state.settings.reserved_prefix
+    panel = with_query(f"/{prefix}/{HASH_PATH}", [("path", path), ("fragment", fragment)])
+    # Lenient, as the page with the script is: one query serves every fragment on the path.
+    at = _TabUrls(path, fragment, panel)
+    return _page(request, prefix, found.entities, found.meta, query, at, noindex=True, lenient=True)
 
 
 @catch_all_router.api_route("/{_:path}", methods=["GET", "HEAD"], include_in_schema=False)
@@ -180,10 +233,14 @@ async def entity_page(request: Request) -> Response:
     """Serve the page an entity URL's path leads to (DESIGN.md §2.3, Lookup); never one under the reserved prefix."""
     prefix: str = request.app.state.settings.reserved_prefix
     path = request_path(request)
+    query = read_tab_query(request)
+    if query is None:
+        return not_found(request)
     found = await read_derived(request, lambda connection: _find(connection, path, None))
     if found.entities:
-        return _page(request, prefix, found.entities, found.meta, path if found.hash_prefix else None)
-    if found.hash_prefix:
+        hash_path = path if found.hash_prefix else None
+        return _page(request, prefix, found.entities, found.meta, query, _TabUrls(path), hash_path)
+    if found.hash_prefix and not query.panel:
         context = {"hash_script": _hash_script(request, prefix, path, prefix_only=True)}
         return templates.TemplateResponse(request, "hash.html", context)
     return not_found(request)

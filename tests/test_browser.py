@@ -492,3 +492,262 @@ def box(locator: Locator) -> FloatRect:
     result = locator.bounding_box()
     assert result is not None
     return result
+
+
+# Page tabs (P-14b, DESIGN.md §2.9, U-28, U-17)
+
+PANEL = re.compile(r"[?&]panel=1(&|$)")
+USAGE_TEXT = "Where other entities use this one"
+
+
+def tab(page: Page, name: str) -> Locator:
+    """Return the page tab with a name."""
+    return page.get_by_role("tablist").get_by_role("tab", name=name)
+
+
+def expect_selected(page: Page, name: str) -> None:
+    """Check that a tab is the selected one, and labels the tab panel."""
+    for other in page.get_by_role("tablist").get_by_role("tab").all():
+        expect(other).to_have_attribute("aria-selected", "true" if other.inner_text() == name else "false")
+    expect(page.get_by_role("tabpanel")).to_have_attribute("aria-labelledby", tab(page, name).get_attribute("id") or "")
+
+
+@NO_JS
+def test_tabs_without_javascript(page: Page, server: LiveServer) -> None:
+    """Check that, without JavaScript, the tabs are links to their pages, which the server renders."""
+    page.goto(f"{server.url}/example.org/plain")
+    expect_selected(page, "Overview")
+    tab(page, "Usage").click()
+    expect(page).to_have_url(f"{server.url}/example.org/plain?tab=usage")
+    expect_selected(page, "Usage")
+    expect(page.get_by_role("tabpanel")).to_contain_text(USAGE_TEXT)
+    tab(page, "Overview").click()
+    expect(page).to_have_url(f"{server.url}/example.org/plain")
+    expect(page.get_by_role("tabpanel")).to_contain_text(f"{EX}/plain")
+
+
+def test_tab_swaps_panel(page: Page, server: LiveServer) -> None:
+    """Check that, with htmx, a tab fetches only its panel, swaps it in, and replaces the URL, without a navigation."""
+    page.goto(f"{server.url}/example.org/plain")
+    page.evaluate("window.marker = 1")
+    length = page.evaluate("history.length")
+    with page.expect_request(PANEL) as request:
+        tab(page, "Usage").click()
+    assert query_of(request.value.url) == {"tab": ["usage"], "panel": ["1"]}
+    expect(page.get_by_role("tabpanel")).to_contain_text(USAGE_TEXT)
+    expect_selected(page, "Usage")
+    expect(page).to_have_url(f"{server.url}/example.org/plain?tab=usage")
+    assert page.evaluate("[window.marker, history.length]") == [1, length]
+    expect(page.locator("main h1")).to_have_count(1)  # the panel alone, not a page inside the page
+    tab(page, "Overview").click()
+    expect(page.get_by_role("tabpanel")).to_contain_text(f"{EX}/plain")
+    expect(page).to_have_url(f"{server.url}/example.org/plain")
+
+
+def record_panels(page: Page) -> list[str]:
+    """Return a list that collects the URLs of the page's panel requests, in order."""
+    requests: list[str] = []
+    page.on("request", lambda request: requests.append(request.url) if PANEL.search(request.url) else None)
+    return requests
+
+
+def test_selected_tab_not_fetched(page: Page, server: LiveServer) -> None:
+    """Check that the selected tab, as served or as swapped in, doesn't fetch its panel again.
+
+    Each click on the other tab makes a request, so one from the click before it would be recorded first.
+    """
+    page.goto(f"{server.url}/example.org/plain")
+    requests = record_panels(page)
+    tab(page, "Overview").click()
+    with page.expect_request(PANEL):
+        tab(page, "Usage").click()
+    expect_selected(page, "Usage")
+    tab(page, "Usage").click()
+    with page.expect_request(PANEL):
+        tab(page, "Overview").click()
+    expect_selected(page, "Overview")
+    assert [query_of(url).get("tab") for url in requests] == [["usage"], None]
+
+
+def test_first_click_focuses_tab(page: Page, server: LiveServer) -> None:
+    """Check that a tab opened by a first click keeps the focus, in the Tab sequence (#92, S3)."""
+    page.goto(f"{server.url}/example.org/plain")
+    tab(page, "Usage").click()
+    expect_selected(page, "Usage")
+    expect(tab(page, "Usage")).to_be_focused()
+    expect(tab(page, "Usage")).to_have_attribute("tabindex", "0")
+
+
+def test_htmx_eval_off(page: Page, server: LiveServer) -> None:
+    """Check that htmx's eval and script-tag features are off (#92, C2)."""
+    page.goto(f"{server.url}/example.org/plain")
+    assert page.evaluate("[htmx.config.allowEval, htmx.config.allowScriptTags]") == [False, False]
+
+
+def test_tab_click_while_loading(page: Page, server: LiveServer) -> None:
+    """Check that clicking back to the selected tab while another's panel loads cancels that load, and stays put."""
+    held: list[Route] = []
+    page.route(re.compile(r"tab=usage&panel=1"), lambda route: held.append(route))
+    page.goto(f"{server.url}/example.org/plain")
+    page.evaluate("window.marker = 1")
+    tab(page, "Usage").click()
+    wait_until(page, lambda: bool(held), "the request for Usage's panel")
+    tab(page, "Overview").click()
+    try:
+        held[0].continue_()
+    except PlaywrightError:
+        pass  # htmx aborted it, so nothing arrives
+    else:
+        if response := held[0].request.response():
+            response.finished()
+    page.wait_for_timeout(100)  # time for htmx to handle a response, if one arrived
+    expect_selected(page, "Overview")
+    expect(page.get_by_role("tabpanel")).to_contain_text(f"{EX}/plain")
+    expect(page).to_have_url(f"{server.url}/example.org/plain")
+    assert page.evaluate("window.marker") == 1
+
+
+def test_tab_keyboard(page: Page, server: LiveServer) -> None:
+    """Check the WAI-ARIA keyboard support, with manual activation: arrows, Home and End move, Enter or Space opens.
+
+    Only the selected tab is in the Tab sequence, and focus entering the list lands on it.
+    """
+    page.goto(f"{server.url}/example.org/plain?tab=usage")
+    page.locator("main h1").click()  # puts the Tab sequence's start just before the tabs
+    page.keyboard.press("Tab")
+    expect(tab(page, "Usage")).to_be_focused()
+    requests = record_panels(page)
+    for key, name in [("ArrowRight", "Overview"), ("ArrowLeft", "Usage"), ("Home", "Overview"), ("End", "Usage")]:
+        page.keyboard.press(key)
+        expect(tab(page, name)).to_be_focused()
+    expect_selected(page, "Usage")  # moving focus doesn't open a tab
+    page.keyboard.press("Home")
+    with page.expect_request(PANEL):
+        page.keyboard.press("Enter")
+    expect_selected(page, "Overview")
+    assert len(requests) == 1  # Enter's; the arrow keys, Home and End fetched nothing
+    expect(page).to_have_url(f"{server.url}/example.org/plain")
+    page.evaluate("window.addEventListener('keydown', (event) => { window.spaceKept = !event.defaultPrevented; })")
+    page.keyboard.press("End")
+    page.keyboard.press(" ")
+    expect_selected(page, "Usage")
+    assert page.evaluate("window.spaceKept") is False  # Space doesn't also scroll the page
+    expect(tab(page, "Usage")).to_have_attribute("tabindex", "0")
+    expect(tab(page, "Overview")).to_have_attribute("tabindex", "-1")
+    page.keyboard.press("Tab")
+    expect(page.get_by_role("tabpanel")).to_be_focused()
+
+
+def test_tab_modifier_click_left_to_browser(page: Page, server: LiveServer) -> None:
+    """Check that a tab clicked with a modifier key opens its page in a new browser tab, and leaves this one alone."""
+    page.goto(f"{server.url}/example.org/plain")
+    with page.context.expect_page() as opened:
+        tab(page, "Usage").click(modifiers=["ControlOrMeta"])
+    opened.value.wait_for_load_state()
+    assert opened.value.url == f"{server.url}/example.org/plain?tab=usage"
+    expect_selected(page, "Overview")
+    expect(page).to_have_url(f"{server.url}/example.org/plain")
+
+
+@pytest.mark.parametrize("failure", ["status", "network"])
+def test_tab_panel_failure_loads_page(page: Page, server: LiveServer, failure: str) -> None:
+    """Check that a tab whose panel can't be fetched loads its page instead."""
+    if failure == "status":
+        page.route(PANEL, lambda route: route.fulfill(status=503, content_type="text/html", body="<p>Loading</p>"))
+    else:
+        page.route(PANEL, lambda route: route.abort())
+    page.goto(f"{server.url}/example.org/plain")
+    tab(page, "Usage").click()
+    expect(page).to_have_url(f"{server.url}/example.org/plain?tab=usage")
+    expect_selected(page, "Usage")
+    expect(page.get_by_role("tabpanel")).to_contain_text(USAGE_TEXT)
+
+
+def test_hash_entity_tabs(page: Page, server: LiveServer) -> None:
+    """Check that a hash entity's tabs fetch their panels from the hash route, and keep the query before its fragment.
+
+    The page then reloads on the tab its URL names.
+    """
+    page.goto(f"{server.url}/example.org/vocab#Gamma")
+    expect(page.locator("main h1")).to_have_text(f"{EX}/vocab#Gamma")
+    with page.expect_request(PANEL) as request:
+        tab(page, "Usage").click()
+    assert "/_browl/hash?" in request.value.url
+    assert query_of(request.value.url) == {
+        "path": ["/example.org/vocab"],
+        "fragment": ["Gamma"],
+        "tab": ["usage"],
+        "panel": ["1"],
+    }
+    expect(page.get_by_role("tabpanel")).to_contain_text(USAGE_TEXT)
+    expect(page).to_have_url(f"{server.url}/example.org/vocab?tab=usage#Gamma")
+    page.reload()
+    expect(page.locator("main h1")).to_have_text(f"{EX}/vocab#Gamma")
+    expect_selected(page, "Usage")
+
+
+def test_hash_entity_tab_from_url(page: Page, server: LiveServer) -> None:
+    """Check that a hash URL's tab, before its fragment, is shown, and stays chosen when the fragment changes."""
+    page.goto(f"{server.url}/example.org/onto?tab=usage#Alpha")
+    expect(page.locator("main h1")).to_have_text(f"{EX}/onto#Alpha")
+    expect_selected(page, "Usage")
+    page.evaluate("location.hash = 'Beta'")
+    expect(page.locator("main h1")).to_have_text(f"{EX}/onto#Beta")
+    expect_selected(page, "Usage")
+
+
+def test_served_page_after_tab_change(page: Page, server: LiveServer) -> None:
+    """Check that a path's own entity, shown again when the fragment is cleared, shows the tab its URL now names.
+
+    The tab was chosen on a hash entity's page, so the page served for the path shows another tab.
+    """
+    page.goto(f"{server.url}/example.org/thing#Delta")
+    expect(page.locator("main h1")).to_have_text(f"{EX}/thing#Delta")
+    tab(page, "Usage").click()
+    expect(page).to_have_url(f"{server.url}/example.org/thing?tab=usage#Delta")
+    page.evaluate("location.hash = ''")
+    expect(page.locator("main h1")).to_have_text(f"{EX}/thing")
+    expect_selected(page, "Usage")
+
+
+def test_restored_page_tabs_work(page: Page, server: LiveServer) -> None:
+    """Check that a path's own entity's tabs still fetch only their panel once the fragment is cleared."""
+    page.goto(f"{server.url}/example.org/thing#Delta")
+    expect(page.locator("main h1")).to_have_text(f"{EX}/thing#Delta")
+    page.evaluate("location.hash = ''")
+    expect(page.locator("main h1")).to_have_text(f"{EX}/thing")
+    page.evaluate("window.marker = 1")
+    with page.expect_request(PANEL):
+        tab(page, "Usage").click()
+    expect_selected(page, "Usage")
+    expect(page).to_have_url(f"{server.url}/example.org/thing?tab=usage")
+    assert page.evaluate("window.marker") == 1
+
+
+def test_tabs_under_policy(page: Page, server: LiveServer) -> None:
+    """Check that the tabs work under the Content-Security-Policy."""
+    watch_policy(page)
+    page.goto(f"{server.url}/example.org/plain")
+    tab(page, "Usage").click()
+    expect(page.get_by_role("tabpanel")).to_contain_text(USAGE_TEXT)
+    assert violations(page) == []
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_tabs_look(page: Page, server: LiveServer, scheme: str) -> None:
+    """Check that the tabs are underlined text on the page background, unlike the tinted navigation bar."""
+    page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
+    page.goto(f"{server.url}/example.org/plain")
+    style = """(element) => {
+        const style = getComputedStyle(element);
+        return [style.backgroundColor, style.borderBottomColor, style.borderBottomWidth, style.color];
+    }"""
+    tablist = page.get_by_role("tablist").evaluate(style)
+    selected = tab(page, "Overview").evaluate(style)
+    other = tab(page, "Usage").evaluate(style)
+    bar = page.locator(".site-bar").evaluate(style)
+    assert tablist[0] == "rgba(0, 0, 0, 0)" != bar[0]  # the page's background shows through
+    assert selected[2] == "3px"
+    assert selected[1] == page.evaluate("getComputedStyle(document.querySelector('.brand')).color")  # the accent
+    assert other[1] == "rgba(0, 0, 0, 0)"
+    assert selected[3] != other[3]

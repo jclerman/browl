@@ -1,0 +1,7 @@
+{# An entity page's tab panel's content: within the page, or alone for htmx (`panel=1`). Placeholders until P-16. #}
+{% if tab.slug == "usage" %}
+<p class="note">Where other entities use this one will be shown here.</p>
+{% else %}
+<p><code>{{ entity.iri }}</code></p>
+<p>{% for type in types %}{{ type }}{% if not loop.last %}, {% endif %}{% endfor %}</p>
+{% endif %}

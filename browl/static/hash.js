@@ -10,6 +10,7 @@
   const main = document.querySelector("main");
   const served = Array.from(main.childNodes, (node) => node.cloneNode(true));
   const servedTitle = document.title;
+  const servedSearch = location.search;
   let shown = false; // whether <main> shows a fetched page rather than the served one
   let controller = null;
 
@@ -20,13 +21,19 @@
     const fragment = location.hash.slice(1);
     if (!fragment && !prefixOnly) {
       if (shown) {
+        if (location.search !== servedSearch) {
+          location.reload(); // e.g. another tab was chosen, so the served page isn't this URL's any more
+          return;
+        }
         main.replaceChildren(...served.map((node) => node.cloneNode(true)));
+        window.htmx?.process(main);
         document.title = servedTitle;
         shown = false;
       }
       return;
     }
     const query = new URLSearchParams(location.search);
+    query.delete("panel"); // the page, not a tab panel alone, goes in <main>
     query.set("path", path);
     query.set("fragment", fragment);
     let html;
@@ -49,6 +56,7 @@
     const page = new DOMParser().parseFromString(html, "text/html");
     const content = page.querySelector("main");
     main.replaceChildren(...(content ? content.childNodes : []));
+    window.htmx?.process(main); // e.g. the tabs (`tabs.js`)
     document.title = page.title;
     shown = true;
   }
