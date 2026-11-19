@@ -13,10 +13,11 @@ import pytest
 import rdflib
 from fastapi import FastAPI
 from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import Page, Route, expect
+from playwright.sync_api import FloatRect, Locator, Page, Route, expect
 from rdflib.namespace import OWL, RDF
 
 import browl.admin
+import browl.pages
 from browl.derived import EntityType
 from browl.jobs import JobContext, Stage, StageFunction
 from browl.jobtypes import StageError
@@ -138,7 +139,7 @@ def test_fragment_change_without_reload(page: Page, server: LiveServer, how: str
         page.locator("header").evaluate(
             """(header) => header.insertAdjacentHTML("beforeend", '<a href="#Beta">B</a>')"""
         )
-        page.click("header a")
+        page.click("header a[href='#Beta']")
     expect(page.locator("main h1")).to_have_text(f"{EX}/onto#Beta")
     assert page.evaluate("window.marker") == 1
 
@@ -265,6 +266,7 @@ def test_status_polls_while_running(page: Page, status_server: LiveServer) -> No
     jobs.register(Stage.LOADING, gate(loaded))
     jobs.register(Stage.PRE_CACHING, derived_stage())
     status_server.call(jobs.start())
+    watch_policy(page)
     page.goto(f"{status_server.url}{STATUS}")
     current = page.locator("#job-status li[aria-current]")
     expect(current).to_have_text("reasoning")
@@ -278,6 +280,7 @@ def test_status_polls_while_running(page: Page, status_server: LiveServer) -> No
     page.on("request", lambda request: polls.append(request.url))
     page.wait_for_timeout(POLL_S * 3 * 1000)
     assert polls == []
+    assert violations(page) == []  # htmx works under the Content-Security-Policy
 
 
 @NO_JS
@@ -362,3 +365,130 @@ def test_upload_from_another_site_refused(
         page.click("button")
     assert response.value.status == 403
     assert server.call(server.app.state.jobs.current()).stage is None
+
+
+# The page frame (P-14a, DESIGN.md §2.9)
+
+TREES = [label for _, label in browl.pages.TREES]
+WIDE = {"width": 1280, "height": 800}
+NARROW = {"width": 375, "height": 700}
+"""Viewports either side of the navigation bar's breakpoint (48rem)."""
+
+
+def watch_policy(page: Page) -> None:
+    """Make the page record its Content-Security-Policy violations, for `violations`; call before loading it."""
+    page.add_init_script(
+        "window.violations = []; document.addEventListener('securitypolicyviolation',"
+        " (event) => window.violations.push(event.violatedDirective));"
+    )
+
+
+def violations(page: Page) -> list[str]:
+    """Return the directives the page has violated since it loaded."""
+    result: list[str] = page.evaluate("window.violations")
+    return result
+
+
+def test_navigation_bar_wide(page: Page, server: LiveServer) -> None:
+    """Check that, on a wide screen, the tree links sit in the bar without a menu button, and the name links home."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{server.url}/example.org/thing")
+    nav = page.get_by_role("navigation", name="Site")
+    for label in TREES:
+        expect(nav.get_by_role("link", name=label)).to_be_visible()
+    expect(nav.locator("summary")).to_be_hidden()
+    nav.get_by_role("link", name=f"browl · {TITLE}").click()
+    expect(page.locator("main h1")).to_have_text(TITLE)
+
+
+@NO_JS
+def test_navigation_menu_narrow(page: Page, server: LiveServer) -> None:
+    """Check that, on a narrow screen, the tree links are in a menu that opens without JavaScript."""
+    page.set_viewport_size(NARROW)
+    page.goto(f"{server.url}/example.org/thing")
+    nav = page.get_by_role("navigation", name="Site")
+    classes = nav.get_by_role("link", name="Classes")
+    expect(classes).to_be_hidden()
+    nav.get_by_text("Browse").click()
+    for label in TREES:
+        expect(nav.get_by_role("link", name=label)).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+
+
+def test_navigation_bar_sticky(page: Page, server: LiveServer) -> None:
+    """Check that the navigation bar stays at the top when the page scrolls."""
+    page.set_viewport_size(NARROW)
+    page.goto(f"{server.url}/example.org/thing")
+    page.evaluate("document.querySelector('main').style.minHeight = '5000px'; window.scrollTo(0, 2000)")
+    assert page.evaluate("window.scrollY") > 0
+    box = page.locator(".site-bar").bounding_box()
+    assert box is not None
+    assert (box["x"], box["y"], box["width"]) == (0, 0, NARROW["width"])
+
+
+@pytest.mark.parametrize(("scheme", "background"), [("light", "rgb(250, 250, 247)"), ("dark", "rgb(29, 31, 33)")])
+def test_theme_follows_browser(page: Page, server: LiveServer, scheme: str, background: str) -> None:
+    """Check that the palette follows the browser's color scheme."""
+    page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
+    page.goto(f"{server.url}/example.org/thing")
+    assert page.evaluate("getComputedStyle(document.body).backgroundColor") == background
+
+
+def test_hash_script_under_policy(page: Page, server: LiveServer) -> None:
+    """Check that the hash-IRI script runs under the policy, which blocks an inline handler in the content it moves."""
+    watch_policy(page)
+    page.goto(f"{server.url}/example.org/vocab#Gamma")
+    expect(page.locator("main h1")).to_have_text(f"{EX}/vocab#Gamma")
+    assert violations(page) == []
+    body = '<title>Delta</title><main><h1>Delta</h1><img src="x" onerror="window.ran = 1"></main>'
+    page.route(HASH_ROUTE, lambda route: route.fulfill(status=200, content_type="text/html", body=body))
+    page.evaluate("location.hash = 'Delta'")
+    expect(page.locator("main h1")).to_have_text("Delta")
+    wait_until(page, lambda: "script-src-attr" in violations(page), "the policy to block the handler")
+    assert page.evaluate("window.ran") is None
+
+
+@pytest.mark.parametrize("content_type", ["text/plain", "application/xhtml+xml", None])
+def test_hash_script_refuses_non_html(page: Page, server: LiveServer, content_type: str | None) -> None:
+    """Check that the hash-IRI script shows an error, not the response, when the hash route's answer isn't HTML."""
+    body = b"<main><h1>Injected</h1></main>"
+    headers = {} if content_type is None else {"Content-Type": content_type}
+    page.route(HASH_ROUTE, lambda route: route.fulfill(status=200, headers=headers, body=body))
+    page.goto(f"{server.url}/example.org/vocab#Gamma")
+    expect(page.locator("main h1")).to_have_text("Error")
+
+
+def test_narrow_bar_one_row(page: Page, server: LiveServer) -> None:
+    """Check that, on a narrow screen, the name and menu button share a row, and the menu opens as a panel under it."""
+    page.set_viewport_size(NARROW)
+    page.goto(f"{server.url}/example.org/thing")
+    bar, name, button = page.locator(".site-bar"), page.locator(".site-name"), page.locator(".site-menu summary")
+    height = box(bar)["height"]
+    assert abs(box(name)["y"] + box(name)["height"] / 2 - box(button)["y"] - box(button)["height"] / 2) < 2
+    main_y = box(page.locator("main"))["y"]
+    button.click()
+    panel = box(page.locator(".site-menu ul"))
+    assert (box(bar)["height"], box(page.locator("main"))["y"]) == (height, main_y)
+    assert panel["y"] >= box(button)["y"] + box(button)["height"]
+    assert abs(panel["x"] + panel["width"] - box(button)["x"] - box(button)["width"]) < 2
+
+
+def test_fonts_and_measure(page: Page, server: LiveServer) -> None:
+    """Check the system font for text, a monospace font for IRIs, and that paragraphs are capped at a readable width."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{server.url}/example.org/thing")
+    assert page.evaluate("getComputedStyle(document.body).fontFamily").startswith("system-ui")
+    assert page.evaluate("getComputedStyle(document.querySelector('main code')).fontFamily").startswith("ui-monospace")
+    page.evaluate(
+        "document.querySelector('main').insertAdjacentHTML('beforeend', '<p>' + 'word '.repeat(500) + '</p>')"
+    )
+    width = page.evaluate("document.querySelector('main p:last-child').getBoundingClientRect().width")
+    char = page.evaluate("parseFloat(getComputedStyle(document.body).fontSize)")
+    assert 35 * char < width < 60 * char  # 75ch is about 47em in the system font; uncapped, it would be about 78em
+
+
+def box(locator: Locator) -> FloatRect:
+    """Return a visible element's bounding box."""
+    result = locator.bounding_box()
+    assert result is not None
+    return result

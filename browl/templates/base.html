@@ -14,11 +14,36 @@
   {% endif %}
 </head>
 <body>
+  {# The navigation bar (U-27). No in-page `#…` links in the frame (DESIGN.md §2.9). #}
   <header class="site-bar">
-    <span class="site-name">browl</span>
+    <nav class="site-nav" aria-label="Site">
+      <span class="site-name">
+        {%- if frame.home is not none %}<a href="{{ frame.home }}">{% endif -%}
+        <span class="brand">browl</span>
+        {%- if frame.name is not none %} · <bdi>{{ frame.name }}</bdi>{% endif -%}
+        {%- if frame.home is not none %}</a>{% endif -%}
+      </span>
+      {# The search box (P-20) goes here. #}
+      <div class="site-search"></div>
+      {# A menu on narrow screens; on wide ones the stylesheet shows its links in the bar, and hides its button. #}
+      <details class="site-menu">
+        <summary>Browse</summary>
+        <ul>
+          {% for link, label in frame.trees %}
+          <li><a href="{{ link }}">{{ label }}</a></li>
+          {% endfor %}
+          {% if frame.is_admin %}
+          <li class="admin-link"><a href="{{ frame.admin }}">Admin</a></li>
+          {% endif %}
+        </ul>
+      </details>
+    </nav>
   </header>
   <main class="content">
     {% block content %}{% endblock %}
   </main>
+  <footer class="site-footer">
+    <a href="{{ frame.admin }}">Sign in</a>
+  </footer>
 </body>
 </html>

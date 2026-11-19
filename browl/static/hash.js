@@ -36,6 +36,9 @@
         location.reload(); // "loading" or "not available": the served page refreshes itself, which <main> can't
         return;
       }
+      if (!(response.headers.get("Content-Type") ?? "").startsWith("text/html")) {
+        throw new Error("not an HTML page"); // e.g. a proxy's error; only browl's pages are moved into <main>
+      }
       html = await response.text();
     } catch (error) {
       html = "<title>Error</title><main><h1>Error</h1><p>The page couldn't be loaded. Please try again.</p></main>";

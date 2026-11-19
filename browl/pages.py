@@ -1,23 +1,26 @@
-"""Templates, static files, the gate that serves the "loading" and "not available" pages (U-16), and derived reads.
+"""Templates, the page frame, static files, the "loading" and "not available" pages (U-16), and derived reads.
 
-The gate is a plain ASGI middleware, not a route dependency, so it also covers paths no route matches, and it leaves
-request bodies alone, so admin uploads stream through it untouched.
+The gate and the frame are plain ASGI middleware, not route dependencies, so they also cover paths no route matches,
+and they leave request bodies alone, so admin uploads stream through them untouched.
 
 Pages read whole-ontology data only from the derived database (N-4), through `read_derived`.
 """
 
 import logging
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 
 import jinja2
+from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.templating import Jinja2Templates
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from browl.derived import DerivedReader, NotCurrentError
+from browl.derived import DerivedReader, EntityType, NotCurrentError, entities_with_iri, read_meta
 from browl.jobs import Site
 
 logger = logging.getLogger(__name__)
@@ -29,12 +32,87 @@ RETRY_AFTER_S = 10
 """How soon a client should retry while a load runs: the loading page's `Retry-After` and its refresh interval."""
 
 
+MAX_NAME_CHARS = 100
+"""The longest ontology name the navigation bar shows; a longer one is cut short (DESIGN.md §2.9)."""
+
+TREES = (
+    ("classes", "Classes"),
+    ("object-properties", "Object properties"),
+    ("data-properties", "Data properties"),
+    ("annotation-properties", "Annotation properties"),
+)
+"""Each tree page's path segment under `tree/` (DESIGN.md §2.13) and its link text, in the navigation bar's order."""
+
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none';"
+    " form-action 'self'; frame-ancestors 'none'"
+)
+"""The `Content-Security-Policy` of browl's own pages (DESIGN.md §2.9)."""
+
+SECURITY_HEADERS = {"X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY"}
+"""Headers every response gets, including those the policy exempts."""
+
+
+@dataclass(frozen=True)
+class OntologyLink:
+    """The served ontology's name and home page, for the navigation bar.
+
+    Attributes:
+        name: Its display name, else its IRI, cut to `MAX_NAME_CHARS`; None if it has neither.
+        path: The home page's path, from the app's root; None if the ontology has no page.
+        fragment: The home page's fragment, if its IRI is a hash IRI.
+    """
+
+    name: str | None = None
+    path: str | None = None
+    fragment: str | None = None
+
+
+NO_LINK = OntologyLink()
+
+
+def read_ontology_link(connection: sqlite3.Connection) -> OntologyLink:
+    """Return the served ontology's name and home page from its derived database."""
+    meta = read_meta(connection)
+    name = meta.title or meta.ontology_iri
+    if name is not None and len(name) > MAX_NAME_CHARS:
+        name = f"{name[: MAX_NAME_CHARS - 1]}…"
+    entities = entities_with_iri(connection, meta.ontology_iri) if meta.ontology_iri is not None else []
+    page = next((entity for entity in entities if entity.type == EntityType.ONTOLOGY), None)
+    return OntologyLink(name) if page is None else OntologyLink(name, page.path, page.fragment)
+
+
+def href(request: Request, path: str, fragment: str | None = None) -> str:
+    """Return a root-relative link to a path from the app's root, with a fragment if given."""
+    root = link_root(request.scope)
+    return f"{root}{path}" if fragment is None else f"{root}{path}#{fragment}"
+
+
+def frame_context(request: Request) -> dict[str, object]:
+    """Return what the base template's frame needs: the navigation bar's links, and whether the user is an admin.
+
+    The ontology's link comes from `PageFrame`. P-22 marks requests from admins by setting `request.state.is_admin`.
+    """
+    reserved = f"/{request.app.state.settings.reserved_prefix}"
+    link: OntologyLink = getattr(request.state, "ontology_link", NO_LINK)
+    return {
+        "frame": {
+            "name": link.name,
+            "home": None if link.path is None else href(request, link.path, link.fragment),
+            "trees": [(href(request, f"{reserved}/tree/{slug}"), label) for slug, label in TREES],
+            "admin": href(request, f"{reserved}/admin/upload"),
+            "is_admin": getattr(request.state, "is_admin", False) is True,
+        }
+    }
+
+
 templates = Jinja2Templates(
     env=jinja2.Environment(
         loader=jinja2.FileSystemLoader(PACKAGE_DIR / "templates"),
         autoescape=True,
         undefined=jinja2.StrictUndefined,
-    )
+    ),
+    context_processors=[frame_context],
 )
 
 
@@ -93,6 +171,11 @@ def app_path(scope: Scope) -> str:
     return path[len(root) :] if root and is_under(path, root) else path
 
 
+def is_under_any(path: str, prefixes: Iterable[str]) -> bool:
+    """Return whether a path is under any of the prefixes (`is_under`)."""
+    return any(is_under(path, prefix) for prefix in prefixes)
+
+
 def is_under(path: str, prefix: str) -> bool:
     """Return whether a path is a prefix, such as `/_browl`, or under it: whole path segments only."""
     return path == prefix or path.startswith(f"{prefix}/")
@@ -117,7 +200,7 @@ class SiteGate:
 
     def is_exempt(self, path: str) -> bool:
         """Return whether a path, relative to the app's root, is passed through whatever the job state."""
-        return any(is_under(path, prefix) for prefix in self.exempt)
+        return is_under_any(path, self.exempt)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Serve the request, or the page for the site's state."""
@@ -130,3 +213,65 @@ class SiteGate:
             await self.app(scope, receive, send)
             return
         await unavailable_page(request, site)(scope, receive, send)
+
+
+class PageFrame:
+    """Give each request the ontology's link (`request.state.ontology_link`), and each response the security headers.
+
+    The link is read once per generation; while it can't be read, the navigation bar shows only browl's name, and it's
+    tried again after `RETRY_AFTER_S`. HTML responses also get `CONTENT_SECURITY_POLICY`.
+
+    Args:
+        app: The application it wraps.
+        passthrough: Path prefixes that serve no pages, e.g. static files, so need no link.
+        csp_exempt: Path prefixes whose pages get no policy: pages browl doesn't build, such as the API docs.
+    """
+
+    def __init__(self, app: ASGIApp, passthrough: list[str], csp_exempt: list[str]) -> None:
+        """Wrap the app."""
+        self.app = app
+        self.passthrough = passthrough
+        self.csp_exempt = csp_exempt
+        self._cached: tuple[int, OntologyLink | None, float] | None = None  # generation, link or failure, retry time
+
+    async def ontology_link(self, request: Request) -> OntologyLink:
+        """Return the ready generation's ontology link, or `NO_LINK` if there's none or it can't be read."""
+        generation = (await request.app.state.jobs.current()).ready_generation
+        if generation is None:
+            return NO_LINK
+        cached = self._cached
+        if cached is not None and cached[0] == generation and (cached[1] is not None or monotonic() < cached[2]):
+            return cached[1] or NO_LINK
+        reader: DerivedReader = request.app.state.derived
+        link: OntologyLink | None = None
+        try:
+            link = await reader.read(generation, read_ontology_link)
+        except NotCurrentError:
+            pass
+        except Exception:
+            # The name is decoration: failing to read it mustn't fail the page, such as the admin's upload page.
+            logger.exception("Couldn't read the ontology's name and home page for the navigation bar")
+        self._cached = (generation, link, monotonic() + RETRY_AFTER_S)
+        return link or NO_LINK
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Serve the request, with the ontology's link in its state, adding the security headers."""
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path = app_path(scope)
+        if not is_under_any(path, self.passthrough):
+            request = Request(scope)
+            request.state.ontology_link = await self.ontology_link(request)
+        policy = not is_under_any(path, self.csp_exempt)
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                for name, value in SECURITY_HEADERS.items():
+                    headers.setdefault(name, value)
+                if policy and headers.get("content-type", "").startswith("text/html"):
+                    headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
