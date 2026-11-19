@@ -33,6 +33,7 @@
       return;
     }
     const query = new URLSearchParams(location.search);
+    query.delete("panel"); // the page, not a tab panel alone, goes in <main>
     query.set("path", path);
     query.set("fragment", fragment);
     let html;

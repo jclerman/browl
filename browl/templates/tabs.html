@@ -1,6 +1,4 @@
-{# Page tabs (DESIGN.md §2.9, U-28), after the WAI-ARIA tabs pattern. Without JS each tab is a link to its page; with
-   htmx it fetches its panel alone into the panel, and `static/tabs.js` updates the tabs and the address bar, and adds
-   the keyboard support. `id`s here are for ARIA and htmx only: the page has no `#…` links (DESIGN.md §2.9). #}
+{# Page tabs (DESIGN.md §2.9). The `id`s are for ARIA and htmx only: the page has no `#…` links. #}
 {% macro tab_list(links, label) -%}
 <div class="tabs" role="tablist" aria-label="{{ label }}">
   {%- for link in links %}

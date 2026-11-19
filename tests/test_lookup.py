@@ -464,6 +464,10 @@ def test_panel_alone_default_tab(client: TestClient) -> None:
     assert "<code>http://other.org/y</code>" in response.text
 
 
+HASH_C = "/_browl/hash?path=/other.org/vocab&fragment=C"
+"""The hash route's URL for an entity page."""
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -475,9 +479,16 @@ def test_panel_alone_default_tab(client: TestClient) -> None:
         "/other.org/y?tab=",
         "/onto?panel=1",
         "/other.org/x?panel=1",
-        "/_browl/hash?path=/other.org/vocab&fragment=C&tab=nope",
+        "/other.org/z?tab=nope&panel=1",
+        "/other.org/vocab?panel=1",
+        "/other.org/vocab?tab=usage&tab=overview",
+        f"{HASH_C}&tab=nope&panel=1",
+        f"{HASH_C}&tab=usage&tab=overview",
+        f"{HASH_C}&panel=1&panel=1",
         "/_browl/hash?path=/other.org/vocab&fragment=E&panel=1",
         iri_link("urn:example:fallback") + "&tab=nope",
+        iri_link("urn:example:fallback") + "&panel=2",
+        iri_link("http://other.org/y") + "&tab=usage&tab=overview",
     ],
 )
 def test_tab_not_found(client: TestClient, path: str) -> None:
@@ -488,27 +499,28 @@ def test_tab_not_found(client: TestClient, path: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "path",
+    ("path", "selected"),
     [
-        "/onto?tab=nope",
-        "/other.org/z?tab=nope",
-        "/other.org/x?tab=usage",
-        "/_browl/hash?path=/other.org/vocab&fragment=E&tab=usage",
+        ("/onto?tab=nope", None),
+        ("/other.org/z?tab=nope", "tab-overview"),
+        ("/other.org/x?tab=usage", None),
+        (f"{HASH_C}&tab=nope", "tab-overview"),
+        ("/_browl/hash?path=/other.org/vocab&fragment=E&tab=usage", None),
     ],
 )
-def test_tab_ignored(client: TestClient, path: str) -> None:
-    """Check that a page with the hash script, or without tabs, serves a tab it lacks rather than a 404.
+def test_tab_ignored(client: TestClient, path: str, selected: str | None) -> None:
+    """Check that a page without tabs, a hash entity's, or one with the hash script, serves a tab it lacks, not a 404.
 
-    The query of a page with the hash script is also its fragment's entity's, and a link to a hash URL whose IRI has
-    `http` and `https` forms may carry the tab on to the choose page.
+    Their query may be meant for another fragment's entity, or carried on to the choose page.
     """
     response = client.get(path)
     assert response.status_code == 200
-    assert selected_tab(response.text) in {None, "tab-overview"}
+    assert selected_tab(response.text) == selected
 
 
-def test_fallback_redirect_keeps_tab(client: TestClient) -> None:
-    """Check that the fallback route's redirect to an entity's own URL keeps the tab, before any fragment."""
-    response = client.get(iri_link("http://other.org/vocab#C") + "&tab=usage", follow_redirects=False)
+@pytest.mark.parametrize(("tab", "query"), [("usage", "?tab=usage"), ("nope", "")])
+def test_fallback_redirect_keeps_tab(client: TestClient, tab: str, query: str) -> None:
+    """Check that the fallback route's redirect to an entity's own URL keeps a known tab, before any fragment."""
+    response = client.get(iri_link("http://other.org/vocab#C") + f"&tab={tab}", follow_redirects=False)
     assert response.status_code == 302
-    assert response.headers["Location"] == "/other.org/vocab?tab=usage#C"
+    assert response.headers["Location"] == f"/other.org/vocab{query}#C"

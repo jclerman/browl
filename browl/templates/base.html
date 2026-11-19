@@ -3,6 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  {# htmx processes what the hash-IRI script moves in; the CSP blocks eval too, but this doesn't rely on it. #}
+  <meta name="htmx-config" content='{"allowEval": false, "allowScriptTags": false}'>
   {% block head %}{% endblock %}
   {% if noindex is defined and noindex %}<meta name="robots" content="noindex">{% endif %}
   <title>{% block title %}{% endblock %} · browl</title>

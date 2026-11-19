@@ -544,14 +544,67 @@ def test_tab_swaps_panel(page: Page, server: LiveServer) -> None:
     expect(page).to_have_url(f"{server.url}/example.org/plain")
 
 
-def test_selected_tab_not_fetched(page: Page, server: LiveServer) -> None:
-    """Check that the selected tab doesn't fetch its panel again."""
-    page.goto(f"{server.url}/example.org/plain")
+def record_panels(page: Page) -> list[str]:
+    """Return a list that collects the URLs of the page's panel requests, in order."""
     requests: list[str] = []
-    page.on("request", lambda request: requests.append(request.url))
+    page.on("request", lambda request: requests.append(request.url) if PANEL.search(request.url) else None)
+    return requests
+
+
+def test_selected_tab_not_fetched(page: Page, server: LiveServer) -> None:
+    """Check that the selected tab, as served or as swapped in, doesn't fetch its panel again.
+
+    Each click on the other tab makes a request, so one from the click before it would be recorded first.
+    """
+    page.goto(f"{server.url}/example.org/plain")
+    requests = record_panels(page)
     tab(page, "Overview").click()
-    page.wait_for_timeout(200)
-    assert requests == []
+    with page.expect_request(PANEL):
+        tab(page, "Usage").click()
+    expect_selected(page, "Usage")
+    tab(page, "Usage").click()
+    with page.expect_request(PANEL):
+        tab(page, "Overview").click()
+    expect_selected(page, "Overview")
+    assert [query_of(url).get("tab") for url in requests] == [["usage"], None]
+
+
+def test_first_click_focuses_tab(page: Page, server: LiveServer) -> None:
+    """Check that a tab opened by a first click keeps the focus, in the Tab sequence (#92, S3)."""
+    page.goto(f"{server.url}/example.org/plain")
+    tab(page, "Usage").click()
+    expect_selected(page, "Usage")
+    expect(tab(page, "Usage")).to_be_focused()
+    expect(tab(page, "Usage")).to_have_attribute("tabindex", "0")
+
+
+def test_htmx_eval_off(page: Page, server: LiveServer) -> None:
+    """Check that htmx's eval and script-tag features are off (#92, C2)."""
+    page.goto(f"{server.url}/example.org/plain")
+    assert page.evaluate("[htmx.config.allowEval, htmx.config.allowScriptTags]") == [False, False]
+
+
+def test_tab_click_while_loading(page: Page, server: LiveServer) -> None:
+    """Check that clicking back to the selected tab while another's panel loads cancels that load, and stays put."""
+    held: list[Route] = []
+    page.route(re.compile(r"tab=usage&panel=1"), lambda route: held.append(route))
+    page.goto(f"{server.url}/example.org/plain")
+    page.evaluate("window.marker = 1")
+    tab(page, "Usage").click()
+    wait_until(page, lambda: bool(held), "the request for Usage's panel")
+    tab(page, "Overview").click()
+    try:
+        held[0].continue_()
+    except PlaywrightError:
+        pass  # htmx aborted it, so nothing arrives
+    else:
+        if response := held[0].request.response():
+            response.finished()
+    page.wait_for_timeout(100)  # time for htmx to handle a response, if one arrived
+    expect_selected(page, "Overview")
+    expect(page.get_by_role("tabpanel")).to_contain_text(f"{EX}/plain")
+    expect(page).to_have_url(f"{server.url}/example.org/plain")
+    assert page.evaluate("window.marker") == 1
 
 
 def test_tab_keyboard(page: Page, server: LiveServer) -> None:
@@ -563,21 +616,22 @@ def test_tab_keyboard(page: Page, server: LiveServer) -> None:
     page.locator("main h1").click()  # puts the Tab sequence's start just before the tabs
     page.keyboard.press("Tab")
     expect(tab(page, "Usage")).to_be_focused()
-    requests: list[str] = []
-    page.on("request", lambda request: requests.append(request.url))
+    requests = record_panels(page)
     for key, name in [("ArrowRight", "Overview"), ("ArrowLeft", "Usage"), ("Home", "Overview"), ("End", "Usage")]:
         page.keyboard.press(key)
         expect(tab(page, name)).to_be_focused()
     expect_selected(page, "Usage")  # moving focus doesn't open a tab
-    assert requests == []
     page.keyboard.press("Home")
-    page.keyboard.press("Enter")
+    with page.expect_request(PANEL):
+        page.keyboard.press("Enter")
     expect_selected(page, "Overview")
+    assert len(requests) == 1  # Enter's; the arrow keys, Home and End fetched nothing
     expect(page).to_have_url(f"{server.url}/example.org/plain")
+    page.evaluate("window.addEventListener('keydown', (event) => { window.spaceKept = !event.defaultPrevented; })")
     page.keyboard.press("End")
     page.keyboard.press(" ")
     expect_selected(page, "Usage")
-    assert page.evaluate("window.scrollY") == 0
+    assert page.evaluate("window.spaceKept") is False  # Space doesn't also scroll the page
     expect(tab(page, "Usage")).to_have_attribute("tabindex", "0")
     expect(tab(page, "Overview")).to_have_attribute("tabindex", "-1")
     page.keyboard.press("Tab")
@@ -654,6 +708,20 @@ def test_served_page_after_tab_change(page: Page, server: LiveServer) -> None:
     page.evaluate("location.hash = ''")
     expect(page.locator("main h1")).to_have_text(f"{EX}/thing")
     expect_selected(page, "Usage")
+
+
+def test_restored_page_tabs_work(page: Page, server: LiveServer) -> None:
+    """Check that a path's own entity's tabs still fetch only their panel once the fragment is cleared."""
+    page.goto(f"{server.url}/example.org/thing#Delta")
+    expect(page.locator("main h1")).to_have_text(f"{EX}/thing#Delta")
+    page.evaluate("location.hash = ''")
+    expect(page.locator("main h1")).to_have_text(f"{EX}/thing")
+    page.evaluate("window.marker = 1")
+    with page.expect_request(PANEL):
+        tab(page, "Usage").click()
+    expect_selected(page, "Usage")
+    expect(page).to_have_url(f"{server.url}/example.org/thing?tab=usage")
+    assert page.evaluate("window.marker") == 1
 
 
 def test_tabs_under_policy(page: Page, server: LiveServer) -> None:

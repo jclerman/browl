@@ -1,7 +1,5 @@
-// Page tabs (DESIGN.md §2.9, U-28, U-17), after the WAI-ARIA tabs pattern with manual activation. The tabs are links
-// that htmx turns into fetches of their panel alone; this marks the tab whose panel arrived as selected and puts its
-// URL in the address bar, and adds the keyboard support: the arrow keys, Home and End move between tabs, and Enter or
-// Space opens one. It listens on the document, so it also serves tabs the hash-IRI script adds.
+// Page tabs (DESIGN.md §2.9): the keyboard support, and the tabs' state and URL once htmx swaps a panel in. It listens
+// on the document, so it also serves tabs the hash-IRI script adds.
 (() => {
   "use strict";
   const TAB = '[role="tablist"] > [role="tab"]';
@@ -85,6 +83,9 @@
       other.setAttribute("aria-selected", other === tab ? "true" : "false");
     }
     rove(tabs);
+    if (tab.parentElement.contains(document.activeElement)) {
+      tab.focus(); // e.g. a first click, whose focus went to the tab selected before
+    }
     event.detail.target.setAttribute("aria-labelledby", tab.id);
     // Replaced, not pushed: switching tabs isn't a navigation, and htmx's own history would fight the hash-IRI script.
     history.replaceState(history.state, "", tab.href);

@@ -898,17 +898,17 @@ script, is exempt; every response, it included, gets `X-Frame-Options: DENY` and
   hash-IRI script over `<main>`. Without JS, each tab is a link, so it does add a history entry. _(P-14b)_
 - They follow the WAI-ARIA tabs pattern, with manual activation, since opening a tab fetches its panel: the arrow
   keys, Home and End move focus between tabs, and Enter or Space opens one. Only the selected tab is in the Tab
-  sequence. `static/tabs.js` adds the keyboard support, marks the tab whose panel arrived as selected, and replaces
-  the URL; a click with a modifier key is left to the browser, and a panel that can't be fetched loads the tab's page
-  instead. _(P-14b)_
+  sequence. A click with a modifier key is left to the browser, and a panel that can't be fetched loads the tab's
+  page instead. _(P-14b)_
 - A `tab` the page lacks, a repeated `tab` or `panel`, or a `panel` other than `1` is a 404, as is `panel=1` on a page
-  without tabs. Two kinds of page ignore a `tab` they lack instead: a page with the hash-IRI script, whose query is
-  also its fragment's entity's, which may have other tabs, shows its first tab; and a page without tabs (the home and
-  choose pages) shows itself. _(P-14b)_
+  without tabs. But a page without tabs (the home and choose pages) ignores `tab`, and so does a hash entity's page,
+  or a page with the hash-IRI script, showing its first tab: there the query may belong to another fragment's
+  entity, with other tabs. _(P-14b)_
 - For hash IRIs, the query string comes before the fragment (`/example.org/onto?tab=usage#Foo`). The hash-IRI script
   keeps it when loading the entity, and a hash entity's tabs fetch their panels from the hash route
-  (`hash?path=…&fragment=…&tab=…&panel=1`). When the fragment is cleared, the script shows the page served for the
-  path again, or reloads it if a tab was chosen since, so the page matches its URL. _(P-14b)_
+  (`hash?path=…&fragment=…&tab=…&panel=1`). The script doesn't pass `panel` on. When the fragment is cleared, it
+  shows the page served for the path again, or reloads it if a tab was chosen since, so the page matches its URL.
+  _(P-14b)_
 - The page cache key includes the tab shown and whether the response is a panel alone (2.10).
 
 **Visual design** (U-29):
@@ -937,9 +937,11 @@ JSON, scripts or unquoted attributes.
 
 ### 2.10 Page cache
 
-An in-memory LRU of rendered HTML, keyed by `(generation, URL path, tab, panel only)`, with a configurable size
-(default 100). The tab is the one the page shows, not the query's `tab`, which pages without it may ignore (2.9), so
-junk queries can't fill the cache; `panel only` is whether the response is a tab panel alone (`panel=1`, 2.9).
+An in-memory LRU of rendered HTML, keyed by `(generation, page, tab, panel only)`, with a configurable size
+(default 100). The page is the URL path plus the query parameters that name the entity, `iri` on the fallback route
+and `path` and `fragment` on the hash route, but no others, so junk queries can't fill the cache. The tab is the one
+the page shows, not the query's `tab`, which some pages ignore (2.9); `panel only` is whether the response is a tab
+panel alone (`panel=1`, 2.9).
 _(Q13)_ Including the generation number in the key means a reload invalidates entries in every worker without
 coordination. Pages differ for admins (the navigation bar's admin link, 2.9), so the key must also include whether
 the user is an admin, or the cache must hold pages without the frame's per-user part and add it after the lookup

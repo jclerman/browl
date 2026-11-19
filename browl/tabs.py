@@ -1,8 +1,6 @@
 """Page tabs (DESIGN.md §2.9, U-28): which tab a request asks for, and each tab's links.
 
-Each tab has its own URL, `?tab={slug}`, but the first tab's is the page's own URL, without `tab`. Without JS the tabs
-are links, and the server renders the chosen tab. With htmx, a tab fetches only its panel, from its URL plus
-`panel=1`, and `static/tabs.js` puts the tab's own URL in the address bar.
+The first tab's URL is the page's own, without `tab`.
 """
 
 import urllib.parse
@@ -39,8 +37,8 @@ class TabQuery:
         panel: Whether it asks for the tab panel alone (`panel=1`).
     """
 
-    tab: str | None = None
-    panel: bool = False
+    tab: str | None
+    panel: bool
 
 
 @dataclass(frozen=True)
@@ -90,7 +88,7 @@ def choose_tab(tabs: tuple[Tab, ...], query: TabQuery, lenient: bool) -> Tab | N
     """
     if not tabs:
         if query.panel:
-            raise TabNotFoundError(query.tab)
+            raise TabNotFoundError
         return None
     if query.tab is None:
         return tabs[0]
@@ -99,7 +97,7 @@ def choose_tab(tabs: tuple[Tab, ...], query: TabQuery, lenient: bool) -> Tab | N
         return tab
     if lenient and not query.panel:
         return tabs[0]
-    raise TabNotFoundError(query.tab)
+    raise TabNotFoundError
 
 
 def with_query(url: str, params: list[tuple[str, str]]) -> str:
@@ -115,7 +113,6 @@ def tab_links(
     page: str,
     fragment: str | None,
     panel: str,
-    panel_params: list[tuple[str, str]] | None = None,
 ) -> list[TabLink]:
     """Return a page's tab links.
 
@@ -125,7 +122,6 @@ def tab_links(
         page: The page's URL, root-relative, without `tab` or a fragment.
         fragment: The page's fragment, in URI form, if it has one.
         panel: The URL its panels are fetched from, root-relative, without `tab` or `panel`.
-        panel_params: Parameters the panels' URL has before `tab`, for one built here.
     """
     links = []
     for tab in tabs:
@@ -133,6 +129,6 @@ def tab_links(
         href = with_query(page, params)
         if fragment is not None:
             href = f"{href}#{fragment}"
-        panel_href = with_query(panel, [*(panel_params or []), *params, (PANEL_PARAM, "1")])
+        panel_href = with_query(panel, [*params, (PANEL_PARAM, "1")])
         links.append(TabLink(tab, href, panel_href, tab == selected))
     return links

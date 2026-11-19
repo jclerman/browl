@@ -104,20 +104,19 @@ def request_path(request: Request) -> str:
 
 
 @dataclass(frozen=True)
-class _At:
+class _TabUrls:
     """Where a page is served, for its tabs' links.
 
     Attributes:
         page: The page's URL, from the app's root, without `tab` or a fragment.
         fragment: The page's fragment, in URI form, if it has one.
-        panel: The URL its tab panels are fetched from, from the app's root, without `tab` or `panel`.
-        panel_params: Parameters of the panels' URL that go before `tab`.
+        panel: The URL its tab panels are fetched from, from the app's root, without `tab` or `panel`; None if the
+            page's own.
     """
 
     page: str
     fragment: str | None = None
     panel: str | None = None
-    panel_params: tuple[tuple[str, str], ...] = ()
 
 
 def not_found(request: Request) -> Response:
@@ -131,9 +130,10 @@ def _page(
     entities: list[Entity],
     meta: Meta | None,
     query: TabQuery,
-    at: _At,
+    at: _TabUrls,
     hash_path: str | None = None,
     noindex: bool = False,
+    lenient: bool = False,
 ) -> Response:
     """Return the page for the entities at a URL: one IRI's page, or the disambiguation page for several (U-15).
 
@@ -148,6 +148,8 @@ def _page(
         at: Where the page is served.
         hash_path: The URL's path, when hash entities share it, so the page includes the hash-IRI script.
         noindex: Whether to ask search engines not to index the page, which is also at another URL.
+        lenient: Whether to show the first tab rather than 404 a tab the page lacks (`choose_tab`); always so for a
+            page with the hash-IRI script.
     """
     hash_script = None if hash_path is None else _hash_script(request, prefix, hash_path, prefix_only=False)
     common = {"hash_script": hash_script, "noindex": noindex}
@@ -157,7 +159,7 @@ def _page(
     is_home = any(entity.type == EntityType.ONTOLOGY for entity in entities)
     tabs = ENTITY_TABS if len(names) == 1 and not is_home else ()
     try:
-        tab = choose_tab(tabs, query, lenient=hash_path is not None)
+        tab = choose_tab(tabs, query, lenient=lenient or hash_path is not None)
     except TabNotFoundError:
         return not_found(request)
     if len(names) > 1:
@@ -166,14 +168,7 @@ def _page(
     if is_home:
         return templates.TemplateResponse(request, "home.html", {"meta": meta} | common)
     assert tab is not None  # an entity page has tabs
-    links = tab_links(
-        tabs,
-        tab,
-        href(request, at.page),
-        at.fragment,
-        href(request, at.page if at.panel is None else at.panel),
-        list(at.panel_params),
-    )
+    links = tab_links(tabs, tab, href(request, at.page), at.fragment, href(request, at.panel or at.page))
     context = {"entity": entities[0], "types": [entity.type for entity in entities], "tab": tab, "tabs": links}
     if query.panel:
         return templates.TemplateResponse(request, "entity_panel.html", context, headers=PANEL_HEADERS)
@@ -205,9 +200,11 @@ async def entity_by_iri(request: Request, iri: str = "") -> Response:
         return not_found(request)
     entity = own[0]
     if entity.path == fallback_path(prefix, iri) or len(own) < len(found.entities):
-        return _page(request, prefix, own, found.meta, query, _At(fallback_path(prefix, iri)))
-    # Not a RedirectResponse, which would percent-encode characters such as `|` that stored URLs keep. The tab is kept.
-    location = with_query(entity.path, [] if query.tab is None else [(TAB_PARAM, query.tab)])
+        return _page(request, prefix, own, found.meta, query, _TabUrls(fallback_path(prefix, iri)))
+    # Not a RedirectResponse, which would percent-encode characters such as `|` that stored URLs keep. A known tab is
+    # kept.
+    known = query.tab in {tab.slug for tab in ENTITY_TABS}
+    location = with_query(entity.path, [(TAB_PARAM, query.tab)] if known and query.tab is not None else [])
     return Response(status_code=302, headers={"Location": href(request, location, entity.fragment)})
 
 
@@ -225,8 +222,10 @@ async def hash_entity(request: Request, path: str = "", fragment: str = "") -> R
     if not found.entities:
         return not_found(request)
     prefix: str = request.app.state.settings.reserved_prefix
-    at = _At(path, fragment, f"/{prefix}/{HASH_PATH}", (("path", path), ("fragment", fragment)))
-    return _page(request, prefix, found.entities, found.meta, query, at, noindex=True)
+    panel = with_query(f"/{prefix}/{HASH_PATH}", [("path", path), ("fragment", fragment)])
+    # Lenient, as the page with the script is: one query serves every fragment on the path.
+    at = _TabUrls(path, fragment, panel)
+    return _page(request, prefix, found.entities, found.meta, query, at, noindex=True, lenient=True)
 
 
 @catch_all_router.api_route("/{_:path}", methods=["GET", "HEAD"], include_in_schema=False)
@@ -240,8 +239,8 @@ async def entity_page(request: Request) -> Response:
     found = await read_derived(request, lambda connection: _find(connection, path, None))
     if found.entities:
         hash_path = path if found.hash_prefix else None
-        return _page(request, prefix, found.entities, found.meta, query, _At(path), hash_path)
-    if found.hash_prefix:
+        return _page(request, prefix, found.entities, found.meta, query, _TabUrls(path), hash_path)
+    if found.hash_prefix and not query.panel:
         context = {"hash_script": _hash_script(request, prefix, path, prefix_only=True)}
         return templates.TemplateResponse(request, "hash.html", context)
     return not_found(request)
