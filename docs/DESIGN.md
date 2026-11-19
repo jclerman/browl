@@ -889,6 +889,18 @@ Every page has the same frame (U-27, U-28, U-29):
 - Generous but not wasteful spacing; works from phone width up.
 - Plain CSS with custom properties for the colors, so the palette can be tuned in one place. No CSS framework.
 
+**Rendering names and IRIs** (from P-11's review, for P-14 and every page after it): display names, CURIEs and IRIs
+come from the uploaded ontology, so they're untrusted text. Autoescaping covers HTML text and quoted attributes, not
+JSON, scripts or unquoted attributes.
+
+- A CURIE or display name never goes in an `href`, or anywhere a URL is expected: `EXTRA_PREFIXES` may name a prefix
+  `http`, making CURIEs that look like URLs (the ontology's own such names are left out, 2.7).
+- Namespaces and IRIs can have any scheme, `javascript:` included, so only `http` and `https` IRIs are rendered as
+  links to themselves; others are shown as text.
+- Labels can be huge, so rendered names are capped in length, with the rest elided.
+- Labels can hold bidirectional-text overrides, so each name is isolated (`<bdi>`, or `dir="auto"`) from the text
+  around it.
+
 ### 2.10 Page cache
 
 An in-memory LRU of rendered HTML, keyed by `(generation, URL path, tab)`, with a configurable size (default 100).
