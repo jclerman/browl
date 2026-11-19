@@ -2,7 +2,7 @@
 
 ## Description
 
-Equivalence groups of named classes, from owl:equivalentClass (union-find).
+Groups of named classes linked by owl:equivalentClass (union-find), and of a hierarchy's entities in a cycle of edges. Only groups of more than one entity have rows; any other entity is its own representative.
 
 <details>
 <summary><strong>Table Definition</strong></summary>
@@ -18,10 +18,10 @@ CREATE TABLE equiv_group (
 
 ## Columns
 
-| Name           | Type    | Default | Nullable | Children | Parents             | Comment                                                                                |
-| -------------- | ------- | ------- | -------- | -------- | ------------------- | -------------------------------------------------------------------------------------- |
-| entity         | INTEGER |         | true     |          | [entity](entity.md) | A class in a group (entity.id).                                                        |
-| representative | INTEGER |         | false    |          | [entity](entity.md) | The group's representative (entity.id), which stands for the group in edge and counts. |
+| Name           | Type    | Default | Nullable | Children | Parents             | Comment                                                                                               |
+| -------------- | ------- | ------- | -------- | -------- | ------------------- | ----------------------------------------------------------------------------------------------------- |
+| entity         | INTEGER |         | true     |          | [entity](entity.md) | An entity in a group (entity.id).                                                                     |
+| representative | INTEGER |         | false    |          | [entity](entity.md) | The group's representative (entity.id), its first IRI, which stands for the group in edge and counts. |
 
 ## Constraints
 

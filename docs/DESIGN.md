@@ -579,7 +579,7 @@ are documented in [`SCHEMA.md`](SCHEMA.md):
 | `entity` | The ontology and every declared class and property: its IRI, type, URL path and fragment (2.3), display name and CURIE | The entity-list query (every declared class and property with its type; the ontology's IRI comes from the header query): 22–29 s on NCBITaxon, 3.03 M rows. The whole hook, which computes each batch's URLs and inserts it before reading the next, takes 25–26 s, and the table and its indexes 530–650 MiB (P-10) |
 | `name_value` | Name-property values, one row per direct and per RDFS-entailed property | The name values query, through a property path (below): 41–48 s on NCBITaxon, 3.56 M rows. The whole hook, which also sets each entity's CURIE and display name, takes about 85 s ([P-11 findings](../research/P-11/README.md)) |
 | `edge` | Parent → child per hierarchy (classes; each property type), between equivalence-group representatives | The edges query: 18–19 s on NCBITaxon |
-| `equiv_group` | Entity → group representative | Union-find over `owl:equivalentClass` between named classes |
+| `equiv_group` | Entity → group representative, for groups of more than one | Union-find over `owl:equivalentClass` between named classes, and over cycles of edges (below) |
 | `counts` | Per node: immediate children, distinct descendants | `edge`, in Python (below) |
 | `hash_prefix` | Distinct URL paths that have hash entities under them | `entity` |
 | `prefix` | CURIE prefix → namespace | The built-in ones, overridden by the ontology file's own, overridden by `EXTRA_PREFIXES` ([2.7](#27-display-names)) |
@@ -652,8 +652,18 @@ page (P-17) queries Fuseki for them.
 An earlier design also had a `usage` table, because the OWLAPI can't find annotation assertions by value. Fuseki can
 (`?s ?p <entity>`), so P-27 decides whether any part of it is still needed ([2.8](#28-entity-pages)).
 
-**Hierarchies.** Named direct parents: `rdfs:subClassOf` and `rdfs:subPropertyOf` triples with an IRI on both sides
-(asserted, or inferred if a reasoner ran). Roots are nodes with no named parent. For classes this includes children of `owl:Thing`.
+**Hierarchies** (P-12, `browl.precache.hierarchies`). Named direct parents: `rdfs:subClassOf` and `rdfs:subPropertyOf`
+triples with an IRI on both sides (asserted, or inferred if a reasoner ran), from one bulk query with the
+`owl:equivalentClass` triples, over the imports too. An edge counts only between two entities declared with the
+hierarchy's type, so a punned IRI is in each of its types' hierarchies, and a sub-property edge between an object and a
+data property is dropped. Roots are nodes with no named parent. `owl:Thing`, `owl:Nothing` and the top and bottom
+properties are in no hierarchy, even if declared, so the children of `owl:Thing` are roots.
+
+- **Nodes:** classes linked by `owl:equivalentClass` form one group (union-find), shown as one node (U-9); so do the
+  members of a cycle of edges, which OWL makes equivalent, with a warning (cycles found by Tarjan's algorithm, then
+  merged until none is left). A group's representative is its first IRI, and stands for it in `edge` and `counts`;
+  `equiv_group` holds only groups of more than one entity, since most have one. `owl:equivalentProperty` isn't
+  grouped yet.
 
 **Distinct descendant counts.** These need a transitive closure, not a sum over edges. _(Q19a)_ The plan is to compute
 them in a bottom-up pass in topological order, merging descendant sets. Each set is a

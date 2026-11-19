@@ -2,7 +2,7 @@
 
 ## Description
 
-Each hierarchy node's numbers of children and of distinct descendants (DESIGN.md 2.5).
+Each hierarchy node's numbers of children and of distinct descendants (DESIGN.md 2.5): a row for every entity of the hierarchy's type that is a group's representative or in no group, except owl:Thing and the other top and bottom entities.
 
 <details>
 <summary><strong>Table Definition</strong></summary>
