@@ -39,23 +39,18 @@ async def entities(context: PreCacheContext) -> None:
     """
     settings = context.job.settings
     mapper = URLMapper(settings.base_url, settings.reserved_prefix)
-    reserved = _Reserved()
+    reserved = Reserved()
     ontology = await context.db.run(
         lambda connection: connection.execute("SELECT ontology_iri FROM meta").fetchone()[0]
     )
     if ontology is not None:
-        await context.db.run(functools.partial(_insert_entities, [(ontology, EntityType.ONTOLOGY)], mapper, reserved))
+        await context.db.run(functools.partial(insert_entities, [(ontology, EntityType.ONTOLOGY)], mapper, reserved))
     async with context.bulk_select(sparql_file("entity-list.rq")) as stream:
         columns = tuple(stream.variables.index(name) for name in ("entity", "type"))
         async for batch in batched(stream):
             await context.db.run(functools.partial(_insert_listed, batch, columns, mapper, reserved))
     await context.db.create_indexes("entity")
-    # In key order, from the entity_path index.
-    await context.db.run(
-        lambda connection: connection.execute(
-            "INSERT INTO hash_prefix SELECT DISTINCT path FROM entity WHERE fragment IS NOT NULL ORDER BY path"
-        )
-    )
+    await context.db.run(fill_hash_prefix)
     await context.db.create_indexes("hash_prefix")
     if reserved.count:
         logger.warning(
@@ -68,7 +63,7 @@ async def entities(context: PreCacheContext) -> None:
 
 
 @dataclass
-class _Reserved:
+class Reserved:
     """The entity IRIs whose URLs would be under the reserved prefix: how many, and the first few, cut short."""
 
     count: int = 0
@@ -79,19 +74,19 @@ def _insert_listed(
     batch: list[tuple[Term | None, ...]],
     columns: tuple[int, ...],
     mapper: URLMapper,
-    reserved: _Reserved,
+    reserved: Reserved,
     connection: sqlite3.Connection,
 ) -> None:
-    """Insert a batch of the entity list's rows (`_insert_entities`), given its entity and type columns.
+    """Insert a batch of the entity list's rows (`insert_entities`), given its entity and type columns.
 
     Their terms are read as each row is inserted, on the database's thread rather than the event loop.
     """
     entity, kind = columns
-    _insert_entities(((str(row[entity]), ENTITY_TYPES[str(row[kind])]) for row in batch), mapper, reserved, connection)
+    insert_entities(((str(row[entity]), ENTITY_TYPES[str(row[kind])]) for row in batch), mapper, reserved, connection)
 
 
-def _insert_entities(
-    rows: Iterable[tuple[str, EntityType]], mapper: URLMapper, reserved: _Reserved, connection: sqlite3.Connection
+def insert_entities(
+    rows: Iterable[tuple[str, EntityType]], mapper: URLMapper, reserved: Reserved, connection: sqlite3.Connection
 ) -> None:
     """Insert entities with their URLs, counting in `reserved` those whose URLs would be under the reserved prefix."""
     values = []
@@ -103,3 +98,11 @@ def _insert_entities(
                 reserved.iris.append(iri if len(iri) <= _LOGGED_IRI_CHARS else f"{iri[:_LOGGED_IRI_CHARS]}…")
         values.append((iri, kind, url.path, url.fragment))  # an EntityType is stored as TEXT, as a str is
     connection.executemany("INSERT INTO entity (iri, type, path, fragment) VALUES (?, ?, ?, ?)", values)
+
+
+def fill_hash_prefix(connection: sqlite3.Connection) -> None:
+    """Fill `hash_prefix` from `entity`: each path that hash entities' URLs have."""
+    # In key order, from the entity_path index.
+    connection.execute(
+        "INSERT INTO hash_prefix SELECT DISTINCT path FROM entity WHERE fragment IS NOT NULL ORDER BY path"
+    )

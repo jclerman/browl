@@ -22,6 +22,7 @@ from browl.imports import OWL_IMPORTS
 from browl.jobs import JobContext, StageFunction
 from browl.jobtypes import ImportResult, Reasoner
 from browl.precache.core import Hook
+from browl.precache.entities import Reserved, fill_hash_prefix, insert_entities
 from browl.precache.keys import build_keys
 from browl.precache.stage import HOOKS
 from browl.sandbox import Runner
@@ -221,7 +222,8 @@ def derived_stage(
 ) -> StageFunction:
     """Return a load job stage that builds the job's derived database with these entities, and the ontology if given.
 
-    Their URLs come from the job's settings (`URLMapper`), and `hash_prefix` from them, as pre-caching would give them.
+    Their URLs come from the job's settings (`URLMapper`), and the rows and `hash_prefix` are written as the entities
+    hook writes them (`browl.precache.entities`).
     """
 
     def build(context: JobContext) -> None:
@@ -230,13 +232,8 @@ def derived_stage(
         meta = derived.Meta(context.generation, context.reasoner, LOADED_AT, ontology_iri=ontology_iri, title=title)
         rows = [*([(ontology_iri, derived.EntityType.ONTOLOGY)] if ontology_iri else []), *entities]
         with derived.build(settings.data_dir, meta, build_keys(settings, HOOKS)) as connection:
-            for iri, kind in rows:
-                url = mapper(iri)
-                connection.execute(
-                    "INSERT INTO entity (iri, type, path, fragment) VALUES (?, ?, ?, ?)",
-                    (iri, kind, url.path, url.fragment),
-                )
-            connection.execute("INSERT INTO hash_prefix SELECT DISTINCT path FROM entity WHERE fragment IS NOT NULL")
+            insert_entities(rows, mapper, Reserved(), connection)
+            fill_hash_prefix(connection)
 
     async def stage(context: JobContext) -> None:
         await asyncio.to_thread(build, context)
