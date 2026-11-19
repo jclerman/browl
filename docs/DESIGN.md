@@ -1031,6 +1031,63 @@ In progress or Done. **Tracking** links each item's GitHub issue, or the PRs tha
 entry criteria and acceptance criteria; GitHub's "blocked by" links and sub-issues mirror **Depends on**, and
 milestones mirror the phases.
 
+### Remaining work
+
+The graph shows the work items not yet done and their **Depends on** links among themselves; links to done items are
+left out. The thick path leads to the first useful entity page (P-16). The dotted link isn't a **Depends on** entry:
+S-5b waits for pages to render. P-24 depends on everything above it, so it has no edges. Update the graph whenever an
+item's status or dependencies change.
+
+```mermaid
+flowchart LR
+    subgraph P3["Phase 3: Derived data"]
+        P12["P-12 Hierarchies"]
+    end
+    subgraph P4["Phase 4: Browsing"]
+        P13["P-13 Routing"]
+        P14["P-14 Page frame"]
+        P15["P-15 Manchester rendering"]
+        P16["P-16 Overview tab"]
+        P17["P-17 Home page"]
+        P18["P-18 Hierarchy trees"]
+        P27["P-27 Usage tab"]
+    end
+    subgraph P5["Phase 5: Search, caching, auth"]
+        P19["P-19 Search backend"]
+        P20["P-20 Autocomplete UI"]
+        P21["P-21 Page cache"]
+        P22["P-22 Sign-in"]
+        P23["P-23 Admin list"]
+        P33["P-33 JSON API"]
+    end
+    subgraph P6["Phase 6: Hardening"]
+        P24["P-24 Performance check"]
+        P25["P-25 Accessibility pass"]
+        P29["P-29 Compressed load files"]
+        P31["P-31 Load progress"]
+        P32["P-32 Reasoner progress"]
+    end
+    S5b["S-5b OLS4 comparison"]
+
+    P13 ==> P14 ==> P15 ==> P16
+    P12 ==> P16
+    P14 --> P17
+    P12 --> P18
+    P14 --> P18
+    P16 --> P27
+    P16 --> P21
+    P19 --> P20
+    P14 --> P20
+    P16 & P17 & P18 & P19 & P27 --> P33
+    P18 & P20 --> P25
+    P22 --> P23
+    P31 --> P32
+    P16 -.-> S5b
+
+    classDef critical stroke-width:3px
+    class P12,P13,P14,P15,P16 critical
+```
+
 ### Phase 0: Spikes
 
 Spikes are time-boxed investigations. Their code lives in `research/S-n/`, outside the `browl` package; their findings
