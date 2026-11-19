@@ -105,8 +105,7 @@ jobs:
       - name: Install dependencies
         run: make install
 
-      # Cache the Chromium that `make browser` installs, keyed by the Playwright version that pins it. Its system
-      # libraries can't be cached, so apt installs them each run.
+      # Cache the Chromium that `make browser` installs, keyed by the Playwright version that pins it.
       - name: Read the locked Playwright version
         id: playwright
         run: echo "version=$(poetry run playwright --version | cut -d ' ' -f 2)" >> "$GITHUB_OUTPUT"
@@ -117,8 +116,36 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ steps.playwright.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
 
+      # Chromium's system libraries and fonts, which apt installs. Installing them can't be cached, but their packages
+      # can: apt skips downloading a package already in its archive directory, so a slow mirror can't stall the job
+      # (it once took 3.5 min to fetch 22 MB). The directory is root's, so the cache keeps a copy. The key adds the
+      # runner image's version, whose packages may change; on a new image the previous copy is restored, apt downloads
+      # only what changed, and autoclean drops the packages the mirror no longer has, so the copy doesn't grow.
+      - name: Read the runner image
+        id: runner-image
+        env:
+          PLAYWRIGHT: ${{ steps.playwright.outputs.version }}
+        run: |
+          echo "prefix=apt-playwright-$PLAYWRIGHT-$ImageOS-$RUNNER_ARCH" >> "$GITHUB_OUTPUT"
+          echo "version=$ImageVersion" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the browser's system packages
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/apt-archives
+          key: ${{ steps.runner-image.outputs.prefix }}-${{ steps.runner-image.outputs.version }}
+          restore-keys: ${{ steps.runner-image.outputs.prefix }}-
+
       - name: Install the browser's system libraries
-        run: poetry run playwright install-deps chromium-headless-shell
+        run: |
+          mkdir -p ~/.cache/apt-archives
+          find ~/.cache/apt-archives -name '*.deb' -exec sudo cp --target-directory=/var/cache/apt/archives {} +
+          poetry run playwright install-deps chromium-headless-shell
+          sudo apt-get autoclean --quiet
+          rm -f ~/.cache/apt-archives/*.deb
+          cd /var/cache/apt/archives
+          find . -maxdepth 1 -name '*.deb' -exec cp --target-directory="$HOME/.cache/apt-archives" {} +
+          echo "Cached $(find ~/.cache/apt-archives -name '*.deb' | wc -l) packages"
 
       - name: Lint and test
         run: make ci
