@@ -36,8 +36,7 @@ from browl.precache.core import Hook, PreCacheContext, hook
 from browl.precache.keys import Closure, build_keys, closure, code_digest
 from browl.precache.stage import HOOKS, build
 from browl.settings import Settings
-from tests.helpers import make_settings
-from tests.test_precache import LOADED_AT, fuseki
+from tests.helpers import LOADED_AT, fuseki, make_settings
 
 pytestmark = pytest.mark.anyio
 

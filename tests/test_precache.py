@@ -49,84 +49,37 @@ from browl.precache.keys import build_keys
 from browl.precache.stage import HOOKS, build, pre_cache, pre_caching_stage, rebuild, remove_previous
 from browl.settings import Settings
 from tests.conftest import DATA
-from tests.helpers import make_app, make_settings
+from tests.helpers import (
+    DC_TITLE,
+    DCTERMS_TITLE,
+    END,
+    ENTITY_END,
+    ENTITY_HEADER,
+    EX,
+    HEADER,
+    LABEL,
+    LOADED_AT,
+    ONTOLOGY,
+    ONTOLOGY_RESULT,
+    OWL,
+    VERSION,
+    VERSION_INFO,
+    VERSION_IRI,
+    answer,
+    connect,
+    fuseki,
+    job,
+    make_app,
+    make_settings,
+)
 
 pytestmark = pytest.mark.anyio
-
-EX = "http://example.org/"
-ONTOLOGY = f"{EX}onto"
-VERSION = f"{EX}onto/1.0"
-OWL = "http://www.w3.org/2002/07/owl#"
-VERSION_IRI = f"<{OWL}versionIRI>"
-VERSION_INFO = f"<{OWL}versionInfo>"
-DCTERMS_TITLE = "<http://purl.org/dc/terms/title>"
-DC_TITLE = "<http://purl.org/dc/elements/1.1/title>"
-LABEL = "<http://www.w3.org/2000/01/rdf-schema#label>"
-HEADER = f"?ontology\t?property\t?value\t?{END_VARIABLE}\n"
-END = "\t\t\ttrue\n"
 
 
 @pytest.fixture
 def settings(data_dir: Path) -> Settings:
     """Return the test settings, with `DATA_DIR` an empty directory."""
     return make_settings()
-
-
-ONTOLOGY_RESULT = (
-    f"{HEADER}<{ONTOLOGY}>\t{VERSION_IRI}\t<{VERSION}>\t\n"
-    f'<{ONTOLOGY}>\t{DCTERMS_TITLE}\t"Onto"@en\t\n<{ONTOLOGY}>\t{VERSION_INFO}\t"1.0"\t\n{END}'
-)
-LOADED_AT = datetime(2026, 11, 17, tzinfo=UTC)
-ENTITY_HEADER = f"?entity\t?type\t?{END_VARIABLE}\n"
-ENTITY_END = "\t\ttrue\n"
-ENTITY_RESULT = f"{ENTITY_HEADER}<{EX}onto#A>\t<{OWL}Class>\t\n{ENTITY_END}"
-
-
-NAME_HEADER = f"?entity\t?name\t?property\t?value\t?{END_VARIABLE}\n"
-NAME_END = "\t\t\t\ttrue\n"
-NAME_RESULT = f'{NAME_HEADER}<{EX}onto#A>\t{LABEL}\t{LABEL}\t"A"@en\t\n{NAME_END}'
-
-
-def answer(query: str) -> str:
-    """Return a stubbed Fuseki's answer to a query: to the entity list, the name values query, else the header's."""
-    if "?entity ?type" in query:
-        return ENTITY_RESULT
-    if "?entity ?name" in query:
-        return NAME_RESULT
-    return ONTOLOGY_RESULT
-
-
-def fuseki(*bodies: str, queries: list[str] | None = None) -> httpx2.AsyncClient:
-    """Return an HTTP client whose stubbed Fuseki answers the queries with these TSV bodies in turn, recording them.
-
-    Without bodies, each query gets its `answer`; the last body answers the rest of the queries.
-    """
-    answers = list(bodies)
-
-    async def handler(request: httpx2.Request) -> httpx2.Response:
-        query = urllib.parse.parse_qs(request.content.decode())["query"][0]
-        if queries is not None:
-            queries.append(query)
-        if not answers:
-            body = answer(query)
-        else:
-            body = answers.pop(0) if len(answers) > 1 else answers[0]
-        return httpx2.Response(200, headers={"Content-Type": TSV}, content=body)
-
-    return httpx2.AsyncClient(base_url="http://fuseki:3030", transport=httpx2.MockTransport(handler))
-
-
-def job(settings: Settings, generation: int, imports: list[ImportResult] | None = None) -> JobContext:
-    """Return a job's context as the loading stage leaves it, with an empty upload."""
-    upload = settings.data_dir / "uploads" / str(generation) / "ontology.ttl"
-    upload.parent.mkdir(parents=True, exist_ok=True)
-    upload.touch()
-    return JobContext(generation, settings, Reasoner.ELK, upload=upload, imports=imports or [], started_at=LOADED_AT)
-
-
-def connect(settings: Settings, generation: int, hooks: Sequence[Hook] = HOOKS) -> sqlite3.Connection:
-    """Open a generation's derived database, built with these settings and hooks (`derived.connect`)."""
-    return derived.connect(settings.data_dir, generation, build_keys(settings, hooks))
 
 
 def is_current(settings: Settings, generation: int, hooks: Sequence[Hook] = HOOKS) -> bool:

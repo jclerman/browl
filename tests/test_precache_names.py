@@ -1,6 +1,5 @@
 """Tests for the names pre-caching hook (P-11): prefixes, name values, CURIEs and display names."""
 
-import sqlite3
 import uuid
 from collections.abc import Sequence
 from contextlib import closing
@@ -21,8 +20,7 @@ from browl.precache.stage import HOOKS, pre_caching_stage
 from browl.prefixes import read_prefixes
 from browl.settings import Settings
 from tests.conftest import DATA
-from tests.helpers import make_settings
-from tests.test_precache import (
+from tests.helpers import (
     DC_TITLE,
     DCTERMS_TITLE,
     END,
@@ -37,6 +35,7 @@ from tests.test_precache import (
     connect,
     fuseki,
     job,
+    make_settings,
 )
 
 pytestmark = pytest.mark.anyio
@@ -47,15 +46,10 @@ PREF_LABEL = f"<{SKOS}prefLabel>"
 HOOKS_USED: Sequence[Hook] = (entities, names)
 
 
-def rows(connection: sqlite3.Connection, query: str) -> list[tuple[object, ...]]:
-    """Return a query's rows."""
-    return connection.execute(query).fetchall()
-
-
 def entity_names(settings: Settings, generation: int) -> dict[tuple[str, str], tuple[str, str | None]]:
     """Return each entity's display name and CURIE, by its IRI and type."""
     with closing(connect(settings, generation, HOOKS_USED)) as connection:
-        found = rows(connection, "SELECT iri, type, display_name, curie FROM entity")
+        found = connection.execute("SELECT iri, type, display_name, curie FROM entity").fetchall()
     return {(str(iri), str(kind)): (str(name), curie) for iri, kind, name, curie in found}  # type: ignore[misc]
 
 
@@ -63,8 +57,7 @@ def name_values(settings: Settings, generation: int) -> list[tuple[object, ...]]
     """Return each `name_value` row with its entity's IRI and type, sorted."""
     with closing(connect(settings, generation, HOOKS_USED)) as connection:
         return sorted(
-            rows(
-                connection,
+            connection.execute(
                 "SELECT iri, type, property, value, normalized, language, direct"
                 " FROM name_value JOIN entity ON entity.id = name_value.entity",
             ),
@@ -189,7 +182,7 @@ async def test_curies(data_dir: Path) -> None:
     }
     assert found[(f"{EX}d#e", "class")] == ("d:e", "d:e")  # the CURIE is the display name without a name value
     with closing(connect(settings, 1, HOOKS_USED)) as connection:
-        stored = dict(rows(connection, "SELECT prefix, namespace FROM prefix"))  # type: ignore[arg-type]
+        stored = dict(connection.execute("SELECT prefix, namespace FROM prefix"))  # type: ignore[arg-type]
     assert stored == BUILTIN_PREFIXES | context.prefixes | settings.extra_prefixes
     assert stored["owl"] == "http://example.org/not-owl#"
 
@@ -243,8 +236,7 @@ async def test_names_on_real_fuseki(fuseki_url: str, data_dir: Path) -> None:
     pref = f"{SKOS}prefLabel"
     with closing(connect(settings, generation, HOOKS)) as connection:
         stored = sorted(
-            rows(
-                connection,
+            connection.execute(
                 "SELECT iri, type, property, value, normalized, language, direct"
                 " FROM name_value JOIN entity ON entity.id = name_value.entity",
             ),
@@ -252,7 +244,7 @@ async def test_names_on_real_fuseki(fuseki_url: str, data_dir: Path) -> None:
         )
         found = {
             (iri, kind): (display, curie)
-            for iri, kind, display, curie in rows(connection, "SELECT iri, type, display_name, curie FROM entity")
+            for iri, kind, display, curie in connection.execute("SELECT iri, type, display_name, curie FROM entity")
         }
     assert stored == sorted(
         [
