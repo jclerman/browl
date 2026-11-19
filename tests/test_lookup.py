@@ -408,7 +408,7 @@ def test_entity_tabs(client: TestClient, query: str, selected: str) -> None:
     assert selected_tab(response.text) == selected
     assert page.panel is not None
     assert page.panel["aria-labelledby"] == selected
-    assert ("annotations and axioms" in response.text) == (selected == "tab-overview")
+    assert ("Logical axioms" in response.text) == (selected == "tab-overview")
 
 
 @pytest.mark.parametrize(
@@ -472,7 +472,7 @@ def test_panel_alone_default_tab(client: TestClient) -> None:
     """Check that `panel=1` without `tab` serves the first tab's panel."""
     response = client.get("/other.org/y?panel=1")
     assert response.status_code == 200
-    assert "annotations and axioms" in response.text
+    assert "Logical axioms" in response.text
 
 
 HASH_C = "/_browl/hash?path=/other.org/vocab&fragment=C"

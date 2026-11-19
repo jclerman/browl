@@ -1,6 +1,9 @@
-{# An entity page's tab panel's content: within the page, or alone for htmx (`panel=1`). Placeholders until P-16. #}
+{# An entity page's tab panel's content: within the page, or alone for htmx (`panel=1`). The Overview tab lists the
+   entity's axioms until P-16 groups them and adds its annotations; the Usage tab is a placeholder until P-27. #}
+{% from "axioms.html" import axiom_list %}
 {% if tab.slug == "usage" %}
 <p class="note">Where other entities use this one will be shown here.</p>
 {% else %}
-<p class="note">The entity's annotations and axioms will be shown here.</p>
+<p class="note">The entity's annotations will be shown here.</p>
+{{ axiom_list(axioms_panel) }}
 {% endif %}
