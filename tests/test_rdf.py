@@ -16,6 +16,7 @@ from browl.rdf import (
     Literal,
     RDFSyntaxError,
     check_ntriples_triple,
+    ntriples_iris,
     parse_tsv_header,
     parse_tsv_row,
     parse_tsv_term,
@@ -257,3 +258,24 @@ def test_terms_copy_and_pickle() -> None:
     for term in (IRI("http://example.org/a"), BlankNode("b0"), Literal("x")):
         assert copy.copy(term) == term
         assert type(pickle.loads(pickle.dumps(term))) is type(term)
+
+
+def test_ntriples_iris() -> None:
+    """Check that the IRIs of N-Triples' subjects, predicates and objects are found, unescaped, but not datatypes'."""
+    ntriples = (
+        b"<http://example.org/s> <http://example.org/p> <http://example.org/\\u00e9> .\n"
+        b'_:b <http://example.org/q> "<http://example.org/in-literal>"^^<http://example.org/type> .\n'
+    )
+    assert ntriples_iris(ntriples) == {
+        "http://example.org/s",
+        "http://example.org/p",
+        "http://example.org/\u00e9",
+        "http://example.org/q",
+    }
+
+
+@pytest.mark.parametrize("line", [b"# comment", b"<http://example.org/s> <rel> <http://example.org/o> ."])
+def test_ntriples_iris_rejects(line: bytes) -> None:
+    """Check that a line that isn't a triple, or an IRI that isn't valid, is refused."""
+    with pytest.raises(RDFSyntaxError):
+        ntriples_iris(line + b"\n")

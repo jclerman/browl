@@ -246,3 +246,21 @@ def check_ntriples_triple(line: str) -> None:
             IRI(_unescape(iri))
     if value is not None:
         _literal(value, language, direction, datatype)
+
+
+def ntriples_iris(ntriples: bytes) -> set[IRI]:
+    """Return the IRIs that N-Triples name as a subject, predicate or object (not as a datatype), unescaped.
+
+    Raises:
+        RDFSyntaxError: A line isn't a triple, or an IRI isn't valid (`check_ntriples_triple`).
+    """
+    found: set[IRI] = set()
+    for line in ntriples.decode().splitlines():
+        if not line:
+            continue
+        match = _NT_TRIPLE.fullmatch(line)
+        if match is None:
+            raise RDFSyntaxError(f"not an N-Triples triple: {line[:200]!r}")
+        subject, _, predicate, object_iri, *_ = match.groups()
+        found.update(IRI(_unescape(iri)) for iri in (subject, predicate, object_iri) if iri is not None)
+    return found
