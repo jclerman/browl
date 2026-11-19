@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import browl
-from browl import admin, derived, imports, loading, owlapi, precache, robot
+from browl import admin, derived, imports, loading, lookup, owlapi, precache, robot
 from browl.derived import DerivedReader, NotCurrentError
 from browl.fuseki import FusekiClient, ping
 from browl.jobs import JobRunner, Stage, StageFunction
@@ -122,7 +122,9 @@ def create_app(
     app.state.settings = settings
     app.include_router(router, prefix=reserved)
     app.include_router(admin.router, prefix=reserved)
+    app.include_router(lookup.reserved_router, prefix=reserved)
     app.mount(f"{reserved}/static", StaticFiles(directory=STATIC_DIR), name="static")
+    app.include_router(lookup.catch_all_router)  # last, so every other route comes first (§2.3, Lookup)
     exempt = [f"{reserved}/health", f"{reserved}/static", f"{reserved}/admin"]
     app.add_middleware(SiteGate, exempt=exempt)
     app.add_exception_handler(NotCurrentError, derived_not_current)

@@ -18,7 +18,7 @@ def url(iri: str, base: str | HttpUrl = BASE, prefix: str = PREFIX) -> EntityURL
 
 def fallback(iri: str, prefix: str = PREFIX, reserved: bool = False) -> EntityURL:
     """Return the fallback URL of an IRI."""
-    return EntityURL(f"/{prefix}/iri?u={urllib.parse.quote(iri, safe='')}", None, reserved)
+    return EntityURL(f"/{prefix}/iri?iri={urllib.parse.quote(iri, safe='')}", None, reserved)
 
 
 @pytest.mark.parametrize(
@@ -170,7 +170,7 @@ def test_shared_urls(iris: tuple[str, ...]) -> None:
     ],
 )
 def test_fallback(iri: str) -> None:
-    """Anything else gets `/{RESERVED_PREFIX}/iri?u={percent-encoded IRI}`, its fragment in the query."""
+    """Anything else gets `/{RESERVED_PREFIX}/iri?iri={percent-encoded IRI}`, its fragment in the query."""
     assert url(iri) == fallback(iri)
 
 
@@ -184,7 +184,7 @@ def test_fallback_protocol_relative_under_base_path() -> None:
 
 def test_fallback_encoding() -> None:
     """The fallback URL percent-encodes the whole IRI, non-ASCII as UTF-8, under the configured prefix."""
-    assert url("urn:x:é#a b", prefix="_site") == EntityURL("/_site/iri?u=urn%3Ax%3A%C3%A9%23a%20b", None)
+    assert url("urn:x:é#a b", prefix="_site") == EntityURL("/_site/iri?iri=urn%3Ax%3A%C3%A9%23a%20b", None)
 
 
 @pytest.mark.parametrize(

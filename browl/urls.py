@@ -42,7 +42,7 @@ class EntityURL:
 
     Attributes:
         path: The URL's path, from the site's root (`BASE_URL`), in URI form. For a fallback URL, the path and query
-            string: `/{RESERVED_PREFIX}/iri?u={the percent-encoded IRI}`.
+            string: `/{RESERVED_PREFIX}/iri?iri={the percent-encoded IRI}`.
         fragment: The fragment of a hash IRI's URL, in URI form; None for any other, and for every fallback URL, whose
             query holds the whole IRI.
         reserved: Whether the IRI got the fallback URL because the URL another rule gives it would be under the reserved
@@ -76,7 +76,7 @@ class URLMapper:
            gets that path, less `BASE_URL`'s.
         2. Proxied: any other `http` or `https` IRI, unless it has user info or a port other than its scheme's default,
            gets `/{host}{path}`; the host is normalized as `BASE_URL`'s is (lowercased, non-ASCII in punycode).
-        3. Fallback: any other IRI gets `/{RESERVED_PREFIX}/iri?u={the percent-encoded IRI}`. So do IRIs with a query
+        3. Fallback: any other IRI gets `/{RESERVED_PREFIX}/iri?iri={the percent-encoded IRI}`. So do IRIs with a query
            string, even an empty one; with an empty fragment, which a URL can't be told apart from no fragment by; with
            an IP literal host (`[::1]`) unless native; whose URL path would have a `.` or `..` segment, from the IRI's
            path or a proxied host such as `..`, which a browser would resolve away; whose native URL path would start
@@ -121,8 +121,12 @@ class URLMapper:
         return EntityURL(url_path, None if fragment is None else _to_uri(fragment, _FRAGMENT_SAFE))
 
     def _fallback(self, iri: str, reserved: bool = False) -> EntityURL:
-        path = f"/{self.reserved_prefix}/{FALLBACK_PATH}?u={urllib.parse.quote(iri, safe='')}"
-        return EntityURL(path, None, reserved)
+        return EntityURL(fallback_path(self.reserved_prefix, iri), None, reserved)
+
+
+def fallback_path(reserved_prefix: str, iri: str) -> str:
+    """Return an IRI's fallback URL, the path and query string `/{RESERVED_PREFIX}/iri?iri={percent-encoded IRI}`."""
+    return f"/{reserved_prefix}/{FALLBACK_PATH}?iri={urllib.parse.quote(iri, safe='')}"
 
 
 def _split_authority(authority: str, default_port: int) -> tuple[str | None, int | None]:

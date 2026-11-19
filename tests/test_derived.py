@@ -14,13 +14,17 @@ import browl.derived
 from browl.derived import (
     DERIVED_DIR,
     DerivedReader,
+    Entity,
+    EntityType,
     Meta,
     NotCurrentError,
     build,
     connect,
     create_indexes,
     derived_path,
+    entities_with_iri,
     is_current,
+    is_hash_prefix,
     read_meta,
     remove_others,
 )
@@ -129,6 +133,35 @@ def test_build_creates_schema_and_meta(tmp_path: Path) -> None:
     finally:
         connection.close()
     assert entity_iris(tmp_path, 3) == ["http://example.org/onto#A"]
+
+
+def test_entities_with_iri(tmp_path: Path) -> None:
+    """An IRI's entities are its rows, one per type, by type; an IRI no entity has has none."""
+    with build(tmp_path, meta(1), KEYS) as connection:
+        connection.executemany(
+            "INSERT INTO entity (iri, type, path, fragment) VALUES (?, ?, ?, ?)",
+            [
+                ("urn:x:p", "object_property", "/_browl/iri?iri=urn%3Ax%3Ap", None),
+                ("urn:x:p", "class", "/_browl/iri?iri=urn%3Ax%3Ap", None),
+                ("urn:x:q", "class", "/q", None),
+            ],
+        )
+    with closing(connect(tmp_path, 1, KEYS)) as connection:
+        assert entities_with_iri(connection, "urn:x:p") == [
+            Entity(2, "urn:x:p", EntityType.CLASS, "/_browl/iri?iri=urn%3Ax%3Ap", None),
+            Entity(1, "urn:x:p", EntityType.OBJECT_PROPERTY, "/_browl/iri?iri=urn%3Ax%3Ap", None),
+        ]
+        assert entities_with_iri(connection, "urn:x:nothing") == []
+
+
+def test_is_hash_prefix(tmp_path: Path) -> None:
+    """A path is a hash prefix if `hash_prefix` has it."""
+    with build(tmp_path, meta(1), KEYS) as connection:
+        connection.execute("INSERT INTO hash_prefix (path) VALUES ('/vocab')")
+    with closing(connect(tmp_path, 1, KEYS)) as connection:
+        assert is_hash_prefix(connection, "/vocab")
+        assert not is_hash_prefix(connection, "/vocab/")
+        assert not is_hash_prefix(connection, "/other")
 
 
 def test_build_pragmas(tmp_path: Path) -> None:

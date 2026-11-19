@@ -11,6 +11,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from browl.derived import DERIVED_DIR
 from browl.jobs import (
     INTERRUPTED_BY_RESTART,
     INTERRUPTED_BY_SHUTDOWN,
@@ -22,15 +23,24 @@ from browl.jobs import (
     Stage,
 )
 from browl.jobtypes import StageError
-from browl.pages import RETRY_AFTER_S, SiteGate, templates
-from tests.helpers import make_app
+from browl.pages import RETRY_AFTER_S, SiteGate, app_path, link_root, templates
+from tests.helpers import derived_stage, make_app
 
 pytestmark = pytest.mark.usefixtures("data_dir")
 
 SECRET_REASON = "<script>alert('reason')</script>"
 """A failure reason that must reach only the admin status, escaped."""
 
-GATED = ["/", "/example.org/onto", "/no/such/page", "/_browl/search", "/_browl/tree/classes", "/_browl/healthz"]
+GATED = [
+    "/",
+    "/example.org/onto",
+    "/no/such/page",
+    "/_browl/search",
+    "/_browl/tree/classes",
+    "/_browl/healthz",
+    "/_browl/hash?path=/x&fragment=y",
+    "/_browl/iri?iri=x",
+]
 """Paths gated on the job state: entity paths, the service's own non-admin routes, and paths no route matches."""
 
 EXEMPT = [
@@ -59,13 +69,14 @@ def client(app: FastAPI) -> Iterator[TestClient]:
 
 
 def run_job(client: TestClient, app: FastAPI, reasoning: str | None = None) -> None:
-    """Run a load job to its end, whose reasoning stage fails with this reason if given."""
+    """Run a load job to its end, building an empty derived database, unless its reasoning stage fails with a reason."""
 
     async def fail(context: JobContext) -> None:
         raise StageError(reasoning)
 
     if reasoning is not None:
         app.state.jobs.register(Stage.REASONING, fail)
+    app.state.jobs.register(Stage.PRE_CACHING, derived_stage())
     client.portal.call(app.state.jobs.start)
     client.portal.call(app.state.jobs.wait)
 
@@ -128,6 +139,18 @@ def test_loading(client: TestClient, app: FastAPI, path: str) -> None:
     assert f'<meta http-equiv="refresh" content="{RETRY_AFTER_S}">' in response.text
 
 
+@pytest.mark.parametrize("path", ["/example.org/onto", "/_browl/iri?iri=x", "/_browl/hash?path=/x&fragment=y"])
+def test_loading_without_derived_database(client: TestClient, app: FastAPI, path: str) -> None:
+    """Check that the lookup routes serve "loading" when the gate let a request through but no derived database is."""
+    run_job(client, app)
+    for file in (app.state.settings.data_dir / DERIVED_DIR).iterdir():
+        file.unlink()
+    response = client.get(path)
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == str(RETRY_AFTER_S)
+    assert "<h1>Loading the ontology</h1>" in response.text
+
+
 def test_loading_other_methods(client: TestClient, app: FastAPI) -> None:
     """Check that the gate covers every method, not just GET."""
     start_job(client, app)
@@ -141,7 +164,7 @@ def test_available(client: TestClient, app: FastAPI) -> None:
     assert app.state.jobs.state.site == Site.AVAILABLE
     response = client.get("/no/such/page")
     assert response.status_code == 404
-    assert response.json() == {"detail": "Not Found"}
+    assert "<h1>Not found</h1>" in response.text
 
 
 @pytest.mark.parametrize("path", EXEMPT)
@@ -169,6 +192,33 @@ def test_exempt_whole_segments(path: str, exempt: bool) -> None:
     """Check that an exempt prefix matches whole path segments only."""
     gate = SiteGate(FastAPI(), ["/_browl/admin", "/_browl/static"])
     assert gate.is_exempt(path) is exempt
+
+
+@pytest.mark.parametrize(
+    ("root_path", "path", "link_root_", "app_path_"),
+    [
+        ("", "/x", "", "/x"),
+        ("/", "/x", "", "/x"),
+        ("/site", "/site/x", "/site", "/x"),
+        ("/site/", "/site/x", "/site", "/x"),
+        ("/site", "/site", "/site", ""),
+        ("/site", "/sitex/y", "/site", "/sitex/y"),
+    ],
+)
+def test_root_path(root_path: str, path: str, link_root_: str, app_path_: str) -> None:
+    """Check the root path for links, and that a path within the app is relative to it, by whole segments."""
+    scope = {"type": "http", "path": path, "root_path": root_path}
+    assert (link_root(scope), app_path(scope)) == (link_root_, app_path_)
+
+
+@pytest.mark.parametrize("root_path", ["site", "//evil.example", "//"])
+def test_root_path_invalid(root_path: str) -> None:
+    """Check that a root path that would make links protocol-relative, or relative, is refused."""
+    scope = {"type": "http", "path": "/x", "root_path": root_path}
+    with pytest.raises(ValueError, match="root path"):
+        link_root(scope)
+    with pytest.raises(ValueError, match="root path"):
+        app_path(scope)
 
 
 def test_exempt_under_root_path(app: FastAPI) -> None:

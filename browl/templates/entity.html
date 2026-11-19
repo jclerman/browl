@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}{{ entity.display_name or entity.iri }}{% endblock %}
+{% block content %}
+{# A placeholder until P-14 and P-16. #}
+<h1>{{ entity.display_name or entity.iri }}</h1>
+<p><code>{{ entity.iri }}</code></p>
+<p>{% for type in types %}{{ type }}{% if not loop.last %}, {% endif %}{% endfor %}</p>
+{% endblock %}

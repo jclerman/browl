@@ -107,7 +107,7 @@ comments:
         Its type (browl.derived.EntityType): ontology, class, object_property, data_property or annotation_property.
       path: >-
         Its URL's path from the site's root (BASE_URL), in URI form (non-ASCII percent-encoded as UTF-8). For a
-        fallback URL, the path and query string, /{RESERVED_PREFIX}/iri?u={the percent-encoded IRI}.
+        fallback URL, the path and query string, /{RESERVED_PREFIX}/iri?iri={the percent-encoded IRI}.
       fragment: The fragment of a hash IRI's URL, in URI form; NULL for any other, and for every fallback URL.
       display_name: >-
         Its display name (DESIGN.md 2.7): its best name value, else its CURIE, else its IRI; for the ontology, its
