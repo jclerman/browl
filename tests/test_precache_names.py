@@ -12,12 +12,13 @@ import pytest
 from browl.fuseki import UNION_FROM
 from browl.jobs import JobContext
 from browl.jobtypes import ImportResult, Reasoner
-from browl.loading import dataset_name
+from browl.loading import dataset_name, read_upload_prefixes
 from browl.names import BUILTIN_PREFIXES
 from browl.precache.core import Hook
 from browl.precache.entities import entities
 from browl.precache.names import names
 from browl.precache.stage import HOOKS, pre_caching_stage
+from browl.prefixes import read_prefixes
 from browl.settings import Settings
 from tests.conftest import DATA
 from tests.helpers import make_settings
@@ -155,6 +156,7 @@ async def test_curies(data_dir: Path) -> None:
         f"@prefix ab: <{EX}a/b/> .\n@prefix : <{EX}d#> .\n@prefix d: <{EX}d#> .\n@prefix mine: <{EX}ignored/> .\n"
         "@prefix owl: <http://example.org/not-owl#> .\n"
     )
+    context.prefixes = read_upload_prefixes(settings.data_dir, 1)  # as the loading stage does
     async with fuseki(HEADER + END, entity_result(*((iri, "Class") for iri in iris)), name_result()) as http:
         await pre_caching_stage(context, http, hooks=HOOKS_USED)
     assert context.prefixes == {
@@ -215,6 +217,7 @@ async def test_names_on_real_fuseki(fuseki_url: str, data_dir: Path) -> None:
                 settings,
                 Reasoner.NONE,
                 upload=DATA / "names.ttl",
+                prefixes=read_prefixes(DATA / "names.ttl"),
                 imports=[ImportResult(f"{EX}imported", triples=2)],
             )
             await pre_caching_stage(context, http, hooks=HOOKS)

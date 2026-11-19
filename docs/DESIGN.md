@@ -744,8 +744,13 @@ no CURIE. _(Q18b)_
 - **The ontology's prefixes** are read from the start of the uploaded file (`converted.ttl` for an OFN upload), not a
   reasoned one, whose writer may not keep them: Turtle's prefix directives before its first statement, or the
   namespaces on RDF/XML's root element (`browl.prefixes`). That's where tools write them; a declaration further on is
-  missed. The pre-caching stage reads them, and the job state stores them, since a rebuild after a restart can't count
-  on the file. _(P-11)_
+  missed. A declared name that isn't a prefix name (as `EXTRA_PREFIXES` names must be: ASCII letters, digits, `_`,
+  `-` and `.`, not starting with a digit, `-` or `.`), or that is a URL scheme such as `http`, is left out with a
+  warning, as is a namespace that isn't an absolute IRI once resolved against a Turtle base.
+- **Stored with the job:** the loading stage reads them at its end, so the job state stores them as pre-caching starts,
+  before the new derived file can be swapped in: a rebuild after a restart can't count on the file. A rebuild of a job
+  stored with none, as after the upgrade that started storing them, reads them again from its upload
+  (`DATA_DIR/uploads/{generation}/`) if that's still there; the job state then stores them. _(P-11)_
 
 ### 2.8 Entity pages
 

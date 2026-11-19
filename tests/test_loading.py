@@ -75,11 +75,12 @@ async def test_load_and_replace(settings: Settings, http: httpx2.AsyncClient) ->
 
     The `FROM` clause merges them as a set; the replacement removes the previous dataset and its store.
     """
-    ontology = f"<{EX}a> <{EX}p> <{EX}b> .\n<{EX}b> <{EX}p> <{EX}c> .\n"
+    ontology = f"@prefix ex: <{EX}> .\n<{EX}a> <{EX}p> <{EX}b> .\n<{EX}b> <{EX}p> <{EX}c> .\n"
     imported = f"<{EX}a> <{EX}p> <{EX}b> .\n<{EX}x> <{EX}p> <{EX}y> .\n"  # one triple the ontology also states
     first = job(settings, 101, ontology, {f"{EX}imported": imported})
     await loading_stage(first, http)
     assert first.triples == 2
+    assert first.prefixes == {"ex": EX}  # read here, so the job state stores them before pre-caching (S2)
     assert first.imports == [
         ImportResult(f"{EX}imported", triples=2),
         ImportResult("file:///x", reason="only http and https imports are fetched"),
@@ -387,7 +388,7 @@ def test_app_loads_and_restarts(
     [
         pytest.param(
             "o.ofn",
-            f"Prefix(:=<{EX}>)\nOntology(<{EX}o>\n"
+            f"Prefix(:=<{EX}>)\nPrefix(ex:=<{EX}>)\nOntology(<{EX}o>\n"
             "Declaration(Class(:A))\nDeclaration(Class(:B))\nSubClassOf(:A :B)\n)\n",
             4,
             marks=pytest.mark.jvm,
@@ -395,7 +396,7 @@ def test_app_loads_and_restarts(
         ),
         pytest.param(
             "o.owl",
-            '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" '
+            f'<rdf:RDF xmlns:ex="{EX}" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" '
             'xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#" xmlns:owl="http://www.w3.org/2002/07/owl#">'
             f'<owl:Ontology rdf:about="{EX}o"/><rdf:Description rdf:about="{EX}A">'
             f'<rdfs:subClassOf rdf:resource="{EX}B"/></rdf:Description></rdf:RDF>',
@@ -413,7 +414,10 @@ def test_app_loads_each_syntax(
     content: str,
     triples: int,
 ) -> None:
-    """Check that an OFN upload (converted to Turtle) and an RDF/XML one each load without a reasoner."""
+    """Check that an OFN upload (converted to Turtle) and an RDF/XML one each load without a reasoner.
+
+    Their prefixes are read, from the converted Turtle for OFN (S4), and give the entities' CURIEs.
+    """
     if request.node.get_closest_marker("jvm"):
         request.getfixturevalue("jvm")  # the OFN lister's JVM needs Java 21 (`JAVA_HOME`), as the fixture finds it
     overrides = {
@@ -430,6 +434,10 @@ def test_app_loads_each_syntax(
         client.portal.call(app.state.jobs.wait)
     state = app.state.jobs.state
     assert (state.stage, state.reason, state.triples) == (Stage.READY, None, triples)
+    assert state.prefixes["ex"] == EX
+    assert state.ready_generation is not None
+    with closing(derived.connect(settings.data_dir, state.ready_generation, build_keys(settings, HOOKS))) as connection:
+        assert connection.execute("SELECT curie FROM entity WHERE iri = ?", (f"{EX}o",)).fetchone() == ("ex:o",)
 
 
 def test_app_failed_load(

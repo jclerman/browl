@@ -98,7 +98,7 @@
           "type": "TEXT",
           "nullable": false,
           "default": "'{}'",
-          "comment": "The prefixes the ontology file declares, as a JSON object of name to namespace IRI, for CURIEs; '{}' until the pre-caching stage reads them."
+          "comment": "The prefixes the ontology file declares, as a JSON object of name to namespace IRI, for CURIEs; '{}' until the loading stage reads them."
         }
       ],
       "constraints": [

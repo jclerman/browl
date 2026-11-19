@@ -12,6 +12,7 @@ import urllib.parse
 import uuid
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import closing
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -829,6 +830,40 @@ def test_restart_rebuilds(settings: Settings, prepare: Callable[[Settings], obje
     assert derived_files(settings) == ["2.sqlite3"]
     with closing(connect(settings, 2)) as connection:
         assert read_meta(connection) == Meta(2, Reasoner.ELK, STARTED, ONTOLOGY, VERSION, "Onto", "1.0")
+
+
+@pytest.mark.parametrize(
+    ("stored", "upload", "expected"),
+    [
+        pytest.param({"o": f"{EX}onto#"}, None, {"o": f"{EX}onto#"}, id="stored"),
+        pytest.param({"o": f"{EX}onto#"}, f"@prefix f: <{EX}onto#> .\n", {"o": f"{EX}onto#"}, id="stored, not read"),
+        pytest.param({}, f"@prefix f: <{EX}onto#> .\n", {"f": f"{EX}onto#"}, id="read again"),
+        pytest.param({}, None, {}, id="none"),
+    ],
+)
+def test_restart_rebuild_keeps_prefixes(
+    settings: Settings, stored: dict[str, str], upload: str | None, expected: dict[str, str]
+) -> None:
+    """Check that a rebuild uses the job's stored prefixes, or reads them again from its upload if none are stored (S2).
+
+    The job state then stores them, and the entities get their CURIEs.
+    """
+    JobStore(settings.data_dir / STATE_DB).write(replace(READY, prefixes=stored))
+    if upload is not None:
+        path = settings.data_dir / "uploads" / "2" / "ontology.ttl"
+        path.parent.mkdir(parents=True)
+        path.write_text(upload)
+    app = restart(StubFuseki())
+    with TestClient(app) as client:
+        assert client.portal is not None
+        client.portal.call(app.state.jobs.wait)
+    assert JobStore(settings.data_dir / STATE_DB).read().prefixes == expected
+    with closing(connect(settings, 2)) as connection:
+        assert connection.execute("SELECT curie FROM entity WHERE iri = ?", (f"{EX}onto#A",)).fetchone() == (
+            f"{next(iter(expected))}:A" if expected else None,
+        )
+        found = dict(connection.execute("SELECT prefix, namespace FROM prefix").fetchall())
+    assert found.items() >= expected.items()
 
 
 def test_restart_rebuild_fails(settings: Settings) -> None:

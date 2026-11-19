@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from browl import prefixes
+from browl.loading import read_upload_prefixes
 from browl.prefixes import read_prefixes
 from tests.conftest import DATA
 
@@ -169,3 +170,37 @@ def test_warnings_limited(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> N
     assert warnings[-1] == "More of the ontology's prefixes are left out; their warnings aren't logged"
     assert all(len(warning) < prefixes._LOGGED_CHARS + 100 for warning in warnings)
     assert f"'{long_iri[: prefixes._LOGGED_CHARS]}…'" in warnings[0]
+
+
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        pytest.param(
+            {"ontology.ofn": f"Prefix(ofn:=<{EX}ofn/>)\n", "converted.ttl": f"@prefix c: <{EX}c/> .\n"},
+            {"c": f"{EX}c/"},
+            id="ofn",
+        ),
+        pytest.param({"ontology.ttl": f"@prefix t: <{EX}t/> .\n"}, {"t": f"{EX}t/"}, id="turtle"),
+        pytest.param(
+            {
+                "ontology.rdf": f'<rdf:RDF xmlns:x="{EX}x/" xmlns:rdf="{EX}rdf#"/>',
+                "reasoned.ttl": "@prefix r: <r/> .\n",
+            },
+            {"x": f"{EX}x/", "rdf": f"{EX}rdf#"},
+            id="rdf-xml",
+        ),
+    ],
+)
+def test_read_upload_prefixes(data_dir: Path, files: dict[str, str], expected: dict[str, str]) -> None:
+    """The prefixes come from the upload, or for an OFN upload from the Turtle it was converted to (S4)."""
+    directory = data_dir / "uploads" / "3"
+    directory.mkdir(parents=True)
+    for name, content in files.items():
+        (directory / name).write_text(content)
+    assert read_upload_prefixes(data_dir, 3) == expected
+
+
+def test_read_upload_prefixes_gone(data_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """A job whose upload is gone has no prefixes, with a warning."""
+    assert read_upload_prefixes(data_dir, 3) == {}
+    assert "Load job 3's uploaded file is gone" in caplog.text

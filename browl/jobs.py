@@ -141,7 +141,7 @@ class JobState:
         upload_bytes: The file's size, or while uploading or after a failed upload, how much had arrived.
         imports: The ontology's imports, direct and indirect, once the imports stage has listed them.
         triples: How many triples the store's default graph holds, once loaded: the ontology without its imports.
-        prefixes: The prefixes the ontology file declares, name → namespace, once the pre-caching stage has read them.
+        prefixes: The prefixes the ontology file declares, name → namespace, once the loading stage has read them.
     """
 
     generation: int | None = None
@@ -394,7 +394,7 @@ class JobContext:
         imports: The imports, direct and indirect, listed by the imports stage.
         import_files: The RDF file to load for each import that was fetched, by its IRI.
         triples: How many triples the store's default graph holds, once loaded.
-        prefixes: The prefixes the ontology file declares (`browl.prefixes.read_prefixes`), read by the pre-caching
+        prefixes: The prefixes the ontology file declares (`browl.loading.read_upload_prefixes`), read by the loading
             stage.
         started_at: When the job started.
     """

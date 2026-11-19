@@ -20,13 +20,12 @@ from browl.derived import Meta
 from browl.fuseki import FusekiClient, SparqlError, ping
 from browl.jobs import JobContext
 from browl.jobtypes import StageError
-from browl.loading import dataset_name
+from browl.loading import dataset_name, read_upload_prefixes
 from browl.precache.core import DerivedWriter, Hook, PreCacheContext
 from browl.precache.entities import entities
 from browl.precache.header import header_meta
 from browl.precache.keys import build_keys
 from browl.precache.names import names
-from browl.prefixes import read_prefixes
 
 logger = logging.getLogger(__name__)
 
@@ -47,17 +46,11 @@ key's order, as such a table is stored in that order."""
 async def pre_caching_stage(context: JobContext, http: httpx2.AsyncClient, hooks: Sequence[Hook] = HOOKS) -> None:
     """Build the new generation's derived database from the store just loaded, and swap it in (`pre_cache`).
 
-    First it reads the prefixes the uploaded file declares (`browl.prefixes.read_prefixes`), for CURIEs, into the
-    job's context, which stores them, since a rebuild after a restart can't count on the file.
-
     Raises:
         StageError: A query failed or returned an incomplete result, or the header query too many rows.
     """
     if context.ontology is None:  # nothing was loaded (as the loading stage skips it)
         return
-    source = context.converted or context.upload
-    if source is not None:  # the file the admin chose, whose prefixes a reasoned one may not keep
-        context.prefixes = await asyncio.to_thread(read_prefixes, source)
     await pre_cache(context, http, hooks)
 
 
@@ -66,7 +59,7 @@ async def pre_cache(context: JobContext, http: httpx2.AsyncClient, hooks: Sequen
 
     The pre-caching stage runs it, and so does a rebuild after a restart (`rebuild`), with a context made from the
     stored job state: it uses only the generation, reasoner, start time (the `meta` table's load time, the same for
-    both) and imports.
+    both), imports and prefixes.
 
     Args:
         context: The job.
@@ -96,9 +89,14 @@ async def pre_cache(context: JobContext, http: httpx2.AsyncClient, hooks: Sequen
 async def rebuild(context: JobContext, http: httpx2.AsyncClient, hooks: Sequence[Hook] = HOOKS) -> None:
     """Rebuild a job's derived database after a restart (`JobRunner.rebuild`), once Fuseki answers (`pre_cache`).
 
+    A job stored without prefixes, as one is by an upgrade from before they were stored, has them read again from its
+    uploaded file if that's still there (`browl.loading.read_upload_prefixes`); the job state then stores them.
+
     Raises:
         StageError: Fuseki didn't answer in time, or a query failed or returned an incomplete result.
     """
+    if not context.prefixes:
+        context.prefixes = await asyncio.to_thread(read_upload_prefixes, context.settings.data_dir, context.generation)
     await wait_for_fuseki(http)
     await pre_cache(context, http, hooks)
 
