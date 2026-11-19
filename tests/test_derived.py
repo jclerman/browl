@@ -141,15 +141,15 @@ def test_entities_with_iri(tmp_path: Path) -> None:
         connection.executemany(
             "INSERT INTO entity (iri, type, path, fragment) VALUES (?, ?, ?, ?)",
             [
-                ("urn:x:p", "object_property", "/_browl/iri?u=urn%3Ax%3Ap", None),
-                ("urn:x:p", "class", "/_browl/iri?u=urn%3Ax%3Ap", None),
+                ("urn:x:p", "object_property", "/_browl/iri?iri=urn%3Ax%3Ap", None),
+                ("urn:x:p", "class", "/_browl/iri?iri=urn%3Ax%3Ap", None),
                 ("urn:x:q", "class", "/q", None),
             ],
         )
     with closing(connect(tmp_path, 1, KEYS)) as connection:
         assert entities_with_iri(connection, "urn:x:p") == [
-            Entity(2, "urn:x:p", EntityType.CLASS, "/_browl/iri?u=urn%3Ax%3Ap", None),
-            Entity(1, "urn:x:p", EntityType.OBJECT_PROPERTY, "/_browl/iri?u=urn%3Ax%3Ap", None),
+            Entity(2, "urn:x:p", EntityType.CLASS, "/_browl/iri?iri=urn%3Ax%3Ap", None),
+            Entity(1, "urn:x:p", EntityType.OBJECT_PROPERTY, "/_browl/iri?iri=urn%3Ax%3Ap", None),
         ]
         assert entities_with_iri(connection, "urn:x:nothing") == []
 

@@ -155,7 +155,7 @@
           "name": "path",
           "type": "TEXT",
           "nullable": false,
-          "comment": "Its URL's path from the site's root (BASE_URL), in URI form (non-ASCII percent-encoded as UTF-8). For a fallback URL, the path and query string, /{RESERVED_PREFIX}/iri?u={the percent-encoded IRI}."
+          "comment": "Its URL's path from the site's root (BASE_URL), in URI form (non-ASCII percent-encoded as UTF-8). For a fallback URL, the path and query string, /{RESERVED_PREFIX}/iri?iri={the percent-encoded IRI}."
         },
         {
           "name": "fragment",

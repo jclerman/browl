@@ -71,7 +71,7 @@ def client(app: FastAPI) -> Iterator[TestClient]:
 
 def iri_link(iri: str, root: str = "") -> str:
     """Return the fallback route's link for an IRI."""
-    return f"{root}/_browl/iri?u={urllib.parse.quote(iri, safe='')}"
+    return f"{root}/_browl/iri?iri={urllib.parse.quote(iri, safe='')}"
 
 
 def test_home(client: TestClient) -> None:
@@ -270,7 +270,7 @@ def test_reserved_prefix_setting() -> None:
         assert response.status_code == 404
         assert "<h1>Not found</h1>" in response.text
         choose = client.get("/other.org/x").text
-        assert f'href="/_site/iri?u={urllib.parse.quote("http://other.org/x", safe="")}"' in choose
+        assert f'href="/_site/iri?iri={urllib.parse.quote("http://other.org/x", safe="")}"' in choose
         assert 'data-lookup="/_site/hash"' in client.get("/onto").text
 
 

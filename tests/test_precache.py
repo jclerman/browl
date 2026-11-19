@@ -980,8 +980,8 @@ async def test_entities(settings: Settings, caplog: pytest.LogCaptureFixture) ->
         ("http://example.net/x", "class", "/example.net/x", None),
         ("https://example.net/x", "class", "/example.net/x", None),
         ("http://example.net/other#C", "class", "/example.net/other", "C"),
-        (f"{base}/_browl/admin", "class", "/_browl/iri?u=http%3A%2F%2Fexample.org%2F_browl%2Fadmin", None),
-        ("urn:x:y", "class", "/_browl/iri?u=urn%3Ax%3Ay", None),
+        (f"{base}/_browl/admin", "class", "/_browl/iri?iri=http%3A%2F%2Fexample.org%2F_browl%2Fadmin", None),
+        ("urn:x:y", "class", "/_browl/iri?iri=urn%3Ax%3Ay", None),
     ]
     assert hash_prefixes(settings, 2) == ["/example.net/other", "/onto"]
     warning = "1 entity IRIs would have URLs under the reserved prefix /_browl, so they get fallback URLs:"

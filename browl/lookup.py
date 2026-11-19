@@ -1,7 +1,7 @@
 """Routing of entity URLs (DESIGN.md §2.3, Lookup): the home page, entity pages, disambiguation, hash IRIs, 404.
 
 Entity URLs come from IRIs, not from a route pattern, so a catch-all route, included after every other, looks each path
-up in the derived database. Two routes under the reserved prefix serve what a path can't: `iri?u=…`, an entity named
+up in the derived database. Two routes under the reserved prefix serve what a path can't: `iri?iri=…`, an entity named
 by its IRI (fallback URLs, and each of the IRIs that share a URL), and `hash?path=…&fragment=…`, which the hash-IRI
 script (`static/hash.js`) fetches for the entity named by the URL's fragment, which the server never sees.
 
@@ -149,18 +149,18 @@ def _hash_script(request: Request, prefix: str, path: str, prefix_only: bool) ->
 
 
 @reserved_router.api_route(f"/{FALLBACK_PATH}", methods=["GET", "HEAD"], include_in_schema=False)
-async def entity_by_iri(request: Request, u: str = "") -> Response:
-    """Serve the page of the entity with IRI `u`, if its URL is a fallback URL or shared by several IRIs.
+async def entity_by_iri(request: Request, iri: str = "") -> Response:
+    """Serve the page of the entity with IRI `iri`, if its URL is a fallback URL or shared by several IRIs.
 
     Any other entity is redirected to its own URL, so its page has one URL.
     """
     prefix: str = request.app.state.settings.reserved_prefix
-    found = await read_derived(request, lambda connection: _find_iri(connection, u))
-    own = [entity for entity in found.entities if entity.iri == u]
+    found = await read_derived(request, lambda connection: _find_iri(connection, iri))
+    own = [entity for entity in found.entities if entity.iri == iri]
     if not own:
         return not_found(request)
     entity = own[0]
-    if entity.path == fallback_path(prefix, u) or len(own) < len(found.entities):
+    if entity.path == fallback_path(prefix, iri) or len(own) < len(found.entities):
         return _page(request, prefix, own, found.meta)
     # Not a RedirectResponse, which would percent-encode characters such as `|` that stored URLs keep.
     return Response(status_code=302, headers={"Location": href(request, entity.path, entity.fragment)})

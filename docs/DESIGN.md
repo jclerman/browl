@@ -249,7 +249,7 @@ For a declared entity IRI, in order (`browl.urls.URLMapper`, P-10):
    (`…/x#`, which a URL can't tell apart from none), a `.` or `..` segment in the URL path, from the IRI's path or from
    a host such as `..` (a browser would resolve it away before sending the request), a native URL path that starts with
    `//` (a browser would read `//evil.com/x` as another host), a host that isn't valid, and IRIs whose native or proxied
-   URL would hit the reserved prefix (below). URL = `/{RESERVED_PREFIX}/iri?u={percent-encoded IRI}`. _(Q1b)_
+   URL would hit the reserved prefix (below). URL = `/{RESERVED_PREFIX}/iri?iri={percent-encoded IRI}`. _(Q1b)_
 
 An empty path counts as `/`, so `http://example.org` and `http://example.org/` share `/example.org/`.
 
@@ -279,13 +279,13 @@ fragment). A request is resolved by looking up the path (`browl.derived.entities
 | --- | --- |
 | the ontology IRI | Home page. If hash entities share this path, the page also includes the hash script below. |
 | one entity (non-hash) | That entity's page. An IRI declared with several types (punning) has a row for each, but is one entity here. |
-| several IRIs | Disambiguation page. _(Q1a)_ Mostly the `http` and `https` forms of an IRI (U-15); also IRIs whose hosts differ only in case, or that differ only in a default port or an empty path, and a native IRI whose URL is a proxied one's (`BASE_URL`/`example.org/x` and `http://example.org/x`). It links each IRI by its `iri?u=…` URL. |
+| several IRIs | Disambiguation page. _(Q1a)_ Mostly the `http` and `https` forms of an IRI (U-15); also IRIs whose hosts differ only in case, or that differ only in a default port or an empty path, and a native IRI whose URL is a proxied one's (`BASE_URL`/`example.org/x` and `http://example.org/x`). It links each IRI by its `iri?iri=…` URL. |
 | a hash prefix only | A small page with a script that reads the fragment and loads that entity, or shows "not found" when there is no fragment or no such entity. HTTP status 200, since the server can't see the fragment. _(Q2a)_ The script (`static/hash.js`) fetches the page from `hash?path=…&fragment=…` ([2.13](#213-url-space-for-the-services-own-pages)), passing on the URL's query (e.g. the tab), and shows its main content and title in place of its own page's. It runs again on `hashchange`, since a link between two hash entities under one path changes only the fragment. _(P-13)_ |
 | nothing | HTTP 404. |
 
 The catch-all route (`browl.lookup`) comes after every other route, and doesn't match paths under the reserved prefix
 (percent-decoded, as the router decodes them). It looks the path up as the request sent it (the raw path, less any
-root path), in URI form as the table stores it, not as the router percent-decodes it. `iri?u=…`
+root path), in URI form as the table stores it, not as the router percent-decodes it. `iri?iri=…`
 serves an entity whose URL is a fallback URL or shared by several IRIs; any other entity it redirects (302) to its own
 URL, so each page has one URL. _(P-13)_
 
@@ -969,7 +969,7 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | --- | --- |
 | `search` | Autocomplete endpoint (htmx fragment) and a full results page |
 | `tree/{hierarchy}` | Tree root page; `?node=` returns one node's children (htmx fragment) |
-| `iri?u=…` | Fallback entity URLs (Q1b) |
+| `iri?iri=…` | Fallback entity URLs (Q1b) |
 | `hash?path=…&fragment=…` | The page for a hash URL's path and fragment, for the hash-IRI script ([2.3](#23-iri--url-mapping), Lookup); marked `noindex`, as its pages are at their hash URLs |
 | `static/…` | CSS, htmx, hash-IRI script |
 | `admin/…` | Upload, status, admin list, sign-in/out |
@@ -991,7 +991,7 @@ Pages link to the service's own routes by root-relative paths, never by URLs bui
 
 **JSON API** (U-42, P-33). Read-only routes that return, as JSON, the same data the HTML pages show,
 from the same functions ([2.8](#28-entity-pages), "Panel data apart from its HTML"). An entity is named by its IRI in
-the query string, as in `iri?u=…`, so hash IRIs and IRIs that share a URL need no special handling. The routes, tentatively:
+the query string, as in `iri?iri=…`, so hash IRIs and IRIs that share a URL need no special handling. The routes, tentatively:
 
 | Path | Returns |
 | --- | --- |
