@@ -15,7 +15,6 @@ import functools
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
 from typing import Any
 
 import jpype
@@ -24,22 +23,12 @@ from pydantic import BaseModel
 from browl import manchester
 from browl.fuseki import FusekiClient
 from browl.owlapi import check_java_thread, ntriples_ontology
+from browl.precache.core import PREFIXES, sparql_file
 from browl.rdf import IRI, XSD_LEXICAL_FORMS, ntriples_iris
 
-_SPARQL_DIR = Path(__file__).parent / "sparql"
-_PROLOGUE = """PREFIX owl: <http://www.w3.org/2002/07/owl#>
-PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-"""
-
-
-def _query(name: str) -> str:
-    return _PROLOGUE + (_SPARQL_DIR / name).read_text(encoding="utf-8")
-
-
-_AXIOMS = _query("entity-axioms.rq")
-_SYMMETRIC = _query("entity-symmetric.rq")
-_TYPES = _query("entity-types.rq")
+_AXIOMS = PREFIXES + sparql_file("entity-axioms.rq")
+_SYMMETRIC = PREFIXES + sparql_file("entity-symmetric.rq")
+_TYPES = PREFIXES + sparql_file("entity-types.rq")
 _ENTITY = "$entity"
 _WHERE = "\nWHERE {"
 _NO_IRIS = "VALUES ?iri { }"
@@ -51,6 +40,8 @@ def _filled(query: str, dataset_clause: str, parts: dict[str, str]) -> str:
     The query files are valid SPARQL as they are, as `tests/test_sparql.py` checks: a placeholder is a variable, such
     as `$entity`, or an empty `VALUES` block.
     """
+    if _WHERE not in query:
+        raise ValueError(f"no {_WHERE.strip()!r} at the start of a line in the query")
     filled = query.replace(_WHERE, f"\n{dataset_clause}{_WHERE}", 1)
     for placeholder, value in parts.items():
         if placeholder not in filled:
@@ -205,7 +196,7 @@ def entity_closure(ontology: Any, iri: str) -> list[Any]:
         iri: The entity's IRI.
 
     Returns:
-        The `OWLAxiom`s, each once, sorted by their functional syntax.
+        The `OWLAxiom`s, each once.
     """
     check_java_thread()
     java = _java()
@@ -222,7 +213,7 @@ def entity_closure(ontology: Any, iri: str) -> list[Any]:
         for axiom in own:
             if str(axiom.getAxiomType().getName()) not in _LEFT_OUT:
                 found.setdefault(axiom.getAxiomWithoutAnnotations(), None)
-    return sorted(found, key=str)
+    return list(found)
 
 
 class _Literals:

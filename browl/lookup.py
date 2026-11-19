@@ -5,8 +5,8 @@ up in the derived database. Two routes under the reserved prefix serve what a pa
 by its IRI (fallback URLs, and each of the IRIs that share a URL), and `hash?path=…&fragment=…`, which the hash-IRI
 script (`static/hash.js`) fetches for the entity named by the URL's fragment, which the server never sees.
 
-Entity pages have tabs (`browl.tabs`). The Overview tab lists the entity's axioms (`browl.overview`) until P-16 adds
-the rest; the Usage tab is a placeholder until P-27, and the home page until P-17.
+Entity pages have tabs (`browl.tabs`): the Overview tab (`browl.overview`), and the Usage tab, a placeholder until P-27,
+as the home page is until P-17.
 """
 
 import sqlite3

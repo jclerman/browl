@@ -82,7 +82,7 @@ def whole(ntriples: bytes) -> tuple[list[Axiom], dict[str, list[Axiom]]]:
         every = [
             axiom.getAxiomWithoutAnnotations()
             for axiom in ontology.getAxioms()
-            if str(axiom.getAxiomType().getName()) not in {"Declaration", "AnnotationAssertion"}
+            if str(axiom.getAxiomType().getName()) not in axioms._LEFT_OUT
         ]
         iris = {str(entity.getIRI()) for entity in ontology.getSignature()}
         return axioms.render_axioms(every), {

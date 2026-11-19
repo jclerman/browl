@@ -15,7 +15,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 
-from browl.rdf import OWL, RDF, RDFS, XSD
+from browl.names import BUILTIN_PREFIXES
 
 KEYWORDS = frozenset(
     {
@@ -87,7 +87,7 @@ KEYWORDS = frozenset(
 """The words of the OWLAPI's Manchester syntax keywords (`ManchesterOWLSyntax`), without their colons; a test checks
 them against the OWLAPI's own list, so the template layer needs no JVM."""
 
-STANDARD_PREFIXES = {XSD: "xsd", RDF: "rdf", RDFS: "rdfs", OWL: "owl"}
+STANDARD_PREFIXES = {BUILTIN_PREFIXES[prefix]: prefix for prefix in ("xsd", "rdf", "rdfs", "owl")}
 """The standard vocabularies' namespaces, and the prefix each IRI in them is shown with."""
 
 _IRI = r"<[^\x00-\x20<>\"{}|^`\\]*+>"

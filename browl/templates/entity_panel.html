@@ -1,5 +1,5 @@
-{# An entity page's tab panel's content: within the page, or alone for htmx (`panel=1`). The Overview tab lists the
-   entity's axioms until P-16 groups them and adds its annotations; the Usage tab is a placeholder until P-27. #}
+{# An entity page's tab panel's content: within the page, or alone for htmx (`panel=1`). The Overview tab is
+   `browl.overview`'s; the Usage tab is a placeholder until P-27. #}
 {% from "axioms.html" import axiom_list %}
 {% if tab.slug == "usage" %}
 <p class="note">Where other entities use this one will be shown here.</p>

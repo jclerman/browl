@@ -236,6 +236,19 @@ def parse_tsv_row(line: str, width: int) -> tuple[Term | None, ...]:
     return tuple(parse_tsv_term(cell) for cell in cells)
 
 
+def _ntriples_triple(line: str) -> tuple[list[IRI], re.Match[str]]:
+    """Return a triple's subject, predicate and object IRIs, unescaped and checked, and the line's match.
+
+    Raises:
+        RDFSyntaxError: The line isn't a triple, or an IRI isn't valid.
+    """
+    match = _NT_TRIPLE.fullmatch(line)
+    if match is None:
+        raise RDFSyntaxError(f"not an N-Triples triple: {line[:200]!r}")
+    subject, _, predicate, object_iri = match.groups()[:4]
+    return [IRI(_unescape(iri)) for iri in (subject, predicate, object_iri) if iri is not None], match
+
+
 def check_ntriples_triple(line: str) -> None:
     """Check that a line is one N-Triples triple, whose terms' values are valid as the term classes check them.
 
@@ -245,13 +258,8 @@ def check_ntriples_triple(line: str) -> None:
     Raises:
         RDFSyntaxError: The line isn't a triple, or a term's value isn't valid (e.g. a relative IRI).
     """
-    match = _NT_TRIPLE.fullmatch(line)
-    if match is None:
-        raise RDFSyntaxError(f"not an N-Triples triple: {line[:200]!r}")
-    subject, _, predicate, object_iri, _, value, language, direction, datatype = match.groups()
-    for iri in (subject, predicate, object_iri):
-        if iri is not None:
-            IRI(_unescape(iri))
+    _, match = _ntriples_triple(line)
+    value, language, direction, datatype = match.groups()[5:]
     if value is not None:
         _literal(value, language, direction, datatype)
 
@@ -260,15 +268,15 @@ def ntriples_iris(ntriples: bytes) -> set[IRI]:
     """Return the IRIs that N-Triples name as a subject, predicate or object (not as a datatype), unescaped.
 
     Raises:
-        RDFSyntaxError: A line isn't a triple, or an IRI isn't valid (`check_ntriples_triple`).
+        RDFSyntaxError: The N-Triples aren't UTF-8, a line isn't a triple, or an IRI isn't valid
+            (`check_ntriples_triple`).
     """
+    try:
+        text = ntriples.decode()
+    except UnicodeDecodeError as error:
+        raise RDFSyntaxError(f"N-Triples that aren't UTF-8: {error}") from error
     found: set[IRI] = set()
-    for line in ntriples.decode().splitlines():
-        if not line:
-            continue
-        match = _NT_TRIPLE.fullmatch(line)
-        if match is None:
-            raise RDFSyntaxError(f"not an N-Triples triple: {line[:200]!r}")
-        subject, _, predicate, object_iri, *_ = match.groups()
-        found.update(IRI(_unescape(iri)) for iri in (subject, predicate, object_iri) if iri is not None)
+    for line in text.splitlines():
+        if line:
+            found.update(_ntriples_triple(line)[0])
     return found

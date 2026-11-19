@@ -274,8 +274,17 @@ def test_ntriples_iris() -> None:
     }
 
 
-@pytest.mark.parametrize("line", [b"# comment", b"<http://example.org/s> <rel> <http://example.org/o> ."])
+@pytest.mark.parametrize(
+    "line",
+    [
+        b"# comment",
+        b"<http://example.org/s> <rel> <http://example.org/o> .",
+        b"<http://example.org/s> <http://example.org/p> <http://example.org/a\\u0020b> .",  # an escaped space
+        b'<http://example.org/s> <http://example.org/p> "\xff" .',  # not UTF-8
+    ],
+    ids=["comment", "relative", "escaped-space", "not-utf-8"],
+)
 def test_ntriples_iris_rejects(line: bytes) -> None:
-    """Check that a line that isn't a triple, or an IRI that isn't valid, is refused."""
+    """Check that a line that isn't a triple, an IRI that isn't valid, or bytes that aren't UTF-8, are refused."""
     with pytest.raises(RDFSyntaxError):
         ntriples_iris(line + b"\n")
