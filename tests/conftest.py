@@ -1,19 +1,18 @@
 """Shared fixtures, and the skip rules for tests that need a JVM or Fuseki.
 
-`jvm` tests need Java and `robot.jar`: `ROBOT_JAR`, else the one `make robot-jar` downloads, else the settings'
-default path. JPype finds Java through `JAVA_HOME`, so point it at Java 21; on macOS, when it's unset, the tests set it
-to Java 21 if that's installed. `fuseki` tests need a Fuseki: the one at `BROWL_TEST_FUSEKI_URL`, or one the
-tests build and start from `docker/fuseki` with Docker. Tests that build stores for it (`fuseki_base`) also need Jena's
-tools (`JENA_HOME`, else the ones `make jena` downloads) and its base directory: for the Fuseki the tests start, a
-temporary directory mounted as its base; for one at `BROWL_TEST_FUSEKI_URL`, `BROWL_TEST_FUSEKI_BASE`. Locally,
-tests whose needs are missing are skipped; in CI
-(`CI` set) they fail instead, so CI runs every test. Mark such tests `jvm` or `fuseki`, and have them use the `jvm` or
-`fuseki_url` fixture.
-
-The tests build the Fuseki image they start, unless `BROWL_TEST_FUSEKI_IMAGE` names one already built, as CI does.
+`jvm` tests need Java and `robot.jar`: `ROBOT_JAR`, else the one `make robot-jar` downloads, else the settings' default
+path. JPype finds Java through `JAVA_HOME`, so point it at Java 21; on macOS, when it's unset, the tests set it to Java
+21 if that's installed. `fuseki` tests need a Fuseki: the one at `BROWL_TEST_FUSEKI_URL`, or one the tests start from
+`docker/fuseki` with Docker, building the image unless `BROWL_TEST_FUSEKI_IMAGE` names one already built (as CI does).
+Tests that build stores for it (`fuseki_base`) also need Jena's tools (`JENA_HOME`, else the ones `make jena` downloads)
+and its base directory: for the Fuseki the tests start, a temporary directory mounted as its base; for one at
+`BROWL_TEST_FUSEKI_URL`, `BROWL_TEST_FUSEKI_BASE`. Locally, tests whose needs are missing are skipped; in CI (`CI` set)
+they fail instead, so CI runs every test. Mark such tests `jvm` or `fuseki`, and have them use the `jvm` or `fuseki_url`
+fixture.
 """
 
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -148,10 +147,11 @@ def jvm() -> None:
 
 
 def _docker(*args: str) -> str:
-    """Run a Docker command and return its output; on failure, raise an error that includes what it wrote to stderr."""
-    result = subprocess.run(["docker", *args], check=False, capture_output=True, text=True)
+    """Run a Docker command and return its output; raise with its stderr if it fails."""
+    command = ["docker", *args]
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
     if result.returncode:
-        raise RuntimeError(f"`docker {' '.join(args)}` failed with exit status {result.returncode}:\n{result.stderr}")
+        raise RuntimeError(f"`{shlex.join(command)}` failed with exit status {result.returncode}:\n{result.stderr}")
     return result.stdout.strip()
 
 
@@ -193,6 +193,8 @@ def fuseki_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[st
     container = _docker(
         "run",
         "--detach",
+        "--pull",
+        "never",
         "--rm",
         "--publish",
         "127.0.0.1::3030",
