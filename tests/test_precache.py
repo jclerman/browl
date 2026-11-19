@@ -12,6 +12,7 @@ import urllib.parse
 import uuid
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import closing
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -48,73 +49,37 @@ from browl.precache.keys import build_keys
 from browl.precache.stage import HOOKS, build, pre_cache, pre_caching_stage, rebuild, remove_previous
 from browl.settings import Settings
 from tests.conftest import DATA
-from tests.helpers import make_app, make_settings
+from tests.helpers import (
+    DC_TITLE,
+    DCTERMS_TITLE,
+    END,
+    ENTITY_END,
+    ENTITY_HEADER,
+    EX,
+    HEADER,
+    LABEL,
+    LOADED_AT,
+    ONTOLOGY,
+    ONTOLOGY_RESULT,
+    OWL,
+    VERSION,
+    VERSION_INFO,
+    VERSION_IRI,
+    answer,
+    connect,
+    fuseki,
+    job,
+    make_app,
+    make_settings,
+)
 
 pytestmark = pytest.mark.anyio
-
-EX = "http://example.org/"
-ONTOLOGY = f"{EX}onto"
-VERSION = f"{EX}onto/1.0"
-OWL = "http://www.w3.org/2002/07/owl#"
-VERSION_IRI = f"<{OWL}versionIRI>"
-VERSION_INFO = f"<{OWL}versionInfo>"
-DCTERMS_TITLE = "<http://purl.org/dc/terms/title>"
-DC_TITLE = "<http://purl.org/dc/elements/1.1/title>"
-LABEL = "<http://www.w3.org/2000/01/rdf-schema#label>"
-HEADER = f"?ontology\t?property\t?value\t?{END_VARIABLE}\n"
-END = "\t\t\ttrue\n"
 
 
 @pytest.fixture
 def settings(data_dir: Path) -> Settings:
     """Return the test settings, with `DATA_DIR` an empty directory."""
     return make_settings()
-
-
-ONTOLOGY_RESULT = (
-    f"{HEADER}<{ONTOLOGY}>\t{VERSION_IRI}\t<{VERSION}>\t\n"
-    f'<{ONTOLOGY}>\t{DCTERMS_TITLE}\t"Onto"@en\t\n<{ONTOLOGY}>\t{VERSION_INFO}\t"1.0"\t\n{END}'
-)
-LOADED_AT = datetime(2026, 11, 17, tzinfo=UTC)
-ENTITY_HEADER = f"?entity\t?type\t?{END_VARIABLE}\n"
-ENTITY_END = "\t\ttrue\n"
-ENTITY_RESULT = f"{ENTITY_HEADER}<{EX}onto#A>\t<{OWL}Class>\t\n{ENTITY_END}"
-
-
-def answer(query: str) -> str:
-    """Return a stubbed Fuseki's answer to a query: `ENTITY_RESULT` to the entity list, else `ONTOLOGY_RESULT`."""
-    return ENTITY_RESULT if "?entity ?type" in query else ONTOLOGY_RESULT
-
-
-def fuseki(*bodies: str, queries: list[str] | None = None) -> httpx2.AsyncClient:
-    """Return an HTTP client whose stubbed Fuseki answers the queries with these TSV bodies in turn, recording them.
-
-    Without bodies, each query gets its `answer`; the last body answers the rest of the queries.
-    """
-    answers = list(bodies)
-
-    async def handler(request: httpx2.Request) -> httpx2.Response:
-        query = urllib.parse.parse_qs(request.content.decode())["query"][0]
-        if queries is not None:
-            queries.append(query)
-        if not answers:
-            body = answer(query)
-        else:
-            body = answers.pop(0) if len(answers) > 1 else answers[0]
-        return httpx2.Response(200, headers={"Content-Type": TSV}, content=body)
-
-    return httpx2.AsyncClient(base_url="http://fuseki:3030", transport=httpx2.MockTransport(handler))
-
-
-def job(settings: Settings, generation: int, imports: list[ImportResult] | None = None) -> JobContext:
-    """Return a job's context as the loading stage leaves it."""
-    upload = settings.data_dir / "uploads" / str(generation) / "ontology.ttl"
-    return JobContext(generation, settings, Reasoner.ELK, upload=upload, imports=imports or [], started_at=LOADED_AT)
-
-
-def connect(settings: Settings, generation: int, hooks: Sequence[Hook] = HOOKS) -> sqlite3.Connection:
-    """Open a generation's derived database, built with these settings and hooks (`derived.connect`)."""
-    return derived.connect(settings.data_dir, generation, build_keys(settings, hooks))
 
 
 def is_current(settings: Settings, generation: int, hooks: Sequence[Hook] = HOOKS) -> bool:
@@ -814,10 +779,44 @@ def test_restart_rebuilds(settings: Settings, prepare: Callable[[Settings], obje
         state = app.state.jobs.state
         assert (state.generation, state.stage, state.ready_generation, state.started_at) == (2, Stage.READY, 2, STARTED)
         assert client.get("/probe").json() == 2
-    assert fuseki.requests == ["/$/ping", f"/{dataset_name(2)}/sparql", f"/{dataset_name(2)}/sparql"]
+    assert fuseki.requests == ["/$/ping", *[f"/{dataset_name(2)}/sparql"] * (1 + len(HOOKS))]
     assert derived_files(settings) == ["2.sqlite3"]
     with closing(connect(settings, 2)) as connection:
         assert read_meta(connection) == Meta(2, Reasoner.ELK, STARTED, ONTOLOGY, VERSION, "Onto", "1.0")
+
+
+@pytest.mark.parametrize(
+    ("stored", "upload", "expected"),
+    [
+        pytest.param({"o": f"{EX}onto#"}, None, {"o": f"{EX}onto#"}, id="stored"),
+        pytest.param({"o": f"{EX}onto#"}, f"@prefix f: <{EX}onto#> .\n", {"o": f"{EX}onto#"}, id="stored, not read"),
+        pytest.param({}, f"@prefix f: <{EX}onto#> .\n", {"f": f"{EX}onto#"}, id="read again"),
+        pytest.param({}, None, {}, id="none"),
+    ],
+)
+def test_restart_rebuild_keeps_prefixes(
+    settings: Settings, stored: dict[str, str], upload: str | None, expected: dict[str, str]
+) -> None:
+    """Check that a rebuild uses the job's stored prefixes, or reads them again from its upload if none are stored (S2).
+
+    The job state then stores them, and the entities get their CURIEs.
+    """
+    JobStore(settings.data_dir / STATE_DB).write(replace(READY, prefixes=stored))
+    if upload is not None:
+        path = settings.data_dir / "uploads" / "2" / "ontology.ttl"
+        path.parent.mkdir(parents=True)
+        path.write_text(upload)
+    app = restart(StubFuseki())
+    with TestClient(app) as client:
+        assert client.portal is not None
+        client.portal.call(app.state.jobs.wait)
+    assert JobStore(settings.data_dir / STATE_DB).read().prefixes == expected
+    with closing(connect(settings, 2)) as connection:
+        assert connection.execute("SELECT curie FROM entity WHERE iri = ?", (f"{EX}onto#A",)).fetchone() == (
+            f"{next(iter(expected))}:A" if expected else None,
+        )
+        found = dict(connection.execute("SELECT prefix, namespace FROM prefix").fetchall())
+    assert found.items() >= expected.items()
 
 
 def test_restart_rebuild_fails(settings: Settings) -> None:
@@ -931,15 +930,17 @@ async def test_read_derived_without_ready_generation() -> None:
         await read_derived(request, read_meta)
 
 
-def entity_rows(settings: Settings, generation: int) -> list[tuple[str, str, str, str | None]]:
-    """Return a generation's `entity` rows, as (IRI, type, path, fragment), in id order."""
-    with closing(connect(settings, generation)) as connection:
+def entity_rows(
+    settings: Settings, generation: int, hooks: Sequence[Hook] = (entities,)
+) -> list[tuple[str, str, str, str | None]]:
+    """Return a generation's `entity` rows, as (IRI, type, path, fragment), in id order, built with these hooks."""
+    with closing(connect(settings, generation, hooks)) as connection:
         return connection.execute("SELECT iri, type, path, fragment FROM entity ORDER BY id").fetchall()
 
 
-def hash_prefixes(settings: Settings, generation: int) -> list[str]:
-    """Return a generation's `hash_prefix` paths, in stored order."""
-    with closing(connect(settings, generation)) as connection:
+def hash_prefixes(settings: Settings, generation: int, hooks: Sequence[Hook] = (entities,)) -> list[str]:
+    """Return a generation's `hash_prefix` paths, in stored order, from a build with these hooks."""
+    with closing(connect(settings, generation, hooks)) as connection:
         return [row[0] for row in connection.execute("SELECT path FROM hash_prefix")]
 
 
@@ -984,7 +985,7 @@ async def test_entities(settings: Settings, caplog: pytest.LogCaptureFixture) ->
     assert hash_prefixes(settings, 2) == ["/example.net/other", "/onto"]
     warning = "1 entity IRIs would have URLs under the reserved prefix /_browl, so they get fallback URLs:"
     assert caplog.messages == [f"{warning} ['{base}/_browl/admin']"]
-    with closing(connect(settings, 2)) as connection:
+    with closing(connect(settings, 2, [entities])) as connection:
         shared = entities_at(connection, "/example.net/x")
         assert [(entity.iri, entity.type) for entity in shared] == [
             ("http://example.net/x", EntityType.CLASS),
@@ -1072,7 +1073,7 @@ async def test_entities_on_real_fuseki(fuseki_url: str, settings: Settings) -> N
             await pre_caching_stage(job(settings, generation, [ImportResult(f"{EX}imported", triples=4)]), http)
         finally:
             await http.delete(f"/$/datasets/{name}")
-    rows = entity_rows(settings, generation)
+    rows = entity_rows(settings, generation, HOOKS)
     assert rows[0] == (family, "ontology", "/family", None)
     assert sorted(rows[1:]) == [
         (f"{family}#Female", "class", "/family", "Female"),
@@ -1085,4 +1086,4 @@ async def test_entities_on_real_fuseki(fuseki_url: str, settings: Settings) -> N
         (f"{family}#rank", "annotation_property", "/family", "rank"),
         ("https://example.org/family#Person", "class", "/family", "Person"),
     ]
-    assert hash_prefixes(settings, generation) == ["/family"]
+    assert hash_prefixes(settings, generation, HOOKS) == ["/family"]

@@ -20,11 +20,12 @@ from browl.derived import Meta
 from browl.fuseki import FusekiClient, SparqlError, ping
 from browl.jobs import JobContext
 from browl.jobtypes import StageError
-from browl.loading import dataset_name
+from browl.loading import dataset_name, read_upload_prefixes
 from browl.precache.core import DerivedWriter, Hook, PreCacheContext
 from browl.precache.entities import entities
 from browl.precache.header import header_meta
 from browl.precache.keys import build_keys
+from browl.precache.names import names
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ FUSEKI_WAIT_S = 120.0
 FUSEKI_RETRY_S = (0.5, 5.0)
 """The first and the longest wait between pings while waiting for Fuseki; each wait doubles the last."""
 
-HOOKS: tuple[Hook, ...] = (entities,)
+HOOKS: tuple[Hook, ...] = (entities, names)
 """The hooks the app runs, in order: a hook may read tables an earlier one filled.
 
 A hook creates the indexes of each table it fills once it's done (`DerivedWriter.create_indexes`), so later hooks can
@@ -58,7 +59,7 @@ async def pre_cache(context: JobContext, http: httpx2.AsyncClient, hooks: Sequen
 
     The pre-caching stage runs it, and so does a rebuild after a restart (`rebuild`), with a context made from the
     stored job state: it uses only the generation, reasoner, start time (the `meta` table's load time, the same for
-    both) and imports.
+    both), imports and prefixes.
 
     Args:
         context: The job.
@@ -88,9 +89,14 @@ async def pre_cache(context: JobContext, http: httpx2.AsyncClient, hooks: Sequen
 async def rebuild(context: JobContext, http: httpx2.AsyncClient, hooks: Sequence[Hook] = HOOKS) -> None:
     """Rebuild a job's derived database after a restart (`JobRunner.rebuild`), once Fuseki answers (`pre_cache`).
 
+    A job stored without prefixes, as one is by an upgrade from before they were stored, has them read again from its
+    uploaded file if that's still there (`browl.loading.read_upload_prefixes`); the job state then stores them.
+
     Raises:
         StageError: Fuseki didn't answer in time, or a query failed or returned an incomplete result.
     """
+    if not context.prefixes:
+        context.prefixes = await asyncio.to_thread(read_upload_prefixes, context.settings.data_dir, context.generation)
     await wait_for_fuseki(http)
     await pre_cache(context, http, hooks)
 

@@ -44,3 +44,6 @@ comments:
         The ontology's imports, direct and indirect, as a JSON list of browl.jobtypes.ImportResult; '[]' until the
         imports stage lists them.
       triples: How many triples the store's default graph holds once loaded, the ontology without its imports.
+      prefixes: >-
+        The prefixes the ontology file declares, as a JSON object of name to namespace IRI, for CURIEs; '{}' until
+        the loading stage reads them.

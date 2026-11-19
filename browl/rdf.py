@@ -35,6 +35,9 @@ _STRING = rf"\"((?:[^\"\\\n\r]++|\\[tbnrf\"'\\]|{_UCHAR})*+)\""
 _LANGUAGE = rf"@({_LANGUAGE_TAG})(?:--(ltr|rtl))?"  # RDF 1.2 adds a base direction
 _LITERAL = rf"{_STRING}(?:{_LANGUAGE}|\^\^{_IRI})?"
 
+PREFIX_NAME = re.compile(r"([A-Za-z_][A-Za-z0-9._-]*)?")
+"""A CURIE prefix name browl accepts, in configuration or from an ontology: ASCII, and empty for the default prefix."""
+
 _IRI_VALUE = re.compile(rf"[A-Za-z][A-Za-z0-9+.\-]*+:{_IRI_CHAR}*+")
 _BLANK_NODE_VALUE = re.compile(_BLANK_NODE_LABEL)
 _LOWERCASE_LANGUAGE_TAG = re.compile(r"[a-z]+(?:-[a-z0-9]+)*")

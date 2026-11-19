@@ -22,12 +22,14 @@ from pathlib import Path
 import httpx2
 
 from browl.fuseki import FusekiAdmin, FusekiAdminError, FusekiClient, SparqlError
+from browl.imports import CONVERTED
 from browl.jobs import JobContext
 from browl.jobtypes import StageError
+from browl.prefixes import read_prefixes
 from browl.process import Completed, run_process
 from browl.rdf import Literal, RDFSyntaxError, Term, parse_tsv_header, parse_tsv_row
 from browl.settings import Settings
-from browl.upload import check_job_file
+from browl.upload import STORED_SUFFIXES, Syntax, check_job_file, upload_path
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +167,8 @@ async def remove_stale_stores(settings: Settings, admin: FusekiAdmin, name: str)
 async def loading_stage(context: JobContext, http: httpx2.AsyncClient) -> None:
     """Load the ontology and its fetched imports into a new TDB2 store, and switch Fuseki to it.
 
-    Sets the context's `triples`, and each loaded import's.
+    Sets the context's `triples`, and each loaded import's, and its `prefixes` (`read_upload_prefixes`), so the job
+    state stores them before pre-caching starts.
 
     Args:
         context: The job.
@@ -209,6 +212,24 @@ async def loading_stage(context: JobContext, http: httpx2.AsyncClient) -> None:
         for result in context.imports
     ]
     await _remove_others(admin, name)
+    context.prefixes = await asyncio.to_thread(read_upload_prefixes, settings.data_dir, context.generation)
+
+
+def read_upload_prefixes(data_dir: Path, generation: int) -> dict[str, str]:
+    """Return the prefixes a generation's uploaded file declares (`browl.prefixes.read_prefixes`); none if it's gone.
+
+    They're read from the file the admin chose, not a reasoned one, whose writer may not keep them: the upload, or the
+    Turtle an OFN upload was converted to (`browl.imports.CONVERTED`), as the prefixes reader reads only RDF.
+    """
+    for path in (
+        upload_path(data_dir, generation, STORED_SUFFIXES[Syntax.OFN]).with_name(CONVERTED),
+        upload_path(data_dir, generation, STORED_SUFFIXES[Syntax.TURTLE]),
+        upload_path(data_dir, generation, STORED_SUFFIXES[Syntax.RDF_XML]),
+    ):
+        if path.is_file():
+            return read_prefixes(path)
+    logger.warning("Load job %d's uploaded file is gone, so the ontology's prefixes aren't known", generation)
+    return {}
 
 
 async def _discard(admin: FusekiAdmin, name: str, store: Path, registering: bool) -> None:

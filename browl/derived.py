@@ -164,8 +164,8 @@ class Entity:
         type: Its type; an IRI declared with several types has an `Entity` for each.
         path: The path of its URL (`browl.urls.EntityURL`).
         fragment: The fragment of a hash IRI's URL; None for any other.
-        display_name: Its display name; None until P-11.
-        curie: Its CURIE; None if it has none, and until P-11.
+        display_name: Its display name (DESIGN.md §2.7): its best name value, else its CURIE, else its IRI.
+        curie: Its CURIE; None if no prefix covers it.
     """
 
     id: int

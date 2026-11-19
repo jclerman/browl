@@ -2,7 +2,7 @@
 
 ## Description
 
-CURIE prefixes, for entity.curie (the ontology's own, built-ins, and EXTRA_PREFIXES overrides).
+CURIE prefixes, for entity.curie: the built-in ones, overridden by those the ontology file declares, overridden by EXTRA_PREFIXES.
 
 <details>
 <summary><strong>Table Definition</strong></summary>

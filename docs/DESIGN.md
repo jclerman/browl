@@ -200,7 +200,7 @@ containers' own file systems hold only what's lost harmlessly (last row).
 
 | Data | Path in the container | Held by | Mounted by | Authoritative? Losing it costs |
 | --- | --- | --- | --- | --- |
-| Job state: generation numbers, the latest job's stage, reason, imports and triple counts | `DATA_DIR/state.sqlite3` (`/data`) | `data` volume | app | Authoritative. Lost, the site shows no ontology until an admin uploads again; Fuseki's store is then orphaned, and replaced by the next load (2.4) |
+| Job state: generation numbers, the latest job's stage, reason, imports, triple counts and the ontology file's prefixes | `DATA_DIR/state.sqlite3` (`/data`) | `data` volume | app | Authoritative. Lost, the site shows no ontology until an admin uploads again; Fuseki's store is then orphaned, and replaced by the next load (2.4) |
 | Job lock (`flock`) | `DATA_DIR/job.lock` | `data` volume | app | No; recreated |
 | Derived database: whole-ontology data and the ontology's `meta` row ([2.5](#25-derived-data-pre-caching)) | `DATA_DIR/derived/{generation}.sqlite3` | `data` volume | app | No: rebuilt from Fuseki's store. Lost, the next start rebuilds it, with the site on "loading" meanwhile (2.4) |
 | The latest job's files: the upload, fetched imports, `catalog.xml`, converted and reasoned ontology | `DATA_DIR/uploads/{generation}/` | `jobs` volume | app, sandbox (both read-write) | No: nothing reads them once the job ends, and each upload deletes the previous job's. Lost, nothing changes |
@@ -570,12 +570,12 @@ are documented in [`SCHEMA.md`](SCHEMA.md):
 | Table | Holds | Filled from |
 | --- | --- | --- |
 | `entity` | The ontology and every declared class and property: its IRI, type, URL path and fragment (2.3), display name and CURIE | The entity-list query (every declared class and property with its type; the ontology's IRI comes from the header query): 22–29 s on NCBITaxon, 3.03 M rows. The whole hook, which computes each batch's URLs and inserts it before reading the next, takes 25–26 s, and the table and its indexes 530–650 MiB (P-10) |
-| `name_value` | Name-property values, one row per direct and per RDFS-entailed property | The dictionary query: 41–48 s on NCBITaxon, 3.56 M rows |
+| `name_value` | Name-property values, one row per direct and per RDFS-entailed property | The name values query, through a property path (below): 41–48 s on NCBITaxon, 3.56 M rows. The whole hook, which also sets each entity's CURIE and display name, takes about 85 s ([P-11 findings](../research/P-11/README.md)) |
 | `edge` | Parent → child per hierarchy (classes; each property type), between equivalence-group representatives | The edges query: 18–19 s on NCBITaxon |
 | `equiv_group` | Entity → group representative | Union-find over `owl:equivalentClass` between named classes |
 | `counts` | Per node: immediate children, distinct descendants | `edge`, in Python (below) |
 | `hash_prefix` | Distinct URL paths that have hash entities under them | `entity` |
-| `prefix` | CURIE prefix → namespace | The ontology's own, built-ins, configured overrides |
+| `prefix` | CURIE prefix → namespace | The built-in ones, overridden by the ontology file's own, overridden by `EXTRA_PREFIXES` ([2.7](#27-display-names)) |
 | `meta` | Ontology IRI, version IRI, title, `owl:versionInfo`, reasoner used, load time (the job's start), generation number | The ontology header query (below) and the job |
 | `build_key` | Component → build key (below) | `browl.precache.keys` |
 
@@ -637,9 +637,10 @@ The result is read as it streams, keeping only that ontology's values, and one o
 fails pre-caching, so an upload that declares millions of ontologies can't hold the job lock while they're all read.
 The same query reads that ontology's title and `owl:versionInfo`, literals only. The title is the first property's
 value among `dcterms:title`, `dc:title`, then `NAME_PROPERTIES`, chosen by language ranking ([2.7](#27-display-names))
-then lexical order, with a warning if several tie; without one, pages show the IRI. Several `owl:versionInfo` values are
-chosen the same way, with a warning. The version shown is the version IRI, else the version info (`Meta.version`). The
-rest of the ontology's annotations aren't stored: the home page (P-17) queries Fuseki for them.
+then lexical order, with a warning if several tie; a blank value (only spaces, tabs and line breaks) isn't one; without
+one, pages show the IRI. Several `owl:versionInfo` values are chosen the same way, with a warning. The version shown is
+the version IRI, else the version info (`Meta.version`). The rest of the ontology's annotations aren't stored: the home
+page (P-17) queries Fuseki for them.
 
 An earlier design also had a `usage` table, because the OWLAPI can't find annotation assertions by value. Fuseki can
 (`?s ?p <entity>`), so P-27 decides whether any part of it is still needed ([2.8](#28-entity-pages)).
@@ -662,11 +663,19 @@ highest index.
 | `rdfs:subClassOf` is transitive (rdfs11) | Covered by the descendant counts, computed in Python (above). |
 | An instance of a class is an instance of its super-classes (rdfs9) | For the Individuals tab (Later, U-18), if it lists indirect members. |
 
-Jena computes the sub-property closure in one of two ways; P-11 picks one before building the dictionary:
+Jena computes the sub-property closure with a property path in the name values query
+(`?property rdfs:subPropertyOf* ?name`, `browl.precache.names`). Its zero-length step gives the name property itself,
+and it reaches each sub-property once, through cycles too. _(P-11)_
 
-- a property path in the dictionary query (`?p rdfs:subPropertyOf* ?name`); S-4 measured it at little extra cost;
-- an RDFS endpoint configured in Fuseki (`ja:DatasetRDFS`) over the same store; not tried yet. The plain endpoint
-  stays too: under RDFS inference, direct subclass edges can't be told apart from entailed ones.
+- **Why a property path:** S-4 measured it at little extra cost, and it needs nothing from Fuseki's configuration.
+- **Not an RDFS endpoint** (`ja:DatasetRDFS`) over the same store: each generation's dataset would need a second,
+  RDFS-inferring endpoint, configured when it's registered, beside the plain one (under RDFS inference, direct subclass
+  edges can't be told apart from entailed ones), and its other entailments (e.g. types from domains and ranges) would
+  have to be kept out of every query that uses it.
+- **Duplicates:** a value under a name property both directly and through a sub-property, or through several, is
+  stored once per name property, as direct if it's direct at all.
+- **Batches:** each bulk query's batches are read and inserted in turn. Reading the next batch while the last is
+  inserted saved nothing on NCBITaxon, as both threads need the GIL ([P-11 findings](../research/P-11/README.md)).
 
 **Subclass closure, not stored.** Queries over `rdfs:subClassOf+` take up to 0.9 s on NCBITaxon, so pages never use them:
 descendant counts are precomputed (above). If a later feature needs to list or count descendants on demand, the fallback
@@ -703,11 +712,19 @@ ranking. _(Q18, Q18a)_ For each entity, the display name is the first value foun
 
 1. property position in the list,
 2. then language ranking,
-3. then shortest value,
-4. then alphabetical,
-5. with the CURIE as the fallback, then the full IRI.
+3. then a direct value before one entailed through a sub-property (2.5), _(P-11)_
+4. then shortest value,
+5. then alphabetical (by code point),
+6. with the CURIE as the fallback, then the full IRI.
 
-It is computed during pre-caching, so link text costs nothing at render time.
+A blank value (only spaces, tabs and line breaks) is skipped, as its links would have no text.
+
+The ontology's display name is its title (2.5, The ontology's IRI) if it has one. It is computed during pre-caching, so
+link text costs nothing at render time.
+
+**Name properties** are given as IRIs or CURIEs. A CURIE is expanded with the built-in prefixes and `EXTRA_PREFIXES`,
+not the ontology's own, so a setting means the same whatever is loaded; one that's still not an IRI is left out, with a
+warning.
 
 **Language matching** (wherever tags are compared, including search ranking, [2.6](#26-search)):
 
@@ -722,6 +739,21 @@ It is computed during pre-caching, so link text costs nothing at render time.
 **CURIE prefixes:** the prefixes declared in the ontology file, plus a built-in set (`rdf`, `rdfs`, `owl`, `xsd`,
 `skos`, `obo`, `dc`, `dcterms`, …), with configured mappings overriding both (O-11). An IRI with no matching prefix has
 no CURIE. _(Q18b)_
+
+- **Precedence:** the ontology's prefixes override the built-in ones of the same name, and `EXTRA_PREFIXES` overrides
+  both. An entity's CURIE comes from the longest namespace that's a proper prefix of its IRI (an IRI that is a namespace
+  gets none). Of several prefixes for that namespace, a configured one is taken first, then one the ontology declares,
+  then a named one rather than the default (empty) prefix, then the first alphabetically. _(P-11)_
+- **The ontology's prefixes** are read from the start of the uploaded file (`converted.ttl` for an OFN upload), not a
+  reasoned one, whose writer may not keep them: Turtle's prefix directives before its first statement, or the
+  namespaces on RDF/XML's root element (`browl.prefixes`). That's where tools write them; a declaration further on is
+  missed. A declared name that isn't a prefix name (as `EXTRA_PREFIXES` names must be: ASCII letters, digits, `_`,
+  `-` and `.`, not starting with a digit, `-` or `.`), or that is a URL scheme such as `http`, is left out with a
+  warning, as is a namespace that isn't an absolute IRI once resolved against a Turtle base.
+- **Stored with the job:** the loading stage reads them at its end, so the job state stores them as pre-caching starts,
+  before the new derived file can be swapped in: a rebuild after a restart can't count on the file. A rebuild of a job
+  stored with none, as after the upgrade that started storing them, reads them again from its upload
+  (`DATA_DIR/uploads/{generation}/`) if that's still there; the job state then stores them. _(P-11)_
 
 ### 2.8 Entity pages
 
@@ -856,6 +888,18 @@ Every page has the same frame (U-27, U-28, U-29):
 - A dark theme that follows the browser setting (`prefers-color-scheme`).
 - Generous but not wasteful spacing; works from phone width up.
 - Plain CSS with custom properties for the colors, so the palette can be tuned in one place. No CSS framework.
+
+**Rendering names and IRIs** (from P-11's review, for P-14 and every page after it): display names, CURIEs and IRIs
+come from the uploaded ontology, so they're untrusted text. Autoescaping covers HTML text and quoted attributes, not
+JSON, scripts or unquoted attributes.
+
+- A CURIE or display name never goes in an `href`, or anywhere a URL is expected: `EXTRA_PREFIXES` may name a prefix
+  `http`, making CURIEs that look like URLs (the ontology's own such names are left out, 2.7).
+- Namespaces and IRIs can have any scheme, `javascript:` included, so only `http` and `https` IRIs are rendered as
+  links to themselves; others are shown as text.
+- Labels can be huge, so rendered names are capped in length, with the rest elided.
+- Labels can hold bidirectional-text overrides, so each name is isolated (`<bdi>`, or `dir="auto"`) from the text
+  around it.
 
 ### 2.10 Page cache
 
@@ -1027,7 +1071,7 @@ go into this document.
 | --- | --- | --- | --- | --- | --- |
 | P-9 | Derived database schema; atomic swap; generation number; reuse on restart when current; completeness check for bulk query results (2.14) | N-4 | P-8 | Done | [#21](https://github.com/jclerman/browl/issues/21) |
 | P-10 | Entities (entity-list query), IRI → URL mapping, hash prefixes, collision warnings | U-2, U-13, U-15, O-3 | P-9 | Done | [#22](https://github.com/jclerman/browl/issues/22) |
-| P-11 | Name values, direct and entailed through sub-properties (first decide: property path or Fuseki-configured RDFS), display names, CURIE prefixes; measure whether reading the next batch while the last is inserted pays | U-6, O-4, O-5, O-11 | P-10 | To do | [#23](https://github.com/jclerman/browl/issues/23) |
+| P-11 | Name values, direct and entailed through sub-properties (first decide: property path or Fuseki-configured RDFS), display names, CURIE prefixes; measure whether reading the next batch while the last is inserted pays | U-6, O-4, O-5, O-11 | P-10 | Done | [#23](https://github.com/jclerman/browl/issues/23) |
 | P-12 | Hierarchies (edges query), equivalence groups, distinct descendant counts | U-7, U-8, U-9 | P-10, S-3 | To do | [#24](https://github.com/jclerman/browl/issues/24) |
 
 ### Phase 4: Browsing

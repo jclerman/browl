@@ -1,9 +1,13 @@
-"""Choosing among name values (DESIGN.md §2.7): language ranking and CURIE expansion."""
+"""Name values (DESIGN.md §2.6, §2.7): the name properties, language ranking, normalization and CURIE expansion."""
 
+import logging
+import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 
-from browl.rdf import Literal
-from browl.settings import UNTAGGED
+from browl.rdf import IRI, Literal, RDFSyntaxError
+from browl.settings import UNTAGGED, Settings
+
+logger = logging.getLogger(__name__)
 
 BUILTIN_PREFIXES = {
     "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
@@ -17,6 +21,9 @@ BUILTIN_PREFIXES = {
 }
 """The built-in CURIE prefixes (§2.7), which `EXTRA_PREFIXES` overrides."""
 
+BLANK = " \t\n\r"
+"""The characters of a blank name value or title, which is never a display name: its links would have no text."""
+
 
 def expand_curie(name: str, prefixes: Mapping[str, str]) -> str:
     """Return the IRI a CURIE stands for, or the name itself if its prefix isn't known (it's taken to be an IRI)."""
@@ -24,6 +31,33 @@ def expand_curie(name: str, prefixes: Mapping[str, str]) -> str:
     if colon and prefix in prefixes and not local.startswith("//"):
         return prefixes[prefix] + local
     return name
+
+
+def name_property_iris(settings: Settings) -> list[str]:
+    """Return the IRIs of the name properties (`NAME_PROPERTIES`, O-4), best first, without repeats.
+
+    A CURIE is expanded with the built-in prefixes and `EXTRA_PREFIXES`, not the ontology's own, so a setting means the
+    same whatever is loaded. A name that's still not an IRI is left out, with a warning.
+    """
+    prefixes = BUILTIN_PREFIXES | settings.extra_prefixes
+    iris = []
+    for name in settings.name_properties:
+        try:
+            iris.append(IRI(expand_curie(name, prefixes)))
+        except RDFSyntaxError:
+            logger.warning("The name property %r isn't an IRI or a known CURIE; it's left out", name)
+    return list(dict.fromkeys(iris))
+
+
+def normalize(text: str) -> str:
+    """Return a name value as search compares it (§2.6): Unicode NFKD, accents removed, case folded.
+
+    Search's queries are normalized with it too, so a query matches a value whatever its accents and case.
+    """
+    # Unicode's compatibility caseless matching (D146) normalizes again after folding, as folding can leave a string
+    # unnormalized (U+0345, a combining mark, folds to a letter that may need reordering against the marks around it).
+    folded = unicodedata.normalize("NFKD", unicodedata.normalize("NFKD", text).casefold())
+    return "".join(char for char in folded if not unicodedata.combining(char))
 
 
 def language_rank(language: str | None, ranking: Sequence[str]) -> float:

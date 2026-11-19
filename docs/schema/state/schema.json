@@ -92,6 +92,13 @@
           "type": "INTEGER",
           "nullable": true,
           "comment": "How many triples the store's default graph holds once loaded, the ontology without its imports."
+        },
+        {
+          "name": "prefixes",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "'{}'",
+          "comment": "The prefixes the ontology file declares, as a JSON object of name to namespace IRI, for CURIEs; '{}' until the loading stage reads them."
         }
       ],
       "constraints": [
@@ -114,7 +121,7 @@
           ]
         }
       ],
-      "def": "CREATE TABLE job (\n        id INTEGER PRIMARY KEY CHECK (id = 1),\n        generation INTEGER NOT NULL,\n        stage TEXT NOT NULL,\n        started_at TEXT NOT NULL,\n        finished_at TEXT,\n        failed_stage TEXT,\n        reason TEXT,\n        ready_generation INTEGER\n    , reasoner TEXT NOT NULL DEFAULT 'none', upload_name TEXT, upload_syntax TEXT, upload_bytes INTEGER, imports TEXT NOT NULL DEFAULT '[]', triples INTEGER)"
+      "def": "CREATE TABLE job (\n        id INTEGER PRIMARY KEY CHECK (id = 1),\n        generation INTEGER NOT NULL,\n        stage TEXT NOT NULL,\n        started_at TEXT NOT NULL,\n        finished_at TEXT,\n        failed_stage TEXT,\n        reason TEXT,\n        ready_generation INTEGER\n    , reasoner TEXT NOT NULL DEFAULT 'none', upload_name TEXT, upload_syntax TEXT, upload_bytes INTEGER, imports TEXT NOT NULL DEFAULT '[]', triples INTEGER, prefixes TEXT NOT NULL DEFAULT '{}')"
     }
   ],
   "driver": {

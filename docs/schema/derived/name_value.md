@@ -2,7 +2,7 @@
 
 ## Description
 
-Each entity's values of the name properties (NAME_PROPERTIES), for display names and search: one row per direct value, and one per value entailed through rdfs:subPropertyOf.
+Each entity's values of the name properties (NAME_PROPERTIES), for display names and search: one row per value and name property, direct if the entity has it under that property itself, else entailed through rdfs:subPropertyOf; stored in entity order.
 
 <details>
 <summary><strong>Table Definition</strong></summary>
@@ -27,7 +27,7 @@ CREATE TABLE name_value (
 | entity     | INTEGER |         | false    |          | [entity](entity.md) | The entity (entity.id).                                                                         |
 | property   | TEXT    |         | false    |          |                     | The name property's IRI.                                                                        |
 | value      | TEXT    |         | false    |          |                     | The value's lexical form.                                                                       |
-| normalized | TEXT    |         | false    |          |                     | The value normalized for search.                                                                |
+| normalized | TEXT    |         | false    |          |                     | The value normalized for search (browl.names.normalize).                                        |
 | language   | TEXT    |         | true     |          |                     | The value's language tag, lowercased; NULL if it has none.                                      |
 | direct     | INTEGER |         | false    |          |                     | 1 if the entity has the value under this property itself, 0 if under one of its sub-properties. |
 

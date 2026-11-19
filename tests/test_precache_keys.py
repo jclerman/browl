@@ -36,8 +36,7 @@ from browl.precache.core import Hook, PreCacheContext, hook
 from browl.precache.keys import Closure, build_keys, closure, code_digest
 from browl.precache.stage import HOOKS, build
 from browl.settings import Settings
-from tests.helpers import make_settings
-from tests.test_precache import LOADED_AT, fuseki
+from tests.helpers import LOADED_AT, fuseki, make_settings
 
 pytestmark = pytest.mark.anyio
 
@@ -322,9 +321,9 @@ def test_build_keys_independent_of_process(data_dir: Path, tmp_path: Path) -> No
     [
         ({"BASE_URL": "http://example.com/"}, {"entities"}),
         ({"RESERVED_PREFIX": "_other"}, {"entities"}),
-        ({"NAME_PROPERTIES": ["skos:prefLabel"]}, {"meta"}),
-        ({"LANGUAGE_RANKING": ["fr"]}, {"meta"}),
-        ({"EXTRA_PREFIXES": {"ex": EX}}, {"meta"}),
+        ({"NAME_PROPERTIES": ["skos:prefLabel"]}, {"meta", "names"}),
+        ({"LANGUAGE_RANKING": ["fr"]}, {"meta", "names"}),
+        ({"EXTRA_PREFIXES": {"ex": EX}}, {"meta", "names"}),
         ({"OIDC_CLIENT_SECRET": "rotated", "FUSEKI_URL": "http://other:3030"}, set()),
     ],
     ids=["base url", "reserved prefix", "name properties", "language ranking", "extra prefixes", "undeclared"],

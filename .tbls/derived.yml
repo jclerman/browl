@@ -109,17 +109,20 @@ comments:
         Its URL's path from the site's root (BASE_URL), in URI form (non-ASCII percent-encoded as UTF-8). For a
         fallback URL, the path and query string, /{RESERVED_PREFIX}/iri?u={the percent-encoded IRI}.
       fragment: The fragment of a hash IRI's URL, in URI form; NULL for any other, and for every fallback URL.
-      display_name: Its display name (DESIGN.md 2.7); NULL until P-11 fills it.
-      curie: Its CURIE, if a prefix in the prefix table covers it; NULL until P-11 fills it.
+      display_name: >-
+        Its display name (DESIGN.md 2.7): its best name value, else its CURIE, else its IRI; for the ontology, its
+        title (meta.title) if it has one.
+      curie: Its CURIE, from the longest namespace in the prefix table that covers it; NULL if none does.
   - table: name_value
     tableComment: >-
-      Each entity's values of the name properties (NAME_PROPERTIES), for display names and search: one row per direct
-      value, and one per value entailed through rdfs:subPropertyOf.
+      Each entity's values of the name properties (NAME_PROPERTIES), for display names and search: one row per value
+      and name property, direct if the entity has it under that property itself, else entailed through
+      rdfs:subPropertyOf; stored in entity order.
     columnComments:
       entity: The entity (entity.id).
       property: The name property's IRI.
       value: The value's lexical form.
-      normalized: The value normalized for search.
+      normalized: The value normalized for search (browl.names.normalize).
       language: The value's language tag, lowercased; NULL if it has none.
       direct: 1 if the entity has the value under this property itself, 0 if under one of its sub-properties.
   - table: edge
@@ -149,7 +152,9 @@ comments:
     columnComments:
       path: The URL path, as in entity.path.
   - table: prefix
-    tableComment: CURIE prefixes, for entity.curie (the ontology's own, built-ins, and EXTRA_PREFIXES overrides).
+    tableComment: >-
+      CURIE prefixes, for entity.curie: the built-in ones, overridden by those the ontology file declares, overridden by
+      EXTRA_PREFIXES.
     columnComments:
       prefix: The prefix name; empty for the default prefix.
       namespace: The namespace IRI it stands for.
