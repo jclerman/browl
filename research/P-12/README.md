@@ -22,33 +22,37 @@ poetry run python research/P-12/bench.py http://localhost:3031
 
 ## Results
 
-Seconds. NCBITaxon: runs 2 and 3, after a first run that warmed Fuseki (its hook took 72 s). Uberon and HPO: the
-second and third runs.
+Seconds. NCBITaxon: runs 2 and 3, after a first run that warmed Fuseki. Uberon and HPO: the second and third runs.
+Measured again on 2026-11-19, after the fixes for the review of PR #94: grouping and counting on NumPy arrays and
+SciPy, and node numbers from a NumPy lookup rather than Python dicts. The times before those fixes are in brackets.
 
 | | entities | hierarchies | of which: staging batches | `_fill`, all hierarchies | `group_nodes` | `count_descendants` |
 | --- | --- | --- | --- | --- | --- | --- |
-| NCBITaxon | 24.9–26.0 | 56.7–57.8 | 2.2 | 32.5–33.2 | 7.1 | 5.0–5.2 |
-| Uberon | 0.2 | 0.5 | 0.0 | 0.2 | 0.0 | 0.0 |
-| HPO | 0.3 | 0.5 | 0.0 | 0.2 | 0.0 | 0.0 |
+| NCBITaxon | 25.2–25.3 | 41.7–42.0 (56.7–57.8) | 2.1–2.2 (2.2) | 16.9–17.6 (32.5–33.2) | 1.0 (7.1) | 1.7–1.8 (5.0–5.2) |
+| Uberon | 0.2–0.3 | 0.4 (0.5) | 0.0 | 0.1 (0.2) | 0.0 | 0.0 |
+| HPO | 0.3 | 0.4–0.5 (0.5) | 0.0 | 0.1 (0.2) | 0.0 | 0.0 |
 
-- **NCBITaxon's hook takes about 57 s.**
+- **NCBITaxon's hook takes about 42 s.**
   - **The query:** run alone with `curl`, the edges query streams its 3.02 M rows (456 MB of TSV) in 20.1–20.7 s. That's
     1–2 s more than S-4's subclass-only query, for the `?relation` column and the two other relations.
-  - **`_fill`, 33 s:** the class hierarchy takes nearly all of it. Grouping takes 7.1 s (one Tarjan pass over 3 M
-    edges, as there are no cycles), and counting 5.1 s (S-3 measured 4.2 s). The remaining ~21 s is the SQL join from
-    staged IRIs to `entity.id`, numbering the entities, and sorting and inserting 3 M rows into each of `edge` and
-    `counts`.
+  - **`_fill`, 17 s:** the class hierarchy takes nearly all of it. Grouping takes 1.0 s (SciPy's strongly connected
+    components over 3 M edges; Tarjan's algorithm in Python took 7.1 s), and counting 1.8 s (S-3 measured 4.2 s). The
+    remaining ~14 s is the SQL join from staged IRIs to `entity.id`, numbering the entities, and inserting 3 M rows
+    into each of `edge` and `counts`.
   - **The rest, about 2 s:** creating the indexes.
 - **Tables:**
   - **Rows:** NCBITaxon gives 3,024,993 in `edge` and 3,025,062 in `counts`; HPO 42,796 and 33,133. `equiv_group`
-    is empty for all three: none has an `owl:equivalentClass` between two IRIs, nor a cycle.
+    is empty for all three: none has an `owl:equivalentClass` between two IRIs, nor a cycle. The fixes left every
+    count unchanged.
   - **Size:** on NCBITaxon, `edge` and its index take 111 MiB, and `counts` 53 MiB; on HPO, about 1 MiB each.
-- **Memory:** the bench process peaked at 2.1–2.3 GB resident on NCBITaxon, 0.1 GB on Uberon and HPO (Python and
-  SQLite; Fuseki is a separate process).
+- **Memory:** the bench process peaked at 0.86–0.87 GB resident on NCBITaxon (2.1–2.3 GB before the fixes), 0.1 GB on
+  Uberon and HPO (Python and SQLite; Fuseki is a separate process). The fixes keep the edges as NumPy arrays rather
+  than Python tuples and lists, and free each descendant set once it's merged into its parents.
 - **Mid-sized ontologies cost nothing to speak of:** on Uberon and HPO the whole hook takes half a second, most of it
   the query.
-- **Possible savings, for P-24:**
-  - Number the entities in SQL rather than in Python dicts.
-  - Skip Tarjan when a topological pass covers every node.
-  - Stage the relation as a small code rather than its IRI.
-  - The [4-lens review of PR #94](https://github.com/jclerman/browl/pull/94) lists these.
+- **Descendant sets on hostile shapes** (`count_descendants` alone, members held at once across the sets):
+  NCBITaxon peaks at 3.0 M, since the root's set holds every class. A chain X0 ⊑ … ⊑ Xm whose members all have one
+  more parent Z, numbered in shuffled order, peaks at 2m members (0.3 s at m = 100 K); merging a node's children only
+  once it had them all held about m²/2 (2.55 GB at m = 100 K, measured in the review). Parents that each wait for the
+  chain's top still hold about m², so `DESCENDANT_BUDGET` caps them.
+- **What's left, for P-24:** most of `_fill` is now SQL: the join from staged IRIs to `entity.id`, and the inserts.

@@ -1,14 +1,20 @@
 """The hierarchies pre-caching hook (P-12): the `equiv_group`, `edge` and `counts` tables (DESIGN.md §2.5)."""
 
 import functools
+import itertools
 import logging
 import sqlite3
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from collections.abc import Iterable
+from typing import NamedTuple
 
+import numpy as np
+import numpy.typing as npt
 from pyroaring import BitMap
+from scipy.sparse import coo_array
+from scipy.sparse.csgraph import connected_components
 
 from browl.derived import EntityType
+from browl.jobtypes import StageError
 from browl.precache.core import PreCacheContext, batched, hook
 from browl.rdf import Term
 
@@ -38,6 +44,9 @@ RELATION_TYPES = {
 }
 """The hierarchies each of the edges query's relations links entities in."""
 
+RELATION_CODES = {iri: code for code, iri in enumerate(RELATION_TYPES)}
+"""Each relation's code, as `edge_staging.relation` stores it: small, as most of NCBITaxon's 3 M rows hold one."""
+
 OUTSIDE = (
     f"{OWL}Thing",
     f"{OWL}Nothing",
@@ -48,6 +57,15 @@ OUTSIDE = (
 )
 """The top and bottom entities, which are in no hierarchy, even if declared: so `owl:Thing`'s children are roots."""
 
+DESCENDANT_BUDGET = 300_000_000
+"""The most members `count_descendants` may hold at once across its descendant sets: a few hundred MB at most.
+
+NCBITaxon, a tree, needs 3 M, as its root's set holds every class. A dense or adversarial hierarchy might otherwise
+need tens of GB (DESIGN.md §2.14)."""
+
+Edges = npt.NDArray[np.int64]
+"""Edges between node numbers, as an array of shape (n, 2): a row is (child, parent)."""
+
 
 @hook()
 async def hierarchies(context: PreCacheContext) -> None:
@@ -56,6 +74,9 @@ async def hierarchies(context: PreCacheContext) -> None:
     The edges come from one bulk query (`EDGES`), over the imports too; an edge whose ends aren't declared entities of
     a hierarchy's type, or are `OUTSIDE` it, is left out. Classes linked by `owl:equivalentClass`, and the members of a
     cycle of edges, form one group, a single node (`group_nodes`). Each node's counts come from `count_descendants`.
+
+    Raises:
+        StageError: A hierarchy is too dense to count its descendants within `DESCENDANT_BUDGET`.
     """
     await context.db.run(_create_staging)
     async with context.bulk_select(EDGES) as stream:
@@ -71,7 +92,7 @@ async def hierarchies(context: PreCacheContext) -> None:
 
 def _create_staging(connection: sqlite3.Connection) -> None:
     connection.execute(
-        "CREATE TEMP TABLE edge_staging (child TEXT NOT NULL, relation TEXT NOT NULL, parent TEXT NOT NULL)"
+        "CREATE TEMP TABLE edge_staging (child TEXT NOT NULL, relation INTEGER NOT NULL, parent TEXT NOT NULL)"
     )
 
 
@@ -80,206 +101,201 @@ def _stage(batch: list[tuple[Term | None, ...]], columns: tuple[int, ...], conne
     child, relation, parent = columns
     connection.executemany(
         "INSERT INTO edge_staging VALUES (?, ?, ?)",
-        ((str(row[child]), str(row[relation]), str(row[parent])) for row in batch),
+        ((str(row[child]), RELATION_CODES[str(row[relation])], str(row[parent])) for row in batch),
     )
 
 
 def _fill(hierarchy: EntityType, connection: sqlite3.Connection) -> None:
-    """Fill a hierarchy's rows of `equiv_group`, `edge` and `counts`."""
+    """Fill a hierarchy's rows of `equiv_group`, `edge` and `counts`.
+
+    Raises:
+        StageError: The hierarchy is too dense to count its descendants within `DESCENDANT_BUDGET`.
+    """
     outside = ", ".join("?" * len(OUTSIDE))
     # Nodes are numbered in IRI order, so a group's representative, its lowest number, is its first IRI.
-    ids = [
-        row[0]
-        for row in connection.execute(
-            f"SELECT id FROM entity WHERE type = ? AND iri NOT IN ({outside}) ORDER BY iri", (hierarchy, *OUTSIDE)
-        )
-    ]
-    number = {entity: n for n, entity in enumerate(ids)}
-    relations = [iri for iri, types in RELATION_TYPES.items() if hierarchy in types]
-    rows = connection.execute(
-        "SELECT c.id, s.relation, p.id FROM edge_staging AS s"
-        " JOIN entity AS c ON c.iri = s.child AND c.type = ?1 JOIN entity AS p ON p.iri = s.parent AND p.type = ?1"
-        f" WHERE s.relation IN ({', '.join('?' * len(relations))})",
-        (hierarchy, *relations),
+    cursor = connection.execute(
+        f"SELECT id FROM entity WHERE type = ? AND iri NOT IN ({outside}) ORDER BY iri", (hierarchy, *OUTSIDE)
     )
-    edges: list[tuple[int, int]] = []
-    equivalent: list[tuple[int, int]] = []
-    for child, relation, parent in rows:
-        if child in number and parent in number:
-            pair = (number[child], number[parent])
-            (equivalent if relation == EQUIVALENT_CLASS else edges).append(pair)
-    nodes = group_nodes(len(ids), edges, equivalent)
+    ids = np.fromiter((row[0] for row in cursor), np.int64)
+    count = len(ids)
+    number = np.full(connection.execute("SELECT coalesce(max(id), -1) + 1 FROM entity").fetchone()[0], -1)
+    number[ids] = np.arange(count)
+
+    def edges(*relations: str) -> Edges:
+        """Return the staged edges for these relations between the hierarchy's nodes, by node number."""
+        codes = [RELATION_CODES[relation] for relation in relations if hierarchy in RELATION_TYPES[relation]]
+        if not codes:
+            return np.empty((0, 2), np.int64)
+        rows = connection.execute(
+            "SELECT c.id, p.id FROM edge_staging AS s"
+            " JOIN entity AS c ON c.iri = s.child AND c.type = ?1 JOIN entity AS p ON p.iri = s.parent AND p.type = ?1"
+            f" WHERE s.relation IN ({', '.join('?' * len(codes))})",
+            (hierarchy, *codes),
+        )
+        found = number[np.fromiter(itertools.chain.from_iterable(rows), np.int64).reshape(-1, 2)]
+        return found[(found >= 0).all(axis=1)]  # without the edges to or from `OUTSIDE`
+
+    sub = [relation for relation in RELATION_TYPES if relation != EQUIVALENT_CLASS]
+    nodes = group_nodes(count, edges(*sub), edges(EQUIVALENT_CLASS))
     if nodes.cycles:
         logger.warning(
             "The %s hierarchy has %d cycles; each one's members are shown as one node", hierarchy, nodes.cycles
         )
-    connection.executemany(
-        "INSERT INTO equiv_group (entity, representative) VALUES (?, ?)",
-        sorted((ids[n], ids[rep]) for n, rep in enumerate(nodes.representative) if nodes.size[rep] > 1),
-    )
-    connection.executemany(
-        "INSERT INTO edge (hierarchy, parent, child) VALUES (?, ?, ?)",
-        sorted((hierarchy.value, ids[parent], ids[child]) for child, parent in nodes.edges),
-    )
-    children, descendants = count_descendants(len(ids), nodes.edges)
-    connection.executemany(
-        "INSERT INTO counts (hierarchy, node, children, descendants) VALUES (?, ?, ?, ?)",
-        sorted(
-            (hierarchy.value, ids[n], children[n], descendants[n])
-            for n, rep in enumerate(nodes.representative)
-            if rep == n
-        ),
+    numbers = np.arange(count)
+    grouped = np.isin(nodes.representative, nodes.representative[nodes.representative != numbers])
+    _insert(connection, "equiv_group (entity, representative)", ids[grouped], ids[nodes.representative[grouped]])
+    parents, children = ids[nodes.edges[:, 1]], ids[nodes.edges[:, 0]]
+    _insert(connection, "edge (hierarchy, parent, child)", hierarchy.value, parents, children)
+    del parents, children
+    try:
+        child_counts, descendant_counts = count_descendants(count, nodes.edges)
+    except StageError as error:
+        raise StageError(f"The {hierarchy} hierarchy: {error}") from error
+    is_node = nodes.representative == numbers
+    _insert(
+        connection,
+        "counts (hierarchy, node, children, descendants)",
+        hierarchy.value,
+        ids[is_node],
+        child_counts[is_node],
+        descendant_counts[is_node],
     )
 
 
-@dataclass(frozen=True)
-class Nodes:
+def _insert(connection: sqlite3.Connection, table: str, *columns: str | npt.NDArray[np.int64]) -> None:
+    """Insert rows into a table, given as its columns: a string is the same in every row, an array a column's values.
+
+    The rows are inserted in key order, sorted by the array columns from the first, which is cheaper than in no order.
+    """
+    arrays = [column for column in columns if not isinstance(column, str)]
+    order = np.lexsort(arrays[::-1])
+    values = [
+        itertools.repeat(column) if isinstance(column, str) else memoryview(np.ascontiguousarray(column[order]))
+        for column in columns
+    ]
+    connection.executemany(f"INSERT INTO {table} VALUES ({', '.join('?' * len(columns))})", zip(*values, strict=False))
+
+
+class Nodes(NamedTuple):
     """A hierarchy's nodes: its entities, grouped (`group_nodes`).
 
     Attributes:
         representative: Each entity's group's representative, by entity number: the group's lowest number.
-        size: Each representative's group's size, by its number; 0 for any other entity.
-        edges: The (child, parent) edges between representatives, each once, without self-loops.
+        edges: The (child, parent) edges between representatives, each once, without self-loops, sorted.
         cycles: How many groups merged cycles of edges.
     """
 
-    representative: list[int]
-    size: list[int]
-    edges: list[tuple[int, int]]
+    representative: npt.NDArray[np.int64]
+    edges: Edges
     cycles: int
 
 
 def group_nodes(count: int, edges: Iterable[tuple[int, int]], equivalent: Iterable[tuple[int, int]]) -> Nodes:
     """Group a hierarchy's entities into its nodes, and map its edges onto them.
 
-    Equivalent entities form a group (union-find), and so do the members of a cycle of edges, which are equivalent too.
+    Equivalent entities form a group, and so do the members of a cycle of edges, which are equivalent too. Merging the
+    equivalent entities may make cycles, so the cycles are found (as strongly connected components) once that's done;
+    merging them leaves no cycle.
 
     Args:
         count: How many entities there are, numbered from 0.
         edges: The (child, parent) edges.
         equivalent: The pairs of equivalent entities.
     """
-    edges = list(edges)
-    parent = list(range(count))
-
-    def find(node: int) -> int:
-        while parent[node] != node:
-            parent[node] = parent[parent[node]]
-            node = parent[node]
-        return node
-
-    def union(a: int, b: int) -> None:
-        a, b = find(a), find(b)
-        if a != b:
-            parent[max(a, b)] = min(a, b)
-
-    for a, b in equivalent:
-        union(a, b)
-    cycles = 0
-    while True:
-        mapped = sorted({(c, p) for c, p in ((find(c), find(p)) for c, p in edges) if c != p})
-        found = strongly_connected(mapped)
-        if not found:
-            break
-        cycles += len(found)
-        for component in found:
-            for member in component[1:]:
-                union(component[0], member)
-    representative = [find(node) for node in range(count)]
-    size = [0] * count
-    for rep in representative:
-        size[rep] += 1
-    return Nodes(representative, size, mapped, cycles)
+    edge_array = np.asarray(edges, np.int64).reshape(-1, 2)
+    representative = _lowest(count, np.asarray(equivalent, np.int64).reshape(-1, 2), directed=False)
+    merged = _distinct(count, representative[edge_array])
+    found = _lowest(count, merged, directed=True)
+    cycles = len(np.unique(found[found != np.arange(count)]))
+    if cycles:
+        representative = found[representative]
+        merged = _distinct(count, representative[edge_array])
+    return Nodes(representative, merged, cycles)
 
 
-def strongly_connected(edges: Sequence[tuple[int, int]]) -> list[list[int]]:
-    """Return the components of more than one node, i.e. the cycles, of a graph given by its edges (Tarjan's).
-
-    Iterative, so a deep hierarchy can't exceed Python's recursion limit.
-    """
-    successors: dict[int, list[int]] = {}
-    for a, b in edges:
-        successors.setdefault(a, []).append(b)
-    index: dict[int, int] = {}
-    low: dict[int, int] = {}
-    stack: list[int] = []
-    on_stack: set[int] = set()
-    components: list[list[int]] = []
-    for start in successors:
-        if start in index:
-            continue
-        work = [(start, 0)]
-        while work:
-            node, position = work.pop()
-            if position == 0:
-                index[node] = low[node] = len(index)
-                stack.append(node)
-                on_stack.add(node)
-            following = successors.get(node, [])
-            if position < len(following):
-                work.append((node, position + 1))
-                successor = following[position]
-                if successor not in index:
-                    work.append((successor, 0))
-                elif successor in on_stack:
-                    low[node] = min(low[node], index[successor])
-                continue
-            if work:  # pass the low link up to the node that visited this one
-                caller = work[-1][0]
-                low[caller] = min(low[caller], low[node])
-            if low[node] == index[node]:
-                component = []
-                while True:
-                    member = stack.pop()
-                    on_stack.discard(member)
-                    component.append(member)
-                    if member == node:
-                        break
-                if len(component) > 1:
-                    components.append(component)
-    return components
+def _lowest(count: int, edges: Edges, directed: bool) -> npt.NDArray[np.int64]:
+    """Return each node's component's lowest number: weakly connected components if not directed, else strongly."""
+    if not len(edges):
+        return np.arange(count)
+    graph = coo_array((np.ones(len(edges), np.int8), (edges[:, 0], edges[:, 1])), shape=(count, count)).tocsr()
+    _, labels = connected_components(graph, directed=directed, connection="strong")
+    _, first = np.unique(labels, return_index=True)  # the lowest number with each label
+    return first[labels].astype(np.int64)
 
 
-def count_descendants(count: int, edges: Iterable[tuple[int, int]]) -> tuple[list[int], list[int]]:
+def _distinct(count: int, edges: Edges) -> Edges:
+    """Return the edges each once, sorted, without self-loops."""
+    keys = np.unique(edges[edges[:, 0] != edges[:, 1]] @ np.array([count, 1], np.int64))
+    return np.stack(np.divmod(keys, count), axis=1)
+
+
+def count_descendants(
+    count: int, edges: Iterable[tuple[int, int]], budget: int | None = None
+) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
     """Return each node's number of children and of distinct descendants (U-8), by node number.
 
-    A bottom-up pass in topological order merges each node's children's descendant sets, as roaring bitmaps, freeing
-    each set once all its parents have merged it (S-3). The nodes that aren't in an edge count 0.
+    A bottom-up pass in topological order (S-3) gives each node a roaring bitmap of its descendants. A node's parents
+    are given its set, with the node, as soon as it's complete, each merging it into the set it's building; so only
+    the sets of nodes some of whose children are still to come are held. The nodes that aren't in an edge count 0.
 
     Args:
         count: How many node numbers there are, from 0.
         edges: The (child, parent) edges, each once, with no cycles (`group_nodes`).
+        budget: The most members to hold at once across the sets being built; `DESCENDANT_BUDGET` if not given.
 
     Raises:
         ValueError: The edges have a cycle.
+        StageError: Counting would hold more than `budget` members.
     """
-    children: list[list[int]] = [[] for _ in range(count)]
-    parents: list[list[int]] = [[] for _ in range(count)]
-    for child, parent in edges:
-        children[parent].append(child)
-        parents[child].append(parent)
-    pending = [len(each) for each in children]  # children not yet merged into the node
-    waiting = [len(each) for each in parents]  # parents that haven't yet merged the node
-    sets: dict[int, BitMap] = {}
-    descendants = [0] * count
-    ready = [node for node in range(count) if pending[node] == 0]
-    while ready:
-        node = ready.pop()
-        found = BitMap()
-        for child in children[node]:
-            found |= sets[child]
-            found.add(child)
-            waiting[child] -= 1
-            if waiting[child] == 0:
-                del sets[child]
-        descendants[node] = len(found)
-        if parents[node]:
+    budget = DESCENDANT_BUDGET if budget is None else budget
+    edge_array = np.asarray(edges, np.int64).reshape(-1, 2)
+    children = np.bincount(edge_array[:, 1], minlength=count)
+    # Each node's parents, as a compressed sparse row: node n's are above[start[n]:start[n + 1]].
+    start = np.zeros(count + 1, np.int64)
+    np.cumsum(np.bincount(edge_array[:, 0], minlength=count), out=start[1:])
+    above = memoryview(edge_array[np.argsort(edge_array[:, 0], kind="stable"), 1])
+    starts = memoryview(start)
+    del edge_array
+    pending_array = children.copy()  # children not yet merged into the node
+    pending = memoryview(pending_array)
+    descendants_array = np.zeros(count, np.int64)
+    descendants = memoryview(descendants_array)
+    sets: dict[int, BitMap] = {}  # the sets being built, each partly merged
+    held = 0
+    leaves = iter(np.flatnonzero(children == 0).tolist())
+    ready: list[int] = []
+    while (node := ready.pop() if ready else next(leaves, None)) is not None:
+        found = sets.pop(node, None)  # None for a leaf, which a parent just adds
+        size = 1
+        if found is not None:
+            held -= len(found)
+            descendants[node] = len(found)
+            found.add(node)
             found.run_optimize()
-            sets[node] = found
-            for parent in parents[node]:
-                pending[parent] -= 1
-                if pending[parent] == 0:
-                    ready.append(parent)
-    if any(pending):
+            size = len(found)
+        given = False  # whether a parent has taken the node's own set
+        for position in range(starts[node], starts[node + 1]):
+            parent = above[position]
+            building = sets.get(parent)
+            if found is None:
+                if building is None:
+                    sets[parent] = BitMap((node,))
+                else:
+                    building.add(node)
+                held += 1
+            elif building is None:
+                sets[parent] = found.copy() if given else found
+                given = True
+                held += size
+            else:
+                before = len(building)
+                building |= found
+                held += len(building) - before
+            pending[parent] -= 1
+            if pending[parent] == 0:
+                ready.append(parent)
+        if held > budget:
+            raise StageError(f"counting distinct descendants would hold more than {budget:,} set members at once")
+    if pending_array.any():
         raise ValueError("the hierarchy has a cycle")
-    return [len(each) for each in children], descendants
+    return children, descendants_array

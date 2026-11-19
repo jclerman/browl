@@ -7,15 +7,17 @@ from contextlib import closing
 from pathlib import Path
 
 import httpx2
+import numpy as np
 import pytest
 
 from browl.fuseki import UNION_FROM
 from browl.jobs import JobContext
-from browl.jobtypes import ImportResult, Reasoner
+from browl.jobtypes import ImportResult, Reasoner, StageError
 from browl.loading import dataset_name
+from browl.precache import hierarchies as hierarchies_module
 from browl.precache.core import Hook
 from browl.precache.entities import entities
-from browl.precache.hierarchies import count_descendants, group_nodes, hierarchies, strongly_connected
+from browl.precache.hierarchies import OUTSIDE, count_descendants, group_nodes, hierarchies
 from browl.precache.stage import HOOKS, pre_caching_stage
 from browl.settings import Settings
 from tests.helpers import (
@@ -62,16 +64,17 @@ def tables(settings: Settings, generation: int, hooks: Sequence[Hook] = HOOKS_US
 
 
 def entity_result(*entities: tuple[str, str]) -> str:
-    """Return the entity list's result for these (local name, OWL class name) pairs, in `EX`."""
-    return ENTITY_HEADER + "".join(f"<{EX}{name}>\t<{OWL}{kind}>\t\n" for name, kind in entities) + ENTITY_END
+    """Return the entity list's result for these (name, OWL class name) pairs; names without `<` are in `EX`."""
+    return ENTITY_HEADER + "".join(f"{term(name)}\t<{OWL}{kind}>\t\n" for name, kind in entities) + ENTITY_END
+
+
+def term(name: str) -> str:
+    """Return a name's term: itself if it's an IRI in `<…>`, else the IRI of that name in `EX`."""
+    return name if name.startswith("<") else f"<{EX}{name}>"
 
 
 def edge_result(*edges: tuple[str, str, str]) -> str:
-    """Return the edges query's result for these (child, relation, parent) rows; names without `:` are in `EX`."""
-
-    def term(name: str) -> str:
-        return name if name.startswith("<") else f"<{EX}{name}>"
-
+    """Return the edges query's result for these (child, relation, parent) rows; names without `<` are in `EX`."""
     return EDGE_HEADER + "".join(f"{term(c)}\t{r}\t{term(p)}\t\n" for c, r, p in edges) + EDGE_END
 
 
@@ -87,16 +90,16 @@ def test_multiple_parents() -> None:
     """Check that a node with two parents counts under both (U-8)."""
     # 0 and 1 are both parents of 2, which has the child 3.
     children, descendants = count_descendants(4, [(2, 0), (2, 1), (3, 2)])
-    assert children == [1, 1, 1, 0]
-    assert descendants == [2, 2, 1, 0]
+    assert children.tolist() == [1, 1, 1, 0]
+    assert descendants.tolist() == [2, 2, 1, 0]
 
 
 def test_diamond() -> None:
     """Check that a diamond's bottom counts once under the shared ancestor (U-8)."""
     # 0 is the top; 1 and 2 its children; 3 the child of both.
     children, descendants = count_descendants(4, [(1, 0), (2, 0), (3, 1), (3, 2)])
-    assert children == [2, 1, 1, 0]
-    assert descendants == [3, 1, 1, 0]
+    assert children.tolist() == [2, 1, 1, 0]
+    assert descendants.tolist() == [3, 1, 1, 0]
 
 
 def test_count_descendants_rejects_cycle() -> None:
@@ -117,36 +120,65 @@ def test_count_descendants_matches_closure() -> None:
                 if parent == node:
                     below[node] |= below[child] | {child}
         children, descendants = count_descendants(count, edges)
-        assert descendants == [len(each) for each in below]
-        assert children == [sum(1 for _, p in edges if p == node) for node in range(count)]
+        assert descendants.tolist() == [len(each) for each in below]
+        assert children.tolist() == [sum(1 for _, p in edges if p == node) for node in range(count)]
 
 
 def test_group_nodes_equivalent() -> None:
     """Check that equivalent entities form one node, the lowest number, whose edges are its members' (U-9)."""
     # 1 ≡ 3; 0 is the parent of 1; 2 the child of 3, and 4 of both 1 and 3.
     nodes = group_nodes(5, [(1, 0), (2, 3), (4, 1), (4, 3)], [(3, 1)])
-    assert nodes.representative == [0, 1, 2, 1, 4]
-    assert nodes.size == [1, 2, 1, 0, 1]
-    assert nodes.edges == [(1, 0), (2, 1), (4, 1)]  # each once
+    assert nodes.representative.tolist() == [0, 1, 2, 1, 4]
+    assert nodes.edges.tolist() == [[1, 0], [2, 1], [4, 1]]  # each once
     assert nodes.cycles == 0
-    assert count_descendants(5, nodes.edges)[1] == [3, 2, 0, 0, 0]  # 1 and 3 count once under 0
+    assert count_descendants(5, nodes.edges)[1].tolist() == [3, 2, 0, 0, 0]  # 1 and 3 count once under 0
 
 
 def test_group_nodes_cycles() -> None:
     """Check that the members of a cycle of edges form one node, as do cycles that a merge makes."""
     # 0 → 1 → 2 → 0 is a cycle; 3 ≡ 4, and 3 ⊑ 5 ⊑ 4 is a cycle only once they're merged; 6 is under 2.
     nodes = group_nodes(7, [(0, 1), (1, 2), (2, 0), (3, 5), (5, 4), (6, 2)], [(3, 4)])
-    assert nodes.representative == [0, 0, 0, 3, 3, 3, 6]
-    assert nodes.edges == [(6, 0)]
+    assert nodes.representative.tolist() == [0, 0, 0, 3, 3, 3, 6]
+    assert nodes.edges.tolist() == [[6, 0]]
     assert nodes.cycles == 2
 
 
-def test_strongly_connected_deep() -> None:
-    """Check that a chain deeper than Python's recursion limit, closed into a cycle, is one component."""
+def test_group_nodes_deep() -> None:
+    """Check that a long chain closed into a cycle is one node, and that it isn't if it isn't closed."""
     count = 50_000
-    [component] = strongly_connected([(n, n + 1) for n in range(count - 1)] + [(count - 1, 0)])
-    assert sorted(component) == list(range(count))
-    assert strongly_connected([(n, n + 1) for n in range(count - 1)]) == []
+    chain = [(n, n + 1) for n in range(count - 1)]
+    nodes = group_nodes(count, [*chain, (count - 1, 0)], [])
+    assert (not nodes.representative.any(), len(nodes.edges), nodes.cycles) == (True, 0, 1)
+    nodes = group_nodes(count, chain, [])
+    assert np.array_equal(nodes.representative, np.arange(count))
+    assert (np.array_equal(nodes.edges, chain), nodes.cycles) == (True, 0)
+
+
+def test_count_descendants_chain_under_common_parent() -> None:
+    """Check that a chain whose members all have one more parent needs memory linear in its length (S1).
+
+    X0 ⊑ X1 ⊑ … ⊑ Xm, each Xi ⊑ Z, numbered in shuffled order. Merging a node's children only once it has them all
+    would hold each Xi's set, of i members, until Z is reached: about m²/2 members.
+    """
+    m = 2_000
+    number = list(range(m + 1))
+    random.Random(3).shuffle(number)
+    edges = [(number[i], number[i + 1]) for i in range(m - 1)] + [(number[i], number[m]) for i in range(m)]
+    _, descendants = count_descendants(m + 1, edges, budget=3 * m)
+    assert descendants[number[m]] == m
+    assert sorted(descendants.tolist()) == [*range(m), m]
+
+
+def test_count_descendants_budget() -> None:
+    """Check that counting fails once it would hold more members than its budget.
+
+    X0 ⊑ X1 ⊑ … ⊑ Xm, each Xi ⊑ Pi, and the chain's top Xm ⊑ every Pi: each Pi holds Xi's set until Xm is done.
+    """
+    m = 200
+    edges = [(i, i + 1) for i in range(m)] + [(i, m + 1 + i) for i in range(m)] + [(m, m + 1 + i) for i in range(m)]
+    count_descendants(2 * m + 1, edges, budget=2 * m * m)  # it peaks at m(m + 1), once Xm is merged into each Pi
+    with pytest.raises(StageError, match="more than 1,000 set members"):
+        count_descendants(2 * m + 1, edges, budget=1_000)
 
 
 # The hook, against a stubbed Fuseki.
@@ -160,7 +192,12 @@ async def test_hierarchies(data_dir: Path) -> None:
     """
     settings = make_settings()
     classes = [(name, "Class") for name in ("Top", "Left", "Right", "Bottom", "Same", "Alias", "Child", "Free")]
-    properties = [("p", "ObjectProperty"), ("q", "ObjectProperty"), ("d", "DatatypeProperty")]
+    properties = [
+        ("p", "ObjectProperty"),
+        ("q", "ObjectProperty"),
+        ("d", "DatatypeProperty"),
+        ("e", "DatatypeProperty"),
+    ]
     properties += [("a", "AnnotationProperty"), ("b", "AnnotationProperty"), ("Top", "ObjectProperty")]
     thing = f"<{OWL}Thing>"
     edges = [
@@ -177,6 +214,7 @@ async def test_hierarchies(data_dir: Path) -> None:
         ("q", SUB_PROPERTY, "p"),
         ("q", SUB_PROPERTY, f"<{OWL}topObjectProperty>"),
         ("q", SUB_PROPERTY, "d"),  # different hierarchies
+        ("e", SUB_PROPERTY, "d"),
         ("Top", SUB_PROPERTY, "p"),  # punned: an object property here
         ("b", SUB_PROPERTY, "a"),
         ("b", SUB_CLASS, "a"),  # not a class edge
@@ -189,7 +227,7 @@ async def test_hierarchies(data_dir: Path) -> None:
     top, left, right, bottom, same, alias, child, free = ex(
         "Top", "Left", "Right", "Bottom", "Same", "Alias", "Child", "Free"
     )
-    p, q, a, b = ex("p", "q", "a", "b")
+    p, q, d, e, a, b = ex("p", "q", "d", "e", "a", "b")
     assert found_edges == {
         ("class", top, left),
         ("class", top, right),
@@ -199,6 +237,7 @@ async def test_hierarchies(data_dir: Path) -> None:
         ("class", alias, child),
         ("object_property", p, q),
         ("object_property", p, top),
+        ("data_property", d, e),
         ("annotation_property", a, b),
     }
     assert groups == {alias: alias, same: alias}
@@ -213,19 +252,56 @@ async def test_hierarchies(data_dir: Path) -> None:
         ("object_property", p): (2, 2),
         ("object_property", q): (0, 0),
         ("object_property", top): (0, 0),
-        ("data_property", f"{EX}d"): (0, 0),
+        ("data_property", d): (1, 1),
+        ("data_property", e): (0, 0),
         ("annotation_property", a): (1, 1),
         ("annotation_property", b): (0, 0),
     }
 
 
-async def test_top_entities_left_out(data_dir: Path) -> None:
-    """Check that `owl:Thing` is in no hierarchy, even if declared, so its children are roots."""
+TOP_AND_BOTTOM = {
+    "Thing": ("Class", "class", SUB_CLASS, True),
+    "Nothing": ("Class", "class", SUB_CLASS, False),
+    "topObjectProperty": ("ObjectProperty", "object_property", SUB_PROPERTY, True),
+    "bottomObjectProperty": ("ObjectProperty", "object_property", SUB_PROPERTY, False),
+    "topDataProperty": ("DatatypeProperty", "data_property", SUB_PROPERTY, True),
+    "bottomDataProperty": ("DatatypeProperty", "data_property", SUB_PROPERTY, False),
+}
+"""Each top and bottom entity's local name, OWL class name, hierarchy, sub-relation, and whether it's a top."""
+
+
+@pytest.mark.parametrize("name", TOP_AND_BOTTOM)
+async def test_top_and_bottom_left_out(data_dir: Path, name: str) -> None:
+    """Check that a top or bottom entity is in no hierarchy, even if declared, so a top's children are roots.
+
+    A and B are under a top, or over a bottom; for classes, C and D are equivalent to it too, and aren't grouped.
+    """
+    assert {f"{OWL}{local}" for local in TOP_AND_BOTTOM} == set(OUTSIDE)
+    kind, hierarchy, relation, top = TOP_AND_BOTTOM[name]
     settings = make_settings()
-    entity_list = ENTITY_HEADER + f"<{OWL}Thing>\t<{OWL}Class>\t\n<{EX}A>\t<{OWL}Class>\t\n" + ENTITY_END
-    async with fuseki(HEADER + END, entity_list, edge_result(("A", SUB_CLASS, f"<{OWL}Thing>"))) as http:
+    outside = f"<{OWL}{name}>"
+    edges = [("A", relation, outside), ("B", relation, outside)] if top else [(outside, relation, "A")]
+    if not top:
+        edges.append((outside, relation, "B"))
+    names = ["A", "B"]
+    if kind == "Class":
+        edges += [("C", EQUIVALENT, outside), ("D", EQUIVALENT, outside)]
+        names += ["C", "D"]
+    entity_list = entity_result((outside, kind), *((local, kind) for local in names))
+    async with fuseki(HEADER + END, entity_list, edge_result(*edges)) as http:
         await pre_caching_stage(job(settings, 1), http, hooks=HOOKS_USED)
-    assert tables(settings, 1) == (set(), {}, {("class", f"{EX}A"): (0, 0)})
+    assert tables(settings, 1) == (set(), {}, {(hierarchy, iri): (0, 0) for iri in ex(*names)})
+
+
+async def test_too_dense(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a hierarchy too dense to count its descendants within the budget fails the stage, naming it."""
+    monkeypatch.setattr(hierarchies_module, "DESCENDANT_BUDGET", 2)
+    settings = make_settings()
+    classes = [(name, "Class") for name in ("A", "B", "C", "D")]
+    edges = [("A", SUB_CLASS, "B"), ("B", SUB_CLASS, "C"), ("C", SUB_CLASS, "D")]
+    async with fuseki(HEADER + END, entity_result(*classes), edge_result(*edges)) as http:
+        with pytest.raises(StageError, match=r"^The class hierarchy: counting distinct descendants would hold more"):
+            await pre_caching_stage(job(settings, 1), http, hooks=HOOKS_USED)
 
 
 async def test_cycle(data_dir: Path, caplog: pytest.LogCaptureFixture) -> None:

@@ -578,7 +578,7 @@ are documented in [`SCHEMA.md`](SCHEMA.md):
 | --- | --- | --- |
 | `entity` | The ontology and every declared class and property: its IRI, type, URL path and fragment (2.3), display name and CURIE | The entity-list query (every declared class and property with its type; the ontology's IRI comes from the header query): 22–29 s on NCBITaxon, 3.03 M rows. The whole hook, which computes each batch's URLs and inserts it before reading the next, takes 25–26 s, and the table and its indexes 530–650 MiB (P-10) |
 | `name_value` | Name-property values, one row per direct and per RDFS-entailed property | The name values query, through a property path (below): 41–48 s on NCBITaxon, 3.56 M rows. The whole hook, which also sets each entity's CURIE and display name, takes about 85 s ([P-11 findings](../research/P-11/README.md)) |
-| `edge` | Parent → child per hierarchy (classes; each property type), between equivalence-group representatives | The edges query (subclass, sub-property and equivalent-class triples): 20–21 s on NCBITaxon, 3.02 M rows. The whole hook, which also groups, counts and inserts `equiv_group` and `counts`, takes about 57 s, and `edge`, `counts` and their index 164 MiB; on Uberon and HPO, 0.5 s ([P-12 findings](../research/P-12/README.md)) |
+| `edge` | Parent → child per hierarchy (classes; each property type), between equivalence-group representatives | The edges query (subclass, sub-property and equivalent-class triples): 20–21 s on NCBITaxon, 3.02 M rows. The whole hook, which also groups, counts and inserts `equiv_group` and `counts`, takes about 42 s and 0.9 GB, and `edge`, `counts` and their index 164 MiB; on Uberon and HPO, 0.5 s ([P-12 findings](../research/P-12/README.md)) |
 | `equiv_group` | Entity → group representative, for groups of more than one | Union-find over `owl:equivalentClass` between named classes, and over cycles of edges (below) |
 | `counts` | Per node: immediate children, distinct descendants | `edge`, in Python (below) |
 | `hash_prefix` | Distinct URL paths that have hash entities under them | `entity` |
@@ -660,16 +660,22 @@ data property is dropped. Roots are nodes with no named parent. `owl:Thing`, `ow
 properties are in no hierarchy, even if declared, so the children of `owl:Thing` are roots.
 
 - **Nodes:** classes linked by `owl:equivalentClass` form one group (union-find), shown as one node (U-9); so do the
-  members of a cycle of edges, which OWL makes equivalent, with a warning (cycles found by Tarjan's algorithm, then
-  merged until none is left). A group's representative is its first IRI, and stands for it in `edge` and `counts`;
+  members of a cycle of edges, which OWL makes equivalent, with a warning. The cycles are found once the equivalences
+  are merged, as strongly connected components (SciPy's `connected_components`, on the edges as NumPy arrays), and
+  merging them leaves none. A group's representative is its first IRI, and stands for it in `edge` and `counts`;
   `equiv_group` holds only groups of more than one entity, since most have one. `owl:equivalentProperty` isn't
   grouped yet.
 
 **Distinct descendant counts.** These need a transitive closure, not a sum over edges. _(Q19a)_ They are computed
 (`count_descendants`) in a bottom-up pass in topological order, merging descendant sets. Each set is a
-[roaring bitmap](https://roaringbitmap.org/) (a compressed integer set with fast unions, via `pyroaring`), freed once
-all its parents have merged it. Only the counts are stored, not the full closure. On NCBITaxon (3.0 M classes) this
-took 4.2 s in S-3 and 5.0–5.2 s in the hook ([S-3 findings](../research/S-3/README.md),
+[roaring bitmap](https://roaringbitmap.org/) (a compressed integer set with fast unions, via `pyroaring`). Once a
+node's set is complete, it's merged, with the node, into each of its parents' sets, and freed; so only the sets of
+nodes still waiting for some of their children are held. Merging the other way, each node pulling its children's sets
+once it has them all, would hold every set until its last parent is done: quadratic memory for, say, a chain whose
+members all have one more parent. Some shapes still hold many sets at once, e.g. many parents each waiting for one
+late child, so counting fails the stage once the sets hold more than `DESCENDANT_BUDGET` members (300 M, a few hundred
+MB at most; NCBITaxon needs 3 M). Only the counts are stored, not the full closure. On NCBITaxon (3.0 M classes) this
+took 4.2 s in S-3 and 1.7–1.8 s in the hook ([S-3 findings](../research/S-3/README.md),
 [P-12 findings](../research/P-12/README.md)). Python `int` bitsets are unsuitable: their size grows with the highest
 index.
 
@@ -1080,7 +1086,8 @@ To settle when it's built:
 | An upload's `owl:imports` make ROBOT read local files (`file:`) or send requests from the app container (`http:`), and its errors can quote what it read | Found in P-7's review; narrowed by P-8: browl lists every import, fetches only `http` and `https` from public addresses, and gives ROBOT a catalog covering every import (2.4). Tested with a `file:` import and one at a local address. P-8's review showed that a crafted file can get an import past the listing; P-30 runs ROBOT and the OFN lister in a sandbox with no network and nothing secret, so such an import fails the job (2.4, [load flow](LOAD-FLOW.md)), checked in CI. Not deployed before P-22 protects the upload. |
 | Code run by a tool in the sandbox (through a JVM or OWLAPI flaw) acts as the runner's user | Accepted residual risk of P-30, beyond its threat (an import browl didn't list): the tools run as the runner's uid, so such code could replace the socket, kill the runner, or leave its process group, and forge later runs' output and status. It still has no network, none of the app's settings or volumes but the jobs volume, and the app loads only regular files on that volume. Running the tools under a second uid would close it. |
 | Memory limit can't be reported reliably | Resolved by S-2: with `-XX:+ExitOnOutOfMemoryError`, a heap breach in any thread exits with status 3 and a fixed message; each other failure kind has its own ROBOT log line (2.4). |
-| Descendant counts too slow or memory-hungry at millions of classes | Resolved by S-3: roaring bitmaps, 4.2 s for NCBITaxon ([S-3 findings](../research/S-3/README.md)). |
+| Descendant counts too slow or memory-hungry at millions of classes | Resolved by S-3 for trees: roaring bitmaps, 4.2 s for NCBITaxon ([S-3 findings](../research/S-3/README.md)). |
+| A dense or adversarial hierarchy makes descendant counting hold too much memory | Found in P-12's review: merging a node's children only once it had them all held memory quadratic in a chain whose members all share one more parent, which a few MB of upload (or a host serving an import) can supply; the build runs in the app process, with no memory limit. P-12 merges each set into its parents as soon as it's complete, which makes that shape linear, and fails the stage once the sets hold more than `DESCENDANT_BUDGET` members (2.5, Distinct descendant counts). |
 | Loading a very large ontology takes minutes | Accepted for uploads (Q14a), shown on the status page. Restarts don't reload (2.4). NCBITaxon: about 5 minutes, estimated; Uberon: 7 s, measured ([S-4 findings](../research/S-4/README.md)). P-24 checks whether extracting the dictionary and edges by streaming the upload file, in parallel with the TDB2 load, is worth it. |
 | Fragment rendering misses axioms a full-ontology render would show | 300 of 300 Uberon classes matched (S-4); P-15 adds n-ary disjointness and general class axioms, and tests against full-ontology rendering. |
 | Usage misses references inside class expressions | P-27 tests walking from the blank node up to the owning axiom before building the tab. |
