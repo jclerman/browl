@@ -6,7 +6,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from browl.jobs import JobRunningError, Stage
 from browl.jobtypes import Reasoner
-from browl.pages import templates
+from browl.pages import link_root, templates
 from browl.upload import FORMATS, StorageError, UploadError, receive_upload
 
 STATUS_POLL_S = 2
@@ -110,7 +110,7 @@ async def openapi(request: Request) -> JSONResponse:
     Without it, Swagger UI's "Try it out" would call paths missing the root path when the app is served under one.
     """
     schema = request.app.openapi()
-    root_path = request.scope.get("root_path", "").rstrip("/")
+    root_path = link_root(request.scope)
     servers = schema.get("servers", [])
     if root_path and root_path not in {server.get("url") for server in servers}:
         schema = {**schema, "servers": [{"url": root_path}, *servers]}

@@ -73,6 +73,31 @@ async def derived_not_current(request: Request, error: Exception) -> Response:
     return unavailable_page(request, Site.LOADING)
 
 
+def link_root(scope: Scope) -> str:
+    """Return the app's root path, for links: empty, or `/` and more, without a trailing `/`.
+
+    Raises:
+        ValueError: The root path is set but doesn't start with `/`, or starts with `//`, which would make links go
+            to another host.
+    """
+    root: str = scope.get("root_path", "")
+    if root and (not root.startswith("/") or root.startswith("//")):
+        raise ValueError(f"The root path must be empty or start with a single /, not {root!r}")
+    return root.rstrip("/")
+
+
+def app_path(scope: Scope) -> str:
+    """Return a request's percent-decoded path relative to the app's root, as routes match it."""
+    path: str = scope["path"]
+    root = link_root(scope)
+    return path[len(root) :] if root and is_under(path, root) else path
+
+
+def is_under(path: str, prefix: str) -> bool:
+    """Return whether a path is a prefix, such as `/_browl`, or under it: whole path segments only."""
+    return path == prefix or path.startswith(f"{prefix}/")
+
+
 def clear_page_cache() -> None:
     """Empty the page cache, when a load job starts (DESIGN.md §2.4). It does nothing until the cache exists (P-21)."""
 
@@ -92,20 +117,16 @@ class SiteGate:
 
     def is_exempt(self, path: str) -> bool:
         """Return whether a path, relative to the app's root, is passed through whatever the job state."""
-        return any(path == prefix or path.startswith(f"{prefix}/") for prefix in self.exempt)
+        return any(is_under(path, prefix) for prefix in self.exempt)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Serve the request, or the page for the site's state."""
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        path: str = scope["path"]
-        root_path: str = scope.get("root_path", "")
-        if root_path and path.startswith(root_path):
-            path = path[len(root_path) :]
         request = Request(scope)
         site = (await request.app.state.jobs.current()).site
-        if site == Site.AVAILABLE or self.is_exempt(path):
+        if site == Site.AVAILABLE or self.is_exempt(app_path(scope)):
             await self.app(scope, receive, send)
             return
         await unavailable_page(request, site)(scope, receive, send)

@@ -1,16 +1,18 @@
 """Tests for the routing of entity URLs: home, entity, disambiguation and hash pages, the fallback route, and 404."""
 
 import urllib.parse
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
-from browl.derived import EntityType
+import browl.lookup
+from browl.derived import EntityType, read_meta
 from browl.jobs import Stage
 from browl.lookup import request_path
+from browl.pages import STATIC_DIR
 from tests.helpers import derived_stage, make_app
 
 pytestmark = pytest.mark.usefixtures("data_dir")
@@ -29,17 +31,26 @@ ENTITIES = [
     ("http://other.org/z#D", EntityType.CLASS),
     ("http://other.org/café", EntityType.CLASS),
     ("http://other.org/a%2Fb", EntityType.CLASS),
+    ("http://other.org/a|b", EntityType.CLASS),
+    ("http://other.org/vocab#f{g}", EntityType.CLASS),
     ("urn:example:fallback", EntityType.DATA_PROPERTY),
+    ("urn:example:p", EntityType.CLASS),
+    ("urn:example:p", EntityType.OBJECT_PROPERTY),
     ("http://_browl/x", EntityType.CLASS),
 ]
-"""Proxied entities, under http://other.org/; one with a fallback URN; one whose URL would be under the prefix."""
+"""Proxied entities, under http://other.org/; fallback URNs, one punned; one whose URL would be under the prefix."""
 
 HASH_SCRIPT = '<script src="/_browl/static/hash.js"'
 
 
-def run(client: TestClient, app: FastAPI) -> None:
-    """Run a load job whose derived database holds the ontology and `ENTITIES`."""
-    app.state.jobs.register(Stage.PRE_CACHING, derived_stage(ENTITIES, ONTOLOGY, title="The <Onto>"))
+def run(
+    client: TestClient,
+    app: FastAPI,
+    entities: Sequence[tuple[str, EntityType]] = ENTITIES,
+    ontology: str | None = ONTOLOGY,
+) -> None:
+    """Run a load job whose derived database holds the ontology and the entities, by default `ENTITIES`."""
+    app.state.jobs.register(Stage.PRE_CACHING, derived_stage(entities, ontology, title="The <Onto>"))
     client.portal.call(app.state.jobs.start)
     client.portal.call(app.state.jobs.wait)
 
@@ -82,11 +93,19 @@ def test_entity(client: TestClient) -> None:
     assert "noindex" not in response.text
 
 
-def test_head(client: TestClient) -> None:
-    """Check that entity URLs answer HEAD as GET, without a body."""
-    response = client.head("/other.org/y")
+@pytest.mark.parametrize(
+    "path", ["/other.org/y", iri_link("urn:example:fallback"), "/_browl/hash?path=/other.org/vocab&fragment=C"]
+)
+def test_head(client: TestClient, path: str) -> None:
+    """Check that entity URLs and the lookup routes answer HEAD as GET, without a body."""
+    response = client.head(path)
     assert (response.status_code, response.text) == (200, "")
+
+
+def test_head_not_found(client: TestClient) -> None:
+    """Check that HEAD is 404 for a path no entity has, and 405 for a reserved route that only answers GET."""
     assert client.head("/no/such/page").status_code == 404
+    assert client.head("/_browl/health").status_code == 405
 
 
 def test_entity_and_hash_prefix(client: TestClient) -> None:
@@ -113,6 +132,7 @@ def test_disambiguation(client: TestClient) -> None:
     response = client.get("/other.org/x")
     assert response.status_code == 200
     assert "<h1>Choose an entity</h1>" in response.text
+    assert response.text.count('href="/_browl/iri?') == 2
     for iri in ("http://other.org/x", "https://other.org/x"):
         assert f'href="{iri_link(iri)}"' in response.text
         page = client.get(iri_link(iri), follow_redirects=False)
@@ -164,15 +184,44 @@ def test_fallback(client: TestClient, iri: str) -> None:
     assert f"<code>{iri}</code>" in response.text
 
 
+def test_fallback_punned(client: TestClient) -> None:
+    """Check that an IRI with several types and a fallback URL is served there as one entity."""
+    response = client.get(iri_link("urn:example:p"))
+    assert response.status_code == 200
+    assert "class, object_property" in response.text
+
+
+@pytest.mark.parametrize("iri", ["http://other.org/vocab#E", "https://other.org/vocab#E"])
+def test_fallback_route_shared_hash_url(client: TestClient, iri: str) -> None:
+    """Check that the fallback route serves each hash IRI that shares a URL, rather than redirecting to it."""
+    response = client.get(iri_link(iri), follow_redirects=False)
+    assert response.status_code == 200
+    assert f"<code>{iri}</code>" in response.text
+    assert "Choose an entity" not in response.text
+
+
 @pytest.mark.parametrize(
     ("iri", "location"),
-    [("http://other.org/y", "/other.org/y"), ("http://other.org/vocab#C", "/other.org/vocab#C"), (ONTOLOGY, "/onto")],
+    [
+        ("http://other.org/y", "/other.org/y"),
+        ("http://other.org/vocab#C", "/other.org/vocab#C"),
+        (ONTOLOGY, "/onto"),
+        ("http://other.org/a|b", "/other.org/a|b"),
+        ("http://other.org/vocab#f{g}", "/other.org/vocab#f{g}"),
+    ],
 )
 def test_fallback_route_redirects(client: TestClient, iri: str, location: str) -> None:
-    """Check that the fallback route redirects an entity that has a URL of its own there."""
+    """Check that the fallback route redirects an entity that has a URL of its own there, as stored, unescaped."""
     response = client.get(iri_link(iri), follow_redirects=False)
     assert response.status_code == 302
     assert response.headers["Location"] == location
+
+
+def test_unescaped_path(client: TestClient) -> None:
+    """Check that a path with a character stored unescaped, as the fallback route redirects to it, is served."""
+    response = client.get("/other.org/a|b")
+    assert response.status_code == 200
+    assert "<code>http://other.org/a|b</code>" in response.text
 
 
 @pytest.mark.parametrize("path", ["/_browl/iri", iri_link("http://other.org/nothing")])
@@ -190,17 +239,60 @@ def test_fallback_route_not_found(client: TestClient, path: str) -> None:
         "/other.org",
         "/example.org/onto",
         "/x",  # http://_browl/x's proxied URL, under the reserved prefix
-        "/_browl/x",
-        "/_browl/admin%2F..%2F..%2Fother.org%2Fy",
-        "/%5Fbrowl/x",
-        "/_browl",
     ],
 )
 def test_not_found(client: TestClient, path: str) -> None:
-    """Check that a path no entity has, or one under the reserved prefix, serves "not found" with status 404 (U-14)."""
+    """Check that a path no entity has serves "not found" with status 404 (U-14)."""
     response = client.get(path)
     assert response.status_code == 404
     assert "<h1>Not found</h1>" in response.text
+
+
+@pytest.mark.parametrize(
+    "path", ["/_browl/x", "/%5Fbrowl/x", "/_browl/admin%2F..%2F..%2Fother.org%2Fy", "/_browl", "/_browl/"]
+)
+def test_reserved_not_found(client: TestClient, path: str) -> None:
+    """Check that a path under the reserved prefix no route has is the router's 404, never looked up (O-3)."""
+    response = client.get(path)
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Not Found"}
+
+
+def test_reserved_prefix_setting() -> None:
+    """Check that the reserved prefix comes from the settings: in 404s, the choose page's links and the hash script."""
+    app = make_app(RESERVED_PREFIX="_site")
+    with TestClient(app) as client:
+        run(client, app)
+        for path in ("/_site/x", "/%5Fsite/x"):
+            assert client.get(path).json() == {"detail": "Not Found"}
+        assert "<code>http://_browl/x</code>" in client.get("/_browl/x").text  # no longer reserved
+        response = client.get("/_browl/nothing")
+        assert response.status_code == 404
+        assert "<h1>Not found</h1>" in response.text
+        choose = client.get("/other.org/x").text
+        assert f'href="/_site/iri?u={urllib.parse.quote("http://other.org/x", safe="")}"' in choose
+        assert 'data-lookup="/_site/hash"' in client.get("/onto").text
+
+
+def test_ontology_iri_shared() -> None:
+    """Check that an ontology IRI whose URL another IRI shares serves the disambiguation page, not the home page."""
+    app = make_app()
+    with TestClient(app) as client:
+        run(client, app, [("https://example.org/onto", EntityType.CLASS)])
+        response = client.get("/onto")
+        assert response.status_code == 200
+        assert "<h1>Choose an entity</h1>" in response.text
+        assert client.get(iri_link(ONTOLOGY)).text.count("<h1>The &lt;Onto&gt;</h1>") == 1
+
+
+def test_base_url_with_path() -> None:
+    """Check that native entities are served under a base URL with a path, relative to it."""
+    app = make_app(BASE_URL="http://example.org/base/")
+    with TestClient(app) as client:
+        run(client, app, [("http://example.org/base/A", EntityType.CLASS)], ontology="http://example.org/base/onto")
+        assert "<code>http://example.org/base/A</code>" in client.get("/A").text
+        assert "<h1>The &lt;Onto&gt;</h1>" in client.get("/onto").text
+        assert client.get("/base/A").status_code == 404
 
 
 def test_reserved_routes_come_first(client: TestClient) -> None:
@@ -224,8 +316,38 @@ def test_under_root_path(app: FastAPI) -> None:
         assert 'data-lookup="/site/_browl/hash"' in client.get("/site/onto").text
 
 
-@pytest.mark.parametrize("raw_path", [b"/site/other.org/caf%C3%A9", b"/other.org/caf%C3%A9"])
-def test_request_path_root_path(raw_path: bytes) -> None:
-    """Check that a request's path is taken from its raw path, less the root path whether a proxy stripped it or not."""
-    scope = {"type": "http", "path": "/site/other.org/caf\u00e9", "raw_path": raw_path, "root_path": "/site"}
-    assert request_path(Request(scope)) == "/other.org/caf%C3%A9"
+@pytest.mark.parametrize(
+    ("path", "raw_path", "expected"),
+    [
+        ("/site/other.org/caf\u00e9", b"/site/other.org/caf%C3%A9", "/other.org/caf%C3%A9"),
+        ("/site/other.org/caf\u00e9", b"/other.org/caf%C3%A9", "/other.org/caf%C3%A9"),
+        ("/site/site/x", b"/site/site/x", "/site/x"),
+        ("/site/site/x", b"/site/x", "/site/x"),
+    ],
+)
+def test_request_path_root_path(path: str, raw_path: bytes, expected: str) -> None:
+    """Check that a request's path is its raw path, less the root path only when the raw path has it."""
+    scope = {"type": "http", "path": path, "raw_path": raw_path, "root_path": "/site"}
+    assert request_path(Request(scope)) == expected
+
+
+def test_hash_script_contract(client: TestClient) -> None:
+    """Check what the hash script and the server agree on: its data attributes, and one main and title per page."""
+    script = (STATIC_DIR / "hash.js").read_text()
+    page = client.get("/other.org/z").text
+    for name, attribute in [("lookup", "data-lookup"), ("path", "data-path"), ("prefixOnly", "data-prefix-only")]:
+        assert f"script.dataset.{name}" in script
+        assert f'{attribute}="' in page
+    response = client.get("/_browl/hash", params={"path": "/other.org/vocab", "fragment": "C"})
+    assert (response.text.count("<main"), response.text.count("<title>")) == (1, 1)
+
+
+def test_meta_read_for_home_only(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that the meta is read only for the home page, the one page that shows it."""
+    reads: list[None] = []
+    monkeypatch.setattr(browl.lookup, "read_meta", lambda connection: reads.append(None) or read_meta(connection))
+    for path in ("/other.org/y", "/other.org/x", iri_link("urn:example:fallback"), "/other.org/vocab"):
+        assert client.get(path).status_code == 200
+    assert reads == []
+    assert "<h1>The &lt;Onto&gt;</h1>" in client.get("/onto").text
+    assert len(reads) == 1

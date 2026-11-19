@@ -283,8 +283,9 @@ fragment). A request is resolved by looking up the path (`browl.derived.entities
 | a hash prefix only | A small page with a script that reads the fragment and loads that entity, or shows "not found" when there is no fragment or no such entity. HTTP status 200, since the server can't see the fragment. _(Q2a)_ The script (`static/hash.js`) fetches the page from `hash?path=…&fragment=…` ([2.13](#213-url-space-for-the-services-own-pages)), passing on the URL's query (e.g. the tab), and shows its main content and title in place of its own page's. It runs again on `hashchange`, since a link between two hash entities under one path changes only the fragment. _(P-13)_ |
 | nothing | HTTP 404. |
 
-The catch-all route (`browl.lookup`) comes after every other route, and looks the path up as the request sent it (the
-raw path, less any root path), in URI form as the table stores it, not as the router percent-decodes it. `iri?u=…`
+The catch-all route (`browl.lookup`) comes after every other route, and doesn't match paths under the reserved prefix
+(percent-decoded, as the router decodes them). It looks the path up as the request sent it (the raw path, less any
+root path), in URI form as the table stores it, not as the router percent-decodes it. `iri?u=…`
 serves an entity whose URL is a fallback URL or shared by several IRIs; any other entity it redirects (302) to its own
 URL, so each page has one URL. _(P-13)_
 

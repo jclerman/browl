@@ -5,8 +5,8 @@
 <p class="prose">Several IRIs share this URL, such as the <code>http</code> and <code>https</code> forms of an IRI.
   Which one do you want?</p>
 <ul>
-  {% for iri, link, entities in choices %}
-  <li><a href="{{ link }}">{{ entities[0].display_name or iri }}</a> <code>{{ iri }}</code></li>
+  {% for iri, link, name in choices %}
+  <li><a href="{{ link }}">{{ name }}</a> <code>{{ iri }}</code></li>
   {% endfor %}
 </ul>
 {% endblock %}
