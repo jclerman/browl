@@ -27,6 +27,9 @@ httpcore2 = "^2.16.0"
 jpype1 = "^1.7.1"
 jinja2 = "^3.1.6"
 python-multipart = ">=0.0.34,<0.1"
+pyroaring = "^1.2.0"
+numpy = "^2.5.5"
+scipy = "^1.18.1"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^2.4.1"
@@ -36,6 +39,7 @@ pytest-cov = "^7.1.0"
 pytest-playwright = "^0.10.0"
 pytest-sugar = "^1.1.1"
 rdflib = "^7.6.0"
+scipy-stubs = "^1.18.1.1"
 
 [tool.pytest]
 # An xfail test that unexpectedly passes is a failure, not a silent pass.

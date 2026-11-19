@@ -130,16 +130,22 @@ comments:
       The hierarchies' named direct parent-child edges, between equivalence-group representatives, stored in key
       order.
     columnComments:
-      hierarchy: Which hierarchy, the classes' or a property type's.
+      hierarchy: Which hierarchy, named by its entities' type (entity.type), e.g. class or object_property.
       parent: The parent (entity.id).
       child: The child (entity.id).
   - table: equiv_group
-    tableComment: Equivalence groups of named classes, from owl:equivalentClass (union-find).
+    tableComment: >-
+      Groups of named classes linked by owl:equivalentClass (union-find), and of a hierarchy's entities in a cycle of
+      edges. Only groups of more than one entity have rows; any other entity is its own representative.
     columnComments:
-      entity: A class in a group (entity.id).
-      representative: The group's representative (entity.id), which stands for the group in edge and counts.
+      entity: An entity in a group (entity.id).
+      representative: >-
+        The group's representative (entity.id), its first IRI, which stands for the group in edge and counts.
   - table: counts
-    tableComment: Each hierarchy node's numbers of children and of distinct descendants (DESIGN.md 2.5).
+    tableComment: >-
+      Each hierarchy node's numbers of children and of distinct descendants (DESIGN.md 2.5): a row for every entity of
+      the hierarchy's type that is a group's representative or in no group, except owl:Thing and the other top and
+      bottom entities.
     columnComments:
       hierarchy: Which hierarchy, as in edge.hierarchy.
       node: The node (entity.id).

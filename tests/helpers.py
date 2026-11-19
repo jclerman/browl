@@ -220,12 +220,19 @@ NAME_END = "\t\t\t\ttrue\n"
 NAME_RESULT = f'{NAME_HEADER}<{EX}onto#A>\t{LABEL}\t{LABEL}\t"A"@en\t\n{NAME_END}'
 
 
+EDGE_HEADER = f"?child\t?relation\t?parent\t?{END_VARIABLE}\n"
+EDGE_END = "\t\t\ttrue\n"
+EDGE_RESULT = EDGE_HEADER + EDGE_END
+
+
 def answer(query: str) -> str:
-    """Return a stubbed Fuseki's answer to a query: to the entity list, the name values query, else the header's."""
+    """Return a stubbed Fuseki's answer: the entity list's, the name values', the edges', else the header's."""
     if "?entity ?type" in query:
         return ENTITY_RESULT
     if "?entity ?name" in query:
         return NAME_RESULT
+    if "?child ?relation" in query:
+        return EDGE_RESULT
     return ONTOLOGY_RESULT
 
 

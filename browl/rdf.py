@@ -15,6 +15,8 @@ from pydantic_core import CoreSchema, core_schema
 XSD = "http://www.w3.org/2001/XMLSchema#"
 XSD_STRING = f"{XSD}string"
 RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+RDFS = "http://www.w3.org/2000/01/rdf-schema#"
+OWL = "http://www.w3.org/2002/07/owl#"
 RDF_LANG_STRING = f"{RDF}langString"
 RDF_DIR_LANG_STRING = f"{RDF}dirLangString"
 DIRECTIONS = frozenset({"ltr", "rtl"})

@@ -20,11 +20,11 @@ CREATE TABLE edge (
 
 ## Columns
 
-| Name      | Type    | Default | Nullable | Children | Parents             | Comment                                             |
-| --------- | ------- | ------- | -------- | -------- | ------------------- | --------------------------------------------------- |
-| hierarchy | TEXT    |         | false    |          |                     | Which hierarchy, the classes' or a property type's. |
-| parent    | INTEGER |         | false    |          | [entity](entity.md) | The parent (entity.id).                             |
-| child     | INTEGER |         | false    |          | [entity](entity.md) | The child (entity.id).                              |
+| Name      | Type    | Default | Nullable | Children | Parents             | Comment                                                                                    |
+| --------- | ------- | ------- | -------- | -------- | ------------------- | ------------------------------------------------------------------------------------------ |
+| hierarchy | TEXT    |         | false    |          |                     | Which hierarchy, named by its entities' type (entity.type), e.g. class or object_property. |
+| parent    | INTEGER |         | false    |          | [entity](entity.md) | The parent (entity.id).                                                                    |
+| child     | INTEGER |         | false    |          | [entity](entity.md) | The child (entity.id).                                                                     |
 
 ## Constraints
 
