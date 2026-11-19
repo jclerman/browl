@@ -9,6 +9,8 @@ temporary directory mounted as its base; for one at `BROWL_TEST_FUSEKI_URL`, `BR
 tests whose needs are missing are skipped; in CI
 (`CI` set) they fail instead, so CI runs every test. Mark such tests `jvm` or `fuseki`, and have them use the `jvm` or
 `fuseki_url` fixture.
+
+The tests build the Fuseki image they start, unless `BROWL_TEST_FUSEKI_IMAGE` names one already built, as CI does.
 """
 
 import os
@@ -146,7 +148,11 @@ def jvm() -> None:
 
 
 def _docker(*args: str) -> str:
-    return subprocess.run(["docker", *args], check=True, capture_output=True, text=True).stdout.strip()
+    """Run a Docker command and return its output; on failure, raise an error that includes what it wrote to stderr."""
+    result = subprocess.run(["docker", *args], check=False, capture_output=True, text=True)
+    if result.returncode:
+        raise RuntimeError(f"`docker {' '.join(args)}` failed with exit status {result.returncode}:\n{result.stderr}")
+    return result.stdout.strip()
 
 
 def _wait_for_fuseki(url: str) -> None:
@@ -180,7 +186,10 @@ def fuseki_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[st
     ):
         skip_or_fail("no Fuseki: set BROWL_TEST_FUSEKI_URL, or make Docker available")
     base = tmp_path_factory.mktemp("fuseki")
-    _docker("build", "--quiet", "--tag", FUSEKI_IMAGE, str(ROOT / "docker" / "fuseki"))
+    image = os.environ.get("BROWL_TEST_FUSEKI_IMAGE")
+    if not image:
+        image = FUSEKI_IMAGE
+        _docker("build", "--quiet", "--tag", image, str(ROOT / "docker" / "fuseki"))
     container = _docker(
         "run",
         "--detach",
@@ -191,7 +200,7 @@ def fuseki_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[st
         f"{os.getuid()}:{os.getgid()}",
         "--volume",
         f"{base}:/fuseki",
-        FUSEKI_IMAGE,
+        image,
     )
     try:
         url = f"http://{_docker('port', container, '3030/tcp').splitlines()[0]}"

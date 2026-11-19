@@ -40,8 +40,8 @@ jobs:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
 
-      # Java for the tests marked jvm; `make test` downloads robot.jar for them, and those marked fuseki build and start
-      # browl's Fuseki image. GitHub sets CI, so tests whose needs are missing fail instead of being skipped
+      # Java for the tests marked jvm; `make test` downloads robot.jar for them, and those marked fuseki start browl's
+      # Fuseki image, built below. GitHub sets CI, so tests whose needs are missing fail instead of being skipped
       # (tests/conftest.py).
       - uses: actions/setup-java@v6
         with:
@@ -86,7 +86,22 @@ jobs:
           path: .cache/tbls
           key: tbls-${{ steps.tbls-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
 
+      # The Fuseki image for the tests marked fuseki, built from the layers the images job caches, so a test job rarely
+      # downloads the base image, Debian's packages or Fuseki. Built here rather than by the tests so its log shows
+      # what went wrong. Only the images job writes the cache, so the matrix's jobs don't race to write it.
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build the Fuseki image for the tests
+        uses: docker/build-push-action@v7
+        with:
+          context: docker/fuseki
+          load: true
+          tags: browl-fuseki-test
+          cache-from: type=gha,scope=fuseki
+
       - name: Install dependencies, lint, and test
+        env:
+          BROWL_TEST_FUSEKI_IMAGE: browl-fuseki-test
         run: make install ci
 
   images:
