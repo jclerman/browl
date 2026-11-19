@@ -124,6 +124,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **N-3** · An uncached entity page renders fast. Proposed target: p95 under 300 ms at N-1 scale, so a small cache is enough. _(Q13)_ | v1 |
 | **N-4** · Nothing that needs the whole ontology (closures, counts, the search index) is computed per request. _(Q5)_ | v1 |
 | **N-5** · The search engine sits behind an interface, so replacing it changes only that module. _(Q11)_ | v1 |
+| **N-6** · One page can't make the site unresponsive: work on a page's ontology content has a deadline, and past it only that page's panel fails. | Later |
 
 ---
 
@@ -189,6 +190,13 @@ Tooling and code conventions are in [`CODING-STANDARDS.md`](CODING-STANDARDS.md)
   and all OWLAPI calls run on one dedicated thread. Parallel threads gave no extra throughput, because each render
   alternates Java and Python work, and Python's GIL serializes the Python part
   ([S-1 findings](../research/S-1/README.md)).
+- **Isolating page work** (N-6): a page's ontology content can be crafted, and in one worker process a slow render
+  stalls every request, since Python can't stop a running thread. P-35 moves rendering into killable subprocesses with a
+  deadline. Until then, code that handles ontology content per page should keep that move easy:
+  - Write it as a function from plain data (fetched triples, IRIs) to Pydantic models, with no request, database
+    handle or global state, so it can run in another process.
+  - Keep scanning of ontology text in those functions, not in templates or route code, and keep it linear-time.
+  - Reach Java only through `run_java`.
 - **Owlready2 is not used.** _(Q6)_
 
 #### Data and persistence
@@ -1097,6 +1105,7 @@ To settle when it's built:
 | A dense or adversarial hierarchy makes descendant counting hold too much memory | Found in P-12's review: merging a node's children only once it had them all held memory quadratic in a chain whose members all share one more parent, which a few MB of upload (or a host serving an import) can supply; the build runs in the app process, with no memory limit. P-12 merges each set into its parents as soon as it's complete, which makes that shape linear, and fails the stage once the sets hold more than `DESCENDANT_BUDGET` members (2.5, Distinct descendant counts). |
 | Loading a very large ontology takes minutes | Accepted for uploads (Q14a), shown on the status page. Restarts don't reload (2.4). NCBITaxon: about 5 minutes, estimated; Uberon: 7 s, measured ([S-4 findings](../research/S-4/README.md)). P-24 checks whether extracting the dictionary and edges by streaming the upload file, in parallel with the TDB2 load, is worth it. |
 | Fragment rendering misses axioms a full-ontology render would show | 300 of 300 Uberon classes matched (S-4); P-15 adds n-ary disjointness and general class axioms, and tests against full-ontology rendering. |
+| A crafted ontology makes one page's rendering slow enough to stall the site | Known cases fixed in P-15's review (PR #95). P-35 renders in killable subprocesses with a deadline (N-6); until then, per-page code follows §2.1's isolation guidelines. |
 | Usage misses references inside class expressions | P-27 tests walking from the blank node up to the owning axiom before building the tab. |
 
 ---
@@ -1236,6 +1245,11 @@ go into this document.
 ### Later
 
 Requirements marked **Later** (U-18–U-25, U-33–U-41, U-43, A-8, A-9, O-12) are not yet broken into work items.
+The exception is N-6, whose work item is written down so per-page code keeps it in mind (2.1):
+
+| ID | Work item | Delivers | Depends on | Status | Tracking |
+| --- | --- | --- | --- | --- | --- |
+| P-35 | Render pages' ontology content in a pool of killable subprocesses, each with its own JVM, with a deadline per render; past it, only that panel fails | N-6 | P-15 | To do | [#96](https://github.com/jclerman/browl/issues/96) |
 
 **Novel features** _(post-log)_. EBI's [OLS4](https://github.com/EBISPOT/ols4) already offers much of v1 for many
 ontologies at once. It shows hierarchies along configured properties, but it does no reasoning, and its "Related from"
