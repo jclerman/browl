@@ -888,12 +888,28 @@ script, is exempt; every response, it included, gets `X-Frame-Options: DENY` and
 
 - Styled as underlined text tabs, not as a second bar, so they don't look like part of the navigation. The navigation
   bar has its own tinted background; the tabs sit on the page background.
-- Each tab has its own URL (`?tab=usage`). Without JS the tabs are ordinary links and the server renders the chosen tab.
-  With htmx, only the tab panel is fetched and swapped, and the URL updated. Only the visible tab's content is fetched.
-- They follow the WAI-ARIA tabs pattern.
+- Each tab has its own URL (`?tab=usage`); the first tab's is the page's own, without `tab`. Without JS the tabs are
+  ordinary links and the server renders the chosen tab. With htmx, only the tab panel is fetched and swapped, and the
+  URL updated. Only the visible tab's content is fetched. _(P-14b)_
+- A tab fetches its panel from its own URL plus `panel=1`, which serves the panel's content alone, marked `noindex`.
+  A parameter rather than the `HX-Request` header, so each response has its own URL: caches need no `Vary`, and
+  other htmx requests, such as boosted links, can't get a panel by accident. _(P-14b)_
+- The URL is replaced, not pushed: switching tabs isn't a navigation, and htmx's own history restore would fight the
+  hash-IRI script over `<main>`. Without JS, each tab is a link, so it does add a history entry. _(P-14b)_
+- They follow the WAI-ARIA tabs pattern, with manual activation, since opening a tab fetches its panel: the arrow
+  keys, Home and End move focus between tabs, and Enter or Space opens one. Only the selected tab is in the Tab
+  sequence. `static/tabs.js` adds the keyboard support, marks the tab whose panel arrived as selected, and replaces
+  the URL; a click with a modifier key is left to the browser, and a panel that can't be fetched loads the tab's page
+  instead. _(P-14b)_
+- A `tab` the page lacks, a repeated `tab` or `panel`, or a `panel` other than `1` is a 404, as is `panel=1` on a page
+  without tabs. Two kinds of page ignore a `tab` they lack instead: a page with the hash-IRI script, whose query is
+  also its fragment's entity's, which may have other tabs, shows its first tab; and a page without tabs (the home and
+  choose pages) shows itself. _(P-14b)_
 - For hash IRIs, the query string comes before the fragment (`/example.org/onto?tab=usage#Foo`). The hash-IRI script
-  keeps it when loading the entity.
-- The page cache key includes the tab.
+  keeps it when loading the entity, and a hash entity's tabs fetch their panels from the hash route
+  (`hash?path=…&fragment=…&tab=…&panel=1`). When the fragment is cleared, the script shows the page served for the
+  path again, or reloads it if a tab was chosen since, so the page matches its URL. _(P-14b)_
+- The page cache key includes the tab shown and whether the response is a panel alone (2.10).
 
 **Visual design** (U-29):
 
@@ -921,7 +937,9 @@ JSON, scripts or unquoted attributes.
 
 ### 2.10 Page cache
 
-An in-memory LRU of rendered HTML, keyed by `(generation, URL path, tab)`, with a configurable size (default 100).
+An in-memory LRU of rendered HTML, keyed by `(generation, URL path, tab, panel only)`, with a configurable size
+(default 100). The tab is the one the page shows, not the query's `tab`, which pages without it may ignore (2.9), so
+junk queries can't fill the cache; `panel only` is whether the response is a tab panel alone (`panel=1`, 2.9).
 _(Q13)_ Including the generation number in the key means a reload invalidates entries in every worker without
 coordination. Pages differ for admins (the navigation bar's admin link, 2.9), so the key must also include whether
 the user is an admin, or the cache must hold pages without the frame's per-user part and add it after the lookup
@@ -985,7 +1003,7 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | `tree/{hierarchy}` | Tree root page, `hierarchy` one of `classes`, `object-properties`, `data-properties` and `annotation-properties` (the navigation bar links them); `?node=` returns one node's children (htmx fragment) |
 | `iri?iri=…` | Fallback entity URLs (Q1b) |
 | `hash?path=…&fragment=…` | The page for a hash URL's path and fragment, for the hash-IRI script ([2.3](#23-iri--url-mapping), Lookup); marked `noindex`, as its pages are at their hash URLs |
-| `static/…` | CSS, htmx, hash-IRI script |
+| `static/…` | CSS, htmx, hash-IRI script, page-tabs script |
 | `admin/…` | Upload, status, admin list, sign-in/out |
 | `admin/upload` | The upload form (A-2, A-3) and the load job's status. The form is parsed as it streams in, the file written straight to the jobs volume, never held whole in memory or spooled to a temporary file; its reasoner field must come before its file. The job is claimed only once the file's name has been checked and its first 8 KiB found to look like the syntax the name says, so a malformed request or a mislabelled, OWL/XML or compressed file leaves the served ontology alone. A post a browser sent from another site's page (by `Sec-Fetch-Site`) is refused, against CSRF (P-6) |
 | `admin/status` | The load job's stage, start time, uploaded file (name, syntax, size), and failed stage and reason (A-5, A-6): an HTML fragment for htmx requests (`HX-Request`), which polls itself while a job runs, else a page, which polls the same way, or refreshes itself while a job runs if JS is off (P-5) |

@@ -1,8 +1,9 @@
 {% extends "base.html" %}
+{% from "tabs.html" import tab_list, tab_panel %}
 {% block title %}{{ entity.display_name or entity.iri }}{% endblock %}
 {% block content %}
-{# A placeholder until P-14 and P-16. #}
+{# The page header is a placeholder until P-14c. #}
 <h1>{{ entity.display_name or entity.iri }}</h1>
-<p><code>{{ entity.iri }}</code></p>
-<p>{% for type in types %}{{ type }}{% if not loop.last %}, {% endif %}{% endfor %}</p>
+{{ tab_list(tabs, "Entity") }}
+{% call tab_panel(tabs) %}{% include "entity_panel.html" %}{% endcall %}
 {% endblock %}

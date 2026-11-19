@@ -235,3 +235,41 @@ code {
 .note {
   color: var(--muted);
 }
+
+/* Page tabs (U-28): underlined text on the page background, unlike the tinted navigation bar. */
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 calc(var(--space) * 1.5);
+  margin: var(--space) 0 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.tabs [role="tab"] {
+  margin-bottom: -1px; /* the selected tab's underline covers the list's border */
+  padding: calc(var(--space) / 4) 0;
+  border-bottom: 3px solid transparent;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.tabs [role="tab"]:hover {
+  color: var(--fg);
+  border-bottom-color: var(--border);
+}
+
+.tabs [role="tab"][aria-selected="true"] {
+  color: var(--fg);
+  font-weight: 600;
+  border-bottom-color: var(--accent);
+}
+
+.tab-panel {
+  padding-top: var(--space);
+}
+
+.tab-panel:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
