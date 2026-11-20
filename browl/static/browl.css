@@ -370,18 +370,12 @@ code {
   font-size: 0.8em;
 }
 
-/* An entity's axioms (U-3): one per line, wrapped lines indented; keywords lighter than the entity names. */
+/* An entity's axioms (U-3): keywords lighter than the entity names; an equivalent its equivalence group implies, not
+   an axiom, marked as language tags are. */
 
-.axiom-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.axiom-list li {
-  padding-left: calc(var(--space) * 1.5);
-  text-indent: calc(var(--space) * -1.5);
-  overflow-wrap: anywhere;
+.implied {
+  color: var(--muted);
+  font-size: 0.8em;
 }
 
 .keyword {

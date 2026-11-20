@@ -854,11 +854,31 @@ Tabs (U-28; see [2.9](#29-page-layout)):
     characters as Fuseki sends them (`MAX_ANNOTATIONS_CHARS`, so huge values can't exhaust the app's memory), gets a
     note instead, as for too many axioms. A failed query fails only this panel, as the axioms' does (below).
 - **Logical-axioms panel:** grouped by axiom kind under familiar section names (SubClass Of, Equivalent To, …), one
-  Manchester-syntax axiom per line. Empty groups are omitted.
+  Manchester-syntax axiom per line. Empty groups are omitted. _(P-16b, P-16c)_
   - **Classes:** SubClass Of (named parents first, then class expressions), Equivalent To (equivalent classes from the
-    derived database, then expressions), Disjoint With, and General class axioms that mention the class.
+    derived database, then expressions), Disjoint With, Disjoint Union Of, Keys, and General class axioms that mention
+    the class.
   - **Properties** (U-31): Domains, Ranges, Characteristics (functional, transitive, …), SubProperty Of, Equivalent To,
-    Inverse Of, Disjoint With, and property chains.
+    Inverse Of, Disjoint With, and SuperProperty Of (Chain), the chains that imply the property. An annotation
+    property has only Domains, Ranges and SubProperty Of.
+  - **Frame-style lines** (`browl.frames`): a line shows an axiom by its operands that aren't the entity, from its
+    named roles: on Heart's page, `Heart SubClassOf Organ` is `Organ` under SubClass Of. An n-ary disjointness is one
+    line, its other members separated by commas, as are a disjoint union's members and a key's properties; a chain's
+    properties are separated by `o`; a characteristic is its keyword (`Functional`). Under Equivalent To each
+    equivalent is a line of its own, shown once, though axioms may state it more than once. An axiom whose entity
+    isn't where its section expects it is shown whole: under General class axioms if it's a class axiom (a subclass,
+    equivalence, disjointness, disjoint-union or key axiom), such as `hasPart some Heart SubClassOf Vertebrate`;
+    else under Other axioms, last, such as `inverse (p) Domain C` on p's page, or a punned individual's assertions.
+  - **Implied equivalents:** a member of the class's equivalence group (`equiv_group`, 2.5) that no axiom of the
+    class states, being equivalent through a chain of equivalences or a cycle of subclass axioms, is a line under
+    Equivalent To marked "(implied)", read from the derived database with the links.
+  - **Order:** a class's sections in the order above, then each property type's, then Other axioms. Within a section,
+    lines that show one named entity first, by the name the page shows for it, case-insensitively, then the others by
+    their text, with the names the page shows.
+  - **Punning:** an IRI with several types has each type's sections; where two of them share a label, both add their
+    type ("Equivalent To (object property)").
+  - **Data:** each section (`AxiomGroup`) holds its label and lines; a line (`FrameLine`) its axiom, None for an
+    implied equivalent, and the operands it shows, so the JSON API (U-42) returns the frame as the page shows it.
 - **Compact layout** (U-32): label column and value column in a two-column grid; tight line spacing within a group and a
   little more between groups. Multi-column values for long lists are Later (U-33). Each panel is a `<dl class="frame">`,
   one `<dt>` per group and one `<dd>` per value; on a phone the values go below their label. The label column fits
@@ -1010,9 +1030,6 @@ An axiom holding a value its node refuses (an IRI the OWLAPI accepts but browl d
 logged and shown in functional syntax as an `OtherAxiom`, without links, so the entity's other axioms still show.
 A stored IRI with an escaped illegal character, which Jena accepts and writes back escaped, fails the fetch already:
 browl's Fuseki client checks every IRI it reads (2.14).
-
-**Until P-16b and P-16c**, the Overview tab lists the axioms one per line, sorted by kind and text, under "Logical
-axioms", below the annotations panel (`browl.overview`).
 
 **Base directions** (RDF 1.2's `"…"@ar--rtl`): Fuseki stores and returns them, and browl's Fuseki client reads them as
 `rdf:dirLangString` literals. The OWLAPI 4.5 predates RDF 1.2: its N-Triples parser accepts them but reads `ar--rtl`

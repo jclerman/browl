@@ -287,11 +287,13 @@ def derived_stage(
     ontology_iri: str | None = None,
     title: str | None = None,
     names: Mapping[str, tuple[str | None, str | None]] | None = None,
+    equivalence_groups: Sequence[Sequence[str]] = (),
 ) -> StageFunction:
     """Return a load job stage that builds the job's derived database with these entities, and the ontology if given.
 
     Their URLs come from the job's settings (`URLMapper`), and the rows and `hash_prefix` are written as the entities
-    hook writes them (`browl.precache.entities`). `names` gives IRIs' display names and CURIEs.
+    hook writes them (`browl.precache.entities`). `names` gives IRIs' display names and CURIEs; `equivalence_groups`
+    classes' equivalence groups (the `equiv_group` table), each with its representative first.
     """
 
     def build(context: JobContext) -> None:
@@ -303,6 +305,12 @@ def derived_stage(
             insert_entities(rows, mapper, Reserved(), connection)
             fill_hash_prefix(connection)
             set_names(connection, names or {})
+            for group in equivalence_groups:
+                connection.executemany(
+                    "INSERT INTO equiv_group (entity, representative) SELECT e.id, r.id FROM entity AS e, entity AS r"
+                    " WHERE e.iri = ? AND r.iri = ? AND e.type = 'class' AND r.type = 'class'",
+                    [(member, group[0]) for member in group],
+                )
 
     async def stage(context: JobContext) -> None:
         await asyncio.to_thread(build, context)

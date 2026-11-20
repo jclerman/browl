@@ -755,22 +755,21 @@ def test_page(fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) ->
         uncle = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "hasUncle", "panel": "1"}).text
     heart_link = '<a href="/axioms#Heart"><bdi>&lt;b&gt;Heart&lt;/b&gt; &amp; &#34;soul&#34;</bdi></a>'
     keyword = '<span class="keyword">{}</span>'.format
+    assert re.search(r'<dt>SubClass Of</dt>\s*<dd dir="ltr"><a href="/axioms#Organ"><bdi>organ</bdi></a></dd>', page)
     assert (
-        f'<li dir="ltr">{heart_link} {keyword("SubClassOf")} <a href="/axioms#Organ"><bdi>organ</bdi></a></li>' in page
-    )
-    assert (
-        f'<li dir="ltr"><a href="/axioms#hasPart"><bdi>http://example.org/axioms#hasPart</bdi></a> {keyword("some")} '
-        f'{heart_link} {keyword("SubClassOf")} <code dir="ltr">&lt;{NS}Vertebrate&gt;</code></li>'
-    ) in page
+        f'<dd dir="ltr"><a href="/axioms#hasPart"><bdi>http://example.org/axioms#hasPart</bdi></a> {keyword("some")} '
+        f'{heart_link} {keyword("SubClassOf")} <code dir="ltr">&lt;{NS}Vertebrate&gt;</code></dd>'
+    ) in page  # a general class axiom, shown whole
     assert f"{keyword('value')} <bdi>&#34;see &lt;{NS}Dog&gt; &amp; \\&#34;friends\\&#34;&#34;@en</bdi>" in person
     label = re.escape('<bdi class="value">&lt;b&gt;Heart&lt;/b&gt; &amp; &#34;soul&#34;</bdi>')
     assert re.search(rf'<dt><code dir="ltr">rdfs:label</code></dt>\s*<dd>{label}</dd>', page)  # the annotations panel
     assert f'{keyword("some")} <code dir="ltr">xsd:integer</code>[&gt;= ' in person  # a built-in datatype
     code = '<code dir="ltr">&lt;{}&gt;</code>'.format
-    assert f"{keyword('HasKey')} {code(f'{NS}hasSSN')}, {code(f'{NS}ssn')}</li>" in person
+    keys = f"{re.escape(code(f'{NS}hasSSN'))}, {re.escape(code(f'{NS}ssn'))}"
+    assert re.search(rf'<dt>Keys</dt>\s*<dd dir="ltr">{keys}</dd>', person)
     assert '<p class="note">None.</p>' in comment  # it has no logical axioms
     # A literal of a custom datatype, which has no page.
     assert f'<bdi>&#34;B&#34;</bdi>^^<code dir="ltr">&lt;{NS}Grade&gt;</code>' in person
     chain = f'<code dir="ltr">&lt;{NS}hasParent&gt;</code> {keyword("o")} <code dir="ltr">&lt;{NS}hasBrother&gt;</code>'
-    assert f'<li dir="ltr">{chain} {keyword("SubPropertyOf:")} ' in uncle
-    assert "axiom-list" not in comment and "None." not in page
+    assert re.search(rf'<dt>SuperProperty Of \(Chain\)</dt>\s*<dd dir="ltr">{re.escape(chain)}</dd>', uncle)
+    assert "SubClass Of" not in comment and "None." not in page

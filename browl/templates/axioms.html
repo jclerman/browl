@@ -14,22 +14,27 @@
 {%- endfor -%}
 {%- endmacro %}
 
-{# An entity's axioms (`browl.overview.AxiomsPanel`), from `links`, one per line. #}
-{% macro axiom_list(panel, links) -%}
+{# An entity's logical axioms (`browl.overview.AxiomsPanel`), from `links`, as a frame in a two-column grid (U-32):
+   each section's label once, then one line per axiom; an equivalent only its equivalence group implies is marked. #}
+{% macro axiom_frame(panel, links) -%}
 <section class="axioms">
   <h2>Logical axioms</h2>
   {% if panel.too_many %}
   <p class="note">This entity has too many axioms to show here.</p>
-  {% elif panel.axioms is none %}
+  {% elif panel.groups is none %}
   <p class="note">The axioms can't be shown just now.</p>
-  {% elif not panel.axioms %}
+  {% elif not panel.groups %}
   <p class="note">None.</p>
   {% else %}
-  <ul class="axiom-list">
-    {% for axiom in panel.axioms %}
-    <li dir="ltr">{{ manchester(axiom.manchester_tokens(), links) }}</li>
+  <dl class="frame">
+    {% for group in panel.groups %}
+    <dt>{{ group.label }}</dt>
+    {% for line in group.lines %}
+    <dd dir="ltr">{{ manchester(line.manchester_tokens(), links) }}
+      {%- if line.axiom is none %} <small class="implied">(implied)</small>{% endif %}</dd>
     {% endfor %}
-  </ul>
+    {% endfor %}
+  </dl>
   {% endif %}
 </section>
 {%- endmacro %}
