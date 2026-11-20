@@ -23,9 +23,9 @@ import typing
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from typing import Annotated, ClassVar
+from typing import Annotated, Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 from browl.names import BUILTIN_PREFIXES
 from browl.rdf import RDF, XSD, XSD_LEXICAL_FORMS, XSD_STRING
@@ -200,8 +200,16 @@ class NodeType(StrEnum):
     OTHER_AXIOM = "OtherAxiom"
 
 
+def _is_concrete(node_type: type[Node]) -> bool:
+    """Return whether a node class is concrete: it has its own `NodeType`, as its `type` field's default."""
+    return isinstance(node_type.model_fields["type"].default, NodeType)
+
+
 class Node(BaseModel):
     """A node of the tree: an axiom, an expression, an entity or a literal.
+
+    Only a concrete node class, one with its own `NodeType`, can be instantiated or validated; `Node`, `Axiom` and the
+    intermediate bases (`_Boolean`, `_Nary`, …) raise `TypeError`, as an abstract class does.
 
     Attributes:
         type: The node's type.
@@ -213,6 +221,14 @@ class Node(BaseModel):
     """The node's tokens and fields, in order, unless `_layout` says otherwise."""
 
     type: NodeType
+
+    @model_validator(mode="before")
+    @classmethod
+    def _concrete_only(cls, data: Any) -> Any:
+        """Refuse to make a node of a base class; runs for construction and validation, not `model_construct`."""
+        if not _is_concrete(cls):
+            raise TypeError(f"{cls.__name__} is a base class; make a node of one of its subclasses")
+        return data
 
     def _layout(self) -> Sequence[LayoutItem]:
         return self.layout
@@ -1478,7 +1494,7 @@ AnyAxiom = Annotated[
 
 def _concrete(base: type[Node]) -> Iterator[type[Node]]:
     for each in base.__subclasses__():
-        if isinstance(each.model_fields["type"].default, NodeType):
+        if _is_concrete(each):
             yield each
         yield from _concrete(each)
 

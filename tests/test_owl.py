@@ -275,6 +275,21 @@ def test_node_types() -> None:
         assert each == ("IRI" if node_type is owl.IRIReference else node_type.__name__)
 
 
+@pytest.mark.parametrize(
+    "base",
+    [owl.Node, owl.Axiom, owl._Boolean, owl._DataBoolean, owl._OneOf, owl._Restriction, owl._Cardinality, owl._Nary],
+    ids=lambda base: base.__name__,
+)
+def test_bases_abstract(base: type[owl.Node]) -> None:
+    """Check that a base class can't be instantiated or validated, even with a type and fields a subclass has."""
+    data = {"type": owl.NodeType.OBJECT_INTERSECTION_OF, "operands": (A, B), "members": (A, B)}
+    with pytest.raises(TypeError, match=f"^{base.__name__} is a base class"):
+        base(**data)
+    with pytest.raises(TypeError, match="is a base class"):
+        base.model_validate(data)
+    assert owl.ObjectIntersectionOf.model_validate(data).operands == (A, B)
+
+
 def render(tokens: list[Token], links: dict[str, EntityLink]) -> str:
     """Return tokens as the axioms template renders them."""
     source = '{% from "axioms.html" import manchester %}{{ manchester(tokens, links) }}'
