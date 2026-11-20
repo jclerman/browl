@@ -15,7 +15,7 @@ from browl.fuseki import UNION_FROM, SparqlError, dataset_clause
 from browl.jobs import JobState
 from browl.links import EntityLink, read_entity_links
 from browl.loading import dataset_name
-from browl.owl import Axiom
+from browl.owl import AnyAxiom
 from browl.owlapi import FragmentError, run_java
 from browl.pages import link_root, read_derived
 from browl.precache.core import has_loaded_imports, logged_iri
@@ -35,7 +35,7 @@ class AxiomsPanel:
         too_many: Whether the axioms are too many to show (`browl.axioms.TooManyAxiomsError`).
     """
 
-    axioms: list[Axiom] | None
+    axioms: list[AnyAxiom] | None
     links: dict[str, EntityLink]
     too_many: bool = False
 

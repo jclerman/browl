@@ -2,10 +2,11 @@
 
 import asyncio
 import contextlib
+import re
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import httpx2
 import jpype
@@ -19,7 +20,7 @@ from browl.derived import EntityType
 from browl.fuseki import UNION_FROM, FusekiClient
 from browl.jobs import Stage
 from browl.owl import TokenKind
-from browl.rdf import RDF, XSD, XSD_LEXICAL_FORMS
+from browl.rdf import OWL, RDF, RDFS, XSD, XSD_LEXICAL_FORMS
 from tests.helpers import derived_stage, make_app
 
 pytestmark = [pytest.mark.jvm, pytest.mark.usefixtures("jvm")]
@@ -167,6 +168,40 @@ DIFFERENCES = {
 literals (`test_unquoted_literals`)."""
 
 
+def expected_text(kind: str, axiom: Any, renderer: Any) -> str:
+    """Return the text browl should give an axiom: the OWLAPI's, with the difference `DIFFERENCES` lists for its kind.
+
+    `comparable` makes up for `HasKey`'s commas.
+    """
+    if kind == "DatatypeDefinition":
+        return f"{renderer.render(axiom.getDatatype())} EquivalentTo {renderer.render(axiom.getDataRange())}"
+    if kind == "Rule":
+        return str(axiom)
+    return str(renderer.render(axiom))
+
+
+def comparable(kind: str, text: str) -> str:
+    """Return text `normalized`, and for a `HasKey` axiom without spaces or commas, which the OWLAPI writes in part."""
+    text = normalized(text)
+    return re.sub(r"[\s,]", "", text) if kind == "HasKey" else text
+
+
+class Reference(NamedTuple):
+    """An axiom compared with the OWLAPI's rendering.
+
+    Attributes:
+        kind: The axiom's kind.
+        owlapi: The OWLAPI's text.
+        expected: The text browl should give it (`expected_text`).
+        node: The axiom as a node.
+    """
+
+    kind: str
+    owlapi: str
+    expected: str
+    node: owl.AnyAxiom
+
+
 def synthetic() -> list[Any]:
     """Return axioms the test ontology lacks, built with the OWLAPI's data factory, to compare with its text.
 
@@ -292,7 +327,7 @@ def literals(factory: Any, custom: Any) -> list[Any]:
     ]
 
 
-def compared() -> list[tuple[str, str, owl.Axiom]]:
+def compared() -> list[Reference]:
     """Return every axiom of the test ontology, and the synthetic ones, each with the OWLAPI's text and as a node."""
     manager = jpype.JClass("org.semanticweb.owlapi.apibinding.OWLManager").createOWLOntologyManager()
     ontology = manager.loadOntologyFromOntologyDocument(jpype.JClass("java.io.File")(str(ONTOLOGY)))
@@ -303,30 +338,30 @@ def compared() -> list[tuple[str, str, owl.Axiom]]:
     ]
     renderer = reference_renderer()
     return [
-        (str(axiom.getAxiomType().getName()), str(renderer.render(axiom)), node)
+        Reference(kind, str(renderer.render(axiom)), expected_text(kind, axiom, renderer), node)
         for axiom in [*every, *synthetic()]
+        for kind in [str(axiom.getAxiomType().getName())]
         for [node] in [axioms.convert_axioms([axiom])]
     ]
 
 
 @pytest.fixture(scope="module")
-def references() -> list[tuple[str, str, owl.Axiom]]:
+def references() -> list[Reference]:
     """Return `compared`, run on the Java thread."""
     return asyncio.run(owlapi.run_java(compared))
 
 
-def test_matches_owlapi(references: list[tuple[str, str, owl.Axiom]]) -> None:
-    """Check that each axiom's text is the OWLAPI's, but for the kinds `DIFFERENCES` lists."""
+def test_matches_owlapi(references: list[Reference]) -> None:
+    """Check that each axiom's text is the OWLAPI's, but for the differences `DIFFERENCES` lists, and only those."""
     assert len(references) > 150
     unexpected = [
-        (normalized(node.manchester), normalized(expected))
-        for kind, expected, node in references
-        if kind not in DIFFERENCES and normalized(node.manchester) != normalized(expected)
+        (normalized(each.node.manchester), normalized(each.expected))
+        for each in references
+        if comparable(each.kind, each.node.manchester) != comparable(each.kind, each.expected)
     ]
     assert unexpected == []
-    assert {kind for kind, expected, node in references if normalized(node.manchester) != normalized(expected)} == set(
-        DIFFERENCES
-    )
+    differ = {each.kind for each in references if normalized(each.node.manchester) != normalized(each.owlapi)}
+    assert differ == set(DIFFERENCES)
 
 
 def walk(node: owl.Node) -> Iterator[owl.Node]:
@@ -339,16 +374,16 @@ def walk(node: owl.Node) -> Iterator[owl.Node]:
                 yield from walk(each)
 
 
-def test_every_node_type(references: list[tuple[str, str, owl.Axiom]]) -> None:
+def test_every_node_type(references: list[Reference]) -> None:
     """Check that the axioms compared with the OWLAPI's use every node type, and every keyword is the OWLAPI's."""
-    nodes = [each for _, _, axiom in references for each in walk(axiom)]
+    nodes = [each for reference in references for each in walk(reference.node)]
     assert {type(each) for each in nodes} == set(owl.NODE_TYPES)
     syntax = jpype.JClass("org.semanticweb.owlapi.manchestersyntax.parser.ManchesterOWLSyntax")
     keywords = {str(keyword.keyword()) for keyword in syntax.values()}
     used = {
         token.text
-        for _, _, axiom in references
-        for token in axiom.manchester_tokens()
+        for reference in references
+        for token in reference.node.manchester_tokens()
         if token.kind == TokenKind.KEYWORD
     }
     assert {word.removesuffix(":") for word in used} <= {word.removesuffix(":") for word in keywords}
@@ -540,6 +575,45 @@ def test_invalid_iri() -> None:
         owlapi.FragmentError, match=r"^browl can't hold an axiom as nodes: not a valid IRI: 'relative'$"
     ):
         asyncio.run(owlapi.run_java(relative_iri))
+
+
+def nested(depth: int, intersections: bool) -> list[owl.AnyAxiom]:
+    """Convert `A SubClassOf` an expression whose nodes nest `depth` deep, the axiom counting as 1, ending in `B`.
+
+    With `intersections`, each level is `A and (…)`, whose operands are a list in JSON, so two levels there; else
+    `not (…)`.
+    """
+    factory = jpype.JClass("org.semanticweb.owlapi.apibinding.OWLManager").getOWLDataFactory()
+    create = jpype.JClass("org.semanticweb.owlapi.model.IRI").create
+    a, expression = factory.getOWLClass(create(f"{NS}A")), factory.getOWLClass(create(f"{NS}B"))
+    for _ in range(depth - 2):
+        if intersections:
+            expression = factory.getOWLObjectIntersectionOf(a, expression)
+        else:
+            expression = factory.getOWLObjectComplementOf(expression)
+    return axioms.convert_axioms([factory.getOWLSubClassOfAxiom(a, expression)])
+
+
+@pytest.mark.parametrize("intersections", [False, True])
+def test_depth(intersections: bool) -> None:
+    """Check that an axiom `MAX_DEPTH` deep converts and round-trips through JSON; one deeper is a `FragmentError`."""
+    deepest = asyncio.run(owlapi.run_java(nested, axioms.MAX_DEPTH, intersections))
+    assert deepest[0].iris() == (f"{NS}A", f"{NS}B")
+    adapter = TypeAdapter(list[owl.AnyAxiom])
+    assert adapter.validate_json(adapter.dump_json(deepest)) == deepest
+    with pytest.raises(owlapi.FragmentError, match=f"^an axiom's nodes nest more than {axioms.MAX_DEPTH} deep$"):
+        asyncio.run(owlapi.run_java(nested, axioms.MAX_DEPTH + 1, intersections))
+
+
+def test_deep_fragment() -> None:
+    """Check that a fragment nesting far deeper than `MAX_DEPTH`, as a fetch can return, fails as a `FragmentError`."""
+    lines = [f"<{NS}{name}> <{RDF}type> <{OWL}Class> ." for name in "AB"]
+    lines.append(f"<{NS}A> <{RDFS}subClassOf> _:b0 .")
+    for level in range(1_000):
+        lines.append(f"_:b{level} <{RDF}type> <{OWL}Class> .")
+        lines.append(f"_:b{level} <{OWL}complementOf> {f'_:b{level + 1}' if level < 999 else f'<{NS}B>'} .")
+    with pytest.raises(owlapi.FragmentError, match="nest more than"):
+        asyncio.run(owlapi.run_java(axioms.entity_axioms, "\n".join(lines).encode(), f"{NS}A"))
 
 
 def test_too_many(ntriples: bytes, monkeypatch: pytest.MonkeyPatch) -> None:

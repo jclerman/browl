@@ -3,7 +3,8 @@
 Node types follow the OWL 2 structural specification's names (`SubClassOf`, `ObjectSomeValuesFrom`, …), and an
 axiom's fields name its roles (`SubClassOf.sub`, `ClassAssertion.individual`). Each node is a frozen Pydantic model with
 a `type` field that discriminates the unions of nodes (`ClassExpression`, `AnyAxiom`, …), so nodes round-trip through
-JSON (U-42).
+JSON (U-42), those `browl.axioms` makes at least, which nest at most `browl.axioms.MAX_DEPTH` deep. A field holding
+axioms is typed `AnyAxiom`: Pydantic serializes by the declared type, so `Axiom` would drop the subclass's fields.
 
 A node renders in Manchester syntax as a stream of typed tokens (`Node.manchester_tokens`): keywords, IRIs, literals
 and punctuation. An axiom's Manchester text (`Axiom.manchester`) is those tokens joined; templates render the same
@@ -11,11 +12,8 @@ tokens as HTML, so neither parses text, and links, literals and keywords come fr
 declares its fields and its keyword or Manchester layout; the base classes do the rendering, the parentheses and the
 walks over fields. The tree itself follows OWL 2's structure, not any syntax; only the `manchester` names render.
 
-The text matches the OWLAPI's Manchester renderer (OWLAPI 4, the one Protégé uses), but for the differences
-`tests/test_axioms.py` lists: commas between a `HasKey` axiom's properties and in `{…}` and `[…]` lists, a
-`DatatypeDefinition` (which the OWLAPI renders as nothing), single spaces, and literals quoted whenever their lexical
-form isn't valid for their datatype. The OWLAPI parenthesizes every class expression nested in another unless it's a
-class, and a data range in a complement unless it's a datatype, and so does `Node`.
+The text matches the OWLAPI's Manchester renderer (OWLAPI 4, the one Protégé uses), parentheses included, but for
+the differences by design that DESIGN.md §2.8 lists and `tests/test_axioms.py` checks.
 
 Example:
     >>> heart = Entity(kind=EntityKind.CLASS, iri="http://example.org/Heart")
@@ -99,6 +97,10 @@ def _keyword(text: str) -> Token:
 
 def _punctuation(text: str) -> Token:
     return Token(TokenKind.PUNCTUATION, text)
+
+
+def _iri_token(iri: IRI) -> Token:
+    return Token(TokenKind.IRI, f"<{iri}>", iri)
 
 
 _OPEN, _CLOSE, _COMMA = _punctuation("("), _punctuation(")"), _punctuation(",")
@@ -238,13 +240,14 @@ class Node(BaseModel):
     intermediate bases (`_Boolean`, `_Nary`, …) raise `TypeError`, as an abstract class does.
 
     Attributes:
+        manchester_layout: The class's Manchester layout (above), when all its nodes share one; else
+            `_manchester_layout` builds it.
         type: The node's type.
     """
 
     model_config = ConfigDict(frozen=True, validate_by_name=True, validate_by_alias=True, serialize_by_alias=True)
 
     manchester_layout: ClassVar[tuple[LayoutItem, ...]] = ()
-    """The class's Manchester layout (above), when all its nodes share one; else `_manchester_layout` builds it."""
 
     type: NodeType
 
@@ -316,7 +319,25 @@ class EntityKind(StrEnum):
     NAMED_INDIVIDUAL = "NamedIndividual"
 
 
-class Entity(Node):
+class _Named(Node):
+    """A node that is an IRI, written as `<…>`.
+
+    Attributes:
+        iri: The IRI.
+    """
+
+    iri: IRI
+
+    @override
+    def unspaced_manchester_tokens(self) -> Iterator[Token]:
+        yield _iri_token(self.iri)
+
+    @override
+    def iri_mentions(self) -> Iterator[str]:
+        yield self.iri
+
+
+class Entity(_Named):
     """A named entity: a class, datatype, property or named individual.
 
     Attributes:
@@ -326,18 +347,9 @@ class Entity(Node):
 
     type: typing.Literal[NodeType.ENTITY] = NodeType.ENTITY
     kind: EntityKind
-    iri: IRI
-
-    @override
-    def unspaced_manchester_tokens(self) -> Iterator[Token]:
-        yield Token(TokenKind.IRI, f"<{self.iri}>", self.iri)
-
-    @override
-    def iri_mentions(self) -> Iterator[str]:
-        yield self.iri
 
 
-class IRIReference(Node):
+class IRIReference(_Named):
     """An IRI that isn't an entity: an annotation property's domain or range.
 
     Attributes:
@@ -345,15 +357,6 @@ class IRIReference(Node):
     """
 
     type: typing.Literal[NodeType.IRI] = NodeType.IRI
-    iri: IRI
-
-    @override
-    def unspaced_manchester_tokens(self) -> Iterator[Token]:
-        yield Token(TokenKind.IRI, f"<{self.iri}>", self.iri)
-
-    @override
-    def iri_mentions(self) -> Iterator[str]:
-        yield self.iri
 
 
 class AnonymousIndividual(Node):
@@ -417,7 +420,7 @@ class Literal(Node):
         yield Token(TokenKind.LITERAL, self.quoted)
         if self.datatype not in _PLAIN:
             yield _punctuation("^^")
-            yield Token(TokenKind.IRI, f"<{self.datatype}>", self.datatype)
+            yield _iri_token(self.datatype)
 
     @property
     def quoted(self) -> str:
@@ -577,12 +580,16 @@ class DataOneOf(_OneOf):
 
 
 class _Restriction(Node):
-    """A restriction on a property: the property, the keyword, and the filler, in parentheses if nested."""
+    """A restriction on a property: the property, the keyword, and the filler, in parentheses if nested.
+
+    Attributes:
+        keyword: The keyword between the property and the filler.
+        nested: Whether the filler gets parentheses unless it's an entity; the OWLAPI never gives a data range, an
+            individual or a literal any here.
+    """
 
     keyword: ClassVar[str]
     nested: ClassVar[bool] = True
-    """Whether the filler gets parentheses unless it's an entity; the OWLAPI never gives a data range, an individual
-    or a literal any here."""
 
     def _manchester_layout(self) -> Sequence[LayoutItem]:
         return Slot("property"), _keyword(self.keyword), Slot("filler", nested=self.nested)
@@ -841,7 +848,7 @@ class FacetRestriction(Node):
     @override
     def unspaced_manchester_tokens(self) -> Iterator[Token]:
         symbol = FACETS.get(self.facet)
-        yield Token(TokenKind.TEXT, symbol) if symbol else Token(TokenKind.IRI, f"<{self.facet}>", self.facet)
+        yield Token(TokenKind.TEXT, symbol) if symbol else _iri_token(self.facet)
         yield from self.value.unspaced_manchester_tokens()
 
     @override
@@ -903,19 +910,21 @@ class _Nary(Axiom):
     """An n-ary axiom: with two members, `a keyword b`; else a keyword and the members, separated by commas.
 
     The OWLAPI writes the members sorted, and so does `browl.axioms`.
+
+    Attributes:
+        members: The members.
+        pair: The keyword between two members; None to write two members as a list too.
+        listed: The keyword before a list of members.
     """
 
     members: tuple[Node, ...]
 
     pair: ClassVar[str | None]
-    """The keyword between two members; None to write two members as a list too."""
     listed: ClassVar[str]
-    """The keyword before a list of members."""
 
     def _manchester_layout(self) -> Sequence[LayoutItem]:
-        members: tuple[Node, ...] = self.members
-        if len(members) == 2 and self.pair is not None:
-            return members[0], _keyword(self.pair), members[1]
+        if len(self.members) == 2 and self.pair is not None:
+            return self.members[0], _keyword(self.pair), self.members[1]
         return _keyword(self.listed), Slot("members", _COMMA)
 
 
@@ -1135,10 +1144,7 @@ class _Domain(Axiom):
 class _Range(Axiom):
     """A property's range."""
 
-    keyword: ClassVar[str] = "Range"
-
-    def _manchester_layout(self) -> Sequence[LayoutItem]:
-        return Slot("property"), _keyword(self.keyword), Slot("range")
+    manchester_layout = (Slot("property"), _keyword("Range"), Slot("range"))
 
 
 class ObjectPropertyDomain(_Domain):
@@ -1188,7 +1194,7 @@ class DataPropertyRange(_Range):
         range: The data range.
     """
 
-    keyword = "Range:"
+    manchester_layout = (Slot("property"), _keyword("Range:"), Slot("range"))
 
     type: typing.Literal[NodeType.DATA_PROPERTY_RANGE] = NodeType.DATA_PROPERTY_RANGE
     property: Entity

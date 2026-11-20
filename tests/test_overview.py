@@ -10,10 +10,12 @@ import httpx2
 import jpype
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import TypeAdapter
 
 import browl.axioms
 import browl.lookup
 import browl.overview
+from browl import owl
 from browl.axioms import fetch_fragment
 from browl.derived import EntityType
 from browl.fuseki import UNION_FROM, FusekiClient, SparqlError
@@ -271,3 +273,11 @@ def test_too_many(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPa
     assert len(queries) == 2  # not the types query
     [record] = caplog.records
     assert record.getMessage() == f"Not showing the axioms of {IRI}: the fragment mentions 3 IRIs, more than 2"
+
+
+def test_panel_json() -> None:
+    """Check that a panel's axioms serialize with their fields, which typing them as the base `Axiom` would drop."""
+    a, b = (owl.Entity(kind=owl.EntityKind.CLASS, iri=f"{IRI}{name}") for name in "12")
+    panel = browl.overview.AxiomsPanel(axioms=[owl.SubClassOf(sub=a, super=b)], links={})
+    adapter = TypeAdapter(browl.overview.AxiomsPanel)
+    assert adapter.validate_json(adapter.dump_json(panel)) == panel

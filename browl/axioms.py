@@ -42,6 +42,11 @@ says the entity has too many axioms to show, rather than fetch, parse, convert a
 MAX_AXIOMS = 1_000
 """The most axioms an entity may have for its page to show them (`entity_axioms`), as for `MAX_FRAGMENT_IRIS`."""
 
+MAX_DEPTH = 50
+"""The deepest an axiom's nodes may nest (the axiom is depth 1) for its entity's page to show its axioms: deeper, and
+the panel says they can't be shown (`FragmentError`). It keeps the recursion in converting, rendering and JSON (whose
+parser stops at about 200 levels, two per node in a list) well within bounds (DESIGN.md §2.8)."""
+
 
 class TooManyAxiomsError(Exception):
     """An entity's axioms are too many, or mention too many IRIs, to show on its page (DESIGN.md §2.8)."""
@@ -104,7 +109,10 @@ type _Build = Callable[[_Converter, Any], owl.Node]
 
 
 def _fields(node_type: Callable[..., owl.Node], **getters: str) -> _Build:
-    """Return a build that makes a node from the values of an OWLAPI object's getters, each converted (`_value`)."""
+    """Return a build that makes a node from the values of an OWLAPI object's getters.
+
+    Each value is converted by `_Converter.value`.
+    """
 
     def build(converter: _Converter, owl_object: Any) -> owl.Node:
         return node_type(**{field: converter.value(getattr(owl_object, getter)()) for field, getter in getters.items()})
@@ -321,17 +329,25 @@ class _Converter:
     def __init__(self) -> None:
         self._java = _java()
         self._builds: dict[type, _Build] = {}
+        self._depth = 0
 
     def __call__(self, owl_object: Any) -> owl.Node:
         """Return an OWLAPI object as a node.
 
         Raises:
-            FragmentError: It's of a kind no node type covers (only axioms have a fallback, `browl.owl.OtherAxiom`).
+            FragmentError: It's of a kind no node type covers (only axioms have a fallback, `browl.owl.OtherAxiom`),
+                or its nodes nest more than `MAX_DEPTH` deep.
         """
         build = self._builds.get(type(owl_object))
         if build is None:
             build = self._builds[type(owl_object)] = self._build(owl_object)
-        return build(self, owl_object)
+        if self._depth == MAX_DEPTH:
+            raise FragmentError(f"an axiom's nodes nest more than {MAX_DEPTH} deep")
+        self._depth += 1
+        try:
+            return build(self, owl_object)
+        finally:
+            self._depth -= 1
 
     def _build(self, owl_object: Any) -> _Build:
         for interface, build in self._java.builds:
@@ -355,41 +371,41 @@ class _Converter:
 
 @functools.cache
 def _converter() -> _Converter:
-    """Return the converter, which keeps no state but the builds it has chosen for each Java class."""
+    """Return the converter, which keeps no state between calls but the builds it has chosen for each Java class."""
     return _Converter()
 
 
-def convert_axioms(axioms: Iterable[Any]) -> list[owl.Axiom]:
+def convert_axioms(axioms: Iterable[Any]) -> list[owl.AnyAxiom]:
     """Return OWLAPI axioms as nodes (`browl.owl`), sorted by kind and text.
 
     Call this on the Java thread (`browl.owlapi.run_java`).
 
     Raises:
         FragmentError: An axiom holds an object of a kind no node type covers, or a value its node refuses, such as
-            an IRI that isn't absolute.
+            an IRI that isn't absolute, or its nodes nest more than `MAX_DEPTH` deep.
     """
     check_java_thread()
     converter = _converter()
-    nodes: list[owl.Axiom] = []
+    nodes: list[owl.AnyAxiom] = []
     for axiom in axioms:
         try:
             node = converter(axiom)
-        except (ValidationError, RDFSyntaxError) as error:
+        except (ValidationError, RDFSyntaxError, RecursionError) as error:
             raise FragmentError(f"browl can't hold an axiom as nodes: {error}") from error
         if not isinstance(node, owl.Axiom):
             raise FragmentError(f"not an axiom: {node.type}")
-        nodes.append(node)
+        nodes.append(cast(owl.AnyAxiom, node))
     return sorted(nodes, key=lambda node: (node.kind, node.manchester))
 
 
-def entity_axioms(ntriples: bytes, iri: str) -> list[owl.Axiom]:
+def entity_axioms(ntriples: bytes, iri: str) -> list[owl.AnyAxiom]:
     """Parse a fragment fetched for an entity (`fetch_fragment`) and return the entity's axioms, as nodes.
 
     Call this on the Java thread (`browl.owlapi.run_java`).
 
     Raises:
         FragmentError: The OWLAPI couldn't parse the fragment, or failed on it with any other Java exception, or an
-            axiom holds an object of a kind no node type covers, or a value its node refuses.
+            axiom holds an object of a kind no node type covers, or a value its node refuses, or nests too deep.
         TooManyAxiomsError: The entity has more than `MAX_AXIOMS` axioms.
     """
     try:

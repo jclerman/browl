@@ -305,7 +305,17 @@ def test_node_types() -> None:
 
 @pytest.mark.parametrize(
     "base",
-    [owl.Node, owl.Axiom, owl._Boolean, owl._DataBoolean, owl._OneOf, owl._Restriction, owl._Cardinality, owl._Nary],
+    [
+        owl.Node,
+        owl._Named,
+        owl.Axiom,
+        owl._Boolean,
+        owl._DataBoolean,
+        owl._OneOf,
+        owl._Restriction,
+        owl._Cardinality,
+        owl._Nary,
+    ],
     ids=lambda base: base.__name__,
 )
 def test_bases_abstract(base: type[owl.Node]) -> None:

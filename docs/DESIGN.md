@@ -907,7 +907,8 @@ axioms of each.
   a property assertion's `subject`, `property` and `object`), so no operand order needs documenting.
 - **JSON:** each node has a `type` field (`NodeType`) that discriminates the unions of nodes (`ClassExpression`,
   `DataRange`, `AnyAxiom`, …), so nodes round-trip through JSON (U-42). An axiom's JSON also holds its Manchester text,
-  `manchester`.
+  `manchester`. A field holding axioms is typed `AnyAxiom`, not `Axiom`: Pydantic serializes by the declared type, so
+  `Axiom` would drop the subclass's fields.
 - **A class hierarchy, with rendering high in it:** a concrete class declares its fields and its keyword or Manchester
   layout. `Node` walks the fields (the IRIs an axiom mentions, `Node.iris`), adds parentheses, and renders tokens from
   the layout. Intermediate bases capture the shared shapes: intersections and unions, complements, enumerations,
@@ -926,8 +927,8 @@ punctuation or other text (a cardinality, a facet such as `>=`), each knowing wh
    axiom of Uberon and NCBITaxon and of a test ontology holding every kind of OWL 2 axiom and expression
    (`tests/test_axioms.py`), with these differences by design:
    - spacing: single spaces, and none before a comma or closing parenthesis (the OWLAPI writes `{a , b}`);
-   - a `HasKey` axiom's properties separated by commas (`<Person> HasKey <hasSSN>, <ssn>`), which OWLAPI 4 runs
-     together;
+   - a `HasKey` axiom's properties separated by commas (`<Person> HasKey <hasSSN>, <ssn>`), where OWLAPI 4 writes
+     nothing between the object and the data properties;
    - a `DatatypeDefinition` written `<Adulthood> EquivalentTo <xsd:integer>[>= 18]`, which OWLAPI 4 renders as
      nothing;
    - a literal whose lexical form isn't valid for its datatype is quoted, with its datatype, though the OWLAPI writes
@@ -965,6 +966,11 @@ view, an entity whose fragment mentions more than 5,000 IRIs (`MAX_FRAGMENT_IRIS
 `AllDisjointClasses` axiom, or that has more than 1,000 axioms (`MAX_AXIOMS`), gets a note that it has too many axioms
 to show, not its axioms. The first is checked before the types query, the second before rendering, so neither the
 fetch nor the renderer does that work. Both are far above what the entities P-15 measured need.
+
+**Too deep** (from P-15b's review): converting, rendering and JSON all recurse through an axiom's nodes, and
+pydantic-core's JSON parser stops at about 200 levels (two per node in a list). An axiom whose nodes nest more than
+50 deep (`MAX_DEPTH`, the axiom being depth 1) fails conversion with a `FragmentError`, so only the panel fails, as
+below, and every tree browl makes round-trips through JSON. Ontologies seldom nest more than a few levels.
 
 **When the axioms can't be read** (from P-4's review): a fragment the OWLAPI can't parse, or any other Java exception
 while reading or rendering it (both `FragmentError`), or a query that fails, fails only the axioms panel. The full
