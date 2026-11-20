@@ -43,6 +43,9 @@ TRIPLES = f"""\
 <{NS}definition> <{RDF}type> <{OWL}AnnotationProperty> .
 <{NS}related> <{RDF}type> <{OWL}AnnotationProperty> .
 <{NS}weight> <{RDF}type> <{OWL}DatatypeProperty> .
+<{NS}both> <{RDF}type> <{OWL}AnnotationProperty> .
+<{NS}both> <{RDF}type> <{OWL}ObjectProperty> .
+<{NS}objectOwn> <{RDF}type> <{OWL}ObjectProperty> .
 <{A}> <{RDFS}label> "Heart"@en .
 <{A}> <{RDFS}label> "c\\u0153ur" .
 <{A}> <{RDFS}label> "Herz"@de .
@@ -59,6 +62,15 @@ TRIPLES = f"""\
 <{A}> <{NS}partOf> <{NS}B> .
 <{A}> <{RDFS}subClassOf> <{NS}B> .
 <{A}> <{NS}note> _:b .
+<{A}> <{RDFS}seeAlso> <{NS}B> .
+<{A}> <{RDFS}isDefinedBy> <http://example.org/ann> .
+<{A}> <{OWL}versionInfo> "1.0" .
+<{A}> <{OWL}priorVersion> <http://example.org/ann/0.9> .
+<{A}> <{OWL}backwardCompatibleWith> <http://example.org/ann/0.8> .
+<{A}> <{OWL}incompatibleWith> <http://example.org/ann/0.1> .
+<{A}> <{OWL}sameAs> <{NS}C> .
+<{A}> <{NS}both> "kept" .
+<{A}> <{NS}objectOwn> <{NS}B> .
 """.encode()
 
 IMPORTED = f"<{NS}partOf> <{RDF}type> <{OWL}ObjectProperty> .\n".encode()
@@ -95,7 +107,12 @@ def literal(lexical: str, language: str | None = None) -> LiteralValue:
 @pytest.mark.anyio
 @pytest.mark.parametrize(("clause", "imported"), [("", True), (UNION_FROM, False)], ids=["own", "with-imports"])
 async def test_fetch(fuseki_url: str, dataset: str, clause: str, imported: bool) -> None:
-    """Check which triples are annotations: not logical ones, blank values, or (with the imports) object properties."""
+    """Check which triples are annotations.
+
+    Each built-in annotation property's are, and a property's declared both an annotation and an object property; not
+    logical ones (`owl:sameAs`), blank values, or object properties', declared in the ontology or (with the imports) in
+    an import.
+    """
     async with httpx2.AsyncClient(base_url=fuseki_url) as http:
         pairs = await fetch_annotations(FusekiClient(http), dataset, A, clause)
     properties = {property_ for property_, _ in pairs}
@@ -104,7 +121,9 @@ async def test_fetch(fuseki_url: str, dataset: str, clause: str, imported: bool)
         f"{SKOS}prefLabel",
         f"{RDFS}comment",
         f"{OWL}deprecated",
-        *(f"{NS}{name}" for name in ("definition", "related", "seeAlsoPage", "code", "arabic")),
+        *(f"{RDFS}{name}" for name in ("seeAlso", "isDefinedBy")),
+        *(f"{OWL}{name}" for name in ("versionInfo", "priorVersion", "backwardCompatibleWith", "incompatibleWith")),
+        *(f"{NS}{name}" for name in ("definition", "related", "seeAlsoPage", "code", "arabic", "both")),
     }
     assert properties == expected | ({f"{NS}partOf"} if imported else set())
     assert (IRI(f"{NS}related"), IRIValue(iri=IRI(f"{NS}B"))) in pairs
@@ -131,11 +150,18 @@ def test_page(fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) ->
         code(f"{SKOS}prefLabel"),  # not a standard vocabulary's
         '<a href="/ann#definition"><bdi>definition</bdi></a>',
         code(f"{NS}arabic"),
+        code(f"{NS}both"),
         code(f"{NS}code"),
         code(f"{NS}partOf"),  # the job has no imports, so the page doesn't see the import's declaration
         code(f"{NS}seeAlsoPage"),
+        code("owl:backwardCompatibleWith"),
         code("owl:deprecated"),
+        code("owl:incompatibleWith"),
+        code("owl:priorVersion"),
+        code("owl:versionInfo"),
         code("rdfs:comment"),
+        code("rdfs:isDefinedBy"),
+        code("rdfs:seeAlso"),
         '<a href="/ann#related"><bdi>related to</bdi></a>',
     ]
     values = re.findall(r"<dd>(.*?)</dd>", page)
@@ -153,17 +179,21 @@ def test_page(fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) ->
     assert f"<dd>{code('javascript:alert(1)')}</dd>" in page  # text, not a link
     assert f"<dd>{code('urn:example:1')}</dd>" in page
     assert '<dd><bdi class="value">true</bdi></dd>' in page
-    assert "weight" not in page and "subClassOf" not in page and "#note" not in page
+    assert "weight" not in page and "subClassOf" not in page and "#note" not in page and "objectOwn" not in page
 
 
 def test_group_order() -> None:
     """Check the order of properties and values, and that a repeated value comes once.
 
-    `first` comes in its order, the rest by shown name case-insensitively; literals by language, then IRIs.
+    `first` comes in its order, the rest by shown name case-insensitively, then by IRI; literals by language, then IRIs.
     """
-    label, alias, zeta, alpha = (IRI(f"{NS}{name}") for name in ("label", "alias", "zeta", "Alpha"))
-    shown = {zeta: "zeta", alpha: "Alpha", label: "label", alias: "alias"}
+    label, alias, zeta, alpha, beta = (IRI(f"{NS}{name}") for name in ("label", "alias", "zeta", "Alpha", "a-beta"))
+    same_1, same_2 = IRI(f"{NS}same1"), IRI(f"{NS}same2")
+    shown = {zeta: "zeta", alpha: "alpha", beta: "Beta", label: "label", alias: "alias", same_1: "x", same_2: "x"}
     pairs = [
+        (same_2, literal("2")),
+        (same_1, literal("1")),
+        (beta, literal("b")),
         (zeta, literal("z")),
         (alpha, IRIValue(iri=IRI(f"{NS}x"))),
         (alpha, literal("b", "fr")),
@@ -174,7 +204,7 @@ def test_group_order() -> None:
         (label, literal("L")),
     ]
     groups = group_annotations(pairs, [label, alias], shown.__getitem__, ["en", "none"])
-    assert [group.property for group in groups] == [label, alias, alpha, zeta]
+    assert [group.property for group in groups] == [label, alias, alpha, beta, same_1, same_2, zeta]
     assert groups[0].values == (literal("L"),)
     assert groups[2].values == (literal("a", "en"), literal("b", "fr"), literal("c"), IRIValue(iri=IRI(f"{NS}x")))
 
@@ -207,8 +237,11 @@ async def test_too_many(monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that more than `MAX_ANNOTATIONS` values raise, and that the query asks for one more than that."""
     monkeypatch.setattr(browl.annotations, "MAX_ANNOTATIONS", 1)
     row = f'<{RDFS}label>\t"x"\n'
+    queries: list[str] = []
     with pytest.raises(TooManyAnnotationsError):
-        await fetch_annotations(answer(f"?property\t?value\n{row}{row}"), "ds", A)
+        await fetch_annotations(answer(f"?property\t?value\n{row}{row}", queries), "ds", A)
+    [query] = queries
+    assert query.rstrip().endswith("LIMIT 2")
     assert len(await fetch_annotations(answer(f"?property\t?value\n{row}"), "ds", A)) == 1
 
 

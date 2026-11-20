@@ -97,6 +97,30 @@ def test_annotations_fail_alone(
     assert record.getMessage() == f"Couldn't show the annotations of {IRI}"
 
 
+def test_axioms_fail_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that the annotations, and their links, still show when the axioms are too many (DESIGN.md §2.8)."""
+    prop = RDFIRI("http://example.org/onto#note")
+
+    async def too_many(*args: object) -> tuple[None, bool]:
+        return None, True
+
+    async def fetched(*args: object) -> list[object]:
+        return [(prop, IRIValue(iri=RDFIRI(IRI)))]
+
+    monkeypatch.setattr(browl.overview, "_read_axioms", too_many)
+    monkeypatch.setattr(browl.overview, "fetch_annotations", fetched)
+    app = make_app()
+    with TestClient(app) as test_client:
+        entities = [(IRI, EntityType.CLASS), (prop, EntityType.ANNOTATION_PROPERTY)]
+        app.state.jobs.register(Stage.PRE_CACHING, derived_stage(entities))
+        test_client.portal.call(app.state.jobs.start)
+        test_client.portal.call(app.state.jobs.wait)
+        page = test_client.get("/_browl/hash", params=PANEL).text
+    assert "This entity has too many axioms to show here." in page
+    assert '<dt><a href="/onto#note">' in page
+    assert '<dd><a href="/onto#A">' in page
+
+
 def test_usage_tab_untouched(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     """Check that the Usage tab doesn't fetch the axioms."""
     page = client.get("/_browl/hash", params={"path": "/onto", "fragment": "A", "tab": "usage"})
