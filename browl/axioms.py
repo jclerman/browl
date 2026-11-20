@@ -24,7 +24,7 @@ import jpype
 from pydantic import ValidationError
 
 from browl import owl
-from browl.fuseki import FusekiClient
+from browl.fuseki import FusekiClient, filled_query
 from browl.owl import EntityKind
 from browl.owlapi import FragmentError, check_java_thread, ntriples_ontology
 from browl.precache.core import PREFIXES, sparql_file
@@ -36,7 +36,6 @@ _AXIOMS = PREFIXES + sparql_file("entity-axioms.rq")
 _SYMMETRIC = PREFIXES + sparql_file("entity-symmetric.rq")
 _TYPES = PREFIXES + sparql_file("entity-types.rq")
 _ENTITY = "$entity"
-_WHERE = "\nWHERE {"
 _NO_IRIS = "VALUES ?iri { }"
 
 MAX_FRAGMENT_IRIS = 5_000
@@ -54,22 +53,6 @@ parser stops at about 200 levels, two per node in a list) well within bounds (DE
 
 class TooManyAxiomsError(Exception):
     """An entity's axioms are too many, or mention too many IRIs, to show on its page (DESIGN.md §2.8)."""
-
-
-def filled_query(query: str, dataset_clause: str, parts: dict[str, str]) -> str:
-    """Return a query with its dataset clause before `WHERE`, and each of its placeholders replaced.
-
-    The query files are valid SPARQL as they are, as `tests/test_sparql.py` checks: a placeholder is a variable, such
-    as `$entity`, or an empty `VALUES` block.
-    """
-    if _WHERE not in query:
-        raise ValueError(f"no {_WHERE.strip()!r} at the start of a line in the query")
-    filled = query.replace(_WHERE, f"\n{dataset_clause}{_WHERE}", 1)
-    for placeholder, value in parts.items():
-        if placeholder not in filled:
-            raise ValueError(f"no {placeholder} in the query")
-        filled = filled.replace(placeholder, value)
-    return filled
 
 
 async def fetch_fragment(sparql: FusekiClient, dataset: str, iri: str, dataset_clause: str = "") -> bytes:

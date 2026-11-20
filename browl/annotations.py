@@ -7,8 +7,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from browl import rdf
-from browl.axioms import filled_query
-from browl.fuseki import FusekiClient, ResultTooLargeError, SparqlError
+from browl.fuseki import FusekiClient, ResultTooLargeError, SparqlError, filled_query
 from browl.names import language_rank
 from browl.precache.core import PREFIXES, sparql_file
 from browl.rdf import IRI

@@ -8,6 +8,8 @@ boundary, or fails with no error text appended, still looks whole to that parsin
 `FusekiClient.bulk_select`, which checks that the result reached its end (P-9).
 """
 
+from __future__ import annotations
+
 import asyncio
 import codecs
 import re
@@ -160,6 +162,25 @@ ADMIN_TIMEOUT_S = 120.0
 def dataset_clause(has_imports: bool) -> str:
     """Return the dataset clause for queries that should see the imports: `UNION_FROM` if there are any, else ""."""
     return UNION_FROM if has_imports else ""
+
+
+_WHERE = "\nWHERE {"
+
+
+def filled_query(query: str, dataset_clause: str, parts: dict[str, str]) -> str:
+    """Return a query with its dataset clause before `WHERE`, and each of its placeholders replaced.
+
+    The query files are valid SPARQL as they are, as `tests/test_sparql.py` checks: a placeholder is a variable, such
+    as `$entity`, or an empty `VALUES` block.
+    """
+    if _WHERE not in query:
+        raise ValueError(f"no {_WHERE.strip()!r} at the start of a line in the query")
+    filled = query.replace(_WHERE, f"\n{dataset_clause}{_WHERE}", 1)
+    for placeholder, value in parts.items():
+        if placeholder not in filled:
+            raise ValueError(f"no {placeholder} in the query")
+        filled = filled.replace(placeholder, value)
+    return filled
 
 
 PING_TIMEOUT_S = 2.0
