@@ -3,6 +3,7 @@
 import asyncio
 import dataclasses
 import logging
+import threading
 import urllib.parse
 from collections.abc import Iterator
 
@@ -78,13 +79,16 @@ def test_query_fails(client: TestClient, caplog: pytest.LogCaptureFixture) -> No
     assert "Error 500: Server Error" in caplog.text
 
 
+@pytest.mark.parametrize(
+    "error", [SparqlError("the annotations failed"), RDFSyntaxError("not a valid IRI")], ids=["query", "iri"]
+)
 def test_annotations_fail_alone(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, error: Exception
 ) -> None:
-    """Check that a failed annotations query leaves the axioms panel alone."""
+    """Check that a failed annotations query, or an invalid IRI, leaves the axioms panel alone."""
 
     async def failed(*args: object) -> list[object]:
-        raise SparqlError("the annotations failed")
+        raise error
 
     monkeypatch.setattr(browl.overview, "_read_axioms", no_axioms)
     monkeypatch.setattr(browl.overview, "fetch_annotations", failed)
@@ -369,3 +373,51 @@ def test_panels_checked() -> None:
     panel = browl.overview.AxiomsPanel(axioms=None)
     with pytest.raises(ValidationError):
         panel.too_many = True  # type: ignore[misc]
+
+
+def test_panels_read_concurrently(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that the two panels' data are read at the same time: each read waits for the other to start."""
+    annotations_started, axioms_started = asyncio.Event(), asyncio.Event()
+
+    async def read_annotations(*args: object) -> tuple[list[object], bool]:
+        annotations_started.set()
+        async with asyncio.timeout(5):
+            await axioms_started.wait()
+        return [], False
+
+    async def read_axioms(*args: object) -> tuple[list[object], bool]:
+        axioms_started.set()
+        async with asyncio.timeout(5):
+            await annotations_started.wait()
+        return [], False
+
+    monkeypatch.setattr(browl.overview, "_read_annotations", read_annotations)
+    monkeypatch.setattr(browl.overview, "_read_axioms", read_axioms)
+    page = client.get("/_browl/hash", params=PANEL)
+    assert page.status_code == 200
+    assert page.text.count('<p class="note">None.</p>') == 2
+
+
+def test_unexpected_error_cancels_other(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that an unexpected error reading one panel cancels the other's read, and is raised itself."""
+    started = asyncio.Event()
+    cancelled = threading.Event()
+
+    async def read_annotations(*args: object) -> tuple[list[object], bool]:
+        started.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return [], False
+
+    async def read_axioms(*args: object) -> tuple[list[object], bool]:
+        await started.wait()
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(browl.overview, "_read_annotations", read_annotations)
+    monkeypatch.setattr(browl.overview, "_read_axioms", read_axioms)
+    with pytest.raises(RuntimeError, match="unexpected"):
+        client.get("/_browl/hash", params=PANEL)
+    assert cancelled.is_set()

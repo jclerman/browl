@@ -1,6 +1,7 @@
 """An entity's annotations, fetched from Fuseki and grouped by property, as typed data (DESIGN.md §2.8)."""
 
 from collections.abc import Callable, Iterable, Sequence
+from functools import cache
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
@@ -42,6 +43,9 @@ class IRIValue(BaseModel):
 
 class LiteralValue(BaseModel):
     """An annotation's value that is a literal.
+
+    It parallels `rdf.Literal` on purpose, as typed data for the JSON API (U-42), which is why it keeps `datatype`,
+    though pages don't show it.
 
     Attributes:
         lexical: Its lexical form.
@@ -127,13 +131,15 @@ def group_annotations(
     """Return annotations grouped by property, each value once, in the order the page shows them (DESIGN.md §2.8).
 
     The properties in `first` (the name properties) come first, in its order, then the others by the name the page
-    shows for them, case-insensitively. A property's literals come before its IRIs; literals by their language's place
-    in the ranking, then by text; IRIs by text.
+    shows for them, case-insensitively, then by IRI. A property's literals come before its IRIs; literals by their
+    language's place in the ranking, then by text, then by language tag, datatype and direction, so the order doesn't
+    depend on Fuseki's; IRIs as properties are.
 
     Args:
-        pairs: The (property, value) pairs (`fetch_annotations`).
+        pairs: The (property, value) pairs (`fetch_annotations`); repeats are dropped here, as the query has no
+            `DISTINCT`.
         first: The IRIs of the properties that come first, best first.
-        shown_name: The name the page shows for a property, by its IRI.
+        shown_name: The name the page shows for an IRI.
         ranking: The language ranking (`Settings.language_ranking`).
     """
     groups: dict[IRI, dict[AnnotationValue, None]] = {}
@@ -142,13 +148,17 @@ def group_annotations(
     position = {iri: index for index, iri in enumerate(first)}
 
     def property_key(iri: str) -> tuple[int, str, str]:
-        name = shown_name(iri)
-        return position.get(iri, len(position)), name.casefold(), iri
+        return position.get(iri, len(position)), shown_name(iri).casefold(), iri
 
-    def value_key(value: AnnotationValue) -> tuple[int, float, str]:
+    @cache
+    def rank(language: str | None) -> float:
+        return language_rank(language, ranking)
+
+    def value_key(value: AnnotationValue) -> tuple[int, float, str, str, str, str]:
         if isinstance(value, IRIValue):
-            return 1, 0, value.iri
-        return 0, language_rank(value.language, ranking), value.lexical
+            return 1, 0, shown_name(value.iri).casefold(), value.iri, "", ""
+        language, direction = value.language or "", value.direction or ""
+        return 0, rank(value.language), value.lexical, language, value.datatype, direction
 
     return [
         AnnotationGroup(property=iri, values=tuple(sorted(groups[iri], key=value_key)))

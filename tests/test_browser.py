@@ -865,3 +865,31 @@ def test_annotations_grid_narrow(page: Page, annotated: LiveServer) -> None:
     assert value["y"] >= term["y"] + term["height"]
     assert abs(value["x"] - term["x"]) < 2
     assert page.evaluate("document.documentElement.scrollWidth") <= NARROW["width"]
+
+
+def test_annotations_layout(page: Page, annotated: LiveServer) -> None:
+    """Check the annotations panel's finer layout, wide.
+
+    It comes before the axioms panel; its labels are muted; a value's wrapped lines are indented; groups are a little
+    further apart than a group's values.
+    """
+    page.set_viewport_size(WIDE)
+    page.goto(f"{annotated.url}/example.org/thing")
+    assert box(page.locator("section.annotations"))["y"] < box(page.locator("section.axioms"))["y"]
+    muted = page.evaluate("getComputedStyle(document.querySelector('.note')).color")
+    assert page.locator(".annotations dt").first.evaluate("each => getComputedStyle(each).color") == muted
+    comment = page.locator(".annotations dd").nth(3)
+    expect(comment).to_contain_text("word word")
+    lines = comment.evaluate(
+        """each => {
+            const range = document.createRange();
+            range.selectNodeContents(each.querySelector("bdi").firstChild);
+            return [...range.getClientRects()].sort((a, b) => a.top - b.top).map(rect => rect.left);
+        }"""
+    )
+    assert len(lines) > 2
+    assert min(lines[1:]) > lines[0] + 4  # wrapped lines indented
+    values = [box(page.locator(".annotations dd").nth(index)) for index in range(3)]
+    within = values[1]["y"] - (values[0]["y"] + values[0]["height"])
+    between = values[2]["y"] - (values[1]["y"] + values[1]["height"])
+    assert between > within + 4

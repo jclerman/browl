@@ -31,6 +31,7 @@ from browl.owlapi import FragmentError, run_java
 from browl.pages import link_root, read_derived, templates
 from browl.precache.core import has_loaded_imports, logged_iri
 from browl.rdf import IRI, RDFSyntaxError
+from browl.settings import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -120,22 +121,28 @@ async def read_overview(request: Request, state: JobState, iri: str) -> Overview
     # started meanwhile, seeing the imports' graphs too is always right, if slower.
     clause = dataset_clause(has_loaded_imports(state.imports)) if state.generation == generation else UNION_FROM
     dataset = dataset_name(generation)
-    (annotations, too_many_annotations), (axioms, too_many_axioms) = await asyncio.gather(
-        _read_annotations(request, dataset, iri, clause), _read_axioms(request, dataset, iri, clause)
-    )
+    try:
+        # A task group, unlike `gather`, cancels the other read when one fails unexpectedly.
+        async with asyncio.TaskGroup() as group:
+            annotations_task = group.create_task(_read_annotations(request, dataset, iri, clause))
+            axioms_task = group.create_task(_read_axioms(request, dataset, iri, clause))
+    except ExceptionGroup as errors:
+        raise errors.exceptions[0]  # noqa: B904 -- the read's own error, with the group as its context
+    annotations, too_many_annotations = annotations_task.result()
+    axioms, too_many_axioms = axioms_task.result()
     mentioned = [each for axiom in axioms or () for each in axiom.iris()]
     for property_, value in annotations or ():
         mentioned.append(property_)
         if isinstance(value, IRIValue):
             mentioned.append(value.iri)
-    prefix: str = request.app.state.settings.reserved_prefix
+    settings: Settings = request.app.state.settings
+    prefix = settings.reserved_prefix
     root = link_root(request.scope)
     links = await read_derived(
         request, lambda connection: read_entity_links(connection, mentioned, prefix, root), state
     )
     groups = None
     if annotations is not None:
-        settings = request.app.state.settings
         groups = group_annotations(
             annotations,
             name_property_iris(settings),

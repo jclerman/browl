@@ -27,7 +27,7 @@ from browl.derived import EntityType
 from browl.fuseki import UNION_FROM, FusekiClient, SparqlError
 from browl.jobs import Stage
 from browl.links import EntityLink
-from browl.pages import MAX_IRI_CHARS, MAX_LANGUAGE_CHARS, templates
+from browl.pages import MAX_IRI_CHARS, MAX_LANGUAGE_CHARS, MAX_LITERAL_CHARS, templates
 from browl.rdf import IRI, OWL, RDF, RDFS, XSD
 from tests.helpers import derived_stage, fuseki_dataset, make_app, no_axioms
 
@@ -46,6 +46,7 @@ TRIPLES = f"""\
 <{NS}both> <{RDF}type> <{OWL}AnnotationProperty> .
 <{NS}both> <{RDF}type> <{OWL}ObjectProperty> .
 <{NS}objectOwn> <{RDF}type> <{OWL}ObjectProperty> .
+<{NS}transitive> <{RDF}type> <{OWL}TransitiveProperty> .
 <{A}> <{RDFS}label> "Heart"@en .
 <{A}> <{RDFS}label> "c\\u0153ur" .
 <{A}> <{RDFS}label> "Herz"@de .
@@ -71,6 +72,7 @@ TRIPLES = f"""\
 <{A}> <{OWL}sameAs> <{NS}C> .
 <{A}> <{NS}both> "kept" .
 <{A}> <{NS}objectOwn> <{NS}B> .
+<{A}> <{NS}transitive> <{NS}B> .
 """.encode()
 
 IMPORTED = f"<{NS}partOf> <{RDF}type> <{OWL}ObjectProperty> .\n".encode()
@@ -110,8 +112,8 @@ async def test_fetch(fuseki_url: str, dataset: str, clause: str, imported: bool)
     """Check which triples are annotations.
 
     Each built-in annotation property's are, and a property's declared both an annotation and an object property; not
-    logical ones (`owl:sameAs`), blank values, or object properties', declared in the ontology or (with the imports) in
-    an import.
+    logical ones (`owl:sameAs`), blank values, or object properties', declared in the ontology (also only by a
+    characteristic, such as `owl:TransitiveProperty`) or (with the imports) in an import.
     """
     async with httpx2.AsyncClient(base_url=fuseki_url) as http:
         pairs = await fetch_annotations(FusekiClient(http), dataset, A, clause)
@@ -174,12 +176,15 @@ def test_page(fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) ->
     assert '<dd><bdi class="value" lang="ar" dir="rtl">مرحبا</bdi> <small class="lang">ar</small></dd>' in page
     assert '<dd><bdi class="value">A &lt;b&gt;comment&lt;/b&gt;</bdi></dd>' in page
     assert '<dd><a href="/ann#B"><bdi>Lung</bdi></a></dd>' in page
-    link = '<a href="https://example.org/heart?a=1&amp;b=2" rel="nofollow">'
+    link = '<a href="https://example.org/heart?a=1&amp;b=2" rel="nofollow noreferrer">'
     assert f'<dd>{link}<code dir="ltr">https://example.org/heart?a=1&amp;b=2</code></a></dd>' in page
+    link = '<a href="http://example.org/ann/0.9" rel="nofollow noreferrer">'  # http, not only https
+    assert f'<dd>{link}<code dir="ltr">http://example.org/ann/0.9</code></a></dd>' in page
     assert f"<dd>{code('javascript:alert(1)')}</dd>" in page  # text, not a link
     assert f"<dd>{code('urn:example:1')}</dd>" in page
     assert '<dd><bdi class="value">true</bdi></dd>' in page
     assert "weight" not in page and "subClassOf" not in page and "#note" not in page and "objectOwn" not in page
+    assert "transitive" not in page
 
 
 def test_group_order() -> None:
@@ -203,10 +208,29 @@ def test_group_order() -> None:
         (label, literal("L")),
         (label, literal("L")),
     ]
-    groups = group_annotations(pairs, [label, alias], shown.__getitem__, ["en", "none"])
+    groups = group_annotations(pairs, [label, alias], lambda iri: shown.get(iri, iri), ["en", "none"])
     assert [group.property for group in groups] == [label, alias, alpha, beta, same_1, same_2, zeta]
     assert groups[0].values == (literal("L"),)
     assert groups[2].values == (literal("a", "en"), literal("b", "fr"), literal("c"), IRIValue(iri=IRI(f"{NS}x")))
+
+
+def test_value_order() -> None:
+    """Check a property's value order beyond language and text.
+
+    A subtag falls back to its language's rank; literals that tie on language rank and text go by tag, datatype and
+    direction, whatever order Fuseki sends them in; IRIs go by the name the page shows for them, then by IRI.
+    """
+    p = IRI(f"{NS}p")
+    gb, fr, de, plain = literal("b", "en-gb"), literal("x", "fr"), literal("x", "de"), literal("c")
+    typed = [LiteralValue(lexical="1", datatype=IRI(f"{XSD}{name}")) for name in ("string", "int")]
+    rtl = LiteralValue(lexical="x", datatype=IRI(f"{RDF}dirLangString"), language="fr", direction="rtl")
+    zebra, apple, apple_2 = (IRIValue(iri=IRI(f"{NS}{name}")) for name in ("1", "3", "2"))
+    shown = {zebra.iri: "Zebra", apple.iri: "apple", apple_2.iri: "apple"}
+    values = [zebra, apple, apple_2, rtl, fr, de, plain, gb, *typed]
+    expected = (gb, de, rtl, fr, *reversed(typed), plain, apple_2, apple, zebra)  # unlisted tags before untagged
+    for pairs in ([(p, value) for value in values], [(p, value) for value in reversed(values)]):
+        [group] = group_annotations(pairs, [], lambda iri: shown.get(iri, iri), ["en", "none"])
+        assert group.values == expected
 
 
 def test_json() -> None:
@@ -302,7 +326,10 @@ def test_long_iri_not_linked() -> None:
     """Check that a web IRI too long to show whole is text, as its cut text could hide where a link goes."""
     fits = f"https://example.org/{'a' * (MAX_IRI_CHARS - 20)}"
     assert len(fits) == MAX_IRI_CHARS
-    assert rendered(IRIValue(iri=IRI(fits))) == f'<a href="{fits}" rel="nofollow"><code dir="ltr">{fits}</code></a>'
+    assert (
+        rendered(IRIValue(iri=IRI(fits)))
+        == f'<a href="{fits}" rel="nofollow noreferrer"><code dir="ltr">{fits}</code></a>'
+    )
     long = f"https://trusted.example.{'a' * MAX_IRI_CHARS}.evil.example/"
     assert rendered(IRIValue(iri=IRI(long))) == f'<code dir="ltr">{long[: MAX_IRI_CHARS - 1]}…</code>'
 
@@ -327,3 +354,31 @@ def test_literal_checked(fields: dict[str, str]) -> None:
     """Check that a literal value refuses a language tag that isn't a lowercase tag, and an unknown base direction."""
     with pytest.raises(ValidationError):
         LiteralValue(lexical="x", datatype=IRI(LANG_STRING), **fields)
+
+
+def test_iri_values() -> None:
+    """Check how IRI values show: an upper-case web scheme linked, one with no page linked to itself, others cut."""
+    upper = "HTTPS://EXAMPLE.ORG/x"
+    assert rendered(IRIValue(iri=IRI(upper))).startswith(f'<a href="{upper}" rel="nofollow noreferrer">')
+    no_page = f"{NS}B"
+    linked = rendered(IRIValue(iri=IRI(no_page)), {no_page: EntityLink(no_page, "Lung", None)})
+    assert linked == f'<a href="{no_page}" rel="nofollow noreferrer"><code dir="ltr">{no_page}</code></a>'
+    urn = f"urn:example:{'a' * MAX_IRI_CHARS}"
+    assert rendered(IRIValue(iri=IRI(urn))) == f'<code dir="ltr">{urn[: MAX_IRI_CHARS - 1]}…</code>'
+
+
+def test_long_literal_cut() -> None:
+    """Check that a literal longer than `MAX_LITERAL_CHARS` is cut short."""
+    lexical = "x" * (MAX_LITERAL_CHARS + 1)
+    assert rendered(literal(lexical)) == f'<bdi class="value">{lexical[: MAX_LITERAL_CHARS - 1]}…</bdi>'
+
+
+def test_bidi_controls_encoded() -> None:
+    """Check that an IRI's bidirectional-text controls are shown encoded, as a value and as a property's name."""
+    iri = "https://evil.example/\u202emoc.elgoog"
+    shown = "https://evil.example/%E2%80%AEmoc.elgoog"
+    assert rendered(IRIValue(iri=IRI(iri))) == (
+        f'<a href="{iri}" rel="nofollow noreferrer"><code dir="ltr">{shown}</code></a>'
+    )
+    template = templates.env.from_string('{% from "links.html" import named_iri %}{{ named_iri(iri, {}) }}')
+    assert template.render(iri=iri) == f'<code dir="ltr">{shown}</code>'
