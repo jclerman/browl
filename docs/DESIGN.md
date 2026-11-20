@@ -890,6 +890,11 @@ axioms of each.
    own axioms. For heavily used classes, the roots that reach each IRI can be listed at load time instead
    ([P-15 findings](../research/P-15/README.md)).
 
+   P-15b's tree (below) costs 1.7–1.8 / 2.5–3.1 ms to parse and convert at p50 / p95 on the same stores, about 0.3–0.7
+   ms more than P-15's renderer; the largest page (93 axioms) 21 ms. In that session NCBITaxon_500585 fetched in
+   264–318 ms, on `main` too, not 44–57: a fetch to look at again with the lookup of blank-node roots
+   ([P-15b findings](../research/P-15b/README.md)).
+
 **Axioms as a typed tree** (P-15b): an axiom is a tree of frozen Pydantic models (`browl.owl`), not text.
 
 - **Node types** follow the OWL 2 structural specification's names (`SubClassOf`, `ObjectSomeValuesFrom`, …), one
