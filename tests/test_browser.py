@@ -790,11 +790,19 @@ def test_entity_header_look(page: Page, server: LiveServer, scheme: str) -> None
 # The Overview tab's annotations panel (P-16a, DESIGN.md §2.8, U-30, U-32)
 
 LONG_VALUE = "word " * 60
+LONG_PROPERTY = IRI(f"http://example.org/{'long' * 28}")
+"""An undeclared annotation property, shown as its full IRI: a long label with no spaces."""
+LONG_IRI = IRI(f"https://example.org/{'a' * 150}")
+UNBROKEN = "y" * 300
 
 
 @pytest.fixture
 def annotated(server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> LiveServer:
-    """Return the server, every entity's Overview showing the same annotations, and no axioms (it has no Fuseki)."""
+    """Return the server, every entity's Overview showing the same annotations, and no axioms (it has no Fuseki).
+
+    The groups, in order: `rdfs:label` (two values), `LONG_PROPERTY` (an unbroken literal), `rdfs:comment` (a long
+    value), `rdfs:seeAlso` (a short and a long web IRI).
+    """
     label, comment, see_also = (IRI(f"{RDFS}{name}") for name in ("label", "comment", "seeAlso"))
     string, lang_string = IRI(f"{XSD}string"), IRI(f"{RDF_NS}langString")
     pairs = [
@@ -802,6 +810,8 @@ def annotated(server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> LiveServer
         (label, LiteralValue(lexical="Ding", datatype=lang_string, language="de")),
         (comment, LiteralValue(lexical=LONG_VALUE, datatype=string)),
         (see_also, IRIValue(iri=IRI("https://example.org/elsewhere"))),
+        (see_also, IRIValue(iri=LONG_IRI)),
+        (LONG_PROPERTY, LiteralValue(lexical=UNBROKEN, datatype=string)),
     ]
 
     async def fetched(*args: object) -> list[tuple[IRI, AnnotationValue]]:
@@ -819,24 +829,29 @@ def test_annotations_grid_wide(page: Page, annotated: LiveServer) -> None:
     """Check the two-column grid of annotations, wide.
 
     A group's first value is on its label's row, the rest below it, one per line, in one column for every group; a long
-    value wraps within the readable measure; language tags are small and muted.
+    label wraps rather than squeezing the values; a long value wraps within the readable measure; language tags are
+    small and muted.
     """
     page.set_viewport_size(WIDE)
     page.goto(f"{annotated.url}/example.org/thing")
     terms = page.locator(".annotations dt")
     values = page.locator(".annotations dd")
-    expect(terms).to_have_count(3)
-    expect(values).to_have_count(4)
-    term_boxes = [box(terms.nth(index)) for index in range(3)]
-    value_boxes = [box(values.nth(index)) for index in range(4)]
-    for term, value in zip(term_boxes, [value_boxes[0], value_boxes[2], value_boxes[3]], strict=True):
+    expect(terms).to_have_count(4)
+    expect(values).to_have_count(6)
+    expect(terms.nth(1)).to_have_text(LONG_PROPERTY)
+    firsts = page.locator(".annotations dt + dd")
+    for index in range(4):
+        term, value = box(terms.nth(index)), box(firsts.nth(index))
         assert abs(term["y"] - value["y"]) < 2  # a group's first value is on its label's row
         assert value["x"] > term["x"] + term["width"]
+    value_boxes = [box(values.nth(index)) for index in range(6)]
     assert value_boxes[1]["y"] >= value_boxes[0]["y"] + value_boxes[0]["height"]  # one line per value
     assert len({round(each["x"]) for each in value_boxes}) == 1  # one value column for every group
     char = page.evaluate("parseFloat(getComputedStyle(document.body).fontSize)")
-    assert value_boxes[2]["width"] < 60 * char  # capped near 75ch, though the line is longer
-    assert value_boxes[2]["height"] > 2 * value_boxes[0]["height"]  # so it wraps
+    assert box(terms.nth(1))["width"] <= 20 * char + 1  # the long label wraps at 20rem
+    comment = value_boxes[3]
+    assert 40 * char < comment["width"] < 60 * char  # not squeezed by the long label, and capped near 75ch
+    assert comment["height"] > 2 * value_boxes[0]["height"]  # so it wraps
     tag = page.locator(".annotations .lang").first
     expect(tag).to_have_text("en")
     sizes = tag.evaluate("each => [getComputedStyle(each).fontSize, getComputedStyle(each.parentNode).fontSize]")
@@ -846,7 +861,7 @@ def test_annotations_grid_wide(page: Page, annotated: LiveServer) -> None:
 
 
 def test_annotations_grid_narrow(page: Page, annotated: LiveServer) -> None:
-    """Check that on a phone each group's values go below its label, and nothing makes the page scroll sideways."""
+    """Check that on a phone each group's values go below its label, and nothing long makes the page scroll sideways."""
     page.set_viewport_size(NARROW)
     page.goto(f"{annotated.url}/example.org/thing")
     term, value = box(page.locator(".annotations dt").first), box(page.locator(".annotations dd").first)

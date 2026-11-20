@@ -320,16 +320,20 @@ code {
   font-size: 1.1rem;
 }
 
+/* The label column fits its labels up to 20rem, so a long unbroken one, such as an IRI, wraps rather than squeezing
+   the values. */
 .frame {
   display: grid;
-  grid-template-columns: minmax(8rem, max-content) minmax(0, 1fr);
+  grid-template-columns: fit-content(20rem) minmax(0, 1fr);
   column-gap: var(--space);
   margin: 0;
 }
 
 .frame dt {
   grid-column: 1;
+  min-width: 8rem;
   color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 .frame dd {

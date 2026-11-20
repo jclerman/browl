@@ -858,7 +858,8 @@ Tabs (U-28; see [2.9](#29-page-layout)):
     Inverse Of, Disjoint With, and property chains.
 - **Compact layout** (U-32): label column and value column in a two-column grid; tight line spacing within a group and a
   little more between groups. Multi-column values for long lists are Later (U-33). Each panel is a `<dl class="frame">`,
-  one `<dt>` per group and one `<dd>` per value; on a phone the values go below their label. _(P-16a)_
+  one `<dt>` per group and one `<dd>` per value; on a phone the values go below their label. The label column fits
+  its labels up to 20rem, so a long one, such as an IRI, wraps rather than squeezing the values. _(P-16a)_
 
 **Panel data apart from its HTML** (for U-42): each panel and tab is built in two steps. First a function returns its
 content as typed data (Pydantic models), with no HTML in it: annotations grouped by property, axioms grouped by kind,
