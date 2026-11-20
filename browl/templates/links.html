@@ -5,13 +5,10 @@
 {%- else %}<bdi>{{ link.name }}</bdi>{% endif %}
 {%- endmacro %}
 
-{# An IRI a page mentions, from `links` (IRI → `browl.links.EntityLink`): a link to its page if it has one; else text,
-   a standard vocabulary's by its prefixed name (`rdfs:label`), the rest as `text` (the IRI by default), cut short if
-   long (`browl.overview.shown_name` gives the same name). #}
+{# An IRI a page mentions, from `links` (IRI → `browl.links.EntityLink`), by the name `browl.overview.shown_name`
+   gives it: a link to its page if it has one; else text, cut short if long. #}
 {% macro named_iri(iri, links, text=none) -%}
 {%- set link = links.get(iri) -%}
-{%- set name = iri | prefixed_name -%}
 {%- if link is not none and link.href is not none %}{{ entity_link(link) }}
-{%- elif name is not none %}<code dir="ltr">{{ name }}</code>
-{%- else %}<code dir="ltr">{{ (text if text is not none else iri) | cut_text(MAX_IRI_CHARS) }}</code>{% endif -%}
+{%- else %}<code dir="ltr">{{ shown_name(iri, links, text) | cut_text(MAX_IRI_CHARS) }}</code>{% endif -%}
 {%- endmacro %}

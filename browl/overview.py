@@ -1,19 +1,18 @@
-"""An entity page's Overview tab (DESIGN.md §2.8): the entity's annotations, grouped by property, and its axioms.
+"""An entity page's Overview tab (DESIGN.md §2.8).
 
-Both are fetched from Fuseki at once. The annotations are grouped in Python (`browl.annotations`); the axioms are
-converted into nodes on the Java thread (`browl.axioms`), for now a plain list until P-16b and P-16c group them. The
-templates make their HTML (`templates/annotations.html`, `templates/axioms.html`), with a link for each entity they
-mention, all read in one query.
+The entity's annotations (`browl.annotations`) and axioms (`browl.axioms`), fetched concurrently; one derived-database
+lookup gives the links for both.
 """
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from collections.abc import Mapping
 
 from fastapi import Request
+from pydantic import BaseModel, ConfigDict
 
 from browl.annotations import (
-    Annotations,
+    AnnotationGroup,
     AnnotationValue,
     IRIValue,
     TooManyAnnotationsError,
@@ -29,68 +28,74 @@ from browl.loading import dataset_name
 from browl.names import name_property_iris
 from browl.owl import AnyAxiom, prefixed_name
 from browl.owlapi import FragmentError, run_java
-from browl.pages import link_root, read_derived
+from browl.pages import link_root, read_derived, templates
 from browl.precache.core import has_loaded_imports, logged_iri
 from browl.rdf import IRI, RDFSyntaxError
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class AnnotationsPanel:
-    """The entity's annotations, and how the page shows each IRI they mention.
+class AnnotationsPanel(BaseModel):
+    """The entity's annotations.
 
     Attributes:
         groups: The annotations, by property, in the order shown (`browl.annotations.group_annotations`); None if
             they couldn't be read, or are too many to show, when the page says so.
-        links: Each IRI they mention, properties included, by IRI (`browl.links.read_entity_links`).
         too_many: Whether they're too many to show (`browl.annotations.TooManyAnnotationsError`).
     """
 
-    groups: list[Annotations] | None
-    links: dict[str, EntityLink]
+    model_config = ConfigDict(frozen=True)
+
+    groups: list[AnnotationGroup] | None
     too_many: bool = False
 
 
-@dataclass(frozen=True)
-class AxiomsPanel:
-    """The entity's axioms, and how the page shows each IRI they mention.
+class AxiomsPanel(BaseModel):
+    """The entity's axioms.
 
     Attributes:
         axioms: The axioms (`browl.axioms.entity_axioms`); None if they couldn't be read, or are too many to show, when
             the page says so.
-        links: Each IRI the axioms mention, by IRI (`browl.links.read_entity_links`).
         too_many: Whether the axioms are too many to show (`browl.axioms.TooManyAxiomsError`).
     """
 
+    model_config = ConfigDict(frozen=True)
+
     axioms: list[AnyAxiom] | None
-    links: dict[str, EntityLink]
     too_many: bool = False
 
 
-@dataclass(frozen=True)
-class Overview:
-    """An entity's Overview tab: its two panels (U-30).
+class Overview(BaseModel):
+    """An entity's Overview tab: its two panels (U-30), and how the page shows each IRI they mention.
 
     Attributes:
         annotations: The annotations panel.
         axioms: The logical-axioms panel.
+        links: Each IRI the panels mention, the annotations' properties included, by IRI
+            (`browl.links.read_entity_links`).
     """
+
+    model_config = ConfigDict(frozen=True)
 
     annotations: AnnotationsPanel
     axioms: AxiomsPanel
+    links: dict[str, EntityLink]
 
 
-def shown_name(iri: str, links: dict[str, EntityLink]) -> str:
-    """Return the name a page shows for an IRI, as `templates/links.html`'s `named_iri` does.
+def shown_name(iri: str, links: Mapping[str, EntityLink], text: str | None = None) -> str:
+    """Return the name a page shows for an IRI (`templates/links.html`'s `named_iri` shows it).
 
     That's its link's name if it has a page, else its prefixed name if it's in a standard vocabulary (`rdfs:label`),
-    else the IRI.
+    else `text`, the IRI by default.
     """
     link = links.get(iri)
     if link is not None and link.href is not None:
         return link.name
-    return prefixed_name(iri) or iri
+    return prefixed_name(iri) or (iri if text is None else text)
+
+
+# A global, so `named_iri` and the annotations' sort share one rule; this module is imported with the entity pages.
+templates.env.globals["shown_name"] = shown_name
 
 
 async def read_overview(request: Request, state: JobState, iri: str) -> Overview:
@@ -115,10 +120,10 @@ async def read_overview(request: Request, state: JobState, iri: str) -> Overview
     # started meanwhile, seeing the imports' graphs too is always right, if slower.
     clause = dataset_clause(has_loaded_imports(state.imports)) if state.generation == generation else UNION_FROM
     dataset = dataset_name(generation)
-    (annotations, too_many), axioms = await asyncio.gather(
+    (annotations, too_many_annotations), (axioms, too_many_axioms) = await asyncio.gather(
         _read_annotations(request, dataset, iri, clause), _read_axioms(request, dataset, iri, clause)
     )
-    mentioned = [each for axiom in axioms.axioms or () for each in axiom.iris()]
+    mentioned = [each for axiom in axioms or () for each in axiom.iris()]
     for property_, value in annotations or ():
         mentioned.append(property_)
         if isinstance(value, IRIValue):
@@ -128,9 +133,8 @@ async def read_overview(request: Request, state: JobState, iri: str) -> Overview
     links = await read_derived(
         request, lambda connection: read_entity_links(connection, mentioned, prefix, root), state
     )
-    if annotations is None:
-        annotations_panel = AnnotationsPanel(None, {}, too_many=too_many)
-    else:
+    groups = None
+    if annotations is not None:
         settings = request.app.state.settings
         groups = group_annotations(
             annotations,
@@ -138,10 +142,11 @@ async def read_overview(request: Request, state: JobState, iri: str) -> Overview
             lambda each: shown_name(each, links),
             settings.language_ranking,
         )
-        annotations_panel = AnnotationsPanel(groups, links)
-    if axioms.axioms is not None:
-        axioms = AxiomsPanel(axioms.axioms, links)
-    return Overview(annotations_panel, axioms)
+    return Overview(
+        annotations=AnnotationsPanel(groups=groups, too_many=too_many_annotations),
+        axioms=AxiomsPanel(axioms=axioms, too_many=too_many_axioms),
+        links=links,
+    )
 
 
 async def _read_annotations(
@@ -161,14 +166,17 @@ async def _read_annotations(
         return None, False
 
 
-async def _read_axioms(request: Request, dataset: str, iri: str, clause: str) -> AxiomsPanel:
-    """Return an entity's axioms panel, without its links."""
+async def _read_axioms(request: Request, dataset: str, iri: str, clause: str) -> tuple[list[AnyAxiom] | None, bool]:
+    """Return an entity's axioms (`browl.axioms.entity_axioms`), and whether they're too many.
+
+    The axioms are None if they can't be shown: too many, or reading them failed, which is logged.
+    """
     try:
         fragment = await fetch_fragment(request.app.state.sparql, dataset, iri, clause)
-        return AxiomsPanel(await run_java(entity_axioms, fragment, iri), {})
+        return await run_java(entity_axioms, fragment, iri), False
     except TooManyAxiomsError as error:
         logger.warning("Not showing the axioms of %s: %s", logged_iri(iri), error)
-        return AxiomsPanel(None, {}, too_many=True)
+        return None, True
     except (SparqlError, RDFSyntaxError, FragmentError):
         logger.exception("Couldn't show the axioms of %s", logged_iri(iri))
-        return AxiomsPanel(None, {})
+        return None, False

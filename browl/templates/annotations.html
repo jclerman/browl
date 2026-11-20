@@ -17,9 +17,9 @@
 {%- endif -%}
 {%- endmacro %}
 
-{# An entity's annotations (`browl.overview.AnnotationsPanel`) in a two-column grid (U-32): each property's name once,
-   then one line per value. #}
-{% macro annotation_list(panel) -%}
+{# An entity's annotations (`browl.overview.AnnotationsPanel`), from `links`, in a two-column grid (U-32): each
+   property's name once, then one line per value. #}
+{% macro annotation_list(panel, links) -%}
 <section class="annotations">
   <h2>Annotations</h2>
   {% if panel.too_many %}
@@ -31,9 +31,9 @@
   {% else %}
   <dl class="frame">
     {% for group in panel.groups %}
-    <dt>{{ named_iri(group.property, panel.links) }}</dt>
+    <dt>{{ named_iri(group.property, links) }}</dt>
     {% for value in group.values %}
-    <dd>{{ annotation_value(value, panel.links) }}</dd>
+    <dd>{{ annotation_value(value, links) }}</dd>
     {% endfor %}
     {% endfor %}
   </dl>

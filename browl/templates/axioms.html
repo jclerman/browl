@@ -14,8 +14,8 @@
 {%- endfor -%}
 {%- endmacro %}
 
-{# An entity's axioms (`browl.overview.AxiomsPanel`), one per line. #}
-{% macro axiom_list(panel) -%}
+{# An entity's axioms (`browl.overview.AxiomsPanel`), from `links`, one per line. #}
+{% macro axiom_list(panel, links) -%}
 <section class="axioms">
   <h2>Logical axioms</h2>
   {% if panel.too_many %}
@@ -27,7 +27,7 @@
   {% else %}
   <ul class="axiom-list">
     {% for axiom in panel.axioms %}
-    <li dir="ltr">{{ manchester(axiom.manchester_tokens(), panel.links) }}</li>
+    <li dir="ltr">{{ manchester(axiom.manchester_tokens(), links) }}</li>
     {% endfor %}
   </ul>
   {% endif %}

@@ -10,20 +10,23 @@ import httpx2
 import jpype
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import browl.axioms
 import browl.lookup
 import browl.overview
 from browl import owl
+from browl.annotations import AnnotationGroup, IRIValue
 from browl.axioms import fetch_fragment
 from browl.derived import EntityType
 from browl.fuseki import UNION_FROM, FusekiClient, SparqlError
 from browl.jobs import JobState, Stage
 from browl.jobtypes import ImportResult
+from browl.links import EntityLink
 from browl.loading import dataset_name
+from browl.rdf import IRI as RDFIRI
 from browl.rdf import OWL, RDF, RDFSyntaxError
-from tests.helpers import derived_stage, make_app
+from tests.helpers import derived_stage, make_app, no_axioms
 
 pytestmark = pytest.mark.usefixtures("data_dir")
 
@@ -79,9 +82,6 @@ def test_annotations_fail_alone(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Check that a failed annotations query leaves the axioms panel alone."""
-
-    async def no_axioms(*args: object) -> browl.overview.AxiomsPanel:
-        return browl.overview.AxiomsPanel([], {})
 
     async def failed(*args: object) -> list[object]:
         raise SparqlError("the annotations failed")
@@ -322,6 +322,26 @@ def test_too_many(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPa
 def test_panel_json() -> None:
     """Check that a panel's axioms serialize with their fields, which typing them as the base `Axiom` would drop."""
     a, b = (owl.Entity(kind=owl.EntityKind.CLASS, iri=f"{IRI}{name}") for name in "12")
-    panel = browl.overview.AxiomsPanel(axioms=[owl.SubClassOf(sub=a, super=b)], links={})
+    panel = browl.overview.AxiomsPanel(axioms=[owl.SubClassOf(sub=a, super=b)])
     adapter = TypeAdapter(browl.overview.AxiomsPanel)
     assert adapter.validate_json(adapter.dump_json(panel)) == panel
+
+
+def test_overview_json() -> None:
+    """Check that the Overview tab's data round-trips through JSON: both panels, and its links."""
+    group = AnnotationGroup(property=RDFIRI(f"{IRI}p"), values=(IRIValue(iri=RDFIRI(IRI)),))
+    overview = browl.overview.Overview(
+        annotations=browl.overview.AnnotationsPanel(groups=[group]),
+        axioms=browl.overview.AxiomsPanel(axioms=None, too_many=True),
+        links={IRI: EntityLink(IRI, "A", "/onto#A"), f"{IRI}p": EntityLink(f"{IRI}p", f"{IRI}p", None)},
+    )
+    assert browl.overview.Overview.model_validate_json(overview.model_dump_json()) == overview
+
+
+def test_panels_checked() -> None:
+    """Check that the panels' models validate their data and are frozen."""
+    with pytest.raises(ValidationError):
+        browl.overview.AnnotationsPanel(groups=["not a group"])
+    panel = browl.overview.AxiomsPanel(axioms=None)
+    with pytest.raises(ValidationError):
+        panel.too_many = True  # type: ignore[misc]

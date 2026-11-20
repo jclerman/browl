@@ -87,11 +87,6 @@ class Token:
     iri: IRI | None = None
     space: bool = False
 
-    @property
-    def prefixed_name(self) -> str | None:
-        """Return an IRI token's prefixed name if it's in a standard vocabulary (`xsd:integer`), else None."""
-        return None if self.iri is None else prefixed_name(self.iri)
-
 
 def _keyword(text: str) -> Token:
     return Token(TokenKind.KEYWORD, text)

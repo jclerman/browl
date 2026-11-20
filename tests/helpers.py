@@ -324,3 +324,8 @@ def fuseki_dataset(fuseki_url: str, graphs: dict[str | None, bytes]) -> Iterator
             yield name
         finally:
             client.delete(f"/$/datasets/{name}")
+
+
+async def no_axioms(*args: object) -> tuple[list[object], bool]:
+    """Stand in for `browl.overview._read_axioms`, finding no axioms without a query."""
+    return [], False

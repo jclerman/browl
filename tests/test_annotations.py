@@ -16,7 +16,7 @@ from pydantic import TypeAdapter, ValidationError
 import browl.annotations
 import browl.overview
 from browl.annotations import (
-    Annotations,
+    AnnotationGroup,
     IRIValue,
     LiteralValue,
     TooManyAnnotationsError,
@@ -29,7 +29,7 @@ from browl.jobs import Stage
 from browl.links import EntityLink
 from browl.pages import MAX_IRI_CHARS, MAX_LANGUAGE_CHARS, templates
 from browl.rdf import IRI, OWL, RDF, RDFS, XSD
-from tests.helpers import derived_stage, fuseki_dataset, make_app
+from tests.helpers import derived_stage, fuseki_dataset, make_app, no_axioms
 
 NS = "http://example.org/ann#"
 SKOS = "http://www.w3.org/2004/02/skos/core#"
@@ -116,10 +116,6 @@ async def test_fetch(fuseki_url: str, dataset: str, clause: str, imported: bool)
 @pytest.mark.usefixtures("data_dir")
 def test_page(fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check the panel's HTML: name properties first, the rest by name; values one per line, escaped and linked."""
-
-    async def no_axioms(*args: object) -> browl.overview.AxiomsPanel:
-        return browl.overview.AxiomsPanel([], {})
-
     monkeypatch.setattr(browl.overview, "dataset_name", lambda generation: dataset)
     monkeypatch.setattr(browl.overview, "_read_axioms", no_axioms)
     app = make_app(FUSEKI_URL=fuseki_url, NAME_PROPERTIES=["rdfs:label", "skos:prefLabel"])
@@ -185,8 +181,8 @@ def test_group_order() -> None:
 
 def test_json() -> None:
     """Check that annotations round-trip through JSON, each value by its type."""
-    groups = [Annotations(property=IRI(A), values=(literal("a", "en"), IRIValue(iri=IRI(A))))]
-    adapter = TypeAdapter(list[Annotations])
+    groups = [AnnotationGroup(property=IRI(A), values=(literal("a", "en"), IRIValue(iri=IRI(A))))]
+    adapter = TypeAdapter(list[AnnotationGroup])
     assert adapter.validate_json(adapter.dump_json(groups)) == groups
 
 
@@ -245,9 +241,6 @@ def test_too_many_page(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptur
 
     async def too_many(*args: object) -> list[object]:
         raise TooManyAnnotationsError("the entity has more than 1000 annotation values")
-
-    async def no_axioms(*args: object) -> browl.overview.AxiomsPanel:
-        return browl.overview.AxiomsPanel([], {})
 
     monkeypatch.setattr(browl.overview, "fetch_annotations", too_many)
     monkeypatch.setattr(browl.overview, "_read_axioms", no_axioms)

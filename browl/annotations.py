@@ -1,9 +1,4 @@
-"""An entity's annotations, fetched from Fuseki and grouped by property, as typed data (DESIGN.md §2.8).
-
-`fetch_annotations` reads the entity's annotation assertions (`sparql/entity-annotations.rq`) and `group_annotations`
-groups their values by property, in the order the page shows them. Templates make the HTML
-(`templates/annotations.html`).
-"""
+"""An entity's annotations, fetched from Fuseki and grouped by property, as typed data (DESIGN.md §2.8)."""
 
 from collections.abc import Callable, Iterable, Sequence
 from typing import Annotated, Literal
@@ -67,7 +62,7 @@ class LiteralValue(BaseModel):
 type AnnotationValue = Annotated[IRIValue | LiteralValue, Field(discriminator="type")]
 
 
-class Annotations(BaseModel):
+class AnnotationGroup(BaseModel):
     """An annotation property's values on an entity.
 
     Attributes:
@@ -128,7 +123,7 @@ def group_annotations(
     first: Sequence[str],
     shown_name: Callable[[str], str],
     ranking: Sequence[str],
-) -> list[Annotations]:
+) -> list[AnnotationGroup]:
     """Return annotations grouped by property, each value once, in the order the page shows them (DESIGN.md §2.8).
 
     The properties in `first` (the name properties) come first, in its order, then the others by the name the page
@@ -156,6 +151,6 @@ def group_annotations(
         return 0, language_rank(value.language, ranking), value.lexical
 
     return [
-        Annotations(property=iri, values=tuple(sorted(groups[iri], key=value_key)))
+        AnnotationGroup(property=iri, values=tuple(sorted(groups[iri], key=value_key)))
         for iri in sorted(groups, key=property_key)
     ]

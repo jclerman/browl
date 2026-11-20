@@ -22,7 +22,6 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from browl.derived import DerivedReader, EntityType, NotCurrentError, entities_with_iri, read_meta
 from browl.jobs import JobState, Site
-from browl.owl import prefixed_name
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +169,6 @@ templates = Jinja2Templates(
 )
 templates.env.filters["isolate"] = isolate
 templates.env.filters["cut_text"] = cut_text
-templates.env.filters["prefixed_name"] = prefixed_name
 templates.env.tests["web_iri"] = is_web_iri
 templates.env.globals.update(
     MAX_IRI_CHARS=MAX_IRI_CHARS, MAX_LITERAL_CHARS=MAX_LITERAL_CHARS, MAX_LANGUAGE_CHARS=MAX_LANGUAGE_CHARS

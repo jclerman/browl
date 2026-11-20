@@ -147,7 +147,7 @@ def test_count_triples() -> None:
     assert {(row[0], row[1].toPython()) for row in rows} == {(None, 2), (g, 1)}  # type: ignore[index]
 
 
-def test_filled() -> None:
+def test_filled_query() -> None:
     """Check that `browl.axioms` puts the dataset clause before `WHERE`, and fails on a query it can't find it in."""
     filled = axioms.filled_query(axioms._SYMMETRIC, "FROM <urn:g>", {"$entity": "<http://example.org/e>"})
     assert "\nFROM <urn:g>\nWHERE {" in filled

@@ -26,7 +26,7 @@ from browl.jobtypes import StageError
 from browl.rdf import IRI, RDFS, XSD
 from browl.rdf import RDF as RDF_NS
 from tests.conftest import DATA
-from tests.helpers import WAIT_S, LiveServer, derived_stage, iso, make_app
+from tests.helpers import WAIT_S, LiveServer, derived_stage, iso, make_app, no_axioms
 
 pytestmark = [pytest.mark.browser, pytest.mark.usefixtures("data_dir")]
 
@@ -816,9 +816,6 @@ def annotated(server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> LiveServer
 
     async def fetched(*args: object) -> list[tuple[IRI, AnnotationValue]]:
         return pairs
-
-    async def no_axioms(*args: object) -> browl.overview.AxiomsPanel:
-        return browl.overview.AxiomsPanel([], {})
 
     monkeypatch.setattr(browl.overview, "fetch_annotations", fetched)
     monkeypatch.setattr(browl.overview, "_read_axioms", no_axioms)
