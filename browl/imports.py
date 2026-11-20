@@ -34,6 +34,7 @@ import browl
 from browl.jobs import JobContext
 from browl.jobtypes import ImportResult, StageError
 from browl.ofn import Listing, convert_ofn
+from browl.pages import is_web_iri
 from browl.process import free_bytes, run_process
 from browl.settings import Settings
 from browl.upload import FORMATS, FREE_SPACE_MARGIN_BYTES, IDLE_S, SNIFF_BYTES, STORED_SUFFIXES, Syntax, sniff_syntax
@@ -309,7 +310,7 @@ async def fetch(
         FetchError: It isn't an `http` or `https` IRI, its host isn't public, the request failed, it's too large, the
             jobs volume is low on space, or it isn't in a syntax browl reads.
     """
-    if not iri.lower().startswith(("http://", "https://")):
+    if not is_web_iri(iri):
         raise FetchError("only http and https imports are fetched")
     try:
         async with asyncio.timeout(timeout_s):

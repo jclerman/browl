@@ -311,11 +311,66 @@ code {
   outline-offset: 2px;
 }
 
-/* An entity's axioms (U-3): one per line, wrapped lines indented; keywords lighter than the entity names. */
+/* The Overview tab's panels (U-30, U-32). A frame is a two-column grid: each label once, in the first column, and one
+   line per value in the second, wrapped lines indented; lines tight within a group, a little apart between groups.
+   Prose, such as a definition, wraps within the readable measure. On a phone the values go below their label. */
 
+.annotations h2,
 .axioms h2 {
   font-size: 1.1rem;
 }
+
+/* The label column fits its labels up to 20rem, so a long unbroken one, such as an IRI, wraps rather than squeezing
+   the values. */
+.frame {
+  display: grid;
+  grid-template-columns: fit-content(20rem) minmax(0, 1fr);
+  column-gap: var(--space);
+  margin: 0;
+}
+
+.frame dt {
+  grid-column: 1;
+  min-width: 8rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.frame dd {
+  grid-column: 2;
+  max-width: var(--measure);
+  margin: 0;
+  padding-left: calc(var(--space) * 1.5);
+  text-indent: calc(var(--space) * -1.5);
+  overflow-wrap: anywhere;
+}
+
+.frame dt:not(:first-child),
+.frame dt:not(:first-child) + dd {
+  margin-top: calc(var(--space) / 2);
+}
+
+@media (max-width: 40rem) {
+  .frame {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .frame dt,
+  .frame dd {
+    grid-column: 1;
+  }
+
+  .frame dt:not(:first-child) + dd {
+    margin-top: 0;
+  }
+}
+
+.lang {
+  color: var(--muted);
+  font-size: 0.8em;
+}
+
+/* An entity's axioms (U-3): one per line, wrapped lines indented; keywords lighter than the entity names. */
 
 .axiom-list {
   margin: 0;

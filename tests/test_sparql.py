@@ -15,7 +15,7 @@ from rdflib.paths import Path as PropertyPath
 from rdflib.plugins.sparql import prepareQuery, prepareUpdate
 
 import browl
-from browl import axioms
+from browl import axioms, fuseki
 
 SPARQL_DIR = Path(browl.__file__).parent / "sparql"
 FILES = sorted(SPARQL_DIR.glob("*.rq"))
@@ -147,12 +147,12 @@ def test_count_triples() -> None:
     assert {(row[0], row[1].toPython()) for row in rows} == {(None, 2), (g, 1)}  # type: ignore[index]
 
 
-def test_filled() -> None:
+def test_filled_query() -> None:
     """Check that `browl.axioms` puts the dataset clause before `WHERE`, and fails on a query it can't find it in."""
-    filled = axioms._filled(axioms._SYMMETRIC, "FROM <urn:g>", {"$entity": "<http://example.org/e>"})
+    filled = fuseki.filled_query(axioms._SYMMETRIC, "FROM <urn:g>", {"$entity": "<http://example.org/e>"})
     assert "\nFROM <urn:g>\nWHERE {" in filled
     prepareQuery(filled)
     with pytest.raises(ValueError, match=re.escape("no 'WHERE {'")):
-        axioms._filled("CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }", "", {})
+        fuseki.filled_query("CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }", "", {})
     with pytest.raises(ValueError, match=r"no \$entity"):
-        axioms._filled(axioms._TYPES, "", {"$entity": "<http://example.org/e>"})
+        fuseki.filled_query(axioms._TYPES, "", {"$entity": "<http://example.org/e>"})

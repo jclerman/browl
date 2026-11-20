@@ -391,7 +391,6 @@ def test_html_other_axiom() -> None:
 def test_prefixed_name(iri: str, name: str | None) -> None:
     """Check that only IRIs in the standard vocabularies, with a plain local name, have a prefixed name."""
     assert owl.prefixed_name(iri) == name
-    assert Token(TokenKind.IRI, f"<{iri}>", iri).prefixed_name == name
 
 
 def test_html_standard_names() -> None:

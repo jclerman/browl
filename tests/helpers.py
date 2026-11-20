@@ -1,6 +1,7 @@
 """Helpers shared by the tests."""
 
 import asyncio
+import contextlib
 import http.server
 import os
 import sqlite3
@@ -8,7 +9,8 @@ import subprocess
 import threading
 import time
 import urllib.parse
-from collections.abc import AsyncIterator, Coroutine, Mapping, Sequence
+import uuid
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -306,3 +308,24 @@ def derived_stage(
         await asyncio.to_thread(build, context)
 
     return stage
+
+
+@contextlib.contextmanager
+def fuseki_dataset(fuseki_url: str, graphs: dict[str | None, bytes]) -> Iterator[str]:
+    """Yield the name of an in-memory Fuseki dataset holding N-Triples by graph (None: the default), then remove it."""
+    name = f"test-{uuid.uuid4().hex[:8]}"
+    with httpx2.Client(base_url=fuseki_url, timeout=30) as client:
+        client.post("/$/datasets", data={"dbName": name, "dbType": "mem"}).raise_for_status()
+        try:
+            headers = {"Content-Type": "application/n-triples"}
+            for graph, triples in graphs.items():
+                params = {"default": ""} if graph is None else {"graph": graph}
+                client.post(f"/{name}/data", params=params, content=triples, headers=headers).raise_for_status()
+            yield name
+        finally:
+            client.delete(f"/$/datasets/{name}")
+
+
+async def no_axioms(*args: object) -> tuple[list[object], bool]:
+    """Stand in for `browl.overview._read_axioms`, finding no axioms without a query."""
+    return [], False

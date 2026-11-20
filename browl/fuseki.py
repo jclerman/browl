@@ -8,6 +8,8 @@ boundary, or fails with no error text appended, still looks whole to that parsin
 `FusekiClient.bulk_select`, which checks that the result reached its end (P-9).
 """
 
+from __future__ import annotations
+
 import asyncio
 import codecs
 import re
@@ -33,6 +35,19 @@ N-Triples, all of Uberon, even at 384 MB (research/P-4); a page's fragment is a 
 MAX_LINE_CHARS = 16 * 2**20
 """Longest line accepted in any result, so a malformed one can't grow without bound."""
 
+ADMIN_TIMEOUT_S = 120.0
+"""Time limit for an admin protocol call: opening a store is quick, but removing one deletes its files."""
+
+PING_TIMEOUT_S = 2.0
+"""Time limit for the whole of a ping (`ping`)."""
+
+UNION_FROM = "FROM <urn:x-arq:DefaultGraph> FROM <urn:x-arq:UnionGraph>"
+"""The dataset clause of a query that sees the ontology and its imports: the default graph merged with every named
+graph, as a set, so a triple both state counts once (DESIGN.md §2.4)."""
+
+END_VARIABLE = "browl_end"
+"""The variable that marks a bulk result's last row (`FusekiClient.bulk_select`); bulk queries mustn't use it."""
+
 TSV = "text/tab-separated-values"
 NTRIPLES = "application/n-triples"
 _ERROR_TEXT_LIMIT = 1000  # characters of an error response kept in the exception
@@ -40,6 +55,8 @@ _HTTP_TIMEOUT = httpx2.Timeout(QUERY_TIMEOUT_S, read=STREAM_READ_TIMEOUT_S)
 # Fuseki's datasets have plain names; anything else could reach other endpoints, such as the unauthenticated admin
 # protocol's under "/$/".
 _DATASET = re.compile(r"[A-Za-z0-9_-]+")
+_END = Literal("true", f"{XSD}boolean")  # the value of `END_VARIABLE` in a bulk result's last row
+_WHERE = "\nWHERE {"  # where `filled_query` puts the dataset clause
 
 
 class SparqlError(Exception):
@@ -48,6 +65,10 @@ class SparqlError(Exception):
 
 class SparqlTimeoutError(SparqlError):
     """A SPARQL query didn't finish in time."""
+
+
+class ResultTooLargeError(SparqlError):
+    """A SPARQL query's result is larger than its caller's limit."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,12 +110,6 @@ class SelectStream:
                 except RDFSyntaxError as error:
                     raise SparqlError(f"malformed SELECT result: {error}") from error
                 yield row
-
-
-END_VARIABLE = "browl_end"
-"""The variable that marks a bulk result's last row (`FusekiClient.bulk_select`); bulk queries mustn't use it."""
-
-_END = Literal("true", f"{XSD}boolean")
 
 
 class BulkSelectStream:
@@ -145,21 +160,25 @@ class BulkSelectStream:
             raise SparqlError(f"the result is incomplete: it broke off after {rows:,} rows without its end marker")
 
 
-UNION_FROM = "FROM <urn:x-arq:DefaultGraph> FROM <urn:x-arq:UnionGraph>"
-"""The dataset clause of a query that sees the ontology and its imports: the default graph merged with every named
-graph, as a set, so a triple both state counts once (DESIGN.md §2.4)."""
-
-ADMIN_TIMEOUT_S = 120.0
-"""Time limit for an admin protocol call: opening a store is quick, but removing one deletes its files."""
-
-
 def dataset_clause(has_imports: bool) -> str:
     """Return the dataset clause for queries that should see the imports: `UNION_FROM` if there are any, else ""."""
     return UNION_FROM if has_imports else ""
 
 
-PING_TIMEOUT_S = 2.0
-"""Time limit for the whole of a ping (`ping`)."""
+def filled_query(query: str, dataset_clause: str, parts: dict[str, str]) -> str:
+    """Return a query with its dataset clause before `WHERE`, and each of its placeholders replaced.
+
+    The query files are valid SPARQL as they are, as `tests/test_sparql.py` checks: a placeholder is a variable, such
+    as `$entity`, or an empty `VALUES` block.
+    """
+    if _WHERE not in query:
+        raise ValueError(f"no {_WHERE.strip()!r} at the start of a line in the query")
+    filled = query.replace(_WHERE, f"\n{dataset_clause}{_WHERE}", 1)
+    for placeholder, value in parts.items():
+        if placeholder not in filled:
+            raise ValueError(f"no {placeholder} in the query")
+        filled = filled.replace(placeholder, value)
+    return filled
 
 
 async def ping(http: httpx2.AsyncClient, timeout_s: float = PING_TIMEOUT_S) -> bool:
@@ -242,14 +261,23 @@ class FusekiClient:
         """Use an HTTP client whose base URL is Fuseki's (`FUSEKI_URL`)."""
         self._http = http
 
-    async def select(self, dataset: str, query: str, timeout_s: float = QUERY_TIMEOUT_S) -> SelectResult:
+    async def select(
+        self, dataset: str, query: str, timeout_s: float = QUERY_TIMEOUT_S, max_chars: int | None = None
+    ) -> SelectResult:
         """Run a SELECT query on a dataset, returning its whole result.
+
+        Args:
+            dataset: The dataset's name.
+            query: The query.
+            timeout_s: The longest the whole query may take.
+            max_chars: The most characters its result's lines may hold in all; no limit if None.
 
         Raises:
             SparqlError: The query failed, or its result is malformed.
             SparqlTimeoutError: The query took longer than `timeout_s`.
+            ResultTooLargeError: The result is longer than `max_chars`.
         """
-        async with _time_limit(timeout_s), self.select_stream(dataset, query) as stream:
+        async with _time_limit(timeout_s), self.select_stream(dataset, query, max_chars) as stream:
             return SelectResult(stream.variables, [row async for row in stream])
 
     async def construct(
@@ -258,8 +286,9 @@ class FusekiClient:
         """Run a DESCRIBE or CONSTRUCT query on a dataset, returning its result as checked N-Triples.
 
         Raises:
-            SparqlError: The query failed, its result isn't N-Triples, or it's larger than `max_bytes`.
+            SparqlError: The query failed, or its result isn't N-Triples.
             SparqlTimeoutError: The query took longer than `timeout_s`.
+            ResultTooLargeError: The result is larger than `max_bytes`.
         """
         lines = []
         size = 0
@@ -268,22 +297,31 @@ class FusekiClient:
                 encoded = line.encode()
                 size += len(encoded) + 1
                 if size > max_bytes:
-                    raise SparqlError(f"the result is larger than {max_bytes} bytes")
+                    raise ResultTooLargeError(f"the result is larger than {max_bytes} bytes")
                 lines.append(encoded)
         lines.append(b"")  # for the last line's end
         return b"\n".join(lines)
 
     @asynccontextmanager
-    async def select_stream(self, dataset: str, query: str) -> AsyncIterator[SelectStream]:
+    async def select_stream(
+        self, dataset: str, query: str, max_chars: int | None = None
+    ) -> AsyncIterator[SelectStream]:
         """Run a SELECT query on a dataset, reading its result as it arrives, for results too large to hold.
 
         Each wait for data has a time limit (`STREAM_READ_TIMEOUT_S`), but the whole query has none.
 
+        Args:
+            dataset: The dataset's name.
+            query: The query.
+            max_chars: The most characters its result's lines may hold in all; no limit if None.
+
         Raises:
             SparqlError: The query failed, or its result is malformed (also while iterating).
             SparqlTimeoutError: Fuseki sent no data for `STREAM_READ_TIMEOUT_S` (also while iterating).
+            ResultTooLargeError: The result is longer than `max_chars` (also while iterating).
         """
-        async with self._query(dataset, query, TSV) as batches:
+        async with self._query(dataset, query, TSV) as lines:
+            batches = lines if max_chars is None else _capped(lines, max_chars)
             first = await anext(batches, None)
             if first is None:
                 raise SparqlError("empty SELECT result: no header line")
@@ -431,6 +469,20 @@ async def _batches(response: httpx2.Response) -> AsyncIterator[list[str]]:
         raise SparqlError(f"the result isn't UTF-8: {error}") from error
     if last := "".join(unfinished):
         yield [last.removesuffix("\r")]
+
+
+async def _capped(batches: AsyncIterator[list[str]], max_chars: int) -> AsyncIterator[list[str]]:
+    """Yield the batches of lines, until their lines, each with its line end, hold more than `max_chars` characters.
+
+    Raises:
+        ResultTooLargeError: They do.
+    """
+    size = 0
+    async for batch in batches:
+        size += sum(map(len, batch)) + len(batch)
+        if size > max_chars:
+            raise ResultTooLargeError(f"the result is longer than {max_chars} characters")
+        yield batch
 
 
 async def _prepend(batch: list[str], batches: AsyncIterator[list[str]]) -> AsyncIterator[list[str]]:

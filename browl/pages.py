@@ -7,7 +7,9 @@ Pages read whole-ontology data only from the derived database (N-4), through `re
 """
 
 import logging
+import re
 import sqlite3
+import urllib.parse
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,10 +38,15 @@ MAX_NAME_CHARS = 100
 """The longest name pages show; a longer one is cut short (`cut_name`, DESIGN.md §2.9)."""
 
 MAX_IRI_CHARS = 200
-"""The longest IRI an axiom shows as text, not as a link; a longer one is cut short (`cut_text`, DESIGN.md §2.8)."""
+"""The longest IRI a page shows as text; a longer one is cut short (`cut_text`, DESIGN.md §2.8), and isn't a link to
+itself, which could hide where it goes."""
 
 MAX_LITERAL_CHARS = 1_000
 """The longest literal an axiom shows, or other text between its IRIs and keywords; a longer one is cut short."""
+
+MAX_LANGUAGE_CHARS = 35
+"""The longest language tag a page gives as an element's `lang`, BCP 47's practical limit (RFC 5646 §4.4.1); a longer
+one is shown cut short, and not given."""
 
 SITE_NAME = "browl"
 """browl's name, which page titles end with when the ontology has no title."""
@@ -104,6 +111,33 @@ def read_ontology_link(connection: sqlite3.Connection) -> OntologyLink:
     return OntologyLink(name, page.path, page.fragment, title)
 
 
+def is_web_iri(iri: str) -> bool:
+    """Return whether an IRI is an `http` or `https` one, which a page may link to (DESIGN.md §2.9).
+
+    Examples:
+        >>> is_web_iri("HTTPS://example.org/a"), is_web_iri("javascript:alert(1)")
+        (True, False)
+    """
+    return iri.lower().startswith(("http://", "https://"))
+
+
+_BIDI_CONTROLS = re.compile("[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+
+
+def bidi_encoded(iri: str) -> str:
+    """Return an IRI with its bidirectional-text controls percent-encoded, so it's shown in the order it's read.
+
+    `<code dir="ltr">` isolates an IRI from the text around it, but not from its own controls, with which
+    `https://evil.example/\u202emoc.elgoog` would read like another host (DESIGN.md §2.9). A browser encodes them in
+    an `href` too.
+
+    Examples:
+        >>> bidi_encoded("https://evil.example/\u202emoc.elgoog")
+        'https://evil.example/%E2%80%AEmoc.elgoog'
+    """
+    return _BIDI_CONTROLS.sub(lambda match: urllib.parse.quote(match.group()), iri)
+
+
 def isolate(text: str) -> str:
     """Return text wrapped in U+2068 … U+2069, isolating it from the text around it (DESIGN.md §2.9).
 
@@ -154,7 +188,11 @@ templates = Jinja2Templates(
 )
 templates.env.filters["isolate"] = isolate
 templates.env.filters["cut_text"] = cut_text
-templates.env.globals.update(MAX_IRI_CHARS=MAX_IRI_CHARS, MAX_LITERAL_CHARS=MAX_LITERAL_CHARS)
+templates.env.filters["bidi_encoded"] = bidi_encoded
+templates.env.tests["web_iri"] = is_web_iri
+templates.env.globals.update(
+    MAX_IRI_CHARS=MAX_IRI_CHARS, MAX_LITERAL_CHARS=MAX_LITERAL_CHARS, MAX_LANGUAGE_CHARS=MAX_LANGUAGE_CHARS
+)
 
 
 def unavailable_page(request: Request, site: Site) -> Response:

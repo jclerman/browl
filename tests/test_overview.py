@@ -1,8 +1,9 @@
-"""Tests for the Overview tab's axioms panel when its axioms can't be read: the page still works, the log has why."""
+"""Tests for the Overview tab's panels when their data can't be read: the page still works, the log has why."""
 
 import asyncio
 import dataclasses
 import logging
+import threading
 import urllib.parse
 from collections.abc import Iterator
 
@@ -10,25 +11,29 @@ import httpx2
 import jpype
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import browl.axioms
 import browl.lookup
 import browl.overview
 from browl import owl
+from browl.annotations import AnnotationGroup, IRIValue
 from browl.axioms import fetch_fragment
 from browl.derived import EntityType
 from browl.fuseki import UNION_FROM, FusekiClient, SparqlError
 from browl.jobs import JobState, Stage
 from browl.jobtypes import ImportResult
+from browl.links import EntityLink
 from browl.loading import dataset_name
+from browl.rdf import IRI as RDFIRI
 from browl.rdf import OWL, RDF, RDFSyntaxError
-from tests.helpers import derived_stage, make_app
+from tests.helpers import derived_stage, make_app, no_axioms
 
 pytestmark = pytest.mark.usefixtures("data_dir")
 
 IRI = "http://example.org/onto#A"
 MESSAGE = "The axioms can't be shown just now."
+ANNOTATIONS_MESSAGE = "The annotations can't be shown just now."
 PANEL = {"path": "/onto", "fragment": "A", "panel": "1"}
 
 
@@ -48,16 +53,76 @@ def client() -> Iterator[TestClient]:
         yield test_client
 
 
+@pytest.fixture
+def no_annotations(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the annotations panel's fetch find none, without a query, so tests of the axioms panel see only its own."""
+
+    async def fetched(*args: object) -> list[object]:
+        return []
+
+    monkeypatch.setattr(browl.overview, "fetch_annotations", fetched)
+
+
 def test_query_fails(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
-    """Check that a failed query fails only the axioms panel: the page shows a short message, and the log the error."""
+    """Check that failed queries fail only the panels: the page shows a message for each, and the log the errors."""
     with caplog.at_level(logging.ERROR, logger="browl.overview"):
         page = client.get("/_browl/hash", params={"path": "/onto", "fragment": "A"})
     assert page.status_code == 200
     assert MESSAGE in page.text
+    assert ANNOTATIONS_MESSAGE in page.text
     assert "Error 500" not in page.text
-    [record] = caplog.records
-    assert record.getMessage() == f"Couldn't show the axioms of {IRI}"
+    assert sorted(record.getMessage() for record in caplog.records) == [
+        f"Couldn't show the annotations of {IRI}",
+        f"Couldn't show the axioms of {IRI}",
+    ]
+    assert all(record.exc_info is not None for record in caplog.records)
     assert "Error 500: Server Error" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "error", [SparqlError("the annotations failed"), RDFSyntaxError("not a valid IRI")], ids=["query", "iri"]
+)
+def test_annotations_fail_alone(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, error: Exception
+) -> None:
+    """Check that a failed annotations query, or an invalid IRI, leaves the axioms panel alone."""
+
+    async def failed(*args: object) -> list[object]:
+        raise error
+
+    monkeypatch.setattr(browl.overview, "_read_axioms", no_axioms)
+    monkeypatch.setattr(browl.overview, "fetch_annotations", failed)
+    with caplog.at_level(logging.ERROR, logger="browl.overview"):
+        page = client.get("/_browl/hash", params=PANEL)
+    assert page.status_code == 200
+    assert ANNOTATIONS_MESSAGE in page.text
+    assert MESSAGE not in page.text
+    [record] = caplog.records
+    assert record.getMessage() == f"Couldn't show the annotations of {IRI}"
+
+
+def test_axioms_fail_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that the annotations, and their links, still show when the axioms are too many (DESIGN.md §2.8)."""
+    prop = RDFIRI("http://example.org/onto#note")
+
+    async def too_many(*args: object) -> tuple[None, bool]:
+        return None, True
+
+    async def fetched(*args: object) -> list[object]:
+        return [(prop, IRIValue(iri=RDFIRI(IRI)))]
+
+    monkeypatch.setattr(browl.overview, "_read_axioms", too_many)
+    monkeypatch.setattr(browl.overview, "fetch_annotations", fetched)
+    app = make_app()
+    with TestClient(app) as test_client:
+        entities = [(IRI, EntityType.CLASS), (prop, EntityType.ANNOTATION_PROPERTY)]
+        app.state.jobs.register(Stage.PRE_CACHING, derived_stage(entities))
+        test_client.portal.call(app.state.jobs.start)
+        test_client.portal.call(app.state.jobs.wait)
+        page = test_client.get("/_browl/hash", params=PANEL).text
+    assert "This entity has too many axioms to show here." in page
+    assert '<dt><a href="/onto#note">' in page
+    assert '<dd><a href="/onto#A">' in page
 
 
 def test_usage_tab_untouched(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
@@ -70,6 +135,7 @@ def test_usage_tab_untouched(client: TestClient, caplog: pytest.LogCaptureFixtur
 
 @pytest.mark.jvm
 @pytest.mark.usefixtures("jvm")
+@pytest.mark.usefixtures("no_annotations")
 def test_fragment_error(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Check that a fragment the OWLAPI can't parse fails only the axioms panel, and its parser's error is logged."""
 
@@ -91,6 +157,7 @@ def test_fragment_error(client: TestClient, monkeypatch: pytest.MonkeyPatch, cap
 
 @pytest.mark.jvm
 @pytest.mark.usefixtures("jvm")
+@pytest.mark.usefixtures("no_annotations")
 def test_java_error(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Check that any other Java exception, here from the conversion, fails only the axioms panel, and is logged."""
 
@@ -113,6 +180,7 @@ def test_java_error(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog:
     assert "IllegalStateException: the conversion broke" in caplog.text
 
 
+@pytest.mark.usefixtures("no_annotations")
 def test_rdf_syntax_error(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -132,6 +200,7 @@ def test_rdf_syntax_error(
     assert record.exc_info is not None and record.exc_info[1] is error
 
 
+@pytest.mark.usefixtures("no_annotations")
 def test_escaped_illegal_iri(caplog: pytest.LogCaptureFixture) -> None:
     """Check that a stored IRI with an escaped illegal character, which Jena writes escaped, fails only the panel."""
 
@@ -171,6 +240,7 @@ def record_fetches(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
     return fetches
 
 
+@pytest.mark.usefixtures("no_annotations")
 def test_one_generation(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that the panel reads the generation the page found its entity in, though a newer one is ready since."""
     state = ready_state(client)
@@ -206,6 +276,7 @@ def test_one_generation(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> 
     ],
     ids=["no-imports", "dropped-import", "loaded-import", "newer-job"],
 )
+@pytest.mark.usefixtures("no_annotations")
 def test_dataset_clause(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -250,6 +321,7 @@ async def test_failed_query_cancels_other() -> None:
         assert cancelled.is_set()
 
 
+@pytest.mark.usefixtures("no_annotations")
 def test_too_many(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that a fragment that mentions too many IRIs isn't fetched further, and the panel says so."""
     queries = []
@@ -278,6 +350,74 @@ def test_too_many(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPa
 def test_panel_json() -> None:
     """Check that a panel's axioms serialize with their fields, which typing them as the base `Axiom` would drop."""
     a, b = (owl.Entity(kind=owl.EntityKind.CLASS, iri=f"{IRI}{name}") for name in "12")
-    panel = browl.overview.AxiomsPanel(axioms=[owl.SubClassOf(sub=a, super=b)], links={})
+    panel = browl.overview.AxiomsPanel(axioms=[owl.SubClassOf(sub=a, super=b)])
     adapter = TypeAdapter(browl.overview.AxiomsPanel)
     assert adapter.validate_json(adapter.dump_json(panel)) == panel
+
+
+def test_overview_json() -> None:
+    """Check that the Overview tab's data round-trips through JSON: both panels, and its links."""
+    group = AnnotationGroup(property=RDFIRI(f"{IRI}p"), values=(IRIValue(iri=RDFIRI(IRI)),))
+    overview = browl.overview.Overview(
+        annotations=browl.overview.AnnotationsPanel(groups=[group]),
+        axioms=browl.overview.AxiomsPanel(axioms=None, too_many=True),
+        links={IRI: EntityLink(IRI, "A", "/onto#A"), f"{IRI}p": EntityLink(f"{IRI}p", f"{IRI}p", None)},
+    )
+    assert browl.overview.Overview.model_validate_json(overview.model_dump_json()) == overview
+
+
+def test_panels_checked() -> None:
+    """Check that the panels' models validate their data and are frozen."""
+    with pytest.raises(ValidationError):
+        browl.overview.AnnotationsPanel(groups=["not a group"])
+    panel = browl.overview.AxiomsPanel(axioms=None)
+    with pytest.raises(ValidationError):
+        panel.too_many = True  # type: ignore[misc]
+
+
+def test_panels_read_concurrently(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that the two panels' data are read at the same time: each read waits for the other to start."""
+    annotations_started, axioms_started = asyncio.Event(), asyncio.Event()
+
+    async def read_annotations(*args: object) -> tuple[list[object], bool]:
+        annotations_started.set()
+        async with asyncio.timeout(5):
+            await axioms_started.wait()
+        return [], False
+
+    async def read_axioms(*args: object) -> tuple[list[object], bool]:
+        axioms_started.set()
+        async with asyncio.timeout(5):
+            await annotations_started.wait()
+        return [], False
+
+    monkeypatch.setattr(browl.overview, "_read_annotations", read_annotations)
+    monkeypatch.setattr(browl.overview, "_read_axioms", read_axioms)
+    page = client.get("/_browl/hash", params=PANEL)
+    assert page.status_code == 200
+    assert page.text.count('<p class="note">None.</p>') == 2
+
+
+def test_unexpected_error_cancels_other(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that an unexpected error reading one panel cancels the other's read, and is raised itself."""
+    started = asyncio.Event()
+    cancelled = threading.Event()
+
+    async def read_annotations(*args: object) -> tuple[list[object], bool]:
+        started.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return [], False
+
+    async def read_axioms(*args: object) -> tuple[list[object], bool]:
+        await started.wait()
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(browl.overview, "_read_annotations", read_annotations)
+    monkeypatch.setattr(browl.overview, "_read_axioms", read_axioms)
+    with pytest.raises(RuntimeError, match="unexpected"):
+        client.get("/_browl/hash", params=PANEL)
+    assert cancelled.is_set()

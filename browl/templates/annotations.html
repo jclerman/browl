@@ -1,0 +1,42 @@
+{% from "links.html" import entity_link, named_iri %}
+{# An annotation's value (`browl.annotations.IRIValue` or `LiteralValue`), from `links`: an IRI with a page as a link to
+   it; an `http` or `https` IRI as a link to itself (DESIGN.md §2.9), without a referrer, unless it's too long to show
+   whole, as a cut one could hide where it goes; any other as text, its bidirectional-text controls encoded. A literal is isolated from the text around it, in its language and base
+   direction, cut short if long, with its language tag small and muted. #}
+{% macro annotation_value(value, links) -%}
+{%- if value.type == "iri" -%}
+{%- set link = links.get(value.iri) -%}
+{%- if link is not none and link.href is not none %}{{ entity_link(link) }}
+{%- elif value.iri is web_iri and value.iri | length <= MAX_IRI_CHARS %}<a href="{{ value.iri }}" rel="nofollow noreferrer"><code dir="ltr">{{ value.iri | bidi_encoded }}</code></a>
+{%- else %}<code dir="ltr">{{ value.iri | bidi_encoded | cut_text(MAX_IRI_CHARS) }}</code>{% endif -%}
+{%- else -%}
+<bdi class="value"
+  {%- if value.language is not none and value.language | length <= MAX_LANGUAGE_CHARS %} lang="{{ value.language }}"{% endif %}
+  {%- if value.direction is not none %} dir="{{ value.direction }}"{% endif %}>{{ value.lexical | cut_text(MAX_LITERAL_CHARS) }}</bdi>
+{%- if value.language is not none %} <small class="lang">{{ value.language | cut_text(MAX_LANGUAGE_CHARS) }}</small>{% endif -%}
+{%- endif -%}
+{%- endmacro %}
+
+{# An entity's annotations (`browl.overview.AnnotationsPanel`), from `links`, in a two-column grid (U-32): each
+   property's name once, then one line per value. #}
+{% macro annotation_list(panel, links) -%}
+<section class="annotations">
+  <h2>Annotations</h2>
+  {% if panel.too_many %}
+  <p class="note">This entity has too many annotations to show here.</p>
+  {% elif panel.groups is none %}
+  <p class="note">The annotations can't be shown just now.</p>
+  {% elif not panel.groups %}
+  <p class="note">None.</p>
+  {% else %}
+  <dl class="frame">
+    {% for group in panel.groups %}
+    <dt>{{ named_iri(group.property, links) }}</dt>
+    {% for value in group.values %}
+    <dd>{{ annotation_value(value, links) }}</dd>
+    {% endfor %}
+    {% endfor %}
+  </dl>
+  {% endif %}
+</section>
+{%- endmacro %}
