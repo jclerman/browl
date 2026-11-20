@@ -370,6 +370,32 @@ def test_every_node_type(references: list[Reference]) -> None:
     assert adapter.validate_json(adapter.dump_json(every)) == every
 
 
+OWN_NODE_TYPES = {
+    "Entity",
+    "IRI",
+    "AnonymousIndividual",
+    "Literal",
+    "ObjectInverseOf",
+    "FacetRestriction",
+    "OtherAxiom",
+}
+"""Node types with no counterpart among the OWLAPI's kinds of axiom, class expression and data range."""
+
+
+def test_node_types_match_owlapi() -> None:
+    """Check that `NodeType` names the OWLAPI's kinds of axiom, class expression and data range, and browl's own.
+
+    A class or a datatype is an `Entity`.
+    """
+    model = "org.semanticweb.owlapi.model."
+    expressions = {
+        str(each.getName())
+        for name in ("ClassExpressionType", "DataRangeType")
+        for each in jpype.JClass(model + name).values()
+    }
+    assert set(owl.NodeType) == kinds() | (expressions - {"Class", "Datatype"}) | OWN_NODE_TYPES
+
+
 def test_facets() -> None:
     """Check `browl.FACETS` against the OWLAPI's facets and their symbols."""
     facets = jpype.JClass("org.semanticweb.owlapi.vocab.OWLFacet")
