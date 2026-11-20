@@ -1,7 +1,7 @@
 """An entity page's Overview tab (DESIGN.md §2.8): for now, until P-16 groups them, the entity's axioms as a plain list.
 
-The axioms are fetched from Fuseki and rendered on the Java thread (`browl.axioms`); the template makes their HTML
-(`templates/axioms.html`), with a link for each entity they mention.
+The axioms are fetched from Fuseki and converted into nodes on the Java thread (`browl.axioms`); the template makes
+their HTML from the nodes' tokens (`templates/axioms.html`), with a link for each entity they mention.
 """
 
 import logging
@@ -9,12 +9,13 @@ from dataclasses import dataclass
 
 from fastapi import Request
 
-from browl.axioms import Axiom, TooManyAxiomsError, entity_axioms, fetch_fragment
+from browl.axioms import TooManyAxiomsError, entity_axioms, fetch_fragment
 from browl.derived import NotCurrentError
 from browl.fuseki import UNION_FROM, SparqlError, dataset_clause
 from browl.jobs import JobState
 from browl.links import EntityLink, read_entity_links
 from browl.loading import dataset_name
+from browl.owl import Axiom
 from browl.owlapi import FragmentError, run_java
 from browl.pages import link_root, read_derived
 from browl.precache.core import has_loaded_imports, logged_iri
@@ -70,7 +71,7 @@ async def read_axioms_panel(request: Request, state: JobState, iri: str) -> Axio
         return AxiomsPanel(None, {})
     prefix: str = request.app.state.settings.reserved_prefix
     root = link_root(request.scope)
-    mentioned = [each for axiom in axioms for each in axiom.iris]
+    mentioned = [each for axiom in axioms for each in axiom.iris()]
     links = await read_derived(
         request, lambda connection: read_entity_links(connection, mentioned, prefix, root), state
     )

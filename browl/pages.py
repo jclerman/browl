@@ -20,7 +20,6 @@ from starlette.responses import Response
 from starlette.templating import Jinja2Templates
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from browl import manchester
 from browl.derived import DerivedReader, EntityType, NotCurrentError, entities_with_iri, read_meta
 from browl.jobs import JobState, Site
 
@@ -154,7 +153,6 @@ templates = Jinja2Templates(
     context_processors=[frame_context],
 )
 templates.env.filters["isolate"] = isolate
-templates.env.filters["manchester_segments"] = manchester.segments
 templates.env.filters["cut_text"] = cut_text
 templates.env.globals.update(MAX_IRI_CHARS=MAX_IRI_CHARS, MAX_LITERAL_CHARS=MAX_LITERAL_CHARS)
 

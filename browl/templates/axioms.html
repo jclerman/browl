@@ -1,18 +1,19 @@
 {% from "links.html" import entity_link %}
-{# Manchester text with full IRIs (DESIGN.md §2.8, `browl.manchester`), from `links` (IRI → `browl.links.EntityLink`):
-   each of the axiom's own IRIs (`iris`) with a page as a link to it, any other as text: a standard vocabulary's by its
-   prefixed name (`xsd:integer`), the rest in full; any other `<…>` as plain text; keywords styled lightly (§2.9). IRIs
-   and literals, which come from the ontology, are isolated from the text around them, as names are in links, and cut
-   short if long, as is any other text, which may hold an IRI. #}
-{% macro manchester(text, links, iris) -%}
-{%- for segment in text | manchester_segments(iris) -%}
-{%- set link = links.get(segment.iri) if segment.kind == "iri" else none -%}
+{# An axiom's tokens (`browl.owl.Node.tokens`), from `links` (IRI → `browl.links.EntityLink`), as HTML (DESIGN.md
+   §2.8): an IRI with a page as a link to it; any other as text: a standard vocabulary's by its prefixed name
+   (`xsd:integer`), the rest in full; keywords styled lightly (§2.9). Literals, which come from the ontology, are
+   isolated from the text around them, as names are in links; they, IRIs shown as text, and other text are cut short
+   if long. #}
+{% macro manchester(tokens, links) -%}
+{%- for token in tokens -%}
+{%- if token.space %} {% endif -%}
+{%- set link = links.get(token.iri) if token.kind == "iri" else none -%}
 {%- if link is not none and link.href is not none %}{{ entity_link(link) }}
-{%- elif segment.standard_name is not none %}<code dir="ltr">{{ segment.standard_name }}</code>
-{%- elif segment.kind == "iri" %}<code dir="ltr">{{ segment.text | cut_text(MAX_IRI_CHARS) }}</code>
-{%- elif segment.kind == "keyword" %}<span class="keyword">{{ segment.text }}</span>
-{%- elif segment.kind == "literal" %}<bdi>{{ segment.text | cut_text(MAX_LITERAL_CHARS) }}</bdi>
-{%- else %}{{ segment.text | cut_text(MAX_LITERAL_CHARS) }}{% endif -%}
+{%- elif token.kind == "iri" and token.prefixed_name is not none %}<code dir="ltr">{{ token.prefixed_name }}</code>
+{%- elif token.kind == "iri" %}<code dir="ltr">{{ token.text | cut_text(MAX_IRI_CHARS) }}</code>
+{%- elif token.kind == "keyword" %}<span class="keyword">{{ token.text }}</span>
+{%- elif token.kind == "literal" %}<bdi>{{ token.text | cut_text(MAX_LITERAL_CHARS) }}</bdi>
+{%- else %}{{ token.text | cut_text(MAX_LITERAL_CHARS) }}{% endif -%}
 {%- endfor -%}
 {%- endmacro %}
 
@@ -29,7 +30,7 @@
   {% else %}
   <ul class="axiom-list">
     {% for axiom in panel.axioms %}
-    <li dir="ltr">{{ manchester(axiom.text, panel.links, axiom.iris) }}</li>
+    <li dir="ltr">{{ manchester(axiom.tokens(), panel.links) }}</li>
     {% endfor %}
   </ul>
   {% endif %}

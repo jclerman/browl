@@ -21,7 +21,7 @@ from typing import Any
 import httpx2
 import jpype
 
-from browl import axioms, owlapi
+from browl import axioms, owl, owlapi
 from browl.fuseki import UNION_FROM, FusekiClient
 
 ROBOT_JAR = Path(__file__).parents[2] / ".cache" / "robot.jar"
@@ -37,7 +37,7 @@ def summary(values: list[float]) -> dict[str, float]:
     }
 
 
-def load_whole(path: str, sample: int, extra: list[str]) -> tuple[list[str], dict[str, list[axioms.Axiom]]]:
+def load_whole(path: str, sample: int, extra: list[str]) -> tuple[list[str], dict[str, list[owl.Axiom]]]:
     """Load the whole ontology; return a sample of its entities and each one's axioms."""
     manager = jpype.JClass("org.semanticweb.owlapi.apibinding.OWLManager").createOWLOntologyManager()
     start = time.perf_counter()
@@ -50,7 +50,7 @@ def load_whole(path: str, sample: int, extra: list[str]) -> tuple[list[str], dic
         for each in [*ontology.getObjectPropertiesInSignature(), *ontology.getDataPropertiesInSignature()]
     )
     iris = [*random.sample(classes, min(sample, len(classes))), *properties[:sample], *extra]
-    return iris, {iri: axioms.render_axioms(axioms.entity_closure(ontology, iri)) for iri in iris}
+    return iris, {iri: axioms.convert_axioms(axioms.entity_closure(ontology, iri)) for iri in iris}
 
 
 async def sample_store(sparql: FusekiClient, dataset: str, sample: int) -> list[str]:
@@ -88,7 +88,7 @@ async def main() -> None:
     clause = UNION_FROM if args.union else ""
     async with httpx2.AsyncClient(base_url=args.url, timeout=600) as http:
         sparql = FusekiClient(http)
-        expected: dict[str, list[axioms.Axiom]] = {}
+        expected: dict[str, list[owl.Axiom]] = {}
         if args.ontology:
             iris, expected = await owlapi.run_java(load_whole, args.ontology, args.sample, args.iri)
         else:
