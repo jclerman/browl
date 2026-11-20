@@ -843,9 +843,13 @@ Tabs (U-28; see [2.9](#29-page-layout)):
     A property's literals come first, by their language's place in the language ranking ([2.7](#27-display-names)),
     then by text; then its IRIs, by text.
   - **Values:** a literal is isolated in `<bdi>`, with its language as `lang` and its base direction, if any, as
-    `dir`, cut to `MAX_LITERAL_CHARS`. An IRI with a page links to it; another `http` or `https` IRI links to itself
-    (`rel="nofollow"`); any other is text. An entity with more than 1,000 values (`MAX_ANNOTATIONS`) gets a note
-    instead, as for too many axioms, and a failed query fails only this panel, as the axioms' does (below).
+    `dir`, cut to `MAX_LITERAL_CHARS`. A language tag longer than 35 characters (`MAX_LANGUAGE_CHARS`, BCP 47's
+    practical limit) isn't given as `lang`, and is shown cut short. An IRI with a page links to it; another `http` or
+    `https` IRI links to itself (`rel="nofollow"`) if it's short enough to show whole (`MAX_IRI_CHARS`), as a cut
+    one could hide where it goes; any other is text.
+  - **Limits:** an entity with more than 1,000 values (`MAX_ANNOTATIONS`), or whose values come to more than 4 Mi
+    characters as Fuseki sends them (`MAX_ANNOTATIONS_CHARS`, so huge values can't exhaust the app's memory), gets a
+    note instead, as for too many axioms. A failed query fails only this panel, as the axioms' does (below).
 - **Logical-axioms panel:** grouped by axiom kind under familiar section names (SubClass Of, Equivalent To, …), one
   Manchester-syntax axiom per line. Empty groups are omitted.
   - **Classes:** SubClass Of (named parents first, then class expressions), Equivalent To (equivalent classes from the

@@ -8,7 +8,16 @@ import httpx2
 import pytest
 
 from browl import fuseki
-from browl.fuseki import END_VARIABLE, NTRIPLES, TSV, FusekiClient, SelectResult, SparqlError, SparqlTimeoutError
+from browl.fuseki import (
+    END_VARIABLE,
+    NTRIPLES,
+    TSV,
+    FusekiClient,
+    ResultTooLargeError,
+    SelectResult,
+    SparqlError,
+    SparqlTimeoutError,
+)
 from browl.rdf import IRI, RDF_LANG_STRING, XSD, Literal
 
 pytestmark = pytest.mark.anyio
@@ -115,6 +124,17 @@ async def test_select_stream() -> None:
         assert [row async for row in stream] == [(IRI("http://example.org/a"),)] * 2
 
 
+async def test_select_size_limit() -> None:
+    """Check that a SELECT result longer than the limit fails, one just within it doesn't, and none means no limit."""
+    chunks = [b"?s\n", f"{A}\n".encode(), f"{A}\n".encode()]
+    size = sum(map(len, chunks))
+    rows = [(IRI("http://example.org/a"),)] * 2
+    assert (await answer(chunks).select("ds", "SELECT", max_chars=size)).rows == rows
+    assert (await answer(chunks).select("ds", "SELECT")).rows == rows
+    with pytest.raises(ResultTooLargeError, match=f"longer than {size - 1} characters"):
+        await answer(chunks).select("ds", "SELECT", max_chars=size - 1)
+
+
 async def test_construct() -> None:
     """Check that a DESCRIBE or CONSTRUCT result comes back as checked N-Triples."""
     body = f"{TRIPLE}\n{TRIPLE}"
@@ -126,7 +146,7 @@ async def test_construct_size_limit() -> None:
     body = f"{TRIPLE}\n{TRIPLE}\n"
     size = len(body.encode())
     assert await answer(body, NTRIPLES).construct("ds", "DESCRIBE", max_bytes=size) == body.encode()
-    with pytest.raises(SparqlError, match=f"larger than {size - 1} bytes"):
+    with pytest.raises(ResultTooLargeError, match=f"larger than {size - 1} bytes"):
         await answer(body, NTRIPLES).construct("ds", "DESCRIBE", max_bytes=size - 1)
 
 

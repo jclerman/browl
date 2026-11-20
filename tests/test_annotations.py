@@ -5,12 +5,13 @@ They check which triples are annotations, their order, and their HTML.
 
 import logging
 import re
+import urllib.parse
 from collections.abc import Iterator
 
 import httpx2
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import browl.annotations
 import browl.overview
@@ -25,6 +26,8 @@ from browl.annotations import (
 from browl.derived import EntityType
 from browl.fuseki import UNION_FROM, FusekiClient, SparqlError
 from browl.jobs import Stage
+from browl.links import EntityLink
+from browl.pages import MAX_IRI_CHARS, MAX_LANGUAGE_CHARS, templates
 from browl.rdf import IRI, OWL, RDF, RDFS, XSD
 from tests.helpers import derived_stage, fuseki_dataset, make_app
 
@@ -187,10 +190,17 @@ def test_json() -> None:
     assert adapter.validate_json(adapter.dump_json(groups)) == groups
 
 
-def answer(body: str) -> FusekiClient:
-    """Return a client whose stubbed Fuseki answers every query with this SELECT result, as TSV."""
+def answer(body: str, queries: list[str] | None = None) -> FusekiClient:
+    """Return a client whose stubbed Fuseki answers every query with this SELECT result, as TSV.
+
+    Args:
+        body: The result.
+        queries: If given, each query is appended to it.
+    """
 
     def fuseki(request: httpx2.Request) -> httpx2.Response:
+        if queries is not None:
+            queries.append(urllib.parse.parse_qs(request.content.decode())["query"][0])
         return httpx2.Response(200, text=body, headers={"Content-Type": "text/tab-separated-values"})
 
     return FusekiClient(httpx2.AsyncClient(transport=httpx2.MockTransport(fuseki), base_url="http://fuseki"))
@@ -204,6 +214,17 @@ async def test_too_many(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(TooManyAnnotationsError):
         await fetch_annotations(answer(f"?property\t?value\n{row}{row}"), "ds", A)
     assert len(await fetch_annotations(answer(f"?property\t?value\n{row}"), "ds", A)) == 1
+
+
+@pytest.mark.anyio
+async def test_too_long(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that annotations longer in all than `MAX_ANNOTATIONS_CHARS` raise, as too many do (DESIGN.md §2.8)."""
+    body = f'?property\t?value\n<{RDFS}comment>\t"{"x" * 100}"\n'
+    monkeypatch.setattr(browl.annotations, "MAX_ANNOTATIONS_CHARS", len(body) - 1)
+    with pytest.raises(TooManyAnnotationsError, match="longer than"):
+        await fetch_annotations(answer(body), "ds", A)
+    monkeypatch.setattr(browl.annotations, "MAX_ANNOTATIONS_CHARS", len(body))
+    assert len(await fetch_annotations(answer(body), "ds", A)) == 1
 
 
 @pytest.mark.anyio
@@ -241,3 +262,42 @@ def test_too_many_page(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptur
     assert '<p class="note">None.</p>' in page  # the axioms panel
     [record] = caplog.records
     assert record.getMessage() == f"Not showing the annotations of {A}: the entity has more than 1000 annotation values"
+
+
+def rendered(value: IRIValue | LiteralValue, links: dict[str, EntityLink] | None = None) -> str:
+    """Return a value's HTML, as the panel renders it."""
+    template = templates.env.from_string(
+        '{% from "annotations.html" import annotation_value %}{{ annotation_value(value, links) }}'
+    )
+    return template.render(value=value, links=links or {})
+
+
+def test_long_iri_not_linked() -> None:
+    """Check that a web IRI too long to show whole is text, as its cut text could hide where a link goes."""
+    fits = f"https://example.org/{'a' * (MAX_IRI_CHARS - 20)}"
+    assert len(fits) == MAX_IRI_CHARS
+    assert rendered(IRIValue(iri=IRI(fits))) == f'<a href="{fits}" rel="nofollow"><code dir="ltr">{fits}</code></a>'
+    long = f"https://trusted.example.{'a' * MAX_IRI_CHARS}.evil.example/"
+    assert rendered(IRIValue(iri=IRI(long))) == f'<code dir="ltr">{long[: MAX_IRI_CHARS - 1]}…</code>'
+
+
+def test_long_language_tag() -> None:
+    """Check that a language tag longer than `MAX_LANGUAGE_CHARS` isn't given as `lang`, and is shown cut short."""
+    fits = "-".join(["en"] + ["abcdefgh"] * 3)  # 2 + 3 * 9 = 29 characters
+    assert (
+        rendered(literal("x", fits)) == f'<bdi class="value" lang="{fits}">x</bdi> <small class="lang">{fits}</small>'
+    )
+    long = "-".join(["en"] + ["abcdefgh"] * 500)
+    shown = f"{long[: MAX_LANGUAGE_CHARS - 1]}…"
+    assert rendered(literal("x", long)) == f'<bdi class="value">x</bdi> <small class="lang">{shown}</small>'
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [{"language": "EN"}, {"language": "en us"}, {"language": "en", "direction": "up"}],
+    ids=["upper-case-tag", "not-a-tag", "not-a-direction"],
+)
+def test_literal_checked(fields: dict[str, str]) -> None:
+    """Check that a literal value refuses a language tag that isn't a lowercase tag, and an unknown base direction."""
+    with pytest.raises(ValidationError):
+        LiteralValue(lexical="x", datatype=IRI(LANG_STRING), **fields)

@@ -8,11 +8,11 @@ groups their values by property, in the order the page shows them. Templates mak
 from collections.abc import Callable, Iterable, Sequence
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from browl import rdf
 from browl.axioms import filled_query
-from browl.fuseki import FusekiClient, SparqlError
+from browl.fuseki import FusekiClient, ResultTooLargeError, SparqlError
 from browl.names import language_rank
 from browl.precache.core import PREFIXES, sparql_file
 from browl.rdf import IRI
@@ -23,9 +23,13 @@ MAX_ANNOTATIONS = 1_000
 """The most annotation values an entity may have for its page to show them: more, and the page says so, as for
 `browl.axioms.MAX_AXIOMS`."""
 
+MAX_ANNOTATIONS_CHARS = 4 * 2**20
+"""The most characters an entity's annotations may hold in all, as Fuseki sends them, for its page to show them: room
+for `MAX_ANNOTATIONS` values well past what the page shows of each, so huge values can't exhaust the app's memory."""
+
 
 class TooManyAnnotationsError(Exception):
-    """An entity has more than `MAX_ANNOTATIONS` annotation values."""
+    """An entity has more than `MAX_ANNOTATIONS` annotation values, or they're longer than `MAX_ANNOTATIONS_CHARS`."""
 
 
 class IRIValue(BaseModel):
@@ -56,8 +60,8 @@ class LiteralValue(BaseModel):
     type: Literal["literal"] = "literal"
     lexical: str
     datatype: IRI
-    language: str | None = None
-    direction: str | None = None
+    language: Annotated[str, StringConstraints(pattern=r"^[a-z]+(-[a-z0-9]+)*$")] | None = None
+    direction: Literal["ltr", "rtl"] | None = None
 
 
 type AnnotationValue = Annotated[IRIValue | LiteralValue, Field(discriminator="type")]
@@ -91,10 +95,16 @@ async def fetch_annotations(
     Raises:
         SparqlError: The query failed, or returned something other than an IRI property and an IRI or literal value.
         RDFSyntaxError: The IRI isn't valid.
-        TooManyAnnotationsError: The entity has more than `MAX_ANNOTATIONS` annotation values.
+        TooManyAnnotationsError: The entity has more than `MAX_ANNOTATIONS` annotation values, or they're longer than
+            `MAX_ANNOTATIONS_CHARS`.
     """
     query = filled_query(_ANNOTATIONS, dataset_clause, {"$entity": f"<{IRI(iri)}>"})
-    result = await sparql.select(dataset, f"{query}LIMIT {MAX_ANNOTATIONS + 1}\n")
+    try:
+        result = await sparql.select(dataset, f"{query}LIMIT {MAX_ANNOTATIONS + 1}\n", max_chars=MAX_ANNOTATIONS_CHARS)
+    except ResultTooLargeError as error:
+        raise TooManyAnnotationsError(
+            f"the entity's annotations are longer than {MAX_ANNOTATIONS_CHARS} characters"
+        ) from error
     if len(result.rows) > MAX_ANNOTATIONS:
         raise TooManyAnnotationsError(f"the entity has more than {MAX_ANNOTATIONS} annotation values")
     pairs: list[tuple[IRI, AnnotationValue]] = []
@@ -104,9 +114,9 @@ async def fetch_annotations(
         if isinstance(value, IRI):
             pairs.append((property_, IRIValue(iri=value)))
         elif isinstance(value, rdf.Literal):
-            literal = LiteralValue(
-                lexical=value.value, datatype=IRI(value.datatype), language=value.language, direction=value.direction
-            )
+            # Validated, as `rdf.Literal` types its (checked) direction as any `str`.
+            fields = {"lexical": value.value, "datatype": value.datatype, "language": value.language}
+            literal = LiteralValue.model_validate(fields | {"direction": value.direction})
             pairs.append((property_, literal))
         else:
             raise SparqlError(f"an annotation value that isn't an IRI or a literal: {value!r:.200}")
