@@ -114,10 +114,10 @@ def _manchester_spaced(tokens: Iterable[Token]) -> list[Token]:
     """Return tokens with their spacing: one space between tokens, but none inside brackets or before a comma."""
     result: list[Token] = []
     for token in tokens:
-        after = result[-1] if result else None
+        previous = result[-1] if result else None
         space = not (
-            after is None
-            or (after.kind == TokenKind.PUNCTUATION and after.text in _NO_SPACE_AFTER)
+            previous is None
+            or (previous.kind == TokenKind.PUNCTUATION and previous.text in _NO_SPACE_AFTER)
             or (token.kind == TokenKind.PUNCTUATION and token.text in _NO_SPACE_BEFORE)
         )
         result.append(replace(token, space=space) if space != token.space else token)
