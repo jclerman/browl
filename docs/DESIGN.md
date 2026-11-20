@@ -880,10 +880,13 @@ axioms of each.
    | Uberon (454 entities) | 3.1 / 4.0 ms | 1.0 / 1.7 ms | 91–117 ms: GO_0065007, in 2.6 K class expressions |
    | NCBITaxon (333 entities) | 3.2 / 4.0 ms | 1.1 / 1.5 ms | 44–57 ms: NCBITaxon_500585, 47.8 K subclasses |
 
-   Against the N-3 target of 300 ms. Walking back from the entity costs in proportion to the class expressions it's in
-   and its subclasses, so heavily used classes take tens of milliseconds. The walk never steps back over
-   `owl:onProperty`, since general class axioms that mention a property are its usage (P-27), not its own axioms. If
-   heavily used classes become too slow, the roots that reach each IRI can be listed at load time instead
+   Against the N-3 target of 300 ms. A sweep of every Uberon and HPO (2026-09-01) entity, and 4.3 K NCBITaxon ones,
+   found one page over the target: HPO's PATO_0000460 ("abnormal"), in 6.3 K class expressions, takes 611 ms, almost
+   all of it fetching. The next slowest are those in the table. The largest page had 169 IRIs and 93 axioms
+   (Uberon's NCBITaxon_9606), far under the caps below. Walking back from the entity costs in proportion to the class
+   expressions it's in and its subclasses, so heavily used classes take tens of milliseconds, or more. The walk never
+   steps back over `owl:onProperty`, since general class axioms that mention a property are its usage (P-27), not its
+   own axioms. For heavily used classes, the roots that reach each IRI can be listed at load time instead
    ([P-15 findings](../research/P-15/README.md)).
 
 Entity names become links like this:

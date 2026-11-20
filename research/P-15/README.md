@@ -61,6 +61,14 @@ ontology; "whole" runs load it for the comparison above, in the same JVM.
     next two (43.7 K and 36.2 K subclasses) take 31–36 ms.
 - **`part_of` (BFO_0000050) takes 5–6 ms**, though it's in 21,142 restrictions in Uberon: the lookup never steps back
   over `owl:onProperty` (below).
+- **A sweep of every entity** (Uberon, 27.4 K; HPO 2026-09-01, 33.2 K; NCBITaxon, 4.3 K sampled plus the
+  most-referenced and top-level ones), timing the heaviest one at a time (median of 3, after a warm-up):
+  - one page is over the N-3 target: HPO's PATO_0000460 ("abnormal"), in 6,268 class expressions, 611 ms, 606 of
+    them fetching. Every other HPO page took 12 ms or less;
+  - the slowest others: GO_0065007 107 ms, NCBITaxon_9606 70 ms (Uberon); NCBITaxon_500585 68 ms;
+  - the largest fragments, against the per-page caps (5,000 IRIs, 1,000 axioms): 169 IRIs and 93 axioms
+    (NCBITaxon_9606, in Uberon: taxon constraints); HPO's largest, 57 and 40 (CHEBI_17650); NCBITaxon's, 15 and 1.
+    p99 was 39 IRIs and 13 axioms (Uberon) and 31 and 7 (HPO).
 - **The dataset clause** for imports (`UNION_FROM`) cost nothing measurable for most pages, but about half again for
   the slowest. Pages add it only when the ontology has imports.
 
