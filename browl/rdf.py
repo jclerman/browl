@@ -78,7 +78,13 @@ class RDFSyntaxError(ValueError):
 
 
 class _CheckedStr(str):
-    """A string that must match a pattern, checked whenever one is made, including by pydantic."""
+    """A string that must match a pattern, checked whenever one is made, inside pydantic models or not.
+
+    A `str` subclass, not an `Annotated[str, StringConstraints(pattern=...)]` alias, because most are made outside
+    pydantic, by the SPARQL and N-Triples parsers, and code tells the kinds of term apart by type (`Term`,
+    `isinstance(value, IRI)`); an alias is a plain `str` at runtime, with no check on construction and no type of its
+    own. `__get_pydantic_core_schema__`, pydantic's hook for custom types, gives models' fields the same check.
+    """
 
     __slots__ = ()
     _pattern: ClassVar[re.Pattern[str]]
@@ -95,8 +101,13 @@ class _CheckedStr(str):
 
     @classmethod
     def __get_pydantic_core_schema__(cls, source: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
-        """Validate as a string, then make one of these from it, so pydantic models' fields get the same check."""
-        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
+        """Make one of these from a string, so pydantic models' fields get the same check; take one as it is."""
+        from_str = core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
+
+        def checked(value: Any, handler: core_schema.ValidatorFunctionWrapHandler) -> Any:
+            return value if isinstance(value, cls) else handler(value)
+
+        return core_schema.no_info_wrap_validator_function(checked, from_str)
 
 
 class IRI(_CheckedStr):

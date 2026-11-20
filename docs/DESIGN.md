@@ -145,8 +145,8 @@ Tooling and code conventions are in [`CODING-STANDARDS.md`](CODING-STANDARDS.md)
    │                                                    │
    │  ┌──────────────────────────────────────────────┐  │
    │  │ in-process JVM (JPype, robot.jar)            │  │
-   │  │ OWLAPI: Manchester rendering of the          │  │
-   │  │ triples fetched for one page                 │  │
+   │  │ OWLAPI: parses the triples fetched for one   │  │
+   │  │ page; browl renders the axioms in Python     │  │
    │  └──────────────────────────────────────────────┘  │
    │  subprocesses: Jena's TDB2 loader, riot            │
    └──────┬───────────────────────┬─────────────────────┘
@@ -227,7 +227,7 @@ and without `SANDBOX_SOCKET`, ROBOT and the OFN lister run beside it, unsandboxe
 | Configuration | pydantic-settings | Defaults in code; environment variables override. _(Q13)_ |
 | Ontology store | Apache Jena Fuseki with TDB2, in its own container | Queried with SPARQL over HTTP. Jena 6 needs Java 21. _(S-4)_ |
 | SPARQL client | HTTPX2 (async) | Pydantic's maintained continuation of HTTPX, which Starlette's test client also prefers. Plain SPARQL protocol; results read as TSV, fragments as N-Triples. |
-| Manchester rendering | OWLAPI's Manchester syntax renderer, from the classes bundled in `robot.jar` | Renders per-page fragments; see [2.8](#28-entity-pages). _(post-log)_ |
+| Manchester rendering | browl's own, in Python, from a typed tree of the axioms the OWLAPI parses (`browl.owl`) | The OWLAPI, from the classes bundled in `robot.jar`, parses per-page fragments; see [2.8](#28-entity-pages). _(post-log; P-15b)_ |
 | Python ↔ Java bridge | JPype | One JVM per process, started at app startup. _(post-log)_ |
 | Derived store and search (v1) | SQLite (Python standard library), queried in a thread pool | FTS5 later for any-word search. _(Q8, Q11)_ |
 | Reasoning | ROBOT (Java), as a subprocess | ELK and HermiT. |
@@ -841,13 +841,14 @@ Tabs (U-28; see [2.9](#29-page-layout)):
 content as typed data (Pydantic models), with no HTML in it: annotations grouped by property, axioms grouped by kind,
 direct parents and children, a page of the Usage tab. Then a Jinja template renders that data. The HTML pages are built
 this way from v1, so the JSON API (U-42) can return the same models without rework ([2.13](#213-url-space-for-the-services-own-pages)).
-A JSON axiom carries its Manchester text with full IRIs (step 1 below), the entities it mentions with their display
-names, and the axiom kind; steps 2 and 3, which make HTML, belong to the template layer. `browl.axioms.Axiom` is that
-model; P-16 uses its operands for frame-style display ("SubClass Of  Organ").
+A JSON axiom is its tree of nodes (`browl.owl`, below), which carries its Manchester text with full IRIs; P-33 adds
+the display names of the entities it mentions. Making HTML belongs to the template layer. P-16 uses an axiom's named
+roles (`SubClassOf.sub`, `SubClassOf.super`, …) for frame-style display ("SubClass Of  Organ").
 
-**Manchester rendering** _(post-log; supersedes Q6's hand-written renderer)_: the OWLAPI's own Manchester syntax
-renderer, the one Protégé uses, covers all of OWL 2. It renders from a fragment of the ontology fetched for each page
-([S-4 findings](../research/S-4/README.md), [P-15 findings](../research/P-15/README.md)).
+**Manchester rendering** _(post-log; supersedes Q6's hand-written renderer; P-15b reverses P-15's choice of the
+OWLAPI's renderer for display)_: the OWLAPI parses a fragment of the ontology fetched for each page
+([S-4 findings](../research/S-4/README.md), [P-15 findings](../research/P-15/README.md)); browl converts the entity's
+axioms into a typed tree and renders that in Python ([P-15b findings](../research/P-15b/README.md)).
 
 An entity's axioms are those the OWLAPI lists for it (`getAxioms(entity)`, which includes the n-ary disjointness,
 equivalence and difference axioms that list it), and for a class its `HasKey` axioms and the general class axioms
@@ -889,34 +890,80 @@ axioms of each.
    own axioms. For heavily used classes, the roots that reach each IRI can be listed at load time instead
    ([P-15 findings](../research/P-15/README.md)).
 
-Entity names become links like this:
+   P-15b's tree (below) costs 1.7–1.8 / 2.5–3.1 ms to parse and convert at p50 / p95 on the same stores, about 0.3–0.7
+   ms more than P-15's renderer; the largest page (93 axioms) 21 ms. In that session NCBITaxon_500585 fetched in
+   264–318 ms, on `main` too, not 44–57: a fetch to look at again with the lookup of blank-node roots
+   ([P-15b findings](../research/P-15b/README.md)).
 
-1. The renderer is given the OWLAPI's `DefaultPrefixManager` with no prefixes as its short-form provider, so every
-   entity is rendered as its full IRI, `<…>`. The renderer breaks lines in long expressions, so the text is joined
-   into one line, outside literals (`browl.manchester.one_line`).
-2. Python splits the text into segments (`browl.manchester.segments`): IRIs, quoted literals, keywords, and the text
-   between; IRIs and keywords are found only outside literals. The template (`templates/axioms.html`) renders each:
-   an IRI that is a declared entity as its link (`entity_link`, 2.9), labeled with its display name
-   ([2.7](#27-display-names)); any other IRI as text, in `<code dir="ltr">`: one in a standard vocabulary (`xsd:`,
-   `rdf:`, `rdfs:`, `owl:`), such as a built-in datatype, by its prefixed name (`xsd:integer`), the rest in full; a
-   literal as text, isolated in `<bdi>`. Only the axiom's own IRIs (`Axiom.iris`, from the OWLAPI's signature of the
-   axiom) are taken for IRIs; any other `<…>` is plain text.
-   Autoescaping does all the escaping: nothing is marked safe. Literals can be huge, as labels can (2.9), so a literal,
-   or other plain text, is cut to 1,000 characters (`MAX_LITERAL_CHARS`), and an IRI shown as text to 200
-   (`MAX_IRI_CHARS`), with the rest elided.
-3. Manchester keywords are wrapped in `<span class="keyword">` for light styling ([2.9](#29-page-layout)). They're the
-   words of the OWLAPI's own keyword list (`ManchesterOWLSyntax`), copied into `browl.manchester.KEYWORDS` so the
-   template layer needs no JVM; a test checks the copy.
-4. A `HasKey` axiom's text is built from its operands (`<Person> HasKey <hasSSN>, <ssn>`), since OWLAPI 4's renderer
-   writes its properties with nothing between them.
-5. An axiom that renders as an empty string (OWLAPI 4 does this for `DatatypeDefinition`) is shown in functional
-   syntax instead. So is one with an ill-typed literal that OWLAPI 4 writes unquoted (`xsd:integer`, `xsd:decimal`,
-   `xsd:float`, `xsd:boolean`), whose text could otherwise pass for IRIs and keywords; functional syntax quotes every
-   literal.
+**Axioms as a typed tree** (P-15b): an axiom is a tree of frozen Pydantic models (`browl.owl`), not text.
 
-No Java code is needed, and no Python code runs inside the renderer. Spike S-1 also tried the earlier plan, a Python
-short-form provider returning placeholder tokens: it worked but was slower, and missed IRIs the renderer prints without
-asking the provider ([S-1 findings](../research/S-1/README.md)).
+- **Node types** follow the OWL 2 structural specification's names (`SubClassOf`, `ObjectSomeValuesFrom`, …), one
+  class for each kind of axiom, class expression and data range, plus leaves: `Entity` (kind and IRI), `Literal`
+  (lexical form, datatype, language tag), `AnonymousIndividual`, and `IRIReference` (an annotation property's domain
+  or range). OWLAPI's `SubPropertyChainOf` is a kind of its own, as P-16 shows chains apart. An axiom of any other
+  kind, such as a SWRL rule, is an `OtherAxiom` holding its functional syntax as plain text, without links; pages
+  don't fetch rules.
+- **Named roles:** axioms' fields say what each operand is (`ClassAssertion.individual`, `ClassAssertion.class_`,
+  a property assertion's `subject`, `property` and `object`), so no operand order needs documenting.
+- **JSON:** each node has a `type` field (`NodeType`) that discriminates the unions of nodes (`ClassExpression`,
+  `DataRange`, `AnyAxiom`, …), so nodes round-trip through JSON (U-42). An axiom's JSON also holds its Manchester text,
+  `manchester`. A field holding axioms is typed `AnyAxiom`, not `Axiom`: Pydantic serializes by the declared type, so
+  `Axiom` would drop the subclass's fields.
+- **A class hierarchy, with rendering high in it:** a concrete class declares its fields and its keyword or Manchester
+  layout. `Node` walks the fields (the IRIs an axiom mentions, `Node.iris`), adds parentheses, and renders tokens from
+  the layout. Intermediate bases capture the shared shapes: intersections and unions, complements, enumerations,
+  restrictions, cardinalities, n-ary axioms (a pair `a DisjointWith b`, else a list `DisjointClasses: a, b, c`),
+  sub-property axioms, domains and ranges, property characteristics, and property assertions.
+- **Building the tree:** `browl.axioms` converts the OWLAPI's objects on the Java thread, choosing a Python function
+  by each object's Java class, cached per class. Sets are sorted in Java, as the OWLAPI's renderer sorts them. The
+  OWLAPI labels anonymous individuals afresh on every parse (`_:genid…`), so a page's are labelled again, `_:b1`,
+  `_:b2`, …, in order of appearance once its axioms are sorted without labels, and its text and order stay the same
+  from one view to the next (but for axioms that differ only in their labels, whose order can still swap). A Java
+  visitor through `jpype.JProxy` was rejected: a proxy's overloads of `visit` all reach one Python method, which would
+  still dispatch on the class, and each call back from Java costs more.
+
+**Rendering:** a node renders as a stream of typed tokens (`browl.owl.Token`): keyword, IRI, literal, blank node,
+punctuation, other text (a cardinality, a facet such as `>=`), or an `OtherAxiom`'s functional syntax (isolated
+like a literal in HTML, as it holds the ontology's text), each knowing whether a space comes before it.
+
+1. An axiom's Manchester text (`Axiom.manchester`) is its tokens (`Node.manchester_tokens`) joined: one line, every
+   entity as its full IRI, `<…>`. It matches the OWLAPI's Manchester renderer, the one Protégé uses, for every logical
+   axiom of Uberon and NCBITaxon and of a test ontology holding every kind of OWL 2 axiom and expression
+   (`tests/test_axioms.py`), with these differences by design:
+   - spacing: single spaces, and none before a comma or closing parenthesis (the OWLAPI writes `{a , b}`);
+   - a `HasKey` axiom's properties separated by commas (`<Person> HasKey <hasSSN>, <ssn>`), where OWLAPI 4 writes
+     nothing between the object and the data properties;
+   - a `DatatypeDefinition` written `<Adulthood> EquivalentTo <xsd:integer>[>= 18]`, which OWLAPI 4 renders as
+     nothing;
+   - a literal whose lexical form isn't valid for its datatype is quoted, with its datatype, though the OWLAPI writes
+     those of `xsd:integer`, `xsd:decimal`, `xsd:float` and `xsd:boolean` unquoted whatever their text;
+   - an `OtherAxiom` in functional syntax.
+
+   Parentheses follow the OWLAPI's: a class expression nested in another gets them unless it's a class (`<A> and
+   (<p> some <B>)`, `not (<A>)`), and a data range in a complement unless it's a datatype; an axiom's operands never
+   do, so `<A> or <B> SubClassOf <C>` reads as the axiom keywords binding loosest.
+2. The template (`templates/axioms.html`) renders the same tokens as HTML, so spacing and parentheses are decided in
+   one place, and links, literals and keywords come from the tree: no regex runs over ontology text. An IRI token
+   with a page becomes its link (`entity_link`, 2.9), labeled with its display name
+   ([2.7](#27-display-names)); any other is text, in `<code dir="ltr">`: one in a standard vocabulary (`xsd:`,
+   `rdf:`, `rdfs:`, `owl:`), such as a built-in datatype, by its prefixed name (`xsd:integer`), the rest in full. A
+   literal is one token, isolated in `<bdi>`; a typed one's datatype is a separate IRI token, so a custom datatype
+   links to its page. Keywords are wrapped in `<span class="keyword">` for light styling
+   ([2.9](#29-page-layout)); a test checks each against the OWLAPI's own list (`ManchesterOWLSyntax`). Autoescaping
+   does all the escaping: nothing is marked safe. Literals can be huge, as labels can (2.9), so a literal, or other
+   text, is cut to 1,000 characters (`MAX_LITERAL_CHARS`), and an IRI shown as text to 200 (`MAX_IRI_CHARS`), with
+   the rest elided.
+3. The models hold no HTML.
+
+**Why not the OWLAPI's renderer** (P-15, reversed by P-15b): P-15 rendered each axiom with the OWLAPI's Manchester
+renderer and parsed the text back for IRIs, literals and keywords. PR #95's review traced problems to that
+re-parsing: ill-typed literals printed bare, which could forge links; quadratic regexes; `HasKey` properties run
+together; and an operand order to document for each kind of axiom. Each was fixed or worked around, but the approach
+stayed fragile. Carrying the OWLAPI's Java objects past the render function wasn't an option: they're tied to the
+single Java thread and the page's ontology manager, and can't go into JSON (U-42), the page cache (2.10), or another
+process (P-35). A Java subclass of the renderer that recorded spans was rejected too: it needs compiled Java, couples
+browl to OWLAPI 4's internals, and gives no control over the renderer's quirks. The OWLAPI still parses the fetched
+triples, and is the reference the tests compare text with.
 
 **Too many axioms** (from P-15's review): until the page cache (2.10) keeps a page's work from being repeated on every
 view, an entity whose fragment mentions more than 5,000 IRIs (`MAX_FRAGMENT_IRIS`), such as a member of a huge
@@ -924,9 +971,16 @@ view, an entity whose fragment mentions more than 5,000 IRIs (`MAX_FRAGMENT_IRIS
 to show, not its axioms. The first is checked before the types query, the second before rendering, so neither the
 fetch nor the renderer does that work. Both are far above what the entities P-15 measured need.
 
+**Too deep** (from P-15b's review): converting, rendering and JSON all recurse through an axiom's nodes, and
+pydantic-core's JSON parser stops at about 200 levels (two per node in a list). An axiom whose nodes nest more than
+50 deep (`MAX_DEPTH`, the axiom being depth 1) fails conversion with a `FragmentError`, so only the panel fails, as
+below, and every tree browl makes round-trips through JSON. Ontologies seldom nest more than a few levels.
+
 **When the axioms can't be read** (from P-4's review): a fragment the OWLAPI can't parse, or any other Java exception
 while reading or rendering it (both `FragmentError`), or a query that fails, fails only the axioms panel. The full
 error is logged, with the OWLAPI's parser log and stack trace, and the panel says only that the axioms can't be shown.
+An axiom holding a value its node refuses (an IRI the OWLAPI accepts but browl doesn't, such as a relative one) is
+logged and shown in functional syntax as an `OtherAxiom`, without links, so the entity's other axioms still show.
 A stored IRI with an escaped illegal character, which Jena accepts and writes back escaped, fails the fetch already:
 browl's Fuseki client checks every IRI it reads (2.14).
 
@@ -1268,7 +1322,8 @@ go into this document.
 | P-34 | Browser tests with Playwright: a live-server fixture; the hash-IRI script, htmx status polling, no-JS fallbacks, and what a browser shows for an upload refused early | | P-13 | Done | [#88](https://github.com/jclerman/browl/issues/88) |
 | P-14 | Base templates and page frame: navigation bar, page header, tab component, stylesheet and themes; links rendered from display names; IRI `<details>` | U-4, U-5, U-6, U-17, U-27, U-28, U-29 | P-11, P-13 | Done | [#27](https://github.com/jclerman/browl/issues/27) (sub-issues [#28](https://github.com/jclerman/browl/issues/28), [#33](https://github.com/jclerman/browl/issues/33), [#34](https://github.com/jclerman/browl/issues/34)) |
 | P-15 | Manchester rendering via the OWLAPI from fetched fragments, including n-ary disjointness and general class axioms; link substitution and keyword styling, in the template layer, not the renderer (2.8) | U-3 | S-1, S-4, P-14 | Done | [#36](https://github.com/jclerman/browl/issues/36) |
-| P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout; panel data built apart from its HTML (2.8) | U-3, U-9, U-30, U-31, U-32 | P-12, P-15 | To do | [#37](https://github.com/jclerman/browl/issues/37) (sub-issues [#29](https://github.com/jclerman/browl/issues/29), [#38](https://github.com/jclerman/browl/issues/38), [#39](https://github.com/jclerman/browl/issues/39)) |
+| P-15b | Axioms as a typed tree of Pydantic nodes, rendered to Manchester syntax in Python; tokens for templates, so no regex runs over ontology text (2.8) | U-3 | P-15 | Done | [#98](https://github.com/jclerman/browl/issues/98) |
+| P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout; panel data built apart from its HTML (2.8) | U-3, U-9, U-30, U-31, U-32 | P-12, P-15b | To do | [#37](https://github.com/jclerman/browl/issues/37) (sub-issues [#29](https://github.com/jclerman/browl/issues/29), [#38](https://github.com/jclerman/browl/issues/38), [#39](https://github.com/jclerman/browl/issues/39)) |
 | P-17 | Ontology home page, with the dropped-imports warning and the triple counts the job state keeps (P-8); link the ontology and version IRIs only if `http` or `https` (`browl.derived.Meta`) | U-1 | P-14 | To do | [#30](https://github.com/jclerman/browl/issues/30) |
 | P-18 | Hierarchy trees with lazy loading (htmx) and keyboard support | U-7, U-17 | P-12, P-14 | To do | [#31](https://github.com/jclerman/browl/issues/31) |
 | P-27 | Usage tab on entity pages, from Fuseki, with paging (first decide: references inside class expressions; counts on first view or up front; any `usage` table) | U-26 | P-9, P-16, S-4 | To do | [#41](https://github.com/jclerman/browl/issues/41) |

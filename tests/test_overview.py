@@ -10,10 +10,12 @@ import httpx2
 import jpype
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import TypeAdapter
 
 import browl.axioms
 import browl.lookup
 import browl.overview
+from browl import owl
 from browl.axioms import fetch_fragment
 from browl.derived import EntityType
 from browl.fuseki import UNION_FROM, FusekiClient, SparqlError
@@ -90,16 +92,16 @@ def test_fragment_error(client: TestClient, monkeypatch: pytest.MonkeyPatch, cap
 @pytest.mark.jvm
 @pytest.mark.usefixtures("jvm")
 def test_java_error(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    """Check that any other Java exception, here from the renderer, fails only the axioms panel, and is logged."""
+    """Check that any other Java exception, here from the conversion, fails only the axioms panel, and is logged."""
 
     async def fetched(*args: object) -> bytes:
         return f"<{IRI}> <{RDF}type> <{OWL}Class> .\n".encode()
 
     def fail(axioms: object) -> None:
-        raise jpype.JClass("java.lang.IllegalStateException")("the renderer broke")
+        raise jpype.JClass("java.lang.IllegalStateException")("the conversion broke")
 
     monkeypatch.setattr(browl.overview, "fetch_fragment", fetched)
-    monkeypatch.setattr(browl.axioms, "render_axioms", fail)
+    monkeypatch.setattr(browl.axioms, "convert_axioms", fail)
     with caplog.at_level(logging.ERROR, logger="browl.overview"):
         page = client.get("/_browl/hash", params=PANEL)
     assert page.status_code == 200
@@ -108,7 +110,7 @@ def test_java_error(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog:
     [record] = caplog.records
     assert record.exc_info is not None
     assert "FragmentError: the OWLAPI failed on the fragment" in caplog.text
-    assert "IllegalStateException: the renderer broke" in caplog.text
+    assert "IllegalStateException: the conversion broke" in caplog.text
 
 
 def test_rdf_syntax_error(
@@ -271,3 +273,11 @@ def test_too_many(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPa
     assert len(queries) == 2  # not the types query
     [record] = caplog.records
     assert record.getMessage() == f"Not showing the axioms of {IRI}: the fragment mentions 3 IRIs, more than 2"
+
+
+def test_panel_json() -> None:
+    """Check that a panel's axioms serialize with their fields, which typing them as the base `Axiom` would drop."""
+    a, b = (owl.Entity(kind=owl.EntityKind.CLASS, iri=f"{IRI}{name}") for name in "12")
+    panel = browl.overview.AxiomsPanel(axioms=[owl.SubClassOf(sub=a, super=b)], links={})
+    adapter = TypeAdapter(browl.overview.AxiomsPanel)
+    assert adapter.validate_json(adapter.dump_json(panel)) == panel

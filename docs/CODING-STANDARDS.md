@@ -57,6 +57,8 @@ instructions specific to coding agents. Requirements and architecture are in [`D
   `live_server` fixture, which serves an app on a free local port, since a browser can't reach the `TestClient`. Hold or
   stub responses with `page.route`, so tests of ordering or failures don't depend on timing. `make test` installs the
   headless Chromium (`make browser`); these tests are skipped or fail without it, like those above.
+- **Doctests:** examples in the package's docstrings run as tests (`--doctest-modules`; `testpaths` is `tests` and
+  `browl`, so `research/`, whose scripts run when imported, isn't collected). Keep them short and working.
 - **Coverage:** CI fails below 90% line coverage of the `browl` package.
 
 ## Documentation

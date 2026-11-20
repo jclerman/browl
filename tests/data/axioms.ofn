@@ -81,6 +81,7 @@ SubClassOf(:Person DataSomeValuesFrom(:age DatatypeRestriction(xsd:integer xsd:m
 SubClassOf(:Person DataAllValuesFrom(:name DataUnionOf(xsd:string DataComplementOf(xsd:integer))))
 SubClassOf(:Person DataHasValue(:nickname "see <http://example.org/axioms#Dog> & \"friends\""@en))
 SubClassOf(:Person DataMinCardinality(1 :name xsd:string))
+SubClassOf(:Person DataHasValue(:name "B"^^:Grade))
 SubClassOf(:Person DataMaxCardinality(1 :ssn))
 SubClassOf(:Person DataExactCardinality(1 :age DataIntersectionOf(xsd:integer DataOneOf("1"^^xsd:integer "2"^^xsd:integer))))
 SubClassOf(:Pet ObjectOneOf(:rex :tom))
