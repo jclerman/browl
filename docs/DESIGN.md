@@ -842,33 +842,96 @@ content as typed data (Pydantic models), with no HTML in it: annotations grouped
 direct parents and children, a page of the Usage tab. Then a Jinja template renders that data. The HTML pages are built
 this way from v1, so the JSON API (U-42) can return the same models without rework ([2.13](#213-url-space-for-the-services-own-pages)).
 A JSON axiom carries its Manchester text with full IRIs (step 1 below), the entities it mentions with their display
-names, and the axiom kind; steps 2 and 3, which make HTML, belong to the template layer.
+names, and the axiom kind; steps 2 and 3, which make HTML, belong to the template layer. `browl.axioms.Axiom` is that
+model; P-16 uses its operands for frame-style display ("SubClass Of  Organ").
 
 **Manchester rendering** _(post-log; supersedes Q6's hand-written renderer)_: the OWLAPI's own Manchester syntax
 renderer, the one Protégé uses, covers all of OWL 2. It renders from a fragment of the ontology fetched for each page
-([S-4 findings](../research/S-4/README.md)):
+([S-4 findings](../research/S-4/README.md), [P-15 findings](../research/P-15/README.md)).
 
-1. Fetch the entity's triples with their blank-node closure (`DESCRIBE`), the triples where it is the object of
-   `owl:disjointWith` or `owl:equivalentClass`, and the types of every IRI they mention.
-2. The OWLAPI parses that fragment as a small ontology. For 300 of 300 random Uberon classes, the logical axioms
-   rendered from it were identical to those rendered from the full ontology. Not yet covered: n-ary
-   `owl:AllDisjointClasses` axioms and general class axioms that mention the entity, which need one more lookup (P-15).
-3. Fetching takes 4.8 ms at p50 and 6.4 ms at p95, parsing and rendering 2.0 and 3.5 ms: about 7–10 ms per page,
-   against the N-3 target of 300 ms.
+An entity's axioms are those the OWLAPI lists for it (`getAxioms(entity)`, which includes the n-ary disjointness,
+equivalence and difference axioms that list it), and for a class its `HasKey` axioms and the general class axioms
+that mention it, for an object property the property chains that imply it, each without its annotations
+(`browl.axioms.entity_closure`). That's every logical axiom about the entity, plus an annotation property's domain,
+range and super-properties, which P-16 shows with a property's; not its annotation assertions (the annotations panel),
+nor its usage in other entities' axioms, such as a property's in restrictions (P-27). An IRI with several types has the
+axioms of each.
+
+1. Fetch, with three queries (`browl/sparql/entity-*.rq`), two at once and then the third:
+   - the entity's triples with their blank-node closure (`DESCRIBE`), together with each axiom rooted at a blank node
+     that reaches the entity (with its closure): n-ary disjointness and difference (`owl:members`,
+     `owl:distinctMembers`), negative property assertions (`owl:sourceIndividual`), and class axioms between class
+     expressions or with the entity on the right. The query walks back from the entity, up through class expressions
+     and lists, to a blank node nothing links to but an axiom annotation;
+   - the triples where another named entity states a symmetric axiom with it as the object: `owl:disjointWith`,
+     `owl:equivalentClass`, `owl:equivalentProperty`, `owl:propertyDisjointWith`, `owl:inverseOf`, `owl:sameAs`,
+     `owl:differentFrom`;
+   - the named types of every IRI they mention, so the OWLAPI parses each as the kind of entity it is.
+
+   Each query sees the imports when the ontology has any (`browl.fuseki.UNION_FROM`, 2.4).
+2. The OWLAPI parses that fragment as a small ontology. The axioms rendered from it are identical to those rendered
+   from the whole ontology for every entity of a test ontology holding every kind of OWL 2 axiom, and for 598 of 598
+   Uberon entities (300 random classes, its 292 object and data properties, and six heavily used entities) and 305 of
+   305 NCBITaxon ones.
+3. Per page (P-15, Fuseki and the app's JVM on a laptop, warm), fetching, then parsing and rendering:
+
+   | | Fetch, p50 / p95 | Parse and render, p50 / p95 | Slowest |
+   | --- | --- | --- | --- |
+   | Uberon (454 entities) | 3.1 / 4.0 ms | 1.0 / 1.7 ms | 91–117 ms: GO_0065007, in 2.6 K class expressions |
+   | NCBITaxon (333 entities) | 3.2 / 4.0 ms | 1.1 / 1.5 ms | 44–57 ms: NCBITaxon_500585, 47.8 K subclasses |
+
+   Against the N-3 target of 300 ms. A sweep of every Uberon and HPO (2026-09-01) entity, and 4.3 K NCBITaxon ones,
+   found one page over the target: HPO's PATO_0000460 ("abnormal"), in 6.3 K class expressions, takes 611 ms, almost
+   all of it fetching. The next slowest are those in the table. The largest page had 169 IRIs and 93 axioms
+   (Uberon's NCBITaxon_9606), far under the caps below. Walking back from the entity costs in proportion to the class
+   expressions it's in and its subclasses, so heavily used classes take tens of milliseconds, or more. The walk never
+   steps back over `owl:onProperty`, since general class axioms that mention a property are its usage (P-27), not its
+   own axioms. For heavily used classes, the roots that reach each IRI can be listed at load time instead
+   ([P-15 findings](../research/P-15/README.md)).
 
 Entity names become links like this:
 
 1. The renderer is given the OWLAPI's `DefaultPrefixManager` with no prefixes as its short-form provider, so every
-   entity is rendered as its full IRI, `<…>`.
-2. Python HTML-escapes the text, then replaces each `<IRI>` that is a declared entity with a link showing the entity's
-   display name ([2.7](#27-display-names)). IRIs that aren't entities, and `<…>` inside literals, stay as text.
-3. Manchester keywords are wrapped for light styling ([2.9](#29-page-layout)).
-4. An axiom that renders as an empty string (OWLAPI 4 does this for `DatatypeDefinition`) is shown in functional
-   syntax instead.
+   entity is rendered as its full IRI, `<…>`. The renderer breaks lines in long expressions, so the text is joined
+   into one line, outside literals (`browl.manchester.one_line`).
+2. Python splits the text into segments (`browl.manchester.segments`): IRIs, quoted literals, keywords, and the text
+   between; IRIs and keywords are found only outside literals. The template (`templates/axioms.html`) renders each:
+   an IRI that is a declared entity as its link (`entity_link`, 2.9), labeled with its display name
+   ([2.7](#27-display-names)); any other IRI as text, in `<code dir="ltr">`: one in a standard vocabulary (`xsd:`,
+   `rdf:`, `rdfs:`, `owl:`), such as a built-in datatype, by its prefixed name (`xsd:integer`), the rest in full; a
+   literal as text, isolated in `<bdi>`. Only the axiom's own IRIs (`Axiom.iris`, from the OWLAPI's signature of the
+   axiom) are taken for IRIs; any other `<…>` is plain text.
+   Autoescaping does all the escaping: nothing is marked safe. Literals can be huge, as labels can (2.9), so a literal,
+   or other plain text, is cut to 1,000 characters (`MAX_LITERAL_CHARS`), and an IRI shown as text to 200
+   (`MAX_IRI_CHARS`), with the rest elided.
+3. Manchester keywords are wrapped in `<span class="keyword">` for light styling ([2.9](#29-page-layout)). They're the
+   words of the OWLAPI's own keyword list (`ManchesterOWLSyntax`), copied into `browl.manchester.KEYWORDS` so the
+   template layer needs no JVM; a test checks the copy.
+4. A `HasKey` axiom's text is built from its operands (`<Person> HasKey <hasSSN>, <ssn>`), since OWLAPI 4's renderer
+   writes its properties with nothing between them.
+5. An axiom that renders as an empty string (OWLAPI 4 does this for `DatatypeDefinition`) is shown in functional
+   syntax instead. So is one with an ill-typed literal that OWLAPI 4 writes unquoted (`xsd:integer`, `xsd:decimal`,
+   `xsd:float`, `xsd:boolean`), whose text could otherwise pass for IRIs and keywords; functional syntax quotes every
+   literal.
 
 No Java code is needed, and no Python code runs inside the renderer. Spike S-1 also tried the earlier plan, a Python
 short-form provider returning placeholder tokens: it worked but was slower, and missed IRIs the renderer prints without
 asking the provider ([S-1 findings](../research/S-1/README.md)).
+
+**Too many axioms** (from P-15's review): until the page cache (2.10) keeps a page's work from being repeated on every
+view, an entity whose fragment mentions more than 5,000 IRIs (`MAX_FRAGMENT_IRIS`), such as a member of a huge
+`AllDisjointClasses` axiom, or that has more than 1,000 axioms (`MAX_AXIOMS`), gets a note that it has too many axioms
+to show, not its axioms. The first is checked before the types query, the second before rendering, so neither the
+fetch nor the renderer does that work. Both are far above what the entities P-15 measured need.
+
+**When the axioms can't be read** (from P-4's review): a fragment the OWLAPI can't parse, or any other Java exception
+while reading or rendering it (both `FragmentError`), or a query that fails, fails only the axioms panel. The full
+error is logged, with the OWLAPI's parser log and stack trace, and the panel says only that the axioms can't be shown.
+A stored IRI with an escaped illegal character, which Jena accepts and writes back escaped, fails the fetch already:
+browl's Fuseki client checks every IRI it reads (2.14).
+
+**Until P-16**, the Overview tab lists the axioms one per line, sorted by kind and text, under "Logical axioms", below
+the annotations' placeholder (`browl.overview`).
 
 **Base directions** (RDF 1.2's `"…"@ar--rtl`): Fuseki stores and returns them, and browl's Fuseki client reads them as
 `rdf:dirLangString` literals. The OWLAPI 4.5 predates RDF 1.2: its N-Triples parser accepts them but reads `ar--rtl`
@@ -1096,7 +1159,8 @@ To settle when it's built:
 | Descendant counts too slow or memory-hungry at millions of classes | Resolved by S-3 for trees: roaring bitmaps, 4.2 s for NCBITaxon ([S-3 findings](../research/S-3/README.md)). |
 | A dense or adversarial hierarchy makes descendant counting hold too much memory | Found in P-12's review: merging a node's children only once it had them all held memory quadratic in a chain whose members all share one more parent, which a few MB of upload (or a host serving an import) can supply; the build runs in the app process, with no memory limit. P-12 merges each set into its parents as soon as it's complete, which makes that shape linear, and fails the stage once the sets hold more than `DESCENDANT_BUDGET` members (2.5, Distinct descendant counts). |
 | Loading a very large ontology takes minutes | Accepted for uploads (Q14a), shown on the status page. Restarts don't reload (2.4). NCBITaxon: about 5 minutes, estimated; Uberon: 7 s, measured ([S-4 findings](../research/S-4/README.md)). P-24 checks whether extracting the dictionary and edges by streaming the upload file, in parallel with the TDB2 load, is worth it. |
-| Fragment rendering misses axioms a full-ontology render would show | 300 of 300 Uberon classes matched (S-4); P-15 adds n-ary disjointness and general class axioms, and tests against full-ontology rendering. |
+| Fragment rendering misses axioms a full-ontology render would show | Resolved by P-15: a fragment adds the axioms rooted at blank nodes that reach the entity (n-ary disjointness and difference, negative property assertions, general class axioms), and the symmetric axioms other entities state. A test compares fragment with full-ontology rendering for every entity of a test ontology holding every kind of OWL 2 axiom; 598 of 598 Uberon entities and 305 of 305 NCBITaxon ones matched too (2.8). |
+| Heavily used classes make their pages slow | Finding a class's general class axioms walks back through every class expression it's in, and its subclasses; P-15 measured the cost, and the fallback if an ontology's hubs are much worse (2.8). |
 | Usage misses references inside class expressions | P-27 tests walking from the blank node up to the owning axiom before building the tab. |
 
 ---
@@ -1111,14 +1175,13 @@ milestones mirror the phases.
 ### Remaining work
 
 The graph shows the work items not yet done and their **Depends on** links among themselves; links to done items are
-left out. The thick path leads to the first useful entity page (P-16). The dotted link isn't a **Depends on** entry:
-S-5b waits for pages to render. P-24 depends on everything above it, so it has no edges. Update the graph whenever an
-item's status or dependencies change.
+left out. The thick border marks the first useful entity page (P-16), which nothing left blocks. The dotted link isn't a
+**Depends on** entry: S-5b waits for pages to render. P-24 depends on everything above it, so it has no edges. Update
+the graph whenever an item's status or dependencies change.
 
 ```mermaid
 flowchart LR
     subgraph P4["Phase 4: Browsing"]
-        P15["P-15 Manchester rendering"]
         P16["P-16 Overview tab"]
         P17["P-17 Home page"]
         P18["P-18 Hierarchy trees"]
@@ -1141,7 +1204,6 @@ flowchart LR
     end
     S5b["S-5b OLS4 comparison"]
 
-    P15 ==> P16
     P16 --> P27
     P16 --> P21
     P19 --> P20
@@ -1152,7 +1214,7 @@ flowchart LR
     P16 -.-> S5b
 
     classDef critical stroke-width:3px
-    class P15,P16 critical
+    class P16 critical
 ```
 
 ### Phase 0: Spikes
@@ -1205,7 +1267,7 @@ go into this document.
 | P-13 | Routing: path lookup, 404, disambiguation page, hash-prefix page and script | U-2, U-13, U-14, U-15 | P-10 | Done | [#25](https://github.com/jclerman/browl/issues/25) |
 | P-34 | Browser tests with Playwright: a live-server fixture; the hash-IRI script, htmx status polling, no-JS fallbacks, and what a browser shows for an upload refused early | | P-13 | Done | [#88](https://github.com/jclerman/browl/issues/88) |
 | P-14 | Base templates and page frame: navigation bar, page header, tab component, stylesheet and themes; links rendered from display names; IRI `<details>` | U-4, U-5, U-6, U-17, U-27, U-28, U-29 | P-11, P-13 | Done | [#27](https://github.com/jclerman/browl/issues/27) (sub-issues [#28](https://github.com/jclerman/browl/issues/28), [#33](https://github.com/jclerman/browl/issues/33), [#34](https://github.com/jclerman/browl/issues/34)) |
-| P-15 | Manchester rendering via the OWLAPI from fetched fragments, including n-ary disjointness and general class axioms; link substitution and keyword styling, in the template layer, not the renderer (2.8) | U-3 | S-1, S-4, P-14 | To do | [#36](https://github.com/jclerman/browl/issues/36) |
+| P-15 | Manchester rendering via the OWLAPI from fetched fragments, including n-ary disjointness and general class axioms; link substitution and keyword styling, in the template layer, not the renderer (2.8) | U-3 | S-1, S-4, P-14 | Done | [#36](https://github.com/jclerman/browl/issues/36) |
 | P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout; panel data built apart from its HTML (2.8) | U-3, U-9, U-30, U-31, U-32 | P-12, P-15 | To do | [#37](https://github.com/jclerman/browl/issues/37) (sub-issues [#29](https://github.com/jclerman/browl/issues/29), [#38](https://github.com/jclerman/browl/issues/38), [#39](https://github.com/jclerman/browl/issues/39)) |
 | P-17 | Ontology home page, with the dropped-imports warning and the triple counts the job state keeps (P-8); link the ontology and version IRIs only if `http` or `https` (`browl.derived.Meta`) | U-1 | P-14 | To do | [#30](https://github.com/jclerman/browl/issues/30) |
 | P-18 | Hierarchy trees with lazy loading (htmx) and keyboard support | U-7, U-17 | P-12, P-14 | To do | [#31](https://github.com/jclerman/browl/issues/31) |

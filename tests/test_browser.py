@@ -497,7 +497,7 @@ def box(locator: Locator) -> FloatRect:
 # Page tabs (P-14b, DESIGN.md §2.9, U-28, U-17)
 
 PANEL = re.compile(r"[?&]panel=1(&|$)")
-OVERVIEW_TEXT = "annotations and axioms will be shown here"
+OVERVIEW_TEXT = "Logical axioms"
 USAGE_TEXT = "Where other entities use this one"
 
 

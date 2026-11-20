@@ -1,0 +1,18 @@
+# An entity's own triples with their blank-node closure, and the axioms rooted at a blank node that list it or, as
+# general class axioms, mention it: n-ary disjointness and difference (owl:members, owl:distinctMembers), negative
+# property assertions (owl:sourceIndividual), and class axioms between class expressions, or with the entity on the
+# right (DESIGN.md §2.8). DESCRIBE adds each root's own closure.
+#
+# The path walks back from the entity, up through class expressions and lists, to a root: a blank node nothing else
+# links to but an axiom annotation. It never steps back over owl:onProperty, so a property used in many restrictions
+# (part_of) costs nothing: general class axioms that mention a property are its usage (P-27), not its own axioms.
+# `$entity` stands for the entity's IRI, and browl.axioms adds the dataset clause before WHERE.
+DESCRIBE $entity ?root
+WHERE {
+  ?root (rdfs:subClassOf|owl:equivalentClass|owl:disjointWith|owl:equivalentProperty|owl:propertyDisjointWith
+        |owl:sameAs|owl:differentFrom|owl:members|owl:distinctMembers|owl:sourceIndividual)?
+        /(owl:intersectionOf|owl:unionOf|owl:complementOf|owl:someValuesFrom|owl:allValuesFrom|owl:onClass
+          |rdf:first|rdf:rest)* $entity
+  FILTER isBlank(?root)
+  FILTER NOT EXISTS { ?parent ?link ?root FILTER (?link NOT IN (owl:annotatedSource, owl:annotatedTarget)) }
+}

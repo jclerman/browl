@@ -1,0 +1,9 @@
+# The types of the IRIs an entity's triples mention, so the OWLAPI parses each as the kind of entity it is (DESIGN.md
+# §2.8). Only named types: an anonymous one (an individual's class expression) would come without its triples.
+# browl.axioms fills in the IRIs, and adds the dataset clause before WHERE.
+CONSTRUCT { ?iri rdf:type ?type }
+WHERE {
+  VALUES ?iri { }
+  ?iri rdf:type ?type
+  FILTER isIRI(?type)
+}

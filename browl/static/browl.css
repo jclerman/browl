@@ -310,3 +310,25 @@ code {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* An entity's axioms (U-3): one per line, wrapped lines indented; keywords lighter than the entity names. */
+
+.axioms h2 {
+  font-size: 1.1rem;
+}
+
+.axiom-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.axiom-list li {
+  padding-left: calc(var(--space) * 1.5);
+  text-indent: calc(var(--space) * -1.5);
+  overflow-wrap: anywhere;
+}
+
+.keyword {
+  color: var(--muted);
+}

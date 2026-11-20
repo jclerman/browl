@@ -54,6 +54,14 @@ _ABBREVIATED = {
     f"{XSD}double": re.compile(r"[+-]?(?:[0-9]+\.[0-9]*|\.[0-9]+|[0-9]+)[eE][+-]?[0-9]+"),
     f"{XSD}boolean": re.compile(r"true|false"),
 }
+_XSD_DECIMAL = r"[+-]?+(?:[0-9]++(?:\.[0-9]*+)?+|\.[0-9]++)"
+XSD_LEXICAL_FORMS = {
+    f"{XSD}integer": _ABBREVIATED[f"{XSD}integer"],
+    f"{XSD}decimal": re.compile(_XSD_DECIMAL),
+    f"{XSD}float": re.compile(rf"{_XSD_DECIMAL}(?:[eE][+-]?+[0-9]++)?+|[+-]?+INF|NaN"),
+    f"{XSD}boolean": re.compile(r"true|false|1|0"),
+}
+"""XSD 1.1's lexical forms for the datatypes OWLAPI 4's Manchester renderer writes unquoted (`browl.axioms`)."""
 _NT_SUBJECT = rf"(?:{_IRI}|{_BLANK_NODE})"
 _NT_OBJECT = rf"(?:{_IRI}|{_BLANK_NODE}|{_LITERAL})"
 _NT_TRIPLE = re.compile(rf"[ \t]*{_NT_SUBJECT}[ \t]*{_IRI}[ \t]*{_NT_OBJECT}[ \t]*\.[ \t]*")
@@ -228,6 +236,19 @@ def parse_tsv_row(line: str, width: int) -> tuple[Term | None, ...]:
     return tuple(parse_tsv_term(cell) for cell in cells)
 
 
+def _ntriples_triple(line: str) -> tuple[list[IRI], re.Match[str]]:
+    """Return a triple's subject, predicate and object IRIs, unescaped and checked, and the line's match.
+
+    Raises:
+        RDFSyntaxError: The line isn't a triple, or an IRI isn't valid.
+    """
+    match = _NT_TRIPLE.fullmatch(line)
+    if match is None:
+        raise RDFSyntaxError(f"not an N-Triples triple: {line[:200]!r}")
+    subject, _, predicate, object_iri = match.groups()[:4]
+    return [IRI(_unescape(iri)) for iri in (subject, predicate, object_iri) if iri is not None], match
+
+
 def check_ntriples_triple(line: str) -> None:
     """Check that a line is one N-Triples triple, whose terms' values are valid as the term classes check them.
 
@@ -237,12 +258,25 @@ def check_ntriples_triple(line: str) -> None:
     Raises:
         RDFSyntaxError: The line isn't a triple, or a term's value isn't valid (e.g. a relative IRI).
     """
-    match = _NT_TRIPLE.fullmatch(line)
-    if match is None:
-        raise RDFSyntaxError(f"not an N-Triples triple: {line[:200]!r}")
-    subject, _, predicate, object_iri, _, value, language, direction, datatype = match.groups()
-    for iri in (subject, predicate, object_iri):
-        if iri is not None:
-            IRI(_unescape(iri))
+    _, match = _ntriples_triple(line)
+    value, language, direction, datatype = match.groups()[5:]
     if value is not None:
         _literal(value, language, direction, datatype)
+
+
+def ntriples_iris(ntriples: bytes) -> set[IRI]:
+    """Return the IRIs that N-Triples name as a subject, predicate or object (not as a datatype), unescaped.
+
+    Raises:
+        RDFSyntaxError: The N-Triples aren't UTF-8, a line isn't a triple, or an IRI isn't valid
+            (`check_ntriples_triple`).
+    """
+    try:
+        text = ntriples.decode()
+    except UnicodeDecodeError as error:
+        raise RDFSyntaxError(f"N-Triples that aren't UTF-8: {error}") from error
+    found: set[IRI] = set()
+    for line in text.splitlines():
+        if line:
+            found.update(_ntriples_triple(line)[0])
+    return found

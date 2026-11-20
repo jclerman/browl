@@ -20,8 +20,9 @@ from starlette.responses import Response
 from starlette.templating import Jinja2Templates
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from browl import manchester
 from browl.derived import DerivedReader, EntityType, NotCurrentError, entities_with_iri, read_meta
-from browl.jobs import Site
+from browl.jobs import JobState, Site
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,12 @@ RETRY_AFTER_S = 10
 
 MAX_NAME_CHARS = 100
 """The longest name pages show; a longer one is cut short (`cut_name`, DESIGN.md §2.9)."""
+
+MAX_IRI_CHARS = 200
+"""The longest IRI an axiom shows as text, not as a link; a longer one is cut short (`cut_text`, DESIGN.md §2.8)."""
+
+MAX_LITERAL_CHARS = 1_000
+"""The longest literal an axiom shows, or other text between its IRIs and keywords; a longer one is cut short."""
 
 SITE_NAME = "browl"
 """browl's name, which page titles end with when the ontology has no title."""
@@ -76,9 +83,14 @@ class OntologyLink:
 NO_LINK = OntologyLink()
 
 
+def cut_text(text: str, limit: int) -> str:
+    """Return text cut to `limit` characters, ending with `…` if it was longer."""
+    return text if len(text) <= limit else f"{text[: limit - 1]}…"
+
+
 def cut_name(name: str) -> str:
     """Return a name cut to `MAX_NAME_CHARS`, ending with `…` if it was longer: labels can be huge (DESIGN.md §2.9)."""
-    return name if len(name) <= MAX_NAME_CHARS else f"{name[: MAX_NAME_CHARS - 1]}…"
+    return cut_text(name, MAX_NAME_CHARS)
 
 
 def read_ontology_link(connection: sqlite3.Connection) -> OntologyLink:
@@ -142,6 +154,9 @@ templates = Jinja2Templates(
     context_processors=[frame_context],
 )
 templates.env.filters["isolate"] = isolate
+templates.env.filters["manchester_segments"] = manchester.segments
+templates.env.filters["cut_text"] = cut_text
+templates.env.globals.update(MAX_IRI_CHARS=MAX_IRI_CHARS, MAX_LITERAL_CHARS=MAX_LITERAL_CHARS)
 
 
 def unavailable_page(request: Request, site: Site) -> Response:
@@ -155,14 +170,24 @@ def unavailable_page(request: Request, site: Site) -> Response:
     return templates.TemplateResponse(request, template, context, status_code=503, headers=headers)
 
 
-async def read_derived[T](request: Request, function: Callable[[sqlite3.Connection], T]) -> T:
+async def read_derived[T](
+    request: Request, function: Callable[[sqlite3.Connection], T], state: JobState | None = None
+) -> T:
     """Call a function with a connection to the ready generation's derived database, in the thread pool.
+
+    Args:
+        request: The request.
+        function: The function.
+        state: The job state whose ready generation to read, so that a page's reads all see one generation; else the
+            current one.
 
     Raises:
         NotCurrentError: No generation is ready, or its derived database isn't current, which the app serves as
             "loading" (`derived_not_current`).
     """
-    generation = (await request.app.state.jobs.current()).ready_generation
+    if state is None:
+        state = await request.app.state.jobs.current()
+    generation = state.ready_generation
     if generation is None:
         raise NotCurrentError("no generation is ready")
     reader: DerivedReader = request.app.state.derived
