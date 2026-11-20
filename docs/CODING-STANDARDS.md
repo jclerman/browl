@@ -18,6 +18,9 @@ instructions specific to coding agents. Requirements and architecture are in [`D
   [`CONTRIBUTING.md`](../CONTRIBUTING.md) lists the tools.
 - **Reuse before writing.** Use the standard library or a well-maintained package where one does the job. Write your
   own only for a good reason (e.g. performance, quality, trustworthiness), and say why in the PR.
+- **Module constants** go together at the top of the module, after the imports and the logger: public ones first,
+  then private ones, each with a docstring or a short comment. Bring an existing module into line when you next change
+  its constants.
 
 ## Linting and formatting
 
