@@ -17,10 +17,14 @@ from playwright.sync_api import FloatRect, Locator, Page, Route, expect
 from rdflib.namespace import OWL, RDF
 
 import browl.admin
+import browl.overview
 import browl.pages
+from browl.annotations import AnnotationValue, IRIValue, LiteralValue
 from browl.derived import EntityType
 from browl.jobs import JobContext, Stage, StageFunction
 from browl.jobtypes import StageError
+from browl.rdf import IRI, RDFS, XSD
+from browl.rdf import RDF as RDF_NS
 from tests.conftest import DATA
 from tests.helpers import WAIT_S, LiveServer, derived_stage, iso, make_app
 
@@ -781,3 +785,71 @@ def test_entity_header_look(page: Page, server: LiveServer, scheme: str) -> None
     heading = page.locator("main h1").evaluate(color)
     assert page.locator(".entity-type").evaluate(color) == probe != heading
     assert page.locator(".entity-iri summary").evaluate(color) == probe
+
+
+# The Overview tab's annotations panel (P-16a, DESIGN.md §2.8, U-30, U-32)
+
+LONG_VALUE = "word " * 60
+
+
+@pytest.fixture
+def annotated(server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> LiveServer:
+    """Return the server, every entity's Overview showing the same annotations, and no axioms (it has no Fuseki)."""
+    label, comment, see_also = (IRI(f"{RDFS}{name}") for name in ("label", "comment", "seeAlso"))
+    string, lang_string = IRI(f"{XSD}string"), IRI(f"{RDF_NS}langString")
+    pairs = [
+        (label, LiteralValue(lexical="thing", datatype=lang_string, language="en")),
+        (label, LiteralValue(lexical="Ding", datatype=lang_string, language="de")),
+        (comment, LiteralValue(lexical=LONG_VALUE, datatype=string)),
+        (see_also, IRIValue(iri=IRI("https://example.org/elsewhere"))),
+    ]
+
+    async def fetched(*args: object) -> list[tuple[IRI, AnnotationValue]]:
+        return pairs
+
+    async def no_axioms(*args: object) -> browl.overview.AxiomsPanel:
+        return browl.overview.AxiomsPanel([], {})
+
+    monkeypatch.setattr(browl.overview, "fetch_annotations", fetched)
+    monkeypatch.setattr(browl.overview, "_read_axioms", no_axioms)
+    return server
+
+
+def test_annotations_grid_wide(page: Page, annotated: LiveServer) -> None:
+    """Check the two-column grid of annotations, wide.
+
+    A group's first value is on its label's row, the rest below it, one per line, in one column for every group; a long
+    value wraps within the readable measure; language tags are small and muted.
+    """
+    page.set_viewport_size(WIDE)
+    page.goto(f"{annotated.url}/example.org/thing")
+    terms = page.locator(".annotations dt")
+    values = page.locator(".annotations dd")
+    expect(terms).to_have_count(3)
+    expect(values).to_have_count(4)
+    term_boxes = [box(terms.nth(index)) for index in range(3)]
+    value_boxes = [box(values.nth(index)) for index in range(4)]
+    for term, value in zip(term_boxes, [value_boxes[0], value_boxes[2], value_boxes[3]], strict=True):
+        assert abs(term["y"] - value["y"]) < 2  # a group's first value is on its label's row
+        assert value["x"] > term["x"] + term["width"]
+    assert value_boxes[1]["y"] >= value_boxes[0]["y"] + value_boxes[0]["height"]  # one line per value
+    assert len({round(each["x"]) for each in value_boxes}) == 1  # one value column for every group
+    char = page.evaluate("parseFloat(getComputedStyle(document.body).fontSize)")
+    assert value_boxes[2]["width"] < 60 * char  # capped near 75ch, though the line is longer
+    assert value_boxes[2]["height"] > 2 * value_boxes[0]["height"]  # so it wraps
+    tag = page.locator(".annotations .lang").first
+    expect(tag).to_have_text("en")
+    sizes = tag.evaluate("each => [getComputedStyle(each).fontSize, getComputedStyle(each.parentNode).fontSize]")
+    assert float(sizes[0].removesuffix("px")) < float(sizes[1].removesuffix("px"))
+    muted = page.evaluate("getComputedStyle(document.querySelector('.note')).color")
+    assert tag.evaluate("each => getComputedStyle(each).color") == muted
+
+
+def test_annotations_grid_narrow(page: Page, annotated: LiveServer) -> None:
+    """Check that on a phone each group's values go below its label, and nothing makes the page scroll sideways."""
+    page.set_viewport_size(NARROW)
+    page.goto(f"{annotated.url}/example.org/thing")
+    term, value = box(page.locator(".annotations dt").first), box(page.locator(".annotations dd").first)
+    assert value["y"] >= term["y"] + term["height"]
+    assert abs(value["x"] - term["x"]) < 2
+    assert page.evaluate("document.documentElement.scrollWidth") <= NARROW["width"]
