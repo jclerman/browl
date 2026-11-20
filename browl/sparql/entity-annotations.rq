@@ -1,0 +1,20 @@
+# An entity's annotations: the values of its own triples whose predicate is an annotation property (DESIGN.md §2.8).
+# That's OWL 2's built-in annotation properties, and any other property outside the RDF, RDFS, OWL and XSD
+# vocabularies that isn't declared an object or data property, as the OWLAPI reads an undeclared one; a property
+# declared an annotation property too is one. A blank value (an anonymous individual) is left out. `$entity` stands
+# for the entity's IRI, and browl.annotations adds the dataset clause before WHERE and a LIMIT.
+SELECT ?property ?value
+WHERE {
+  $entity ?property ?value
+  FILTER (!isBlank(?value))
+  FILTER (
+    ?property IN (rdfs:label, rdfs:comment, rdfs:seeAlso, rdfs:isDefinedBy, owl:deprecated, owl:versionInfo,
+                  owl:priorVersion, owl:backwardCompatibleWith, owl:incompatibleWith)
+    || (!STRSTARTS(STR(?property), "http://www.w3.org/1999/02/22-rdf-syntax-ns#")
+        && !STRSTARTS(STR(?property), "http://www.w3.org/2000/01/rdf-schema#")
+        && !STRSTARTS(STR(?property), "http://www.w3.org/2002/07/owl#")
+        && !STRSTARTS(STR(?property), "http://www.w3.org/2001/XMLSchema#")
+        && (EXISTS { ?property rdf:type owl:AnnotationProperty }
+            || NOT EXISTS { VALUES ?logical { owl:ObjectProperty owl:DatatypeProperty } ?property rdf:type ?logical }))
+  )
+}

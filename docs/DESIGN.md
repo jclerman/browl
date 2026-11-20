@@ -828,6 +828,24 @@ Tabs (U-28; see [2.9](#29-page-layout)):
   name shown once and one line per value. Language tags are shown small and muted. IRI values are links. Long values,
   such as definitions, wrap within the readable text width ([2.9](#29-page-layout)). Property order: the configured
   name properties first, in their configured order, then the others alphabetically.
+  - **Which triples** _(P-16a)_: one SPARQL query (`browl/sparql/entity-annotations.rq`), run alongside the axioms'
+    fetch, reads the entity's triples whose predicate is one of OWL 2's built-in annotation properties (`rdfs:label`,
+    `rdfs:comment`, `rdfs:seeAlso`, `rdfs:isDefinedBy`, `owl:deprecated`, `owl:versionInfo`, …), or any property
+    outside the RDF, RDFS, OWL and XSD vocabularies that isn't declared an object or data property: an undeclared one
+    is read as an annotation property, as the OWLAPI reads one. Like the axioms' queries, it sees the imports when the
+    ontology has any. A blank value (an anonymous individual) is left out. Axiom annotations on the assertions (such as
+    a definition's references) aren't shown yet.
+  - **Why not from the axioms' fragment:** the OWLAPI could list the annotation assertions of the fragment it parses,
+    but then the annotations would fail with the axioms, and an entity with too many axioms (below) would lose its
+    label and definition too. A separate query costs one more round trip, run at the same time.
+  - **Order:** properties other than the name properties go by the name the page shows for them, case-insensitively:
+    their display name if they have a page, else a standard vocabulary's prefixed name (`rdfs:comment`), else the IRI.
+    A property's literals come first, by their language's place in the language ranking ([2.7](#27-display-names)),
+    then by text; then its IRIs, by text.
+  - **Values:** a literal is isolated in `<bdi>`, with its language as `lang` and its base direction, if any, as
+    `dir`, cut to `MAX_LITERAL_CHARS`. An IRI with a page links to it; another `http` or `https` IRI links to itself
+    (`rel="nofollow"`); any other is text. An entity with more than 1,000 values (`MAX_ANNOTATIONS`) gets a note
+    instead, as for too many axioms, and a failed query fails only this panel, as the axioms' does (below).
 - **Logical-axioms panel:** grouped by axiom kind under familiar section names (SubClass Of, Equivalent To, …), one
   Manchester-syntax axiom per line. Empty groups are omitted.
   - **Classes:** SubClass Of (named parents first, then class expressions), Equivalent To (equivalent classes from the
@@ -835,7 +853,8 @@ Tabs (U-28; see [2.9](#29-page-layout)):
   - **Properties** (U-31): Domains, Ranges, Characteristics (functional, transitive, …), SubProperty Of, Equivalent To,
     Inverse Of, Disjoint With, and property chains.
 - **Compact layout** (U-32): label column and value column in a two-column grid; tight line spacing within a group and a
-  little more between groups. Multi-column values for long lists are Later (U-33).
+  little more between groups. Multi-column values for long lists are Later (U-33). Each panel is a `<dl class="frame">`,
+  one `<dt>` per group and one `<dd>` per value; on a phone the values go below their label. _(P-16a)_
 
 **Panel data apart from its HTML** (for U-42): each panel and tab is built in two steps. First a function returns its
 content as typed data (Pydantic models), with no HTML in it: annotations grouped by property, axioms grouped by kind,
@@ -984,8 +1003,8 @@ logged and shown in functional syntax as an `OtherAxiom`, without links, so the 
 A stored IRI with an escaped illegal character, which Jena accepts and writes back escaped, fails the fetch already:
 browl's Fuseki client checks every IRI it reads (2.14).
 
-**Until P-16**, the Overview tab lists the axioms one per line, sorted by kind and text, under "Logical axioms", below
-the annotations' placeholder (`browl.overview`).
+**Until P-16b and P-16c**, the Overview tab lists the axioms one per line, sorted by kind and text, under "Logical
+axioms", below the annotations panel (`browl.overview`).
 
 **Base directions** (RDF 1.2's `"…"@ar--rtl`): Fuseki stores and returns them, and browl's Fuseki client reads them as
 `rdf:dirLangString` literals. The OWLAPI 4.5 predates RDF 1.2: its N-Triples parser accepts them but reads `ar--rtl`

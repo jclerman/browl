@@ -1,4 +1,4 @@
-"""Tests for the Overview tab's axioms panel when its axioms can't be read: the page still works, the log has why."""
+"""Tests for the Overview tab's panels when their data can't be read: the page still works, the log has why."""
 
 import asyncio
 import dataclasses
@@ -29,6 +29,7 @@ pytestmark = pytest.mark.usefixtures("data_dir")
 
 IRI = "http://example.org/onto#A"
 MESSAGE = "The axioms can't be shown just now."
+ANNOTATIONS_MESSAGE = "The annotations can't be shown just now."
 PANEL = {"path": "/onto", "fragment": "A", "panel": "1"}
 
 
@@ -48,16 +49,52 @@ def client() -> Iterator[TestClient]:
         yield test_client
 
 
+@pytest.fixture
+def no_annotations(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the annotations panel's fetch find none, without a query, so tests of the axioms panel see only its own."""
+
+    async def fetched(*args: object) -> list[object]:
+        return []
+
+    monkeypatch.setattr(browl.overview, "fetch_annotations", fetched)
+
+
 def test_query_fails(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
-    """Check that a failed query fails only the axioms panel: the page shows a short message, and the log the error."""
+    """Check that failed queries fail only the panels: the page shows a message for each, and the log the errors."""
     with caplog.at_level(logging.ERROR, logger="browl.overview"):
         page = client.get("/_browl/hash", params={"path": "/onto", "fragment": "A"})
     assert page.status_code == 200
     assert MESSAGE in page.text
+    assert ANNOTATIONS_MESSAGE in page.text
     assert "Error 500" not in page.text
-    [record] = caplog.records
-    assert record.getMessage() == f"Couldn't show the axioms of {IRI}"
+    assert sorted(record.getMessage() for record in caplog.records) == [
+        f"Couldn't show the annotations of {IRI}",
+        f"Couldn't show the axioms of {IRI}",
+    ]
+    assert all(record.exc_info is not None for record in caplog.records)
     assert "Error 500: Server Error" in caplog.text
+
+
+def test_annotations_fail_alone(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Check that a failed annotations query leaves the axioms panel alone."""
+
+    async def no_axioms(*args: object) -> browl.overview.AxiomsPanel:
+        return browl.overview.AxiomsPanel([], {})
+
+    async def failed(*args: object) -> list[object]:
+        raise SparqlError("the annotations failed")
+
+    monkeypatch.setattr(browl.overview, "_read_axioms", no_axioms)
+    monkeypatch.setattr(browl.overview, "fetch_annotations", failed)
+    with caplog.at_level(logging.ERROR, logger="browl.overview"):
+        page = client.get("/_browl/hash", params=PANEL)
+    assert page.status_code == 200
+    assert ANNOTATIONS_MESSAGE in page.text
+    assert MESSAGE not in page.text
+    [record] = caplog.records
+    assert record.getMessage() == f"Couldn't show the annotations of {IRI}"
 
 
 def test_usage_tab_untouched(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
@@ -70,6 +107,7 @@ def test_usage_tab_untouched(client: TestClient, caplog: pytest.LogCaptureFixtur
 
 @pytest.mark.jvm
 @pytest.mark.usefixtures("jvm")
+@pytest.mark.usefixtures("no_annotations")
 def test_fragment_error(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Check that a fragment the OWLAPI can't parse fails only the axioms panel, and its parser's error is logged."""
 
@@ -91,6 +129,7 @@ def test_fragment_error(client: TestClient, monkeypatch: pytest.MonkeyPatch, cap
 
 @pytest.mark.jvm
 @pytest.mark.usefixtures("jvm")
+@pytest.mark.usefixtures("no_annotations")
 def test_java_error(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Check that any other Java exception, here from the conversion, fails only the axioms panel, and is logged."""
 
@@ -113,6 +152,7 @@ def test_java_error(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog:
     assert "IllegalStateException: the conversion broke" in caplog.text
 
 
+@pytest.mark.usefixtures("no_annotations")
 def test_rdf_syntax_error(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -132,6 +172,7 @@ def test_rdf_syntax_error(
     assert record.exc_info is not None and record.exc_info[1] is error
 
 
+@pytest.mark.usefixtures("no_annotations")
 def test_escaped_illegal_iri(caplog: pytest.LogCaptureFixture) -> None:
     """Check that a stored IRI with an escaped illegal character, which Jena writes escaped, fails only the panel."""
 
@@ -171,6 +212,7 @@ def record_fetches(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
     return fetches
 
 
+@pytest.mark.usefixtures("no_annotations")
 def test_one_generation(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that the panel reads the generation the page found its entity in, though a newer one is ready since."""
     state = ready_state(client)
@@ -206,6 +248,7 @@ def test_one_generation(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> 
     ],
     ids=["no-imports", "dropped-import", "loaded-import", "newer-job"],
 )
+@pytest.mark.usefixtures("no_annotations")
 def test_dataset_clause(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -250,6 +293,7 @@ async def test_failed_query_cancels_other() -> None:
         assert cancelled.is_set()
 
 
+@pytest.mark.usefixtures("no_annotations")
 def test_too_many(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that a fragment that mentions too many IRIs isn't fetched further, and the panel says so."""
     queries = []

@@ -56,7 +56,7 @@ class TooManyAxiomsError(Exception):
     """An entity's axioms are too many, or mention too many IRIs, to show on its page (DESIGN.md §2.8)."""
 
 
-def _filled(query: str, dataset_clause: str, parts: dict[str, str]) -> str:
+def filled_query(query: str, dataset_clause: str, parts: dict[str, str]) -> str:
     """Return a query with its dataset clause before `WHERE`, and each of its placeholders replaced.
 
     The query files are valid SPARQL as they are, as `tests/test_sparql.py` checks: a placeholder is a variable, such
@@ -94,8 +94,8 @@ async def fetch_fragment(sparql: FusekiClient, dataset: str, iri: str, dataset_c
     try:
         # A task group, unlike `gather`, cancels the other query when one fails.
         async with asyncio.TaskGroup() as group:
-            own = group.create_task(sparql.construct(dataset, _filled(_AXIOMS, dataset_clause, entity)))
-            symmetric = group.create_task(sparql.construct(dataset, _filled(_SYMMETRIC, dataset_clause, entity)))
+            own = group.create_task(sparql.construct(dataset, filled_query(_AXIOMS, dataset_clause, entity)))
+            symmetric = group.create_task(sparql.construct(dataset, filled_query(_SYMMETRIC, dataset_clause, entity)))
     except ExceptionGroup as errors:
         raise errors.exceptions[0]  # noqa: B904 -- the query's own error, with the group as its context
     triples = own.result() + symmetric.result()
@@ -105,7 +105,7 @@ async def fetch_fragment(sparql: FusekiClient, dataset: str, iri: str, dataset_c
     if not mentioned:
         return triples
     values = f"VALUES ?iri {{ {' '.join(f'<{each}>' for each in sorted(mentioned))} }}"
-    return triples + await sparql.construct(dataset, _filled(_TYPES, dataset_clause, {_NO_IRIS: values}))
+    return triples + await sparql.construct(dataset, filled_query(_TYPES, dataset_clause, {_NO_IRIS: values}))
 
 
 type _Build = Callable[[_Converter, Any], owl.Node]

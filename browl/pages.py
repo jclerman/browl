@@ -22,6 +22,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from browl.derived import DerivedReader, EntityType, NotCurrentError, entities_with_iri, read_meta
 from browl.jobs import JobState, Site
+from browl.owl import prefixed_name
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,16 @@ def read_ontology_link(connection: sqlite3.Connection) -> OntologyLink:
     return OntologyLink(name, page.path, page.fragment, title)
 
 
+def is_web_iri(iri: str) -> bool:
+    """Return whether an IRI is an `http` or `https` one, which a page may link to (DESIGN.md §2.9).
+
+    Examples:
+        >>> is_web_iri("HTTPS://example.org/a"), is_web_iri("javascript:alert(1)")
+        (True, False)
+    """
+    return iri.lower().startswith(("http://", "https://"))
+
+
 def isolate(text: str) -> str:
     """Return text wrapped in U+2068 … U+2069, isolating it from the text around it (DESIGN.md §2.9).
 
@@ -154,6 +165,8 @@ templates = Jinja2Templates(
 )
 templates.env.filters["isolate"] = isolate
 templates.env.filters["cut_text"] = cut_text
+templates.env.filters["prefixed_name"] = prefixed_name
+templates.env.tests["web_iri"] = is_web_iri
 templates.env.globals.update(MAX_IRI_CHARS=MAX_IRI_CHARS, MAX_LITERAL_CHARS=MAX_LITERAL_CHARS)
 
 

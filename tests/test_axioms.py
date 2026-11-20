@@ -781,7 +781,8 @@ def test_page(fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) ->
         f'{heart_link} {keyword("SubClassOf")} <code dir="ltr">&lt;{NS}Vertebrate&gt;</code></li>'
     ) in page
     assert f"{keyword('value')} <bdi>&#34;see &lt;{NS}Dog&gt; &amp; \\&#34;friends\\&#34;&#34;@en</bdi>" in person
-    assert "The entity's annotations will be shown here." in page
+    label = re.escape('<bdi class="value">&lt;b&gt;Heart&lt;/b&gt; &amp; &#34;soul&#34;</bdi>')
+    assert re.search(rf'<dt><code dir="ltr">rdfs:label</code></dt>\s*<dd>{label}</dd>', page)  # the annotations panel
     assert f'{keyword("some")} <code dir="ltr">xsd:integer</code>[&gt;= ' in person  # a built-in datatype
     code = '<code dir="ltr">&lt;{}&gt;</code>'.format
     assert f"{keyword('HasKey')} {code(f'{NS}hasSSN')}, {code(f'{NS}ssn')}</li>" in person

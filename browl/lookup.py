@@ -31,7 +31,7 @@ from browl.derived import (
 )
 from browl.jobs import JobState
 from browl.links import EntityLink, entity_name
-from browl.overview import read_axioms_panel
+from browl.overview import read_overview
 from browl.pages import app_path, cut_name, href, is_under, link_root, read_derived, templates
 from browl.tabs import TAB_PARAM, Tab, TabNotFoundError, TabQuery, choose_tab, read_tab_query, tab_links, with_query
 from browl.urls import FALLBACK_PATH, fallback_path
@@ -199,7 +199,7 @@ async def _page(
         "tabs": links,
     }
     if tab.slug == OVERVIEW:
-        context["axioms_panel"] = await read_axioms_panel(request, state, entity.iri)
+        context["overview"] = await read_overview(request, state, entity.iri)
     if query.panel:
         return templates.TemplateResponse(request, "entity_panel.html", context, headers=PANEL_HEADERS)
     return templates.TemplateResponse(request, "entity.html", context | common)

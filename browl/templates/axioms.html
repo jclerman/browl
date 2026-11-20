@@ -1,4 +1,4 @@
-{% from "links.html" import entity_link %}
+{% from "links.html" import named_iri %}
 {# An axiom's Manchester tokens (`browl.owl.Node.manchester_tokens`), from `links` (IRI → `browl.links.EntityLink`),
    as HTML (DESIGN.md §2.8): an IRI with a page as a link to it; any other as text, a standard vocabulary's by its
    prefixed name (`xsd:integer`), the rest in full; keywords styled lightly (§2.9). Literals and an `OtherAxiom`'s
@@ -7,12 +7,7 @@
 {% macro manchester(tokens, links) -%}
 {%- for token in tokens -%}
 {%- if token.space %} {% endif -%}
-{%- if token.kind == "iri" -%}
-{%- set link = links.get(token.iri) -%}
-{%- set name = token.prefixed_name -%}
-{%- if link is not none and link.href is not none %}{{ entity_link(link) }}
-{%- elif name is not none %}<code dir="ltr">{{ name }}</code>
-{%- else %}<code dir="ltr">{{ token.text | cut_text(MAX_IRI_CHARS) }}</code>{% endif -%}
+{%- if token.kind == "iri" %}{{ named_iri(token.iri, links, token.text) }}
 {%- elif token.kind == "keyword" %}<span class="keyword">{{ token.text }}</span>
 {%- elif token.kind in ("literal", "functional") %}<bdi>{{ token.text | cut_text(MAX_LITERAL_CHARS) }}</bdi>
 {%- else %}{{ token.text | cut_text(MAX_LITERAL_CHARS) }}{% endif -%}
