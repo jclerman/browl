@@ -24,7 +24,7 @@ ANY_AXIOM = TypeAdapter(owl.AnyAxiom)
 
 def short(node: owl.Node) -> str:
     """Return a node's text, with `NS` and the XSD namespace left out of its IRIs."""
-    return owl.text(node.tokens()).replace(NS, "").replace(XSD, "xsd:")
+    return owl.manchester_text(node.manchester_tokens()).replace(NS, "").replace(XSD, "xsd:")
 
 
 def literal(lexical: str, datatype: str = XSD_STRING, language: str | None = None) -> owl.Literal:
@@ -133,13 +133,13 @@ def test_expressions(node: owl.Node, text: str) -> None:
 def test_axioms(axiom: owl.Axiom, text: str) -> None:
     """Check axioms' text: their operands never in parentheses, n-ary ones as pairs or lists."""
     assert short(axiom) == text
-    assert axiom.text == owl.text(axiom.tokens())
+    assert axiom.manchester == owl.manchester_text(axiom.manchester_tokens())
 
 
 def test_tokens() -> None:
     """Check an axiom's tokens: their kinds, IRIs and spacing."""
     axiom = owl.SubClassOf(sub=A, super=owl.ObjectSomeValuesFrom(property=P, filler=owl.ObjectOneOf(items=(IND_I, X))))
-    assert axiom.tokens() == [
+    assert axiom.manchester_tokens() == [
         Token(TokenKind.IRI, f"<{NS}A>", f"{NS}A"),
         Token(TokenKind.KEYWORD, "SubClassOf", space=True),
         Token(TokenKind.IRI, f"<{NS}p>", f"{NS}p", space=True),
@@ -204,8 +204,8 @@ def test_literals(node: owl.Node, tokens: list[tuple[TokenKind, str]] | None) ->
     if tokens is None:
         assert short(node) == '<d> value "yes"^^<xsd:boolean>'
         return
-    assert [(token.kind, token.text) for token in node.tokens()] == tokens
-    assert owl.text(node.tokens()) == "".join(text for _, text in tokens)
+    assert [(token.kind, token.text) for token in node.manchester_tokens()] == tokens
+    assert owl.manchester_text(node.manchester_tokens()) == "".join(text for _, text in tokens)
 
 
 def test_iris() -> None:
@@ -242,12 +242,40 @@ AXIOMS = [
 
 @pytest.mark.parametrize("axiom", AXIOMS, ids=lambda axiom: axiom.kind)
 def test_json_round_trip(axiom: owl.Axiom) -> None:
-    """Check that an axiom round-trips through JSON, which holds its text, and the discriminator picks its class."""
+    """Check an axiom's JSON round trip, with its Manchester text, and that the discriminator picks its class."""
     dumped = axiom.model_dump(mode="json")
-    assert dumped["text"] == axiom.text
+    assert dumped["manchester"] == axiom.manchester
     assert dumped["type"] == type(axiom).__name__
     assert ANY_AXIOM.validate_json(axiom.model_dump_json()) == axiom
     assert type(ANY_AXIOM.validate_python(dumped)) is type(axiom)
+
+
+def test_cardinality() -> None:
+    """Check that a cardinality is a non-negative integer, as OWL 2 says: 0 is valid, -1 isn't."""
+    assert short(owl.DataExactCardinality(property=D, cardinality=0, filler=INTEGER)) == "<d> exactly 0 <xsd:integer>"
+    with pytest.raises(ValueError, match="greater than or equal to 0"):
+        owl.ObjectMinCardinality(property=P, cardinality=-1, filler=A)
+    dumped = owl.SubClassOf(sub=A, super=owl.ObjectMaxCardinality(property=P, cardinality=1, filler=A)).model_dump()
+    dumped["super"]["cardinality"] = -1
+    with pytest.raises(ValueError, match="greater than or equal to 0"):
+        ANY_AXIOM.validate_python(dumped)
+
+
+@pytest.mark.parametrize("iri", ["relative", "http://example.org/a b", "http://example.org/<a>", ""])
+def test_invalid_iri(iri: str) -> None:
+    """Check that every field holding an IRI refuses one that isn't absolute or has characters IRIs don't allow."""
+    with pytest.raises(ValueError, match="not a valid IRI"):
+        owl.Entity(kind=EntityKind.CLASS, iri=iri)
+    with pytest.raises(ValueError, match="not a valid IRI"):
+        owl.IRIReference(iri=iri)
+    with pytest.raises(ValueError, match="not a valid IRI"):
+        literal("x", iri)
+    with pytest.raises(ValueError, match="not a valid IRI"):
+        owl.FacetRestriction(facet=iri, value=literal("1"))
+    dumped = owl.SubClassOf(sub=A, super=B).model_dump()
+    dumped["sub"]["iri"] = iri
+    with pytest.raises(ValueError, match="not a valid IRI"):
+        ANY_AXIOM.validate_python(dumped)
 
 
 def test_json_names() -> None:
@@ -301,7 +329,7 @@ def test_html() -> None:
     a = owl.Entity(kind=EntityKind.CLASS, iri=f"{NS}A")
     axiom = owl.SubClassOf(sub=a, super=owl.DataHasValue(property=D, filler=literal(f"<{NS}A> & <i>", language="en")))
     links = {a.iri: EntityLink(a.iri, "<b>A</b> & \"a\" 'b'", "/A"), D.iri: no_link(D.iri)}
-    assert render(axiom.tokens(), links) == (
+    assert render(axiom.manchester_tokens(), links) == (
         '<a href="/A"><bdi>&lt;b&gt;A&lt;/b&gt; &amp; &#34;a&#34; &#39;b&#39;</bdi></a> '
         '<span class="keyword">SubClassOf</span> '
         f'<code dir="ltr">&lt;{NS}d&gt;</code> '
@@ -312,7 +340,7 @@ def test_html() -> None:
 
 def test_html_unknown_iri() -> None:
     """Check that an IRI missing from the links is shown as text, as one with no page is."""
-    assert render(A.tokens(), {}) == f'<code dir="ltr">&lt;{NS}A&gt;</code>'
+    assert render(A.manchester_tokens(), {}) == f'<code dir="ltr">&lt;{NS}A&gt;</code>'
 
 
 def test_html_punctuation() -> None:
@@ -321,7 +349,7 @@ def test_html_punctuation() -> None:
         individual=X,
         class_=owl.DataMinCardinality(property=D, cardinality=2, filler=owl.DataOneOf(items=(literal("1", DT.iri),))),
     )
-    html = render(axiom.tokens(), {DT.iri: EntityLink(DT.iri, "DT", "/DT")})
+    html = render(axiom.manchester_tokens(), {DT.iri: EntityLink(DT.iri, "DT", "/DT")})
     assert html == (
         '_:x <span class="keyword">Type</span> <code dir="ltr">&lt;http://example.org/d&gt;</code> '
         '<span class="keyword">min</span> 2 {<bdi>&#34;1&#34;</bdi>^^<a href="/DT"><bdi>DT</bdi></a>}'
@@ -331,7 +359,7 @@ def test_html_punctuation() -> None:
 def test_html_other_axiom() -> None:
     """Check that an axiom of another kind is escaped text, with no links."""
     axiom = owl.OtherAxiom(axiom_type="DLSafeRule", functional=f'<script>"{NS}A"</script>')
-    assert render(axiom.tokens(), {A.iri: EntityLink(A.iri, "A", "/A")}) == (
+    assert render(axiom.manchester_tokens(), {A.iri: EntityLink(A.iri, "A", "/A")}) == (
         f"&lt;script&gt;&#34;{NS}A&#34;&lt;/script&gt;"
     )
 
@@ -364,7 +392,7 @@ def test_html_standard_names() -> None:
         sub=owl.ObjectIntersectionOf(operands=(thing, A)), super=owl.DataSomeValuesFrom(property=D, filler=INTEGER)
     )
     links = {INTEGER.iri: no_link(INTEGER.iri), thing.iri: EntityLink(thing.iri, "Thing", "/Thing")}
-    assert render(axiom.tokens(), links) == (
+    assert render(axiom.manchester_tokens(), links) == (
         '<a href="/Thing"><bdi>Thing</bdi></a> <span class="keyword">and</span> '
         f'<code dir="ltr">&lt;{NS}A&gt;</code> <span class="keyword">SubClassOf</span> '
         f'<code dir="ltr">&lt;{NS}d&gt;</code> <span class="keyword">some</span> <code dir="ltr">xsd:integer</code>'
@@ -378,9 +406,9 @@ def test_html_long() -> None:
     long_entity = owl.Entity(kind=EntityKind.DATA_PROPERTY, iri=iri)
     axiom = owl.DataPropertyAssertion(subject=IND_I, property=long_entity, object=long_literal)
     other = owl.OtherAxiom(axiom_type="DLSafeRule", functional="o" * (MAX_LITERAL_CHARS + 1))
-    assert render(axiom.tokens(), {IND_I.iri: EntityLink(IND_I.iri, "i", "/i")}) == (
+    assert render(axiom.manchester_tokens(), {IND_I.iri: EntityLink(IND_I.iri, "i", "/i")}) == (
         '<a href="/i"><bdi>i</bdi></a> '
         f'<code dir="ltr">&lt;{iri[: MAX_IRI_CHARS - 2]}…</code> '
         f"<bdi>&#34;{'x' * (MAX_LITERAL_CHARS - 2)}…</bdi>"
     )
-    assert render(other.tokens(), {}) == f"{'o' * (MAX_LITERAL_CHARS - 1)}…"
+    assert render(other.manchester_tokens(), {}) == f"{'o' * (MAX_LITERAL_CHARS - 1)}…"

@@ -19,13 +19,14 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 import jpype
+from pydantic import ValidationError
 
 from browl import owl
 from browl.fuseki import FusekiClient
 from browl.owl import EntityKind
 from browl.owlapi import FragmentError, check_java_thread, ntriples_ontology
 from browl.precache.core import PREFIXES, sparql_file
-from browl.rdf import IRI, ntriples_iris
+from browl.rdf import IRI, RDFSyntaxError, ntriples_iris
 
 _AXIOMS = PREFIXES + sparql_file("entity-axioms.rq")
 _SYMMETRIC = PREFIXES + sparql_file("entity-symmetric.rq")
@@ -112,31 +113,33 @@ def _fields(node_type: Callable[..., owl.Node], **getters: str) -> _Build:
 
 
 def _entity(kind: EntityKind) -> _Build:
-    return lambda converter, entity: owl.Entity(kind=kind, iri=str(entity.getIRI()))
+    return lambda converter, entity: owl.Entity(kind=kind, iri=IRI(str(entity.getIRI())))
 
 
 def _literal(converter: _Converter, literal: Any) -> owl.Node:
     language = str(literal.getLang()) if literal.hasLang() else None
     return owl.Literal(
-        lexical=str(literal.getLiteral()), datatype=str(literal.getDatatype().getIRI()), language=language
+        lexical=str(literal.getLiteral()), datatype=IRI(str(literal.getDatatype().getIRI())), language=language
     )
 
 
 def _facet(converter: _Converter, restriction: Any) -> owl.Node:
     return owl.FacetRestriction(
-        facet=str(restriction.getFacet().getIRI()), value=cast(owl.Literal, converter(restriction.getFacetValue()))
+        facet=IRI(str(restriction.getFacet().getIRI())), value=cast(owl.Literal, converter(restriction.getFacetValue()))
     )
 
 
 def _annotation_domain(converter: _Converter, axiom: Any) -> owl.Node:
     return owl.AnnotationPropertyDomain(
-        property=cast(owl.Entity, converter(axiom.getProperty())), domain=owl.IRIReference(iri=str(axiom.getDomain()))
+        property=cast(owl.Entity, converter(axiom.getProperty())),
+        domain=owl.IRIReference(iri=IRI(str(axiom.getDomain()))),
     )
 
 
 def _annotation_range(converter: _Converter, axiom: Any) -> owl.Node:
     return owl.AnnotationPropertyRange(
-        property=cast(owl.Entity, converter(axiom.getProperty())), range=owl.IRIReference(iri=str(axiom.getRange()))
+        property=cast(owl.Entity, converter(axiom.getProperty())),
+        range=owl.IRIReference(iri=IRI(str(axiom.getRange()))),
     )
 
 
@@ -362,17 +365,21 @@ def convert_axioms(axioms: Iterable[Any]) -> list[owl.Axiom]:
     Call this on the Java thread (`browl.owlapi.run_java`).
 
     Raises:
-        FragmentError: An axiom holds an object of a kind no node type covers.
+        FragmentError: An axiom holds an object of a kind no node type covers, or a value its node refuses, such as
+            an IRI that isn't absolute.
     """
     check_java_thread()
     converter = _converter()
     nodes: list[owl.Axiom] = []
     for axiom in axioms:
-        node = converter(axiom)
+        try:
+            node = converter(axiom)
+        except (ValidationError, RDFSyntaxError) as error:
+            raise FragmentError(f"browl can't hold an axiom as nodes: {error}") from error
         if not isinstance(node, owl.Axiom):
             raise FragmentError(f"not an axiom: {node.type}")
         nodes.append(node)
-    return sorted(nodes, key=lambda node: (node.kind, node.text))
+    return sorted(nodes, key=lambda node: (node.kind, node.manchester))
 
 
 def entity_axioms(ntriples: bytes, iri: str) -> list[owl.Axiom]:
@@ -382,7 +389,7 @@ def entity_axioms(ntriples: bytes, iri: str) -> list[owl.Axiom]:
 
     Raises:
         FragmentError: The OWLAPI couldn't parse the fragment, or failed on it with any other Java exception, or an
-            axiom holds an object of a kind no node type covers.
+            axiom holds an object of a kind no node type covers, or a value its node refuses.
         TooManyAxiomsError: The entity has more than `MAX_AXIOMS` axioms.
     """
     try:

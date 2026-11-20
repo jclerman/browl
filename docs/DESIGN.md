@@ -906,10 +906,11 @@ axioms of each.
 - **Named roles:** axioms' fields say what each operand is (`ClassAssertion.individual`, `ClassAssertion.class_`,
   a property assertion's `subject`, `property` and `object`), so no operand order needs documenting.
 - **JSON:** each node has a `type` field (`NodeType`) that discriminates the unions of nodes (`ClassExpression`,
-  `DataRange`, `AnyAxiom`, …), so nodes round-trip through JSON (U-42). An axiom's JSON also holds its `text`.
-- **A class hierarchy, with rendering high in it:** a concrete class declares its fields and its keyword or layout.
-  `Node` walks the fields (the IRIs an axiom mentions, `Node.iris`), adds parentheses, and renders tokens from the
-  layout. Intermediate bases capture the shared shapes: intersections and unions, complements, enumerations,
+  `DataRange`, `AnyAxiom`, …), so nodes round-trip through JSON (U-42). An axiom's JSON also holds its Manchester text,
+  `manchester`.
+- **A class hierarchy, with rendering high in it:** a concrete class declares its fields and its keyword or Manchester
+  layout. `Node` walks the fields (the IRIs an axiom mentions, `Node.iris`), adds parentheses, and renders tokens from
+  the layout. Intermediate bases capture the shared shapes: intersections and unions, complements, enumerations,
   restrictions, cardinalities, n-ary axioms (a pair `a DisjointWith b`, else a list `DisjointClasses: a, b, c`),
   sub-property axioms, domains and ranges, property characteristics, and property assertions.
 - **Building the tree:** `browl.axioms` converts the OWLAPI's objects on the Java thread, choosing a Python function
@@ -920,10 +921,10 @@ axioms of each.
 **Rendering:** a node renders as a stream of typed tokens (`browl.owl.Token`): keyword, IRI, literal, blank node,
 punctuation or other text (a cardinality, a facet such as `>=`), each knowing whether a space comes before it.
 
-1. An axiom's text (`Axiom.text`) is its tokens joined: Manchester syntax, one line, every entity as its full IRI,
-   `<…>`. It matches the OWLAPI's Manchester renderer, the one Protégé uses, for every logical axiom of Uberon and
-   NCBITaxon and of a test ontology holding every kind of OWL 2 axiom and expression (`tests/test_axioms.py`), with
-   these differences by design:
+1. An axiom's Manchester text (`Axiom.manchester`) is its tokens (`Node.manchester_tokens`) joined: one line, every
+   entity as its full IRI, `<…>`. It matches the OWLAPI's Manchester renderer, the one Protégé uses, for every logical
+   axiom of Uberon and NCBITaxon and of a test ontology holding every kind of OWL 2 axiom and expression
+   (`tests/test_axioms.py`), with these differences by design:
    - spacing: single spaces, and none before a comma or closing parenthesis (the OWLAPI writes `{a , b}`);
    - a `HasKey` axiom's properties separated by commas (`<Person> HasKey <hasSSN>, <ssn>`), which OWLAPI 4 runs
      together;

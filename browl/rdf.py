@@ -78,7 +78,13 @@ class RDFSyntaxError(ValueError):
 
 
 class _CheckedStr(str):
-    """A string that must match a pattern, checked whenever one is made, including by pydantic."""
+    """A string that must match a pattern, checked whenever one is made, inside pydantic models or not.
+
+    A `str` subclass, not an `Annotated[str, StringConstraints(pattern=...)]` alias, because most are made outside
+    pydantic, by the SPARQL and N-Triples parsers, and code tells the kinds of term apart by type (`Term`,
+    `isinstance(value, IRI)`); an alias is a plain `str` at runtime, with no check on construction and no type of its
+    own. `__get_pydantic_core_schema__`, pydantic's hook for custom types, gives models' fields the same check.
+    """
 
     __slots__ = ()
     _pattern: ClassVar[re.Pattern[str]]

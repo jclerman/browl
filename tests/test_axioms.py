@@ -319,12 +319,12 @@ def test_matches_owlapi(references: list[tuple[str, str, owl.Axiom]]) -> None:
     """Check that each axiom's text is the OWLAPI's, but for the kinds `DIFFERENCES` lists."""
     assert len(references) > 150
     unexpected = [
-        (normalized(node.text), normalized(expected))
+        (normalized(node.manchester), normalized(expected))
         for kind, expected, node in references
-        if kind not in DIFFERENCES and normalized(node.text) != normalized(expected)
+        if kind not in DIFFERENCES and normalized(node.manchester) != normalized(expected)
     ]
     assert unexpected == []
-    assert {kind for kind, expected, node in references if normalized(node.text) != normalized(expected)} == set(
+    assert {kind for kind, expected, node in references if normalized(node.manchester) != normalized(expected)} == set(
         DIFFERENCES
     )
 
@@ -345,7 +345,12 @@ def test_every_node_type(references: list[tuple[str, str, owl.Axiom]]) -> None:
     assert {type(each) for each in nodes} == set(owl.NODE_TYPES)
     syntax = jpype.JClass("org.semanticweb.owlapi.manchestersyntax.parser.ManchesterOWLSyntax")
     keywords = {str(keyword.keyword()) for keyword in syntax.values()}
-    used = {token.text for _, _, axiom in references for token in axiom.tokens() if token.kind == TokenKind.KEYWORD}
+    used = {
+        token.text
+        for _, _, axiom in references
+        for token in axiom.manchester_tokens()
+        if token.kind == TokenKind.KEYWORD
+    }
     assert {word.removesuffix(":") for word in used} <= {word.removesuffix(":") for word in keywords}
 
 
@@ -360,8 +365,8 @@ def test_every_kind(rendered: tuple[list[owl.Axiom], dict[str, list[owl.Axiom]]]
     every, _ = rendered
     assert {axiom.kind for axiom in every} == KINDS
     for axiom in every:
-        assert axiom.text
-        assert "\n" not in axiom.text
+        assert axiom.manchester
+        assert "\n" not in axiom.manchester
 
 
 def test_json_round_trip(rendered: tuple[list[owl.Axiom], dict[str, list[owl.Axiom]]]) -> None:
@@ -376,7 +381,7 @@ def test_closure(rendered: tuple[list[owl.Axiom], dict[str, list[owl.Axiom]]]) -
     _, closures = rendered
 
     def texts(name: str) -> list[str]:
-        return [axiom.text.replace(NS, "") for axiom in closures[f"{NS}{name}"]]
+        return [axiom.manchester.replace(NS, "") for axiom in closures[f"{NS}{name}"]]
 
     general = "<partOf> only (<Dog> or (not (<Cat>))) SubClassOf <Pet>"  # through unionOf and complementOf
     assert texts("Cat") == ["<Cat> DisjointWith <Dog>", "<Cat> SubClassOf <Animal>", general]  # annotation stripped
@@ -402,11 +407,11 @@ def test_roles(rendered: tuple[list[owl.Axiom], dict[str, list[owl.Axiom]]]) -> 
         return [axiom for axiom in closures[f"{NS}{name}"] if isinstance(axiom, kind)]
 
     def short(node: owl.Node) -> str:
-        return owl.text(node.tokens()).replace(NS, "")
+        return owl.manchester_text(node.manchester_tokens()).replace(NS, "")
 
     [assertion] = found("rex", owl.ClassAssertion)
     assert (short(assertion.individual), short(assertion.class_)) == ("<rex>", "<Dog>")
-    [likes] = [axiom for axiom in found("alice", owl.ObjectPropertyAssertion) if "likes" in axiom.text]
+    [likes] = [axiom for axiom in found("alice", owl.ObjectPropertyAssertion) if "likes" in axiom.manchester]
     assert (short(likes.subject), short(likes.property), short(likes.object)) == ("<alice>", "<likes>", "<rex>")
     [hates] = found("alice", owl.NegativeObjectPropertyAssertion)
     assert (short(hates.subject), short(hates.property), short(hates.object)) == ("<alice>", "<hates>", "<rex>")
@@ -429,7 +434,7 @@ def test_roles(rendered: tuple[list[owl.Axiom], dict[str, list[owl.Axiom]]]) -> 
     ]
     [definition] = found("Adulthood", owl.DatatypeDefinition)
     assert (short(definition.datatype), definition.iris()) == ("<Adulthood>", (f"{NS}Adulthood", f"{XSD}integer"))
-    [nickname] = [axiom for axiom in closures[f"{NS}Person"] if "nickname" in axiom.text]
+    [nickname] = [axiom for axiom in closures[f"{NS}Person"] if "nickname" in axiom.manchester]
     # Not the IRI in the literal; the literal's datatype, though it isn't in the text.
     assert nickname.iris() == (f"{NS}Person", f"{NS}nickname", f"{RDF}PlainLiteral")
 
@@ -467,12 +472,12 @@ def hostile_assertions() -> tuple[set[str], list[tuple[str, owl.Axiom]]]:
 
 def check_quoted(axiom: owl.Axiom) -> None:
     """Check that no text of `HOSTILE` is in an axiom's tokens but its literal's, nor its IRI in the axiom's IRIs."""
-    for token in axiom.tokens():
+    for token in axiom.manchester_tokens():
         if token.kind != TokenKind.LITERAL:
-            assert not any(mark in token.text for mark in ('"', "\u202e", "example.org/B")), axiom.text
-            assert token.kind != TokenKind.KEYWORD or token.text != "and", axiom.text
+            assert not any(mark in token.text for mark in ('"', "\u202e", "example.org/B")), axiom.manchester
+            assert token.kind != TokenKind.KEYWORD or token.text != "and", axiom.manchester
         else:
-            assert token.text.startswith('"'), axiom.text
+            assert token.text.startswith('"'), axiom.manchester
     assert "http://example.org/B" not in axiom.iris()
 
 
@@ -506,7 +511,7 @@ _:r <http://www.w3.org/2002/07/owl#hasValue> "1 \\" and <http://example.org/B>"^
     assert [axiom.kind for axiom in found] == ["DataPropertyAssertion", "SubClassOf"]
     for axiom in found:
         check_quoted(axiom)
-    assert found[1].text == f'<{NS}A> SubClassOf <{NS}p> value "1 \\" and <http://example.org/B>"^^<{XSD}decimal>'
+    assert found[1].manchester == f'<{NS}A> SubClassOf <{NS}p> value "1 \\" and <http://example.org/B>"^^<{XSD}decimal>'
 
 
 @pytest.mark.parametrize(
@@ -517,8 +522,24 @@ def test_valid_unquoted(datatype: str, lexical: str, shown: str) -> None:
     """Check that valid literals the OWLAPI writes unquoted are unquoted."""
     ntriples = f'<{NS}i> <{NS}p> "{lexical}"^^<{XSD}{datatype}> .\n{DATA_PROPERTY}'.encode()
     [axiom] = asyncio.run(owlapi.run_java(axioms.entity_axioms, ntriples, f"{NS}i"))
-    assert axiom.text == f"<{NS}i> <{NS}p> {shown}"
+    assert axiom.manchester == f"<{NS}i> <{NS}p> {shown}"
     assert axiom.iris() == (f"{NS}i", f"{NS}p", f"{XSD}{datatype}")
+
+
+def relative_iri() -> list[owl.Axiom]:
+    """Convert an axiom whose class has a relative IRI, which the OWLAPI's data factory allows."""
+    factory = jpype.JClass("org.semanticweb.owlapi.apibinding.OWLManager").getOWLDataFactory()
+    create = jpype.JClass("org.semanticweb.owlapi.model.IRI").create
+    relative = factory.getOWLClass(create("relative"))
+    return axioms.convert_axioms([factory.getOWLSubClassOfAxiom(relative, factory.getOWLThing())])
+
+
+def test_invalid_iri() -> None:
+    """Check that an axiom with an IRI its node refuses fails as a `FragmentError`, which fails only the panel."""
+    with pytest.raises(
+        owlapi.FragmentError, match=r"^browl can't hold an axiom as nodes: not a valid IRI: 'relative'$"
+    ):
+        asyncio.run(owlapi.run_java(relative_iri))
 
 
 def test_too_many(ntriples: bytes, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -548,7 +569,7 @@ def annotated_twice() -> list[owl.Axiom]:
 
 def test_annotations_collapse() -> None:
     """Check that an axiom stated with an annotation and without is one of the entity's axioms."""
-    assert [axiom.text for axiom in asyncio.run(owlapi.run_java(annotated_twice))] == [
+    assert [axiom.manchester for axiom in asyncio.run(owlapi.run_java(annotated_twice))] == [
         f"<{NS}Cat> SubClassOf <{NS}Animal>"
     ]
 

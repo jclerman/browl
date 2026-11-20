@@ -1,6 +1,6 @@
 {% from "links.html" import entity_link %}
-{# An axiom's tokens (`browl.owl.Node.tokens`), from `links` (IRI → `browl.links.EntityLink`), as HTML (DESIGN.md
-   §2.8): an IRI with a page as a link to it; any other as text: a standard vocabulary's by its prefixed name
+{# An axiom's Manchester tokens (`browl.owl.Node.manchester_tokens`), from `links` (IRI → `browl.links.EntityLink`),
+   as HTML (DESIGN.md §2.8): an IRI with a page as a link to it; any other as text: a standard vocabulary's by its prefixed name
    (`xsd:integer`), the rest in full; keywords styled lightly (§2.9). Literals, which come from the ontology, are
    isolated from the text around them, as names are in links; they, IRIs shown as text, and other text are cut short
    if long. #}
@@ -30,7 +30,7 @@
   {% else %}
   <ul class="axiom-list">
     {% for axiom in panel.axioms %}
-    <li dir="ltr">{{ manchester(axiom.tokens(), panel.links) }}</li>
+    <li dir="ltr">{{ manchester(axiom.manchester_tokens(), panel.links) }}</li>
     {% endfor %}
   </ul>
   {% endif %}

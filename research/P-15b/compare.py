@@ -53,7 +53,7 @@ def compare(path: str) -> dict[str, Any]:
     for axiom in every:
         start = time.perf_counter()
         [node] = axioms.convert_axioms([axiom])
-        text = node.text
+        text = node.manchester
         middle = time.perf_counter()
         expected = str(renderer.render(axiom))
         end = time.perf_counter()

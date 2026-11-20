@@ -5,16 +5,29 @@ axiom's fields name its roles (`SubClassOf.sub`, `ClassAssertion.individual`). E
 a `type` field that discriminates the unions of nodes (`ClassExpression`, `AnyAxiom`, …), so nodes round-trip through
 JSON (U-42).
 
-A node renders as a stream of typed tokens (`Node.tokens`): keywords, IRIs, literals and punctuation. An axiom's text
-(`Axiom.text`) is those tokens joined; templates render the same tokens as HTML, so neither parses text, and links,
-literals and keywords come from the tree. A concrete node class declares its fields and its keyword or layout; the
-base classes do the rendering, the parentheses and the walks over fields.
+A node renders in Manchester syntax as a stream of typed tokens (`Node.manchester_tokens`): keywords, IRIs, literals
+and punctuation. An axiom's Manchester text (`Axiom.manchester`) is those tokens joined; templates render the same
+tokens as HTML, so neither parses text, and links, literals and keywords come from the tree. A concrete node class
+declares its fields and its keyword or Manchester layout; the base classes do the rendering, the parentheses and the
+walks over fields. The tree itself follows OWL 2's structure, not any syntax; only the `manchester` names render.
 
 The text matches the OWLAPI's Manchester renderer (OWLAPI 4, the one Protégé uses), but for the differences
 `tests/test_axioms.py` lists: commas between a `HasKey` axiom's properties and in `{…}` and `[…]` lists, a
 `DatatypeDefinition` (which the OWLAPI renders as nothing), single spaces, and literals quoted whenever their lexical
 form isn't valid for their datatype. The OWLAPI parenthesizes every class expression nested in another unless it's a
 class, and a data range in a complement unless it's a datatype, and so does `Node`.
+
+Example:
+    >>> heart = Entity(kind=EntityKind.CLASS, iri="http://example.org/Heart")
+    >>> part_of = Entity(kind=EntityKind.OBJECT_PROPERTY, iri="http://example.org/partOf")
+    >>> body = Entity(kind=EntityKind.CLASS, iri="http://example.org/Body")
+    >>> axiom = SubClassOf(sub=heart, super=ObjectSomeValuesFrom(property=part_of, filler=body))
+    >>> axiom.manchester
+    '<http://example.org/Heart> SubClassOf <http://example.org/partOf> some <http://example.org/Body>'
+    >>> [(token.kind.value, token.text) for token in axiom.manchester_tokens()][1:3]
+    [('keyword', 'SubClassOf'), ('iri', '<http://example.org/partOf>')]
+    >>> axiom.iris()
+    ('http://example.org/Heart', 'http://example.org/partOf', 'http://example.org/Body')
 """
 
 from __future__ import annotations
@@ -23,12 +36,12 @@ import typing
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from typing import Annotated, Any, ClassVar
+from typing import Annotated, Any, ClassVar, override
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, computed_field, model_validator
 
 from browl.names import BUILTIN_PREFIXES
-from browl.rdf import RDF, XSD, XSD_LEXICAL_FORMS, XSD_STRING
+from browl.rdf import IRI, RDF, XSD, XSD_LEXICAL_FORMS, XSD_STRING
 
 STANDARD_PREFIXES = {BUILTIN_PREFIXES[prefix]: prefix for prefix in ("xsd", "rdf", "rdfs", "owl")}
 """The standard vocabularies' namespaces, and the prefix each IRI in them is shown with."""
@@ -71,7 +84,7 @@ class Token:
 
     kind: TokenKind
     text: str
-    iri: str | None = None
+    iri: IRI | None = None
     space: bool = False
 
     @property
@@ -93,7 +106,7 @@ _NO_SPACE_AFTER = frozenset({"(", "{", "[", "^^"})
 _NO_SPACE_BEFORE = frozenset({")", "}", "]", ",", "[", "^^"})
 
 
-def _spaced(tokens: Iterable[Token]) -> list[Token]:
+def _manchester_spaced(tokens: Iterable[Token]) -> list[Token]:
     """Return tokens with their spacing: one space between tokens, but none inside brackets or before a comma."""
     result: list[Token] = []
     for token in tokens:
@@ -107,14 +120,14 @@ def _spaced(tokens: Iterable[Token]) -> list[Token]:
     return result
 
 
-def text(tokens: Iterable[Token]) -> str:
-    """Return spaced tokens (`Node.tokens`) as text."""
+def manchester_text(tokens: Iterable[Token]) -> str:
+    """Return spaced tokens (`Node.manchester_tokens`) as Manchester text."""
     return "".join(f" {token.text}" if token.space else token.text for token in tokens)
 
 
 @dataclass(frozen=True, slots=True)
 class Slot:
-    """A field in a node's layout.
+    """A field in a node's Manchester layout (`Node.manchester_layout`).
 
     Attributes:
         name: The field's name.
@@ -208,6 +221,19 @@ def _is_concrete(node_type: type[Node]) -> bool:
 class Node(BaseModel):
     """A node of the tree: an axiom, an expression, an entity or a literal.
 
+    A node renders as Manchester syntax tokens (`manchester_tokens`), built from its Manchester layout: a sequence of
+    items, each one of these:
+
+    - a `Token`, written as it is: a keyword such as `SubClassOf`, or punctuation such as `(`;
+    - a `Slot`, which names one of the node's fields: the field's value is rendered in turn (a node by its own layout,
+      a number as text), with the slot's separator between the items of a tuple, and in parentheses if the slot is
+      nested and the item isn't an entity;
+    - a `Node`, rendered as it is, for a layout built per node (`_Nary`, `HasKey`).
+
+    A class whose layout is the same for every node sets `manchester_layout`; one whose layout depends on its keyword or
+    its values overrides `_manchester_layout` instead. Leaves (`Entity`, `Literal`, …) have no layout: they override
+    `unspaced_manchester_tokens`.
+
     Only a concrete node class, one with its own `NodeType`, can be instantiated or validated; `Node`, `Axiom` and the
     intermediate bases (`_Boolean`, `_Nary`, …) raise `TypeError`, as an abstract class does.
 
@@ -217,8 +243,8 @@ class Node(BaseModel):
 
     model_config = ConfigDict(frozen=True, validate_by_name=True, validate_by_alias=True, serialize_by_alias=True)
 
-    layout: ClassVar[tuple[LayoutItem, ...]] = ()
-    """The node's tokens and fields, in order, unless `_layout` says otherwise."""
+    manchester_layout: ClassVar[tuple[LayoutItem, ...]] = ()
+    """The class's Manchester layout (above), when all its nodes share one; else `_manchester_layout` builds it."""
 
     type: NodeType
 
@@ -230,46 +256,48 @@ class Node(BaseModel):
             raise TypeError(f"{cls.__name__} is a base class; make a node of one of its subclasses")
         return data
 
-    def _layout(self) -> Sequence[LayoutItem]:
-        return self.layout
+    def _manchester_layout(self) -> Sequence[LayoutItem]:
+        return self.manchester_layout
 
-    def _tokens(self) -> Iterator[Token]:
-        for item in self._layout():
+    def unspaced_manchester_tokens(self) -> Iterator[Token]:
+        """Yield the node's Manchester tokens, without spacing; a node calls this on the nodes in its fields."""
+        for item in self._manchester_layout():
             if isinstance(item, Token):
                 yield item
             elif isinstance(item, Node):
-                yield from item._tokens()
+                yield from item.unspaced_manchester_tokens()
             else:
                 value = getattr(self, item.name)
                 for index, each in enumerate(value if isinstance(value, tuple) else (value,)):
                     if index and item.separator is not None:
                         yield item.separator
-                    yield from _child_tokens(each, item.nested)
+                    yield from _child_manchester_tokens(each, item.nested)
 
-    def tokens(self) -> list[Token]:
+    def manchester_tokens(self) -> list[Token]:
         """Return the node in Manchester syntax, as tokens with their spacing."""
-        return _spaced(self._tokens())
+        return _manchester_spaced(self.unspaced_manchester_tokens())
 
-    def _iris(self) -> Iterator[str]:
+    def iri_mentions(self) -> Iterator[str]:
+        """Yield each IRI the node mentions, repeats included, in its fields' order; `iris` drops the repeats."""
         for name in type(self).model_fields:
             value = getattr(self, name)
             for each in value if isinstance(value, tuple) else (value,):
                 if isinstance(each, Node):
-                    yield from each._iris()
+                    yield from each.iri_mentions()
 
     def iris(self) -> tuple[str, ...]:
         """Return the IRIs the node mentions, each once, in its fields' order: entities' and literals' datatypes."""
-        return tuple(dict.fromkeys(self._iris()))
+        return tuple(dict.fromkeys(self.iri_mentions()))
 
 
-def _child_tokens(value: Node | int, nested: bool) -> Iterator[Token]:
+def _child_manchester_tokens(value: Node | int, nested: bool) -> Iterator[Token]:
     if isinstance(value, int):
         yield Token(TokenKind.TEXT, str(value))
         return
     wrap = nested and not isinstance(value, Entity)
     if wrap:
         yield _OPEN
-    yield from value._tokens()
+    yield from value.unspaced_manchester_tokens()
     if wrap:
         yield _CLOSE
 
@@ -298,12 +326,14 @@ class Entity(Node):
 
     type: typing.Literal[NodeType.ENTITY] = NodeType.ENTITY
     kind: EntityKind
-    iri: str
+    iri: IRI
 
-    def _tokens(self) -> Iterator[Token]:
+    @override
+    def unspaced_manchester_tokens(self) -> Iterator[Token]:
         yield Token(TokenKind.IRI, f"<{self.iri}>", self.iri)
 
-    def _iris(self) -> Iterator[str]:
+    @override
+    def iri_mentions(self) -> Iterator[str]:
         yield self.iri
 
 
@@ -315,12 +345,14 @@ class IRIReference(Node):
     """
 
     type: typing.Literal[NodeType.IRI] = NodeType.IRI
-    iri: str
+    iri: IRI
 
-    def _tokens(self) -> Iterator[Token]:
+    @override
+    def unspaced_manchester_tokens(self) -> Iterator[Token]:
         yield Token(TokenKind.IRI, f"<{self.iri}>", self.iri)
 
-    def _iris(self) -> Iterator[str]:
+    @override
+    def iri_mentions(self) -> Iterator[str]:
         yield self.iri
 
 
@@ -334,7 +366,8 @@ class AnonymousIndividual(Node):
     type: typing.Literal[NodeType.ANONYMOUS_INDIVIDUAL] = NodeType.ANONYMOUS_INDIVIDUAL
     id: str
 
-    def _tokens(self) -> Iterator[Token]:
+    @override
+    def unspaced_manchester_tokens(self) -> Iterator[Token]:
         yield Token(TokenKind.BLANK_NODE, self.id)
 
 
@@ -344,7 +377,17 @@ _FLOAT = f"{XSD}float"
 
 
 class Literal(Node):
-    """A literal.
+    r"""A literal.
+
+    Examples:
+        >>> manchester_text(Literal(lexical="42", datatype=f"{XSD}integer").manchester_tokens())
+        '42'
+        >>> ill_typed = Literal(lexical="forty-two", datatype=f"{XSD}integer")
+        >>> manchester_text(ill_typed.manchester_tokens())
+        '"forty-two"^^<http://www.w3.org/2001/XMLSchema#integer>'
+        >>> tagged = Literal(lexical='say "cœur"', datatype=f"{RDF}langString", language="fr")
+        >>> print(manchester_text(tagged.manchester_tokens()))
+        "say \"cœur\""@fr
 
     Attributes:
         lexical: Its lexical form.
@@ -354,10 +397,11 @@ class Literal(Node):
 
     type: typing.Literal[NodeType.LITERAL] = NodeType.LITERAL
     lexical: str
-    datatype: str
+    datatype: IRI
     language: str | None = None
 
-    def _tokens(self) -> Iterator[Token]:
+    @override
+    def unspaced_manchester_tokens(self) -> Iterator[Token]:
         """Yield the literal as the OWLAPI writes it, but quoted whenever its lexical form isn't valid.
 
         The OWLAPI writes a number or boolean unquoted (`XSD_LEXICAL_FORMS`), else quotes it, with its language tag or
@@ -381,7 +425,8 @@ class Literal(Node):
         escaped = self.lexical.replace("\\", "\\\\").replace('"', '\\"')
         return f'"{escaped}"'
 
-    def _iris(self) -> Iterator[str]:
+    @override
+    def iri_mentions(self) -> Iterator[str]:
         yield self.datatype
 
 
@@ -395,7 +440,7 @@ class ObjectInverseOf(Node):
         property: The object property.
     """
 
-    layout = (_keyword("inverse"), _OPEN, Slot("property"), _CLOSE)
+    manchester_layout = (_keyword("inverse"), _OPEN, Slot("property"), _CLOSE)
 
     type: typing.Literal[NodeType.OBJECT_INVERSE_OF] = NodeType.OBJECT_INVERSE_OF
     property: Entity
@@ -409,19 +454,24 @@ class _Boolean(Node):
 
     keyword: ClassVar[str]
 
-    def _layout(self) -> Sequence[LayoutItem]:
+    def _manchester_layout(self) -> Sequence[LayoutItem]:
         return (Slot("operands", _keyword(self.keyword), nested=True),)
 
 
 class _DataBoolean(_Boolean):
     """A data range's intersection or union, which the OWLAPI writes in parentheses wherever it is."""
 
-    def _layout(self) -> Sequence[LayoutItem]:
-        return (_OPEN, Slot("operands", _keyword(self.keyword)), _CLOSE)
+    def _manchester_layout(self) -> Sequence[LayoutItem]:
+        return _OPEN, Slot("operands", _keyword(self.keyword)), _CLOSE
 
 
 class ObjectIntersectionOf(_Boolean):
     """An intersection of class expressions (`and`).
+
+    Example:
+        >>> a, b = (Entity(kind=EntityKind.CLASS, iri=f"http://example.org/{name}") for name in "ab")
+        >>> manchester_text(ObjectIntersectionOf(operands=(a, ObjectComplementOf(operand=b))).manchester_tokens())
+        '<http://example.org/a> and (not (<http://example.org/b>))'
 
     Attributes:
         operands: The class expressions.
@@ -479,7 +529,7 @@ class ObjectComplementOf(Node):
         operand: The class expression.
     """
 
-    layout = (_keyword("not"), _OPEN, Slot("operand"), _CLOSE)
+    manchester_layout = (_keyword("not"), _OPEN, Slot("operand"), _CLOSE)
 
     type: typing.Literal[NodeType.OBJECT_COMPLEMENT_OF] = NodeType.OBJECT_COMPLEMENT_OF
     operand: ClassExpression
@@ -492,7 +542,7 @@ class DataComplementOf(Node):
         operand: The data range.
     """
 
-    layout = (_keyword("not"), Slot("operand", nested=True))
+    manchester_layout = (_keyword("not"), Slot("operand", nested=True))
 
     type: typing.Literal[NodeType.DATA_COMPLEMENT_OF] = NodeType.DATA_COMPLEMENT_OF
     operand: DataRange
@@ -501,7 +551,7 @@ class DataComplementOf(Node):
 class _OneOf(Node):
     """An enumeration: its items in braces, separated by commas."""
 
-    layout = (_punctuation("{"), Slot("items", _COMMA), _punctuation("}"))
+    manchester_layout = (_punctuation("{"), Slot("items", _COMMA), _punctuation("}"))
 
 
 class ObjectOneOf(_OneOf):
@@ -534,8 +584,8 @@ class _Restriction(Node):
     """Whether the filler gets parentheses unless it's an entity; the OWLAPI never gives a data range, an individual
     or a literal any here."""
 
-    def _layout(self) -> Sequence[LayoutItem]:
-        return (Slot("property"), _keyword(self.keyword), Slot("filler", nested=self.nested))
+    def _manchester_layout(self) -> Sequence[LayoutItem]:
+        return Slot("property"), _keyword(self.keyword), Slot("filler", nested=self.nested)
 
 
 class ObjectSomeValuesFrom(_Restriction):
@@ -639,7 +689,7 @@ class ObjectHasSelf(Node):
         property: The object property expression.
     """
 
-    layout = (Slot("property"), _keyword("Self"))
+    manchester_layout = (Slot("property"), _keyword("Self"))
 
     type: typing.Literal[NodeType.OBJECT_HAS_SELF] = NodeType.OBJECT_HAS_SELF
     property: ObjectPropertyExpression
@@ -651,8 +701,8 @@ class _Cardinality(_Restriction):
     The OWLAPI gives a restriction without a filler `owl:Thing`'s, or `rdfs:Literal`'s, so every one has a filler.
     """
 
-    def _layout(self) -> Sequence[LayoutItem]:
-        return (Slot("property"), _keyword(self.keyword), Slot("cardinality"), Slot("filler", nested=self.nested))
+    def _manchester_layout(self) -> Sequence[LayoutItem]:
+        return Slot("property"), _keyword(self.keyword), Slot("cardinality"), Slot("filler", nested=self.nested)
 
 
 class ObjectMinCardinality(_Cardinality):
@@ -668,7 +718,7 @@ class ObjectMinCardinality(_Cardinality):
 
     type: typing.Literal[NodeType.OBJECT_MIN_CARDINALITY] = NodeType.OBJECT_MIN_CARDINALITY
     property: ObjectPropertyExpression
-    cardinality: int
+    cardinality: NonNegativeInt
     filler: ClassExpression
 
 
@@ -685,7 +735,7 @@ class ObjectMaxCardinality(_Cardinality):
 
     type: typing.Literal[NodeType.OBJECT_MAX_CARDINALITY] = NodeType.OBJECT_MAX_CARDINALITY
     property: ObjectPropertyExpression
-    cardinality: int
+    cardinality: NonNegativeInt
     filler: ClassExpression
 
 
@@ -702,7 +752,7 @@ class ObjectExactCardinality(_Cardinality):
 
     type: typing.Literal[NodeType.OBJECT_EXACT_CARDINALITY] = NodeType.OBJECT_EXACT_CARDINALITY
     property: ObjectPropertyExpression
-    cardinality: int
+    cardinality: NonNegativeInt
     filler: ClassExpression
 
 
@@ -720,7 +770,7 @@ class DataMinCardinality(_Cardinality):
 
     type: typing.Literal[NodeType.DATA_MIN_CARDINALITY] = NodeType.DATA_MIN_CARDINALITY
     property: Entity
-    cardinality: int
+    cardinality: NonNegativeInt
     filler: DataRange
 
 
@@ -738,7 +788,7 @@ class DataMaxCardinality(_Cardinality):
 
     type: typing.Literal[NodeType.DATA_MAX_CARDINALITY] = NodeType.DATA_MAX_CARDINALITY
     property: Entity
-    cardinality: int
+    cardinality: NonNegativeInt
     filler: DataRange
 
 
@@ -756,7 +806,7 @@ class DataExactCardinality(_Cardinality):
 
     type: typing.Literal[NodeType.DATA_EXACT_CARDINALITY] = NodeType.DATA_EXACT_CARDINALITY
     property: Entity
-    cardinality: int
+    cardinality: NonNegativeInt
     filler: DataRange
 
 
@@ -785,18 +835,20 @@ class FacetRestriction(Node):
     """
 
     type: typing.Literal[NodeType.FACET_RESTRICTION] = NodeType.FACET_RESTRICTION
-    facet: str
+    facet: IRI
     value: Literal
 
-    def _tokens(self) -> Iterator[Token]:
+    @override
+    def unspaced_manchester_tokens(self) -> Iterator[Token]:
         symbol = FACETS.get(self.facet)
         yield Token(TokenKind.TEXT, symbol) if symbol else Token(TokenKind.IRI, f"<{self.facet}>", self.facet)
-        yield from self.value._tokens()
+        yield from self.value.unspaced_manchester_tokens()
 
-    def _iris(self) -> Iterator[str]:
+    @override
+    def iri_mentions(self) -> Iterator[str]:
         if self.facet not in FACETS:
             yield self.facet
-        yield from self.value._iris()
+        yield from self.value.iri_mentions()
 
 
 class DatatypeRestriction(Node):
@@ -807,7 +859,7 @@ class DatatypeRestriction(Node):
         restrictions: The facets and their values.
     """
 
-    layout = (Slot("datatype"), _punctuation("["), Slot("restrictions", _COMMA), _punctuation("]"))
+    manchester_layout = (Slot("datatype"), _punctuation("["), Slot("restrictions", _COMMA), _punctuation("]"))
 
     type: typing.Literal[NodeType.DATATYPE_RESTRICTION] = NodeType.DATATYPE_RESTRICTION
     datatype: Entity
@@ -822,9 +874,9 @@ class Axiom(Node):
 
     @computed_field  # type: ignore[prop-decorator]
     @property
-    def text(self) -> str:
+    def manchester(self) -> str:
         """Return the axiom in Manchester syntax, on one line, every entity in it written as its full IRI, `<…>`."""
-        return text(self.tokens())
+        return manchester_text(self.manchester_tokens())
 
     @property
     def kind(self) -> str:
@@ -840,7 +892,7 @@ class SubClassOf(Axiom):
         super: The superclass.
     """
 
-    layout = (Slot("sub"), _keyword("SubClassOf"), Slot("super"))
+    manchester_layout = (Slot("sub"), _keyword("SubClassOf"), Slot("super"))
 
     type: typing.Literal[NodeType.SUB_CLASS_OF] = NodeType.SUB_CLASS_OF
     sub: ClassExpression
@@ -860,11 +912,11 @@ class _Nary(Axiom):
     listed: ClassVar[str]
     """The keyword before a list of members."""
 
-    def _layout(self) -> Sequence[LayoutItem]:
+    def _manchester_layout(self) -> Sequence[LayoutItem]:
         members: tuple[Node, ...] = self.members
         if len(members) == 2 and self.pair is not None:
-            return (members[0], _keyword(self.pair), members[1])
-        return (_keyword(self.listed), Slot("members", _COMMA))
+            return members[0], _keyword(self.pair), members[1]
+        return _keyword(self.listed), Slot("members", _COMMA)
 
 
 class EquivalentClasses(_Nary):
@@ -882,6 +934,13 @@ class EquivalentClasses(_Nary):
 
 class DisjointClasses(_Nary):
     """A disjoint-classes axiom.
+
+    Examples:
+        >>> a, b, c = (Entity(kind=EntityKind.CLASS, iri=f"http://example.org/{name}") for name in "abc")
+        >>> DisjointClasses(members=(a, b)).manchester
+        '<http://example.org/a> DisjointWith <http://example.org/b>'
+        >>> DisjointClasses(members=(a, b, c)).manchester
+        'DisjointClasses: <http://example.org/a>, <http://example.org/b>, <http://example.org/c>'
 
     Attributes:
         members: The class expressions.
@@ -901,7 +960,7 @@ class DisjointUnion(Axiom):
         members: The class expressions.
     """
 
-    layout = (Slot("class_"), _keyword("DisjointUnionOf"), Slot("members", _COMMA))
+    manchester_layout = (Slot("class_"), _keyword("DisjointUnionOf"), Slot("members", _COMMA))
 
     type: typing.Literal[NodeType.DISJOINT_UNION] = NodeType.DISJOINT_UNION
     class_: Entity = Field(alias="class")
@@ -912,6 +971,12 @@ class HasKey(Axiom):
     """A key axiom: individuals of a class are identified by the values of properties.
 
     Its properties are separated by commas, where the OWLAPI writes nothing between them.
+
+    Example:
+        >>> person = Entity(kind=EntityKind.CLASS, iri="http://example.org/Person")
+        >>> ssn = Entity(kind=EntityKind.DATA_PROPERTY, iri="http://example.org/ssn")
+        >>> HasKey(class_=person, object_properties=(), data_properties=(ssn,)).manchester
+        '<http://example.org/Person> HasKey <http://example.org/ssn>'
 
     Attributes:
         class_: The class expression.
@@ -924,7 +989,7 @@ class HasKey(Axiom):
     object_properties: tuple[ObjectPropertyExpression, ...]
     data_properties: tuple[Entity, ...]
 
-    def _layout(self) -> Sequence[LayoutItem]:
+    def _manchester_layout(self) -> Sequence[LayoutItem]:
         items: list[LayoutItem] = [Slot("class_"), _keyword("HasKey")]
         for index, each in enumerate((*self.object_properties, *self.data_properties)):
             items += (_COMMA, each) if index else (each,)
@@ -934,7 +999,7 @@ class HasKey(Axiom):
 class _SubPropertyOf(Axiom):
     """A subproperty axiom."""
 
-    layout = (Slot("sub"), _keyword("SubPropertyOf:"), Slot("super"))
+    manchester_layout = (Slot("sub"), _keyword("SubPropertyOf:"), Slot("super"))
 
 
 class SubObjectPropertyOf(_SubPropertyOf):
@@ -987,7 +1052,7 @@ class SubPropertyChainOf(Axiom):
         super: The object property expression.
     """
 
-    layout = (Slot("chain", _keyword("o")), _keyword("SubPropertyOf:"), Slot("super"))
+    manchester_layout = (Slot("chain", _keyword("o")), _keyword("SubPropertyOf:"), Slot("super"))
 
     type: typing.Literal[NodeType.SUB_PROPERTY_CHAIN_OF] = NodeType.SUB_PROPERTY_CHAIN_OF
     chain: tuple[ObjectPropertyExpression, ...]
@@ -1054,7 +1119,7 @@ class InverseObjectProperties(Axiom):
         second: Its inverse.
     """
 
-    layout = (Slot("first"), _keyword("InverseOf"), Slot("second"))
+    manchester_layout = (Slot("first"), _keyword("InverseOf"), Slot("second"))
 
     type: typing.Literal[NodeType.INVERSE_OBJECT_PROPERTIES] = NodeType.INVERSE_OBJECT_PROPERTIES
     first: ObjectPropertyExpression
@@ -1064,7 +1129,7 @@ class InverseObjectProperties(Axiom):
 class _Domain(Axiom):
     """A property's domain."""
 
-    layout = (Slot("property"), _keyword("Domain"), Slot("domain"))
+    manchester_layout = (Slot("property"), _keyword("Domain"), Slot("domain"))
 
 
 class _Range(Axiom):
@@ -1072,8 +1137,8 @@ class _Range(Axiom):
 
     keyword: ClassVar[str] = "Range"
 
-    def _layout(self) -> Sequence[LayoutItem]:
-        return (Slot("property"), _keyword(self.keyword), Slot("range"))
+    def _manchester_layout(self) -> Sequence[LayoutItem]:
+        return Slot("property"), _keyword(self.keyword), Slot("range")
 
 
 class ObjectPropertyDomain(_Domain):
@@ -1161,8 +1226,8 @@ class _Characteristic(Axiom):
 
     keyword: ClassVar[str]
 
-    def _layout(self) -> Sequence[LayoutItem]:
-        return (_keyword(self.keyword), Slot("property"))
+    def _manchester_layout(self) -> Sequence[LayoutItem]:
+        return _keyword(self.keyword), Slot("property")
 
 
 class FunctionalObjectProperty(_Characteristic):
@@ -1279,7 +1344,7 @@ class DatatypeDefinition(Axiom):
         range: The data range.
     """
 
-    layout = (Slot("datatype"), _keyword("EquivalentTo"), Slot("range"))
+    manchester_layout = (Slot("datatype"), _keyword("EquivalentTo"), Slot("range"))
 
     type: typing.Literal[NodeType.DATATYPE_DEFINITION] = NodeType.DATATYPE_DEFINITION
     datatype: Entity
@@ -1294,7 +1359,7 @@ class ClassAssertion(Axiom):
         class_: The class expression.
     """
 
-    layout = (Slot("individual"), _keyword("Type"), Slot("class_"))
+    manchester_layout = (Slot("individual"), _keyword("Type"), Slot("class_"))
 
     type: typing.Literal[NodeType.CLASS_ASSERTION] = NodeType.CLASS_ASSERTION
     individual: Individual
@@ -1306,7 +1371,7 @@ class _PropertyAssertion(Axiom):
 
     negative: ClassVar[bool] = False
 
-    def _layout(self) -> Sequence[LayoutItem]:
+    def _manchester_layout(self) -> Sequence[LayoutItem]:
         triple = (Slot("subject"), Slot("property"), Slot("object"))
         return (_keyword("not"), _OPEN, *triple, _CLOSE) if self.negative else triple
 
@@ -1413,7 +1478,8 @@ class OtherAxiom(Axiom):
     axiom_type: str
     functional: str
 
-    def _tokens(self) -> Iterator[Token]:
+    @override
+    def unspaced_manchester_tokens(self) -> Iterator[Token]:
         yield Token(TokenKind.TEXT, self.functional)
 
     @property
