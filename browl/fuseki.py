@@ -35,6 +35,19 @@ N-Triples, all of Uberon, even at 384 MB (research/P-4); a page's fragment is a 
 MAX_LINE_CHARS = 16 * 2**20
 """Longest line accepted in any result, so a malformed one can't grow without bound."""
 
+ADMIN_TIMEOUT_S = 120.0
+"""Time limit for an admin protocol call: opening a store is quick, but removing one deletes its files."""
+
+PING_TIMEOUT_S = 2.0
+"""Time limit for the whole of a ping (`ping`)."""
+
+UNION_FROM = "FROM <urn:x-arq:DefaultGraph> FROM <urn:x-arq:UnionGraph>"
+"""The dataset clause of a query that sees the ontology and its imports: the default graph merged with every named
+graph, as a set, so a triple both state counts once (DESIGN.md §2.4)."""
+
+END_VARIABLE = "browl_end"
+"""The variable that marks a bulk result's last row (`FusekiClient.bulk_select`); bulk queries mustn't use it."""
+
 TSV = "text/tab-separated-values"
 NTRIPLES = "application/n-triples"
 _ERROR_TEXT_LIMIT = 1000  # characters of an error response kept in the exception
@@ -42,6 +55,8 @@ _HTTP_TIMEOUT = httpx2.Timeout(QUERY_TIMEOUT_S, read=STREAM_READ_TIMEOUT_S)
 # Fuseki's datasets have plain names; anything else could reach other endpoints, such as the unauthenticated admin
 # protocol's under "/$/".
 _DATASET = re.compile(r"[A-Za-z0-9_-]+")
+_END = Literal("true", f"{XSD}boolean")  # the value of `END_VARIABLE` in a bulk result's last row
+_WHERE = "\nWHERE {"  # where `filled_query` puts the dataset clause
 
 
 class SparqlError(Exception):
@@ -97,12 +112,6 @@ class SelectStream:
                 yield row
 
 
-END_VARIABLE = "browl_end"
-"""The variable that marks a bulk result's last row (`FusekiClient.bulk_select`); bulk queries mustn't use it."""
-
-_END = Literal("true", f"{XSD}boolean")
-
-
 class BulkSelectStream:
     """A bulk SELECT result read as it arrives and checked to be whole: iterate it for the rows, in column order.
 
@@ -151,20 +160,9 @@ class BulkSelectStream:
             raise SparqlError(f"the result is incomplete: it broke off after {rows:,} rows without its end marker")
 
 
-UNION_FROM = "FROM <urn:x-arq:DefaultGraph> FROM <urn:x-arq:UnionGraph>"
-"""The dataset clause of a query that sees the ontology and its imports: the default graph merged with every named
-graph, as a set, so a triple both state counts once (DESIGN.md §2.4)."""
-
-ADMIN_TIMEOUT_S = 120.0
-"""Time limit for an admin protocol call: opening a store is quick, but removing one deletes its files."""
-
-
 def dataset_clause(has_imports: bool) -> str:
     """Return the dataset clause for queries that should see the imports: `UNION_FROM` if there are any, else ""."""
     return UNION_FROM if has_imports else ""
-
-
-_WHERE = "\nWHERE {"
 
 
 def filled_query(query: str, dataset_clause: str, parts: dict[str, str]) -> str:
@@ -181,10 +179,6 @@ def filled_query(query: str, dataset_clause: str, parts: dict[str, str]) -> str:
             raise ValueError(f"no {placeholder} in the query")
         filled = filled.replace(placeholder, value)
     return filled
-
-
-PING_TIMEOUT_S = 2.0
-"""Time limit for the whole of a ping (`ping`)."""
 
 
 async def ping(http: httpx2.AsyncClient, timeout_s: float = PING_TIMEOUT_S) -> bool:
