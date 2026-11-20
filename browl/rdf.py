@@ -101,8 +101,13 @@ class _CheckedStr(str):
 
     @classmethod
     def __get_pydantic_core_schema__(cls, source: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
-        """Validate as a string, then make one of these from it, so pydantic models' fields get the same check."""
-        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
+        """Make one of these from a string, so pydantic models' fields get the same check; take one as it is."""
+        from_str = core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
+
+        def checked(value: Any, handler: core_schema.ValidatorFunctionWrapHandler) -> Any:
+            return value if isinstance(value, cls) else handler(value)
+
+        return core_schema.no_info_wrap_validator_function(checked, from_str)
 
 
 class IRI(_CheckedStr):

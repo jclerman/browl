@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import logging
 import re
 import uuid
 from collections.abc import Iterator
@@ -28,45 +29,17 @@ pytestmark = [pytest.mark.jvm, pytest.mark.usefixtures("jvm")]
 ONTOLOGY = Path(__file__).parent / "data" / "axioms.ofn"
 NS = "http://example.org/axioms#"
 
-KINDS = {
-    "SubClassOf",
-    "EquivalentClasses",
-    "DisjointClasses",
-    "DisjointUnion",
-    "HasKey",
-    "SubObjectPropertyOf",
-    "SubPropertyChainOf",
-    "EquivalentObjectProperties",
-    "DisjointObjectProperties",
-    "InverseObjectProperties",
-    "ObjectPropertyDomain",
-    "ObjectPropertyRange",
-    "FunctionalObjectProperty",
-    "InverseFunctionalObjectProperty",
-    "ReflexiveObjectProperty",
-    "IrreflexiveObjectProperty",
-    "SymmetricObjectProperty",
-    "AsymmetricObjectProperty",
-    "TransitiveObjectProperty",
-    "SubDataPropertyOf",
-    "EquivalentDataProperties",
-    "DisjointDataProperties",
-    "DataPropertyDomain",
-    "DataPropertyRange",
-    "FunctionalDataProperty",
-    "DatatypeDefinition",
-    "ClassAssertion",
-    "ObjectPropertyAssertion",
-    "NegativeObjectPropertyAssertion",
-    "DataPropertyAssertion",
-    "NegativeDataPropertyAssertion",
-    "SameIndividual",
-    "DifferentIndividuals",
-    "SubAnnotationPropertyOf",
-    "AnnotationPropertyDomain",
-    "AnnotationPropertyRange",
-}
-"""Every kind of OWL 2 axiom but declarations and annotation assertions, as `Axiom.kind` names them."""
+
+def kinds() -> set[str]:
+    """Return every kind of OWL 2 axiom but declarations, annotation assertions and rules, by its OWLAPI interface.
+
+    The OWLAPI's own names for two kinds are misspelt (`IrrefexiveObjectProperty`, `AnnotationPropertyRangeOf`).
+    """
+    return {
+        str(each.getActualClass().getSimpleName()).removeprefix("OWL").removesuffix("Axiom")
+        for each in jpype.JClass("org.semanticweb.owlapi.model.AxiomType").AXIOM_TYPES
+        if str(each.getName()) not in {*axioms._LEFT_OUT, "Rule"}
+    }
 
 
 @pytest.fixture(scope="module")
@@ -180,9 +153,14 @@ def expected_text(kind: str, axiom: Any, renderer: Any) -> str:
     return str(renderer.render(axiom))
 
 
+def unlabelled(text: str) -> str:
+    """Return text `normalized`, without anonymous individuals' labels, which `browl.axioms` gives anew."""
+    return re.sub(r"_:[\w-]+", "_:", normalized(text))
+
+
 def comparable(kind: str, text: str) -> str:
-    """Return text `normalized`, and for a `HasKey` axiom without spaces or commas, which the OWLAPI writes in part."""
-    text = normalized(text)
+    """Return text `unlabelled`, and for a `HasKey` axiom without spaces or commas, which the OWLAPI writes in part."""
+    text = unlabelled(text)
     return re.sub(r"[\s,]", "", text) if kind == "HasKey" else text
 
 
@@ -360,7 +338,7 @@ def test_matches_owlapi(references: list[Reference]) -> None:
         if comparable(each.kind, each.node.manchester) != comparable(each.kind, each.expected)
     ]
     assert unexpected == []
-    differ = {each.kind for each in references if normalized(each.node.manchester) != normalized(each.owlapi)}
+    differ = {each.kind for each in references if unlabelled(each.node.manchester) != unlabelled(each.owlapi)}
     assert differ == set(DIFFERENCES)
 
 
@@ -375,7 +353,7 @@ def walk(node: owl.Node) -> Iterator[owl.Node]:
 
 
 def test_every_node_type(references: list[Reference]) -> None:
-    """Check that the axioms compared with the OWLAPI's use every node type, and every keyword is the OWLAPI's."""
+    """Check that the axioms compared with the OWLAPI's use every node type, in its union, and the OWLAPI's keywords."""
     nodes = [each for reference in references for each in walk(reference.node)]
     assert {type(each) for each in nodes} == set(owl.NODE_TYPES)
     syntax = jpype.JClass("org.semanticweb.owlapi.manchestersyntax.parser.ManchesterOWLSyntax")
@@ -387,6 +365,9 @@ def test_every_node_type(references: list[Reference]) -> None:
         if token.kind == TokenKind.KEYWORD
     }
     assert {word.removesuffix(":") for word in used} <= {word.removesuffix(":") for word in keywords}
+    adapter = TypeAdapter(list[owl.AnyAxiom])
+    every = [reference.node for reference in references]
+    assert adapter.validate_json(adapter.dump_json(every)) == every
 
 
 def test_facets() -> None:
@@ -398,7 +379,7 @@ def test_facets() -> None:
 def test_every_kind(rendered: tuple[list[owl.Axiom], dict[str, list[owl.Axiom]]]) -> None:
     """Check that the test ontology has every kind of axiom, each on one line."""
     every, _ = rendered
-    assert {axiom.kind for axiom in every} == KINDS
+    assert {axiom.kind for axiom in every} == kinds()
     for axiom in every:
         assert axiom.manchester
         assert "\n" not in axiom.manchester
@@ -561,20 +542,30 @@ def test_valid_unquoted(datatype: str, lexical: str, shown: str) -> None:
     assert axiom.iris() == (f"{NS}i", f"{NS}p", f"{XSD}{datatype}")
 
 
-def relative_iri() -> list[owl.Axiom]:
-    """Convert an axiom whose class has a relative IRI, which the OWLAPI's data factory allows."""
+def relative_iri() -> list[owl.AnyAxiom]:
+    """Convert an axiom whose class has a relative IRI, which the OWLAPI's data factory allows, and one without."""
     factory = jpype.JClass("org.semanticweb.owlapi.apibinding.OWLManager").getOWLDataFactory()
     create = jpype.JClass("org.semanticweb.owlapi.model.IRI").create
-    relative = factory.getOWLClass(create("relative"))
-    return axioms.convert_axioms([factory.getOWLSubClassOfAxiom(relative, factory.getOWLThing())])
+    relative, a = factory.getOWLClass(create("relative")), factory.getOWLClass(create(f"{NS}A"))
+    return axioms.convert_axioms(
+        [
+            factory.getOWLSubClassOfAxiom(relative, factory.getOWLThing()),
+            factory.getOWLSubClassOfAxiom(a, factory.getOWLThing()),
+        ]
+    )
 
 
-def test_invalid_iri() -> None:
-    """Check that an axiom with an IRI its node refuses fails as a `FragmentError`, which fails only the panel."""
-    with pytest.raises(
-        owlapi.FragmentError, match=r"^browl can't hold an axiom as nodes: not a valid IRI: 'relative'$"
-    ):
-        asyncio.run(owlapi.run_java(relative_iri))
+def test_invalid_iri(caplog: pytest.LogCaptureFixture) -> None:
+    """Check that an axiom with an IRI its node refuses is logged and shown in functional syntax, not the others."""
+    with caplog.at_level(logging.WARNING, logger="browl.axioms"):
+        found = asyncio.run(owlapi.run_java(relative_iri))
+    assert [(type(node), node.kind, node.manchester) for node in found] == [
+        (owl.SubClassOf, "SubClassOf", f"<{NS}A> SubClassOf <http://www.w3.org/2002/07/owl#Thing>"),
+        (owl.OtherAxiom, "SubClassOf", "SubClassOf(<relative> owl:Thing)"),
+    ]
+    assert [record.getMessage() for record in caplog.records] == [
+        "Showing an axiom in functional syntax, as browl can't hold it as nodes: not a valid IRI: 'relative'"
+    ]
 
 
 def nested(depth: int, intersections: bool) -> list[owl.AnyAxiom]:
@@ -614,6 +605,42 @@ def test_deep_fragment() -> None:
         lines.append(f"_:b{level} <{OWL}complementOf> {f'_:b{level + 1}' if level < 999 else f'<{NS}B>'} .")
     with pytest.raises(owlapi.FragmentError, match="nest more than"):
         asyncio.run(owlapi.run_java(axioms.entity_axioms, "\n".join(lines).encode(), f"{NS}A"))
+
+
+def unconvertible() -> list[str]:
+    """Return the errors from converting a class, which isn't an axiom, and a SWRL variable, which no node covers."""
+    factory = jpype.JClass("org.semanticweb.owlapi.apibinding.OWLManager").getOWLDataFactory()
+    create = jpype.JClass("org.semanticweb.owlapi.model.IRI").create
+    errors = []
+    for value in (factory.getOWLClass(create(f"{NS}A")), factory.getSWRLVariable(create("urn:swrl#x"))):
+        with pytest.raises(owlapi.FragmentError) as error:
+            axioms.convert_axioms([value])
+        errors.append(str(error.value))
+    return errors
+
+
+def test_unconvertible() -> None:
+    """Check that an object that isn't an axiom, or that no node type covers, fails as a `FragmentError`."""
+    not_axiom, no_node = asyncio.run(owlapi.run_java(unconvertible))
+    assert not_axiom == "not an axiom: Entity"
+    assert re.fullmatch(r"browl has no node type for [\w.]+SWRLVariable\w*", no_node)
+
+
+ANONYMOUS = "".join(
+    [
+        f"<{NS}i> <{RDF}type> <{OWL}NamedIndividual> .\n",
+        *(f"<{NS}{name}> <{RDF}type> <{OWL}ObjectProperty> .\n" for name in "pqr"),
+        f"<{NS}i> <{NS}r> _:y .\n<{NS}i> <{NS}q> _:x .\n<{NS}i> <{NS}p> _:x .\n",
+    ]
+).encode()
+"""An individual related to two anonymous individuals, one of them twice."""
+
+
+def test_anonymous_labels() -> None:
+    """Check that anonymous individuals are labelled in order of appearance, the same each time a fragment is parsed."""
+    for _ in range(2):
+        found = asyncio.run(owlapi.run_java(axioms.entity_axioms, ANONYMOUS, f"{NS}i"))
+        assert [axiom.manchester.replace(NS, "") for axiom in found] == ["<i> <p> _:b1", "<i> <q> _:b1", "<i> <r> _:b2"]
 
 
 def test_too_many(ntriples: bytes, monkeypatch: pytest.MonkeyPatch) -> None:

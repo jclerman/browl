@@ -13,7 +13,9 @@ super-properties; not its annotation assertions, nor its usage in other entities
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import functools
+import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, cast
@@ -27,6 +29,8 @@ from browl.owl import EntityKind
 from browl.owlapi import FragmentError, check_java_thread, ntriples_ontology
 from browl.precache.core import PREFIXES, sparql_file
 from browl.rdf import IRI, RDFSyntaxError, ntriples_iris
+
+logger = logging.getLogger(__name__)
 
 _AXIOMS = PREFIXES + sparql_file("entity-axioms.rq")
 _SYMMETRIC = PREFIXES + sparql_file("entity-symmetric.rq")
@@ -151,6 +155,14 @@ def _annotation_range(converter: _Converter, axiom: Any) -> owl.Node:
     )
 
 
+def _anonymous(converter: _Converter, individual: Any) -> owl.Node:
+    """Make an anonymous individual, labelled anew while `convert_axioms` relabels them (`_Converter.labels`)."""
+    node_id = str(individual.toStringID())
+    if converter.labels is not None:
+        node_id = converter.labels.setdefault(node_id, f"_:b{len(converter.labels) + 1}")
+    return owl.AnonymousIndividual(id=node_id)
+
+
 def _other(converter: _Converter, axiom: Any) -> owl.Node:
     return owl.OtherAxiom(axiom_type=str(axiom.getAxiomType().getName()), functional=str(axiom))
 
@@ -170,7 +182,7 @@ _BUILDS: tuple[tuple[str, _Build], ...] = (
     ("OWLDataProperty", _entity(EntityKind.DATA_PROPERTY)),
     ("OWLAnnotationProperty", _entity(EntityKind.ANNOTATION_PROPERTY)),
     ("OWLNamedIndividual", _entity(EntityKind.NAMED_INDIVIDUAL)),
-    ("OWLAnonymousIndividual", _fields(owl.AnonymousIndividual, id="toStringID")),
+    ("OWLAnonymousIndividual", _anonymous),
     ("OWLLiteral", _literal),
     ("OWLFacetRestriction", _facet),
     ("OWLObjectInverseOf", _fields(owl.ObjectInverseOf, property="getInverse")),
@@ -321,15 +333,18 @@ def entity_closure(ontology: Any, iri: str) -> list[Any]:
 class _Converter:
     """Converts OWLAPI objects into nodes (`browl.owl`), choosing each build (`_BUILDS`) by the object's Java class.
 
-    One Python function per kind of node, rather than a Java visitor (`OWLObjectVisitorEx` through `jpype.JProxy`):
-    a proxy's overloads of `visit` all reach one Python method, which would have to dispatch on the class anyway, and
-    each call from Java back into Python costs more than a lookup by class here.
+    One Python function per kind of node, not a Java visitor; DESIGN.md §2.8 says why.
+
+    Attributes:
+        labels: Anonymous individuals' new labels, by the OWLAPI's node IDs, while `convert_axioms` relabels them;
+            else None.
     """
 
     def __init__(self) -> None:
         self._java = _java()
         self._builds: dict[type, _Build] = {}
         self._depth = 0
+        self.labels: dict[str, str] | None = None
 
     def __call__(self, owl_object: Any) -> owl.Node:
         """Return an OWLAPI object as a node.
@@ -378,24 +393,50 @@ def _converter() -> _Converter:
 def convert_axioms(axioms: Iterable[Any]) -> list[owl.AnyAxiom]:
     """Return OWLAPI axioms as nodes (`browl.owl`), sorted by kind and text.
 
+    The OWLAPI labels anonymous individuals afresh whenever it parses (`_:genid…`), so if there are any, they're
+    labelled again, `_:b1`, `_:b2`, …, in order of appearance in the axioms sorted without labels: a page's text and
+    order are then the same each time. An axiom with a value its node refuses, such as an IRI that isn't absolute, is
+    logged and kept as an `OtherAxiom`, in functional syntax, so the rest still show.
+
     Call this on the Java thread (`browl.owlapi.run_java`).
 
     Raises:
-        FragmentError: An axiom holds an object of a kind no node type covers, or a value its node refuses, such as
-            an IRI that isn't absolute, or its nodes nest more than `MAX_DEPTH` deep.
+        FragmentError: An axiom holds an object of a kind no node type covers, or its nodes nest more than
+            `MAX_DEPTH` deep.
     """
     check_java_thread()
     converter = _converter()
-    nodes: list[owl.AnyAxiom] = []
-    for axiom in axioms:
+    axioms = list(axioms)
+    nodes = [_axiom_node(converter, axiom) for axiom in axioms]
+    if any(token.kind == owl.TokenKind.BLANK_NODE for node in nodes for token in node.manchester_tokens()):
+        order = sorted(range(len(nodes)), key=lambda index: (nodes[index].kind, _unlabelled(nodes[index])))
+        converter.labels = {}
         try:
-            node = converter(axiom)
-        except (ValidationError, RDFSyntaxError, RecursionError) as error:
-            raise FragmentError(f"browl can't hold an axiom as nodes: {error}") from error
-        if not isinstance(node, owl.Axiom):
-            raise FragmentError(f"not an axiom: {node.type}")
-        nodes.append(cast(owl.AnyAxiom, node))
+            nodes = [_axiom_node(converter, axioms[index]) for index in order]
+        finally:
+            converter.labels = None
     return sorted(nodes, key=lambda node: (node.kind, node.manchester))
+
+
+def _axiom_node(converter: _Converter, axiom: Any) -> owl.AnyAxiom:
+    try:
+        node = converter(axiom)
+    except (ValidationError, RDFSyntaxError) as error:
+        logger.warning("Showing an axiom in functional syntax, as browl can't hold it as nodes: %s", error)
+        node = _other(converter, axiom)
+    except RecursionError as error:
+        raise FragmentError(f"an axiom nests too deep for browl: {error}") from error
+    if not isinstance(node, owl.Axiom):
+        raise FragmentError(f"not an axiom: {node.type}")
+    return cast(owl.AnyAxiom, node)
+
+
+def _unlabelled(node: owl.Node) -> str:
+    """Return a node's text without its anonymous individuals' labels."""
+    tokens = node.manchester_tokens()
+    return owl.manchester_text(
+        dataclasses.replace(token, text="_:") if token.kind == owl.TokenKind.BLANK_NODE else token for token in tokens
+    )
 
 
 def entity_axioms(ntriples: bytes, iri: str) -> list[owl.AnyAxiom]:
@@ -405,7 +446,7 @@ def entity_axioms(ntriples: bytes, iri: str) -> list[owl.AnyAxiom]:
 
     Raises:
         FragmentError: The OWLAPI couldn't parse the fragment, or failed on it with any other Java exception, or an
-            axiom holds an object of a kind no node type covers, or a value its node refuses, or nests too deep.
+            axiom holds an object of a kind no node type covers, or nests too deep.
         TooManyAxiomsError: The entity has more than `MAX_AXIOMS` axioms.
     """
     try:

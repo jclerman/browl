@@ -139,7 +139,7 @@ def test_axioms(axiom: owl.Axiom, text: str) -> None:
 def test_tokens() -> None:
     """Check an axiom's tokens: their kinds, IRIs and spacing."""
     axiom = owl.SubClassOf(sub=A, super=owl.ObjectSomeValuesFrom(property=P, filler=owl.ObjectOneOf(items=(IND_I, X))))
-    assert axiom.manchester_tokens() == [
+    assert axiom.manchester_tokens() == (
         Token(TokenKind.IRI, f"<{NS}A>", f"{NS}A"),
         Token(TokenKind.KEYWORD, "SubClassOf", space=True),
         Token(TokenKind.IRI, f"<{NS}p>", f"{NS}p", space=True),
@@ -151,7 +151,7 @@ def test_tokens() -> None:
         Token(TokenKind.BLANK_NODE, "_:x", space=True),
         Token(TokenKind.PUNCTUATION, "}"),
         Token(TokenKind.PUNCTUATION, ")"),
-    ]
+    )
 
 
 @pytest.mark.parametrize(
@@ -218,6 +218,10 @@ def test_iris() -> None:
     restriction = owl.FacetRestriction(facet=f"{NS}facet", value=literal("1"))
     assert restriction.iris() == (f"{NS}facet", XSD_STRING)
     assert short(restriction) == '<facet> "1"'
+    domain = owl.AnnotationPropertyDomain(
+        property=owl.Entity(kind=EntityKind.ANNOTATION_PROPERTY, iri=f"{NS}n"), domain=owl.IRIReference(iri=A.iri)
+    )
+    assert domain.iris() == (f"{NS}n", A.iri)
 
 
 AXIOMS = [
@@ -303,19 +307,14 @@ def test_node_types() -> None:
         assert each == ("IRI" if node_type is owl.IRIReference else node_type.__name__)
 
 
+def subclasses(base: type[owl.Node]) -> list[type[owl.Node]]:
+    """Return every class below a node class."""
+    return [each for child in base.__subclasses__() for each in (child, *subclasses(child))]
+
+
 @pytest.mark.parametrize(
     "base",
-    [
-        owl.Node,
-        owl._Named,
-        owl.Axiom,
-        owl._Boolean,
-        owl._DataBoolean,
-        owl._OneOf,
-        owl._Restriction,
-        owl._Cardinality,
-        owl._Nary,
-    ],
+    [owl.Node, *(each for each in subclasses(owl.Node) if each not in owl.NODE_TYPES)],
     ids=lambda base: base.__name__,
 )
 def test_bases_abstract(base: type[owl.Node]) -> None:
@@ -367,10 +366,10 @@ def test_html_punctuation() -> None:
 
 
 def test_html_other_axiom() -> None:
-    """Check that an axiom of another kind is escaped text, with no links."""
+    """Check that an axiom of another kind is escaped text, isolated as a literal is, with no links."""
     axiom = owl.OtherAxiom(axiom_type="DLSafeRule", functional=f'<script>"{NS}A"</script>')
     assert render(axiom.manchester_tokens(), {A.iri: EntityLink(A.iri, "A", "/A")}) == (
-        f"&lt;script&gt;&#34;{NS}A&#34;&lt;/script&gt;"
+        f"<bdi>&lt;script&gt;&#34;{NS}A&#34;&lt;/script&gt;</bdi>"
     )
 
 
@@ -421,4 +420,4 @@ def test_html_long() -> None:
         f'<code dir="ltr">&lt;{iri[: MAX_IRI_CHARS - 2]}…</code> '
         f"<bdi>&#34;{'x' * (MAX_LITERAL_CHARS - 2)}…</bdi>"
     )
-    assert render(other.manchester_tokens(), {}) == f"{'o' * (MAX_LITERAL_CHARS - 1)}…"
+    assert render(other.manchester_tokens(), {}) == f"<bdi>{'o' * (MAX_LITERAL_CHARS - 1)}…</bdi>"

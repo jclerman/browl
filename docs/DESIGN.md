@@ -915,12 +915,16 @@ axioms of each.
   restrictions, cardinalities, n-ary axioms (a pair `a DisjointWith b`, else a list `DisjointClasses: a, b, c`),
   sub-property axioms, domains and ranges, property characteristics, and property assertions.
 - **Building the tree:** `browl.axioms` converts the OWLAPI's objects on the Java thread, choosing a Python function
-  by each object's Java class, cached per class. Sets are sorted in Java, as the OWLAPI's renderer sorts them. A
-  Java visitor through `jpype.JProxy` was rejected: a proxy's overloads of `visit` all reach one Python method, which
-  would still dispatch on the class, and each call back from Java costs more.
+  by each object's Java class, cached per class. Sets are sorted in Java, as the OWLAPI's renderer sorts them. The
+  OWLAPI labels anonymous individuals afresh on every parse (`_:genid…`), so a page's are labelled again, `_:b1`,
+  `_:b2`, …, in order of appearance once its axioms are sorted without labels, and its text and order stay the same
+  from one view to the next (but for axioms that differ only in their labels, whose order can still swap). A Java
+  visitor through `jpype.JProxy` was rejected: a proxy's overloads of `visit` all reach one Python method, which would
+  still dispatch on the class, and each call back from Java costs more.
 
 **Rendering:** a node renders as a stream of typed tokens (`browl.owl.Token`): keyword, IRI, literal, blank node,
-punctuation or other text (a cardinality, a facet such as `>=`), each knowing whether a space comes before it.
+punctuation, other text (a cardinality, a facet such as `>=`), or an `OtherAxiom`'s functional syntax (isolated
+like a literal in HTML, as it holds the ontology's text), each knowing whether a space comes before it.
 
 1. An axiom's Manchester text (`Axiom.manchester`) is its tokens (`Node.manchester_tokens`) joined: one line, every
    entity as its full IRI, `<…>`. It matches the OWLAPI's Manchester renderer, the one Protégé uses, for every logical
@@ -975,6 +979,8 @@ below, and every tree browl makes round-trips through JSON. Ontologies seldom ne
 **When the axioms can't be read** (from P-4's review): a fragment the OWLAPI can't parse, or any other Java exception
 while reading or rendering it (both `FragmentError`), or a query that fails, fails only the axioms panel. The full
 error is logged, with the OWLAPI's parser log and stack trace, and the panel says only that the axioms can't be shown.
+An axiom holding a value its node refuses (an IRI the OWLAPI accepts but browl doesn't, such as a relative one) is
+logged and shown in functional syntax as an `OtherAxiom`, without links, so the entity's other axioms still show.
 A stored IRI with an escaped illegal character, which Jena accepts and writes back escaped, fails the fetch already:
 browl's Fuseki client checks every IRI it reads (2.14).
 

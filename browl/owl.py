@@ -30,6 +30,7 @@ Example:
 
 from __future__ import annotations
 
+import functools
 import typing
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, replace
@@ -58,7 +59,7 @@ def prefixed_name(iri: str) -> str | None:
 
 
 class TokenKind(StrEnum):
-    """What a token is."""
+    """What a token is: `TEXT` is a number or a facet; `FUNCTIONAL` an axiom in functional syntax (`OtherAxiom`)."""
 
     KEYWORD = "keyword"
     IRI = "iri"
@@ -66,6 +67,7 @@ class TokenKind(StrEnum):
     BLANK_NODE = "blank_node"
     PUNCTUATION = "punctuation"
     TEXT = "text"
+    FUNCTIONAL = "functional"
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,8 +234,9 @@ class Node(BaseModel):
       nested and the item isn't an entity;
     - a `Node`, rendered as it is, for a layout built per node (`_Nary`, `HasKey`).
 
-    A class whose layout is the same for every node sets `manchester_layout`; one whose layout depends on its keyword or
-    its values overrides `_manchester_layout` instead. Leaves (`Entity`, `Literal`, …) have no layout: they override
+    A class whose layout is the same for every node sets `manchester_layout`, or has it built once, when the class is
+    made, from class variables such as its keyword (`_class_manchester_layout`); one whose layout depends on its values
+    overrides `_manchester_layout` instead. Leaves (`Entity`, `Literal`, …) have no layout: they override
     `unspaced_manchester_tokens`.
 
     Only a concrete node class, one with its own `NodeType`, can be instantiated or validated; `Node`, `Axiom` and the
@@ -248,14 +251,27 @@ class Node(BaseModel):
     model_config = ConfigDict(frozen=True, validate_by_name=True, validate_by_alias=True, serialize_by_alias=True)
 
     manchester_layout: ClassVar[tuple[LayoutItem, ...]] = ()
+    _concrete: ClassVar[bool] = False
 
     type: NodeType
+
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
+        """Note whether a new class is concrete, and if it is, build its layout (`_class_manchester_layout`)."""
+        super().__pydantic_init_subclass__(**kwargs)
+        cls._concrete = _is_concrete(cls)
+        if cls._concrete:
+            cls.manchester_layout = cls._class_manchester_layout()
+
+    @classmethod
+    def _class_manchester_layout(cls) -> tuple[LayoutItem, ...]:
+        return cls.manchester_layout
 
     @model_validator(mode="before")
     @classmethod
     def _concrete_only(cls, data: Any) -> Any:
         """Refuse to make a node of a base class; runs for construction and validation, not `model_construct`."""
-        if not _is_concrete(cls):
+        if not cls._concrete:
             raise TypeError(f"{cls.__name__} is a base class; make a node of one of its subclasses")
         return data
 
@@ -276,9 +292,14 @@ class Node(BaseModel):
                         yield item.separator
                     yield from _child_manchester_tokens(each, item.nested)
 
-    def manchester_tokens(self) -> list[Token]:
+    def manchester_tokens(self) -> tuple[Token, ...]:
         """Return the node in Manchester syntax, as tokens with their spacing."""
-        return _manchester_spaced(self.unspaced_manchester_tokens())
+        return self._manchester_tokens
+
+    @functools.cached_property
+    def _manchester_tokens(self) -> tuple[Token, ...]:
+        """The tokens, made once per node, as a page sorts axioms by their text and then renders them."""
+        return tuple(_manchester_spaced(self.unspaced_manchester_tokens()))
 
     def iri_mentions(self) -> Iterator[str]:
         """Yield each IRI the node mentions, repeats included, in its fields' order; `iris` drops the repeats."""
@@ -457,15 +478,17 @@ class _Boolean(Node):
 
     keyword: ClassVar[str]
 
-    def _manchester_layout(self) -> Sequence[LayoutItem]:
-        return (Slot("operands", _keyword(self.keyword), nested=True),)
+    @classmethod
+    def _class_manchester_layout(cls) -> tuple[LayoutItem, ...]:
+        return (Slot("operands", _keyword(cls.keyword), nested=True),)
 
 
 class _DataBoolean(_Boolean):
     """A data range's intersection or union, which the OWLAPI writes in parentheses wherever it is."""
 
-    def _manchester_layout(self) -> Sequence[LayoutItem]:
-        return _OPEN, Slot("operands", _keyword(self.keyword)), _CLOSE
+    @classmethod
+    def _class_manchester_layout(cls) -> tuple[LayoutItem, ...]:
+        return _OPEN, Slot("operands", _keyword(cls.keyword)), _CLOSE
 
 
 class ObjectIntersectionOf(_Boolean):
@@ -591,8 +614,9 @@ class _Restriction(Node):
     keyword: ClassVar[str]
     nested: ClassVar[bool] = True
 
-    def _manchester_layout(self) -> Sequence[LayoutItem]:
-        return Slot("property"), _keyword(self.keyword), Slot("filler", nested=self.nested)
+    @classmethod
+    def _class_manchester_layout(cls) -> tuple[LayoutItem, ...]:
+        return Slot("property"), _keyword(cls.keyword), Slot("filler", nested=cls.nested)
 
 
 class ObjectSomeValuesFrom(_Restriction):
@@ -708,8 +732,9 @@ class _Cardinality(_Restriction):
     The OWLAPI gives a restriction without a filler `owl:Thing`'s, or `rdfs:Literal`'s, so every one has a filler.
     """
 
-    def _manchester_layout(self) -> Sequence[LayoutItem]:
-        return Slot("property"), _keyword(self.keyword), Slot("cardinality"), Slot("filler", nested=self.nested)
+    @classmethod
+    def _class_manchester_layout(cls) -> tuple[LayoutItem, ...]:
+        return Slot("property"), _keyword(cls.keyword), Slot("cardinality"), Slot("filler", nested=cls.nested)
 
 
 class ObjectMinCardinality(_Cardinality):
@@ -1232,8 +1257,9 @@ class _Characteristic(Axiom):
 
     keyword: ClassVar[str]
 
-    def _manchester_layout(self) -> Sequence[LayoutItem]:
-        return _keyword(self.keyword), Slot("property")
+    @classmethod
+    def _class_manchester_layout(cls) -> tuple[LayoutItem, ...]:
+        return _keyword(cls.keyword), Slot("property")
 
 
 class FunctionalObjectProperty(_Characteristic):
@@ -1377,9 +1403,10 @@ class _PropertyAssertion(Axiom):
 
     negative: ClassVar[bool] = False
 
-    def _manchester_layout(self) -> Sequence[LayoutItem]:
+    @classmethod
+    def _class_manchester_layout(cls) -> tuple[LayoutItem, ...]:
         triple = (Slot("subject"), Slot("property"), Slot("object"))
-        return (_keyword("not"), _OPEN, *triple, _CLOSE) if self.negative else triple
+        return (_keyword("not"), _OPEN, *triple, _CLOSE) if cls.negative else triple
 
 
 class ObjectPropertyAssertion(_PropertyAssertion):
@@ -1486,7 +1513,7 @@ class OtherAxiom(Axiom):
 
     @override
     def unspaced_manchester_tokens(self) -> Iterator[Token]:
-        yield Token(TokenKind.TEXT, self.functional)
+        yield Token(TokenKind.FUNCTIONAL, self.functional)
 
     @property
     def kind(self) -> str:
