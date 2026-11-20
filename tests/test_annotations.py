@@ -26,8 +26,7 @@ from browl.derived import EntityType
 from browl.fuseki import UNION_FROM, FusekiClient, SparqlError
 from browl.jobs import Stage
 from browl.rdf import IRI, OWL, RDF, RDFS, XSD
-from tests.helpers import derived_stage, make_app
-from tests.test_axioms import fuseki_dataset
+from tests.helpers import derived_stage, fuseki_dataset, make_app
 
 NS = "http://example.org/ann#"
 SKOS = "http://www.w3.org/2004/02/skos/core#"
