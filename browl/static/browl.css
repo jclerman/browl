@@ -16,6 +16,7 @@
   --measure: 75ch;
   --title-size: 1.75rem;
   --title-leading: 1.25;
+  --header-height: calc(2 * var(--title-size) * var(--title-leading)); /* an entity page's: two title lines */
 }
 
 @media (prefers-color-scheme: dark) {
@@ -66,7 +67,7 @@ code {
 .site-bar {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 3; /* over the opened IRI (`.entity-iri dl`) scrolling under it */
   background: var(--bar-bg);
   border-bottom: 1px solid var(--border);
 }
@@ -242,8 +243,7 @@ code {
 }
 
 /* An entity page (DESIGN.md §2.9): named grid areas, its columns set here alone, so a hierarchy column can be added
-   later as a `tree` area on the left (e.g. "tree header" "tree tabs" "tree panel", columns 16rem minmax(0, 1fr)) without
-   changing the rest. The window-filling frame, below, sets the rows. */
+   later; the window-filling frame, below, sets the rows. */
 
 .entity-page {
   display: grid;
@@ -259,7 +259,7 @@ code {
   grid-area: header;
   grid-template-columns: fit-content(30%) minmax(0, 1fr);
   /* At least two title lines high, as in the window-filling frame, so turning that off doesn't move a short name. */
-  grid-template-rows: minmax(calc(2 * var(--title-size) * var(--title-leading)), auto);
+  grid-template-rows: minmax(var(--header-height), auto);
   align-items: center;
   column-gap: var(--space);
 }
@@ -309,6 +309,13 @@ code {
   text-align: start;
 }
 
+@media print {
+  .entity-iri dl {
+    position: static; /* printed, it would cover what's below */
+    box-shadow: none;
+  }
+}
+
 .entity-iri dt {
   color: var(--muted);
 }
@@ -331,11 +338,6 @@ code {
   border-bottom: 1px solid var(--border);
 }
 
-.tab-bar .tabs {
-  margin: 0;
-  border-bottom: none;
-}
-
 .one-page-toggle {
   display: none; /* where the frame applies, below */
   align-items: center;
@@ -350,8 +352,6 @@ code {
   display: flex;
   flex-wrap: wrap;
   gap: 0 calc(var(--space) * 1.5);
-  margin: var(--space) 0 0;
-  border-bottom: 1px solid var(--border);
 }
 
 .tabs [role="tab"] {
@@ -469,92 +469,92 @@ code {
    doesn't scroll. The navigation bar, the header and the tab bar keep their heights, and the tab panel takes the rest;
    it scrolls what doesn't fit, and the Overview's panels scroll within themselves. Medium windows stack the panels at
    a fixed split, wide ones put them side by side. Everything else, i.e. narrow or short windows, print, the toggle
-   checked, or a browser without `:has`, gets the one-page view (U-44): it all scrolls as one page. */
+   checked, or a browser without `:has` or CSS nesting, gets the one-page view (U-44): it all scrolls as one page. */
 
-@media screen and (width >= 40rem) and (height >= 36rem) {
-  .one-page-toggle {
-    display: inline-flex;
-  }
+@supports selector(:has(a)) and selector(&) {
+  @media screen and (width >= 40rem) and (height >= 36rem) {
+    .one-page-toggle {
+      display: inline-flex;
+    }
 
-  body:has(.entity-page):not(:has(#one-page:checked)) {
-    display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
-    height: 100vh;
-    height: 100dvh;
-
-    & .content {
+    body:has(.entity-page):not(:has(#one-page:checked)) {
       display: grid;
-      grid-template-rows: minmax(0, 1fr);
-      min-height: 0;
-    }
+      grid-template-rows: auto minmax(0, 1fr);
+      height: 100vh;
+      height: 100dvh;
 
-    & .entity-page {
-      grid-template-rows: auto auto minmax(0, 1fr);
-      min-height: 0;
-    }
+      & .content {
+        display: grid;
+        grid-template-rows: minmax(0, 1fr);
+        min-height: 0;
+      }
 
-    /* Two title lines high whatever the name; a longer one is cut, whole in its tooltip, as are many types. */
-    & .entity-header {
-      grid-template-rows: calc(2 * var(--title-size) * var(--title-leading));
-    }
+      & .entity-page {
+        grid-template-rows: auto auto minmax(0, 1fr);
+        min-height: 0;
+      }
 
-    & .entity-header h1 {
-      display: -webkit-box;
-      overflow: hidden;
-      -webkit-box-orient: vertical;
-      -webkit-line-clamp: 2;
-      line-clamp: 2;
-    }
+      /* Two title lines high whatever the name; a longer one is cut, whole in its tooltip, as are many types. */
+      & .entity-header {
+        grid-template-rows: var(--header-height);
+      }
 
-    & .entity-type {
-      overflow: hidden;
-      white-space: nowrap;
-      text-overflow: ellipsis;
-    }
+      & .entity-header h1 {
+        display: -webkit-box;
+        overflow: hidden;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        line-clamp: 2;
+      }
 
-    & .tab-bar {
-      flex-wrap: nowrap;
-    }
+      & .entity-type {
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
 
-    & .tab-panel {
-      min-height: 0;
-      overflow: auto;
-    }
+      & .tab-bar {
+        flex-wrap: nowrap;
+      }
 
-    & .overview {
-      display: grid;
-      grid-template:
-        "annotations" minmax(10rem, 2fr)
-        "axioms" minmax(10rem, 3fr)
-        / minmax(0, 1fr);
-      gap: var(--space);
-      height: 100%;
-    }
+      & .tab-panel {
+        min-height: 0;
+        overflow: auto;
+      }
 
-    & .annotations {
-      grid-area: annotations;
-    }
+      & .overview {
+        display: grid;
+        grid-template:
+          "annotations" minmax(10rem, 2fr)
+          "axioms" minmax(10rem, 3fr)
+          / minmax(0, 1fr);
+        gap: var(--space);
+        height: 100%;
 
-    & .axioms {
-      grid-area: axioms;
-    }
+        @media (width >= 64rem) {
+          grid-template: "annotations axioms" minmax(0, 1fr) / minmax(0, 1fr) minmax(0, 1fr);
+        }
+      }
 
-    & .panel {
-      min-height: 0;
-      margin: 0;
-      overflow: auto;
-    }
+      & .annotations {
+        grid-area: annotations;
+      }
 
-    & .panel h2 {
-      position: sticky;
-      top: 0;
-      background: var(--bg);
-    }
-  }
-}
+      & .axioms {
+        grid-area: axioms;
+      }
 
-@media screen and (width >= 64rem) and (height >= 36rem) {
-  body:has(.entity-page):not(:has(#one-page:checked)) .overview {
-    grid-template: "annotations axioms" minmax(0, 1fr) / minmax(0, 1fr) minmax(0, 1fr);
+      & .panel {
+        min-height: 0;
+        margin: 0;
+        overflow: auto;
+      }
+
+      & .panel h2 {
+        position: sticky;
+        top: 0;
+        background: var(--bg);
+      }
+    }
   }
 }

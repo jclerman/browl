@@ -1072,8 +1072,7 @@ Every page has the same frame (U-27, U-28, U-29):
 - The full search page with type and property filters (U-10) is reached from the search box, e.g. "All results…".
 - An admin link appears only for signed-in admins: the base template shows it when `request.state.is_admin` is true,
   which P-22 sets. Sign-in itself is a small link at the bar's end, to the admin upload page, whose sign-in P-22 adds.
-  It was in a page footer until P-16d; an entity page, filling the window, has no room for one, so pages have no
-  footer now.
+  Pages have no footer: an entity page, filling the window, has no room for one.
 - On narrow screens, the tree links collapse into a menu: a `<details>` element, so it opens without JS.
 - The ontology name is its title, else its IRI, capped in length; it's read once per generation (`PageFrame`). The bar
   has no in-page (`#…`) links, such as a skip link, since on a path hash entities share the hash-IRI script would look
@@ -1117,7 +1116,8 @@ script, is exempt; every response, it included, gets `X-Frame-Options: DENY` and
 navigation bar, the page header (2.8) and the tabs keep their heights, and the tab panel takes the rest of the window
 (`100dvh`, a grid, `min-height: 0`); what doesn't fit scrolls within it. So every tab, the Usage tab and later the
 Individuals tab included, fills the same area. Plain CSS, keyed on the page's content (`:has(.entity-page)`), so a
-page the hash-IRI script moves into `<main>` gets it too; a browser without `:has` gets the one-page view. _(P-16d)_
+page the hash-IRI script moves into `<main>` gets it too. It's wrapped in `@supports`, so a browser without `:has` or
+CSS nesting gets the one-page view, without the toggle. _(P-16d)_
 
 - **Wide** (64rem and up): the Overview's panels side by side, Annotations on the left and Logical axioms on the
   right, each the tab panel's full height.
