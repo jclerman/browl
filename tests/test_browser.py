@@ -19,6 +19,7 @@ from rdflib.namespace import OWL, RDF
 import browl.admin
 import browl.overview
 import browl.pages
+from browl import owl
 from browl.annotations import AnnotationValue, IRIValue, LiteralValue
 from browl.derived import EntityType
 from browl.jobs import JobContext, Stage, StageFunction
@@ -463,12 +464,16 @@ def test_hash_script_refuses_non_html(page: Page, server: LiveServer, content_ty
 
 
 def test_narrow_bar_one_row(page: Page, server: LiveServer) -> None:
-    """Check that, on a narrow screen, the name and menu button share a row, and the menu opens as a panel under it."""
+    """Check that, on a narrow screen, the name, Sign in and the menu button share a row, and the menu opens below."""
     page.set_viewport_size(NARROW)
     page.goto(f"{server.url}/example.org/thing")
     bar, name, button = page.locator(".site-bar"), page.locator(".site-name"), page.locator(".site-menu summary")
+    sign_in = page.get_by_role("link", name="Sign in")
+    expect(sign_in).to_be_visible()
     height = box(bar)["height"]
-    assert abs(box(name)["y"] + box(name)["height"] / 2 - box(button)["y"] - box(button)["height"] / 2) < 2
+    middle = box(name)["y"] + box(name)["height"] / 2
+    for each in (button, sign_in):
+        assert abs(middle - box(each)["y"] - box(each)["height"] / 2) < 2
     main_y = box(page.locator("main"))["y"]
     button.click()
     panel = box(page.locator(".site-menu ul"))
@@ -508,6 +513,11 @@ USAGE_TEXT = "Where other entities use this one"
 def tab(page: Page, name: str) -> Locator:
     """Return the page tab with a name."""
     return page.get_by_role("tablist").get_by_role("tab", name=name)
+
+
+def one_page_toggle(page: Page) -> Locator:
+    """Return the entity page's "Scroll as one page" toggle."""
+    return page.get_by_label("Scroll as one page")
 
 
 def expect_selected(page: Page, name: str) -> None:
@@ -639,6 +649,8 @@ def test_tab_keyboard(page: Page, server: LiveServer) -> None:
     assert page.evaluate("window.spaceKept") is False  # Space doesn't also scroll the page
     expect(tab(page, "Usage")).to_have_attribute("tabindex", "0")
     expect(tab(page, "Overview")).to_have_attribute("tabindex", "-1")
+    page.keyboard.press("Tab")
+    expect(one_page_toggle(page)).to_be_focused()  # at the tab bar's end
     page.keyboard.press("Tab")
     expect(page.get_by_role("tabpanel")).to_be_focused()
 
@@ -827,10 +839,11 @@ def test_annotations_grid_wide(page: Page, annotated: LiveServer) -> None:
 
     A group's first value is on its label's row, the rest below it, one per line, in one column for every group; a long
     label wraps rather than squeezing the values; a long value wraps within the readable measure; language tags are
-    small and muted.
+    small and muted. The page is in the one-page view, so the panel is the page's width.
     """
     page.set_viewport_size(WIDE)
     page.goto(f"{annotated.url}/example.org/thing")
+    one_page_toggle(page).check()
     terms = page.locator(".annotations dt")
     values = page.locator(".annotations dd")
     expect(terms).to_have_count(4)
@@ -870,11 +883,12 @@ def test_annotations_grid_narrow(page: Page, annotated: LiveServer) -> None:
 def test_annotations_layout(page: Page, annotated: LiveServer) -> None:
     """Check the annotations panel's finer layout, wide.
 
-    It comes before the axioms panel; its labels are muted; a value's wrapped lines are indented; groups are a little
-    further apart than a group's values.
+    In the one-page view, it comes before the axioms panel; its labels are muted; a value's wrapped lines are indented;
+    groups are a little further apart than a group's values.
     """
     page.set_viewport_size(WIDE)
     page.goto(f"{annotated.url}/example.org/thing")
+    one_page_toggle(page).check()
     assert box(page.locator("section.annotations"))["y"] < box(page.locator("section.axioms"))["y"]
     muted = page.evaluate("getComputedStyle(document.querySelector('.note')).color")
     assert page.locator(".annotations dt").first.evaluate("each => getComputedStyle(each).color") == muted
@@ -893,3 +907,398 @@ def test_annotations_layout(page: Page, annotated: LiveServer) -> None:
     within = values[1]["y"] - (values[0]["y"] + values[0]["height"])
     between = values[2]["y"] - (values[1]["y"] + values[1]["height"])
     assert between > within + 4
+
+
+# The window-filling frame (P-16d, DESIGN.md §2.9, U-30, U-44)
+
+MEDIUM = {"width": 800, "height": 800}
+"""Between the frame's breakpoints, 40rem and 64rem wide: the panels one above the other."""
+SHORT = {"width": 1280, "height": 500}
+"""Shorter than 36rem: the one-page view."""
+FEW, MANY = "plain", "thing"
+"""Entities with one annotation, and with `MANY_VALUES`."""
+MANY_VALUES = 80
+
+
+@pytest.fixture
+def varied(server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> LiveServer:
+    """Return the server, `FEW` with one annotation and no axioms, `MANY` with `MANY_VALUES` of each (no Fuseki)."""
+    label, comment = IRI(f"{RDFS}label"), IRI(f"{RDFS}comment")
+    string = IRI(f"{XSD}string")
+
+    async def fetched(sparql: object, dataset: object, iri: str, *args: object) -> list[tuple[IRI, AnnotationValue]]:
+        pairs: list[tuple[IRI, AnnotationValue]] = [(label, LiteralValue(lexical="name", datatype=string))]
+        if iri.endswith(f"/{MANY}"):
+            pairs += [(comment, LiteralValue(lexical=f"comment {i}", datatype=string)) for i in range(MANY_VALUES)]
+        return pairs
+
+    async def read_axioms(request: object, dataset: object, iri: str, *args: object) -> tuple[list[owl.AnyAxiom], bool]:
+        if not iri.endswith(f"/{MANY}"):
+            return [], False
+        entity = owl.Entity(kind=owl.EntityKind.CLASS, iri=iri)
+        supers = (owl.Entity(kind=owl.EntityKind.CLASS, iri=f"{EX}/super{i}") for i in range(MANY_VALUES))
+        return [owl.SubClassOf(sub=entity, super=each) for each in supers], False
+
+    monkeypatch.setattr(browl.overview, "fetch_annotations", fetched)
+    monkeypatch.setattr(browl.overview, "_read_axioms", read_axioms)
+    return server
+
+
+def panels(page: Page) -> tuple[FloatRect, FloatRect]:
+    """Return the Overview's annotations and axioms panels' boxes."""
+    return box(page.locator("section.annotations")), box(page.locator("section.axioms"))
+
+
+def page_scrolls(page: Page) -> bool:
+    """Return whether the page itself is taller than the window."""
+    result: bool = page.evaluate("document.documentElement.scrollHeight > window.innerHeight")
+    return result
+
+
+def overflows(locator: Locator) -> bool:
+    """Return whether an element's content is taller than the element, so it scrolls."""
+    result: bool = locator.evaluate("(each) => each.scrollHeight > each.clientHeight")
+    return result
+
+
+@pytest.mark.parametrize("size", [WIDE, MEDIUM], ids=["wide", "medium"])
+def test_panels_fixed(page: Page, varied: LiveServer, size: dict[str, int]) -> None:
+    """Check that the panels have the same boxes on every entity page, whatever its content, filling the window.
+
+    Wide, they're side by side, annotations on the left, each full height; medium, annotations on top, 40% to 60%. The
+    page itself doesn't scroll; the panel with many annotations does.
+    """
+    page.set_viewport_size(size)
+    boxes = []
+    for entity in [FEW, MANY]:
+        page.goto(f"{varied.url}/example.org/{entity}")
+        boxes.append(panels(page))
+        assert not page_scrolls(page)
+        for each in ("annotations", "axioms"):
+            assert overflows(page.locator(f"section.{each}")) is (entity == MANY)
+    assert boxes[0] == boxes[1]
+    annotations, axioms = boxes[0]
+    space = page.evaluate("parseFloat(getComputedStyle(document.body).fontSize)")
+    assert abs(axioms["y"] + axioms["height"] - (size["height"] - space)) < 2  # down to the window's padding
+    if size == WIDE:
+        assert annotations["y"] == axioms["y"] and annotations["height"] == axioms["height"]
+        assert annotations["x"] + annotations["width"] < axioms["x"]
+    else:
+        assert annotations["x"] == axioms["x"] and annotations["width"] == axioms["width"]
+        assert annotations["y"] + annotations["height"] < axioms["y"]
+        assert abs(annotations["height"] / axioms["height"] - 2 / 3) < 0.02
+
+
+def test_panel_scrolls(page: Page, varied: LiveServer) -> None:
+    """Check that long panels scroll within themselves, by mouse and by keyboard, their headings staying in view.
+
+    The keyboard reaches them with Tab after the tab panel, and they show a focus ring; the page itself doesn't move.
+    The panels have borders, and their headings a background, so the content scrolls out of sight under them.
+    """
+    page.set_viewport_size(WIDE)
+    page.goto(f"{varied.url}/example.org/{MANY}")
+    panel = page.get_by_role("region", name="Annotations")
+    heading = panel.get_by_role("heading", name="Annotations")
+    panel.hover()
+    page.mouse.wheel(0, 300)
+    wait_until(page, lambda: panel.evaluate("(each) => each.scrollTop") > 0, "the panel to scroll")
+    panel.evaluate("(each) => { each.scrollTop = 0; }")
+    page.get_by_role("tabpanel").focus()
+    page.keyboard.press("Tab")
+    expect(panel).to_be_focused()
+    assert panel.evaluate("(each) => getComputedStyle(each).outlineStyle") == "solid"
+    page.keyboard.press("End")
+    wait_until(page, lambda: panel.evaluate("(each) => each.scrollTop") > 0, "the panel to scroll")
+    assert abs(box(heading)["y"] - box(panel)["y"]) < 2  # the heading stays at the top
+    expect(panel.get_by_text(f"comment {MANY_VALUES - 1}", exact=True)).to_be_in_viewport()
+    assert page.evaluate("window.scrollY") == 0
+    assert panel.evaluate("(each) => getComputedStyle(each).borderTopStyle") == "solid"
+    assert heading.evaluate("(each) => getComputedStyle(each).backgroundColor") == page.evaluate(
+        "getComputedStyle(document.body).backgroundColor"
+    )
+    axioms = page.get_by_role("region", name="Logical axioms")
+    page.keyboard.press("Tab")
+    expect(axioms).to_be_focused()
+    page.keyboard.press("End")
+    wait_until(page, lambda: axioms.evaluate("(each) => each.scrollTop") > 0, "the axioms panel to scroll")
+    expect(axioms.get_by_text(f"<{EX}/super{MANY_VALUES - 1}>", exact=True)).to_be_in_viewport()
+
+
+def expect_one_page(page: Page) -> None:
+    """Check the one-page view: the page scrolls, the panels don't, and the axioms come after the annotations."""
+    assert page_scrolls(page)
+    annotations, axioms = panels(page)
+    assert not overflows(page.locator("section.annotations"))
+    assert not overflows(page.locator("section.axioms"))
+    assert axioms["y"] > annotations["y"] + annotations["height"]
+
+
+@pytest.mark.parametrize("size", [NARROW, SHORT], ids=["narrow", "short"])
+def test_small_windows_one_page(page: Page, varied: LiveServer, size: dict[str, int]) -> None:
+    """Check that a narrow or short window gets the one-page view, without the toggle, which would change nothing."""
+    page.set_viewport_size(size)
+    page.goto(f"{varied.url}/example.org/{MANY}")
+    expect_one_page(page)
+    expect(one_page_toggle(page)).to_be_hidden()
+
+
+@pytest.mark.parametrize(
+    ("size", "layout"),
+    [
+        ({"width": 1024, "height": 800}, "side by side"),
+        ({"width": 1023, "height": 800}, "stacked"),
+        ({"width": 640, "height": 800}, "stacked"),
+        ({"width": 639, "height": 800}, "one page"),
+        ({"width": 1280, "height": 576}, "side by side"),
+        ({"width": 1280, "height": 575}, "one page"),
+    ],
+    ids=lambda each: f"{each['width']}x{each['height']}" if isinstance(each, dict) else each,
+)
+def test_breakpoints(page: Page, varied: LiveServer, size: dict[str, int], layout: str) -> None:
+    """Check the layout either side of each breakpoint: 64rem and 40rem wide, 36rem tall."""
+    page.set_viewport_size(size)
+    page.goto(f"{varied.url}/example.org/{MANY}")
+    if layout == "one page":
+        expect_one_page(page)
+        expect(one_page_toggle(page)).to_be_hidden()
+        return
+    assert not page_scrolls(page)
+    expect(one_page_toggle(page)).to_be_visible()
+    annotations, axioms = panels(page)
+    if layout == "side by side":
+        assert annotations["y"] == axioms["y"]
+        assert annotations["x"] + annotations["width"] < axioms["x"]
+    else:
+        assert annotations["x"] == axioms["x"]
+        assert annotations["y"] + annotations["height"] < axioms["y"]
+
+
+def test_stacked_minimum(page: Page, varied: LiveServer) -> None:
+    """Check that, stacked in a window just tall enough for the frame, each panel is still at least 10rem high."""
+    page.set_viewport_size({"width": 800, "height": 580})
+    page.goto(f"{varied.url}/example.org/{MANY}")
+    assert not page_scrolls(page)
+    assert all(each["height"] >= 160 for each in panels(page))
+
+
+def test_hash_entity_framed(page: Page, varied: LiveServer) -> None:
+    """Check that a hash entity's page, which the hash-IRI script moves in, gets the frame: the same panel boxes."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{varied.url}/example.org/{FEW}")
+    shown = panels(page)
+    page.goto(f"{varied.url}/example.org/vocab#Gamma")
+    expect(page.locator("main h1")).to_have_text(f"{EX}/vocab#Gamma")
+    assert not page_scrolls(page)
+    assert panels(page) == shown
+
+
+def test_print_one_page(page: Page, varied: LiveServer) -> None:
+    """Check that printing gets the one-page view, whatever the window size, and without the toggle.
+
+    An opened IRI takes its own room rather than covering what's below it.
+    """
+    page.set_viewport_size(WIDE)
+    page.emulate_media(media="print")
+    page.goto(f"{varied.url}/example.org/{MANY}")
+    expect_one_page(page)
+    expect(one_page_toggle(page)).to_be_hidden()
+    page.locator(".entity-iri summary").click()
+    details, tab_bar = box(page.locator(".entity-iri dl")), box(page.locator(".tab-bar"))
+    assert details["y"] + details["height"] <= tab_bar["y"]
+
+
+def test_toggle_remembered(page: Page, varied: LiveServer) -> None:
+    """Check that the toggle gives the one-page view, and is remembered on other pages, a hash entity's too."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{varied.url}/example.org/{MANY}")
+    toggle = one_page_toggle(page)
+    expect(toggle).not_to_be_checked()
+    toggle.check()
+    expect_one_page(page)
+    page.reload()
+    expect(toggle).to_be_checked()
+    expect_one_page(page)
+    page.goto(f"{varied.url}/example.org/vocab#Gamma")  # its <main> moved in by the hash-IRI script
+    expect(page.locator("main h1")).to_have_text(f"{EX}/vocab#Gamma")
+    expect(toggle).to_be_checked()
+    toggle.uncheck()
+    page.goto(f"{varied.url}/example.org/{MANY}")
+    expect(toggle).not_to_be_checked()
+    assert not page_scrolls(page)
+
+
+@pytest.mark.parametrize("entity", [FEW, MANY])
+def test_toggle_keeps_header(page: Page, varied: LiveServer, entity: str) -> None:
+    """Check that the toggle doesn't move the header's name, type or IRI, whether or not the page then scrolls."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{varied.url}/example.org/{entity}")
+    parts = [page.locator(each) for each in ("main h1", ".entity-type", ".entity-iri summary")]
+    before = [box(each) for each in parts]
+    one_page_toggle(page).check()
+    if entity == MANY:
+        expect_one_page(page)
+    assert [box(each) for each in parts] == before
+
+
+@NO_JS
+def test_toggle_without_javascript(page: Page, varied: LiveServer) -> None:
+    """Check that, without JavaScript, the toggle still gives the one-page view, though it isn't remembered."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{varied.url}/example.org/{MANY}")
+    one_page_toggle(page).check()
+    expect_one_page(page)
+    page.goto(f"{varied.url}/example.org/{FEW}")
+    expect(one_page_toggle(page)).not_to_be_checked()
+
+
+ONE_PAGE_KEY = "browl.onePage"
+"""Where `static/one-page.js` remembers the toggle."""
+
+
+@pytest.mark.parametrize(
+    ("storage", "script"),
+    [
+        ("blocked", "Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('blocked'); } });"),
+        (
+            "full",
+            (
+                f"localStorage.setItem('{ONE_PAGE_KEY}', 'true');"
+                " Storage.prototype.setItem = () => { throw new DOMException('full', 'QuotaExceededError'); };"
+            ),
+        ),
+    ],
+    ids=["blocked", "full"],
+)
+def test_storage_fails(page: Page, varied: LiveServer, storage: str, script: str) -> None:
+    """Check that the toggle works, without script errors, when `localStorage` is blocked, or full but remembers it."""
+    errors: list[PlaywrightError] = []
+    page.on("pageerror", lambda error: errors.append(error))
+    page.add_init_script(script)
+    page.set_viewport_size(WIDE)
+    page.goto(f"{varied.url}/example.org/{MANY}")
+    toggle = one_page_toggle(page)
+    if storage == "blocked":
+        expect(toggle).not_to_be_checked()
+        toggle.check()
+        expect_one_page(page)
+    else:
+        expect(toggle).to_be_checked()
+        toggle.uncheck()  # not stored
+        assert not page_scrolls(page)
+    page.goto(f"{varied.url}/example.org/vocab#Gamma")  # its <main> moved in by the hash-IRI script
+    expect(page.locator("main h1")).to_have_text(f"{EX}/vocab#Gamma")
+    expect(toggle).to_be_checked(checked=storage == "full")
+    assert errors == []
+
+
+def test_toggle_restored_while_parsing(page: Page, varied: LiveServer) -> None:
+    """Check that the toggle is restored before the page has been parsed, so a framed page isn't drawn first."""
+    page.add_init_script(f"localStorage.setItem('{ONE_PAGE_KEY}', 'true')")
+    held: list[Route] = []
+    page.route("**/one-page.js", lambda route: held.append(route))
+    page.set_viewport_size(WIDE)
+    page.goto(f"{varied.url}/example.org/{MANY}", wait_until="commit")
+    wait_until(page, lambda: bool(held), "the script's request")
+    assert page.evaluate("document.readyState") == "loading"  # the parser waits for the script
+    held[0].continue_()
+    expect(one_page_toggle(page)).to_be_checked()
+
+
+def test_toggle_follows_changes(page: Page, varied: LiveServer) -> None:
+    """Check that the toggle follows another tab's change, and is restored on a page from the back-forward cache."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{varied.url}/example.org/{MANY}")
+    other = page.context.new_page()
+    other.goto(f"{varied.url}/example.org/{FEW}")
+    one_page_toggle(other).check()
+    expect(one_page_toggle(page)).to_be_checked()
+    page.evaluate(f"localStorage.setItem('{ONE_PAGE_KEY}', 'false')")  # a page gets no storage event of its own
+    page.evaluate("window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))")
+    expect(one_page_toggle(page)).not_to_be_checked()
+
+
+def test_header_fixed_height(page: Page, varied: LiveServer) -> None:
+    """Check that a long name is clamped to two lines, whole in its tooltip, and the opened IRI overlays the panels.
+
+    Neither moves the panels.
+    """
+    page.set_viewport_size(MEDIUM)
+    page.goto(f"{varied.url}/example.org/{FEW}")
+    heading = page.locator("main h1")
+    expect(heading).to_have_attribute("title", iso(f"{EX}/{FEW}"))
+    line = box(heading)["height"]
+    assert box(page.locator(".entity-meta"))["x"] < box(heading)["x"]  # type and IRI first
+    shown = panels(page)
+    heading.evaluate("(each) => { each.textContent = 'long name '.repeat(60); }")
+    assert 1.5 * line < box(heading)["height"] < 2.5 * line
+    assert panels(page) == shown
+    types = page.locator(".entity-type")
+    type_line = box(types)["height"]
+    types.evaluate("(each) => { each.textContent = 'Class · '.repeat(30); }")
+    assert box(types)["height"] == type_line  # one line, cut short
+    assert types.evaluate("(each) => each.scrollWidth > each.clientWidth")
+    assert panels(page) == shown
+    page.locator(".entity-iri summary").click()
+    iri = page.locator(".entity-iri dd code")
+    expect(iri).to_be_visible()
+    assert panels(page) == shown
+    header = box(page.locator(".entity-header"))
+    details = box(page.locator(".entity-iri dl"))
+    assert details["y"] + details["height"] > header["y"] + header["height"]  # over what's below the header
+
+
+def test_right_to_left_name(page: Page, varied: LiveServer) -> None:
+    """Check that a right-to-left name is laid out right to left, so cut short it ends in "…" on its left.
+
+    The type and IRI stay first, on the left.
+    """
+    page.set_viewport_size(MEDIUM)
+    page.goto(f"{varied.url}/example.org/{FEW}")
+    heading = page.locator("main h1")
+    heading.evaluate("(each) => { each.textContent = 'שם ארוך '.repeat(60); }")
+    assert heading.evaluate("(each) => getComputedStyle(each).direction") == "rtl"
+    assert box(page.locator(".entity-meta"))["x"] < box(heading)["x"]
+
+
+def on_top(page: Page, x: float, y: float, selector: str) -> bool:
+    """Return whether what's drawn at a point in the window is in an element matching a selector."""
+    result: bool = page.evaluate(f"document.elementFromPoint({x}, {y})?.closest({selector!r}) != null")
+    return result
+
+
+def test_iri_box_stacking(page: Page, varied: LiveServer) -> None:
+    """Check that the opened IRI box is drawn under the navigation bar when scrolled there, and over a panel heading."""
+    page.set_viewport_size(NARROW)  # the one-page view, so the page scrolls
+    page.goto(f"{varied.url}/example.org/{MANY}")
+    page.locator(".entity-iri summary").click()
+    details, bar = box(page.locator(".entity-iri dl")), box(page.locator(".site-bar"))
+    page.evaluate(f"window.scrollBy(0, {details['y'] - bar['height'] / 2})")
+    assert on_top(page, details["x"] + 4, bar["height"] / 2, ".site-bar")
+    page.set_viewport_size(MEDIUM)
+    page.evaluate("window.scrollTo(0, 0)")
+    page.locator(".entity-iri dd code").first.evaluate("(each) => { each.textContent = 'segment/'.repeat(200); }")
+    heading = box(page.locator(".annotations h2"))
+    assert box(page.locator(".entity-iri dl"))["y"] + box(page.locator(".entity-iri dl"))["height"] > heading["y"]
+    assert on_top(page, heading["x"] + 4, heading["y"] + heading["height"] / 2, ".entity-iri dl")
+
+
+def test_other_tab_fills_frame(page: Page, varied: LiveServer) -> None:
+    """Check that the Usage tab's panel fills the same area, and scrolls within it what doesn't fit."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{varied.url}/example.org/{FEW}")
+    panel = page.get_by_role("tabpanel")
+    overview = box(panel)
+    tab(page, "Usage").click()
+    expect(panel).to_contain_text(USAGE_TEXT)
+    assert box(panel) == overview
+    panel.evaluate("(each) => each.insertAdjacentHTML('beforeend', '<p>line</p>'.repeat(200))")
+    assert overflows(panel)
+    assert not page_scrolls(page)
+
+
+def test_sign_in_in_view(page: Page, varied: LiveServer) -> None:
+    """Check that the sign-in link is in the navigation bar, in view on an entity page, which has no footer."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{varied.url}/example.org/{MANY}")
+    expect(page.get_by_role("navigation", name="Site").get_by_role("link", name="Sign in")).to_be_in_viewport()
+    expect(page.locator("footer")).to_have_count(0)

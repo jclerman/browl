@@ -17,8 +17,8 @@
 {# An entity's logical axioms (`browl.overview.AxiomsPanel`), from `links`, as a frame in a two-column grid (U-32):
    each section's label once, then one line per axiom; an equivalent only its equivalence group implies is marked. #}
 {% macro axiom_frame(panel, links) -%}
-<section class="axioms">
-  <h2>Logical axioms</h2>
+<section class="axioms panel" tabindex="0" aria-labelledby="axioms-heading">
+  <h2 id="axioms-heading">Logical axioms</h2>
   {% if panel.too_many %}
   <p class="note">This entity has too many axioms to show here.</p>
   {% elif panel.groups is none %}

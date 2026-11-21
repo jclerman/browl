@@ -40,13 +40,14 @@
           {% endif %}
         </ul>
       </details>
+      {# In the bar, not a footer, so it stays in view on an entity page, which fills the window (DESIGN.md §2.9). #}
+      <a class="sign-in" href="{{ frame.admin }}">Sign in</a>
     </nav>
   </header>
   <main class="content">
     {% block content %}{% endblock %}
   </main>
-  <footer class="site-footer">
-    <a href="{{ frame.admin }}">Sign in</a>
-  </footer>
+  {# Not deferred, so a remembered "Scroll as one page" is restored before the page is first drawn. #}
+  <script src="{{ url_for('static', path='one-page.js').path }}"></script>
 </body>
 </html>

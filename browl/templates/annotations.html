@@ -20,8 +20,8 @@
 {# An entity's annotations (`browl.overview.AnnotationsPanel`), from `links`, in a two-column grid (U-32): each
    property's name once, then one line per value. #}
 {% macro annotation_list(panel, links) -%}
-<section class="annotations">
-  <h2>Annotations</h2>
+<section class="annotations panel" tabindex="0" aria-labelledby="annotations-heading">
+  <h2 id="annotations-heading">Annotations</h2>
   {% if panel.too_many %}
   <p class="note">This entity has too many annotations to show here.</p>
   {% elif panel.groups is none %}
