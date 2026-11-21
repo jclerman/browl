@@ -796,9 +796,10 @@ Header, above the tabs (U-5):
 - A `<details>` element with the full IRI and CURIE, closed at first. The IRI is text, not a link: on a browl site it
   often resolves to the page it's on. _(P-14c)_
 - A fixed height, so the panels below start at the same place on every entity page (U-30): the title is clamped to two
-  lines, with the full name in its tooltip; the type and the IRI's `<details>` sit to its right, the type on one line,
-  cut short if need be, with all the types in its tooltip; the opened IRI and CURIE overlay the page rather than push
-  it down. The "show everything" view (U-44, 2.9) shows the title and types whole. _(P-16d)_
+  lines, with the full name in its tooltip; the type and the IRI's `<details>` come first, to its left, the type on one
+  line, cut short if need be, with all the types in its tooltip; the opened IRI and CURIE overlay the page rather than
+  push it down. The "show everything" view (U-44, 2.9) shows the title and types whole, the header still at least two
+  title lines high, so switching views doesn't move a short name. _(P-16d)_
 
 Tabs (U-28; see [2.9](#29-page-layout)):
 
@@ -1054,8 +1055,8 @@ Every page has the same frame (U-27, U-28, U-29):
 │ browl · <ontology name>   [ Search… ]   Classes  Object props        │  navigation bar
 │                                Data props  Annotation props  Sign in │
 ├──────────────────────────────────────────────────────────────────────┤
-│  Heart                                                        Class  │  page header
-│                                                               ▸ IRI  │
+│  Class  Heart                                                        │  page header
+│  ▸ IRI                                                               │
 │  Overview   Usage (128)                            ☐ Show everything │  page tabs
 │  ═════════────────────────────────────────────────────────────────── │
 │  ┌ Annotations ───────────────┐  ┌ Logical axioms ────────────────┐  │  tab panel: the rest

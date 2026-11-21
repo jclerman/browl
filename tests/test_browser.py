@@ -1047,6 +1047,19 @@ def test_toggle_remembered(page: Page, varied: LiveServer) -> None:
     assert not page_scrolls(page)
 
 
+@pytest.mark.parametrize("entity", [FEW, MANY])
+def test_toggle_keeps_header(page: Page, varied: LiveServer, entity: str) -> None:
+    """Check that the toggle doesn't move the header's name, type or IRI, whether or not the page then scrolls."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{varied.url}/example.org/{entity}")
+    parts = [page.locator(each) for each in ("main h1", ".entity-type", ".entity-iri summary")]
+    before = [box(each) for each in parts]
+    page.get_by_label("Show everything").check()
+    if entity == MANY:
+        expect_everything(page)
+    assert [box(each) for each in parts] == before
+
+
 @NO_JS
 def test_toggle_without_javascript(page: Page, varied: LiveServer) -> None:
     """Check that, without JavaScript, the toggle still shows everything, though it isn't remembered."""
@@ -1080,6 +1093,7 @@ def test_header_fixed_height(page: Page, varied: LiveServer) -> None:
     heading = page.locator("main h1")
     expect(heading).to_have_attribute("title", iso(f"{EX}/{FEW}"))
     line = box(heading)["height"]
+    assert box(page.locator(".entity-meta"))["x"] < box(heading)["x"]  # type and IRI first
     shown = panels(page)
     heading.locator("bdi").evaluate("(each) => { each.textContent = 'long name '.repeat(60); }")
     assert 1.5 * line < box(heading)["height"] < 2.5 * line

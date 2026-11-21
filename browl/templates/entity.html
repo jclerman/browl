@@ -5,9 +5,8 @@
 {# The page fills the window (DESIGN.md §2.9), unless it shows everything (U-44): on small screens, in print, or with
    the toggle, which works without JS through `:has(:checked)`; `static/show-all.js` remembers it. #}
 <div class="entity-page">
-  {# The header (DESIGN.md §2.8), of fixed height: the name clamped, its type and IRI beside it. #}
+  {# The header (DESIGN.md §2.8), of fixed height: its type and IRI first, then the name, clamped. #}
   <div class="entity-header">
-    <h1 title="{{ name | isolate }}"><bdi>{{ name }}</bdi></h1>
     <div class="entity-meta">
       <p class="entity-type" title="{{ types | join(' · ') }}">{{ types | join(" · ") }}</p>
       <details class="entity-iri">
@@ -22,6 +21,7 @@
         </dl>
       </details>
     </div>
+    <h1 title="{{ name | isolate }}"><bdi>{{ name }}</bdi></h1>
   </div>
   <div class="tab-bar">
     {{ tab_list(tabs, "Entity") }}

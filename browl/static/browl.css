@@ -251,13 +251,15 @@ code {
   grid-template-columns: minmax(0, 1fr);
 }
 
-/* Its header (U-5): its name; to its right, its type in muted text, and its IRI and CURIE folded away, opening over
-   the page rather than pushing it down. */
+/* Its header (U-5): its type in muted text, and its IRI and CURIE folded away, opening over the page rather than
+   pushing it down; then, to their right, its name. */
 
 .entity-header {
   display: grid;
   grid-area: header;
-  grid-template-columns: minmax(0, 1fr) fit-content(40%);
+  grid-template-columns: fit-content(30%) minmax(0, 1fr);
+  /* At least two title lines high, as in the window-filling frame, so turning that off doesn't move a short name. */
+  grid-template-rows: minmax(calc(2 * var(--title-size) * var(--title-leading)), auto);
   align-items: center;
   column-gap: var(--space);
 }
@@ -270,7 +272,6 @@ code {
 
 .entity-meta {
   min-width: 0;
-  text-align: end;
 }
 
 .entity-type {
@@ -285,15 +286,14 @@ code {
 
 .entity-iri summary {
   width: fit-content;
-  margin-inline-start: auto;
   color: var(--muted);
   cursor: pointer;
 }
 
 .entity-iri dl {
   position: absolute;
-  top: 100%;
-  right: 0;
+  inset-block-start: 100%;
+  inset-inline-start: 0;
   z-index: 2;
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
