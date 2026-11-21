@@ -365,18 +365,13 @@ code {
   }
 }
 
-.lang {
-  color: var(--muted);
-  font-size: 0.8em;
-}
-
-/* An entity's axioms (U-3): keywords lighter than the entity names; an equivalent its equivalence group implies, not
-   an axiom, marked as language tags are. */
-
+.lang,
 .implied {
   color: var(--muted);
   font-size: 0.8em;
 }
+
+/* An entity's axioms (U-3): keywords lighter than the entity names. */
 
 .keyword {
   color: var(--muted);

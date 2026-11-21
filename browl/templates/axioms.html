@@ -35,6 +35,9 @@
     {% endfor %}
     {% endfor %}
   </dl>
+  {% if panel.more_equivalents %}
+  <p class="note">This class has more equivalents than can be shown here.</p>
+  {% endif %}
   {% endif %}
 </section>
 {%- endmacro %}

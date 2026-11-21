@@ -5,6 +5,8 @@ A frame shows each axiom by the operands that aren't the entity, under a section
 as a general class axiom, is shown whole.
 """
 
+import functools
+from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from enum import StrEnum
 from typing import Annotated, TypeGuard
@@ -52,23 +54,30 @@ SECTION_LABELS = {
 """Each section's label, as the page shows it."""
 
 _CLASS_ORDER = (
-    Section.SUB_CLASS_OF,
     Section.EQUIVALENT_TO,
+    Section.SUB_CLASS_OF,
     Section.DISJOINT_WITH,
     Section.DISJOINT_UNION_OF,
     Section.KEYS,
     Section.GENERAL,
 )
 _PROPERTY_ORDER = (
+    Section.EQUIVALENT_TO,
+    Section.SUB_PROPERTY_OF,
     Section.DOMAINS,
     Section.RANGES,
     Section.CHARACTERISTICS,
-    Section.SUB_PROPERTY_OF,
-    Section.EQUIVALENT_TO,
     Section.INVERSE_OF,
     Section.DISJOINT_WITH,
     Section.CHAINS,
 )
+_SECTION_INDEX = {
+    kind: {
+        section: index for index, section in enumerate(_CLASS_ORDER if kind is EntityKind.CLASS else _PROPERTY_ORDER)
+    }
+    for kind in EntityKind
+}
+_KIND_INDEX = {kind: index for index, kind in enumerate(EntityKind)}
 _KIND_WORDS = {
     EntityKind.CLASS: "class",
     EntityKind.DATATYPE: "datatype",
@@ -79,32 +88,7 @@ _KIND_WORDS = {
 }
 
 Operand = Annotated[
-    Entity
-    | owl.IRIReference
-    | owl.ObjectInverseOf
-    | owl.ObjectIntersectionOf
-    | owl.ObjectUnionOf
-    | owl.ObjectComplementOf
-    | owl.ObjectOneOf
-    | owl.ObjectSomeValuesFrom
-    | owl.ObjectAllValuesFrom
-    | owl.ObjectHasValue
-    | owl.ObjectHasSelf
-    | owl.ObjectMinCardinality
-    | owl.ObjectMaxCardinality
-    | owl.ObjectExactCardinality
-    | owl.DataSomeValuesFrom
-    | owl.DataAllValuesFrom
-    | owl.DataHasValue
-    | owl.DataMinCardinality
-    | owl.DataMaxCardinality
-    | owl.DataExactCardinality
-    | owl.DataIntersectionOf
-    | owl.DataUnionOf
-    | owl.DataComplementOf
-    | owl.DataOneOf
-    | owl.DatatypeRestriction,
-    Field(discriminator="type"),
+    owl.ClassExpression | owl.DataRange | owl.ObjectPropertyExpression | owl.IRIReference, Field(discriminator="type")
 ]
 """An operand a frame's line shows: a class or property expression, a data range, or an annotation property's domain
 or range."""
@@ -148,6 +132,11 @@ class FrameLine(BaseModel):
         Operands are separated by commas, or by `o` in a property chain; a characteristic is its keyword, without its
         colon (`Functional`).
         """
+        return self._manchester_tokens
+
+    @functools.cached_property
+    def _manchester_tokens(self) -> tuple[Token, ...]:
+        """The tokens, made once per line, as a page sorts lines by their text and then renders them."""
         if isinstance(self.axiom, _CHARACTERISTICS):
             return (Token(TokenKind.KEYWORD, self.axiom.keyword.removesuffix(":")),)
         if self.operands or self.axiom is None:
@@ -176,36 +165,33 @@ class AxiomGroup(BaseModel):
 
 
 def frame_groups(
-    axioms: Iterable[AnyAxiom], iri: str, equivalents: Iterable[str], shown_name: Callable[[str], str]
+    axioms: Iterable[AnyAxiom], iri: str, equivalents: Iterable[IRI], shown_name: Callable[[str], str]
 ) -> list[AxiomGroup]:
     """Return an entity's axioms as a frame's sections, in the order the page shows them (DESIGN.md §2.8).
-
-    A class's sections come first, then a property's, then other axioms; empty ones are left out. Within a section,
-    lines that show one named entity come first, by the name the page shows for it, case-insensitively; then the
-    others by their text, with the names the page shows. Under Equivalent To, each equivalent is a line of its own,
-    once, and so is each member of the class's equivalence group that no axiom states.
 
     Args:
         axioms: The entity's axioms (`browl.axioms.entity_axioms`).
         iri: The entity's IRI.
-        equivalents: The other members of the class's equivalence group, if it's in one (the `equiv_group` table).
+        equivalents: The other members of the class's equivalence group, if it's in one (the `equiv_group` table), not
+            the entity itself.
         shown_name: The name the page shows for an IRI.
     """
-    sections: dict[tuple[EntityKind | None, Section], dict[FrameLine, None]] = {}
-    stated: set[str] = set()
+    sections: dict[tuple[EntityKind | None, Section], list[FrameLine]] = {}
+    # Each kind's equivalents, so each is shown once, though several axioms, or the equivalence group, may state it.
+    stated: set[tuple[EntityKind | None, owl.Node]] = set()
     for axiom in axioms:
         for kind, section, line in _place(axiom, iri):
-            if section is Section.EQUIVALENT_TO and isinstance(entity := line.operands[0], Entity):
-                if entity.iri in stated:
+            if section is Section.EQUIVALENT_TO:
+                if (kind, line.operands[0]) in stated:
                     continue
-                stated.add(entity.iri)
-            sections.setdefault((kind, section), {})[line] = None
+                stated.add((kind, line.operands[0]))
+            sections.setdefault((kind, section), []).append(line)
     for each in equivalents:
-        if each not in stated and each != iri:
-            entity = Entity(kind=EntityKind.CLASS, iri=IRI(each))
-            sections.setdefault((EntityKind.CLASS, Section.EQUIVALENT_TO), {})[
+        entity = Entity(kind=EntityKind.CLASS, iri=each)
+        if (EntityKind.CLASS, entity) not in stated:
+            sections.setdefault((EntityKind.CLASS, Section.EQUIVALENT_TO), []).append(
                 FrameLine(axiom=None, operands=(entity,))
-            ] = None
+            )
 
     def line_key(line: FrameLine) -> tuple[bool, str, str]:
         tokens = line.manchester_tokens()
@@ -214,11 +200,12 @@ def frame_groups(
 
     keys = sorted(sections, key=_section_key)
     labels = [SECTION_LABELS[section] for _, section in keys]
+    counts = Counter(labels)
     return [
         AxiomGroup(
             section=section,
             kind=kind,
-            label=label if labels.count(label) == 1 or kind is None else f"{label} ({_KIND_WORDS[kind]})",
+            label=label if counts[label] == 1 or kind is None else f"{label} ({_KIND_WORDS[kind]})",
             lines=tuple(sorted(sections[kind, section], key=line_key)),
         )
         for (kind, section), label in zip(keys, labels, strict=True)
@@ -229,17 +216,21 @@ def _place(axiom: AnyAxiom, iri: str) -> Iterator[tuple[EntityKind | None, Secti
     """Yield the section, and its kind, of each line that shows an axiom on the entity's page."""
     if isinstance(axiom, owl.SubClassOf) and _is(axiom.sub, iri):
         yield EntityKind.CLASS, Section.SUB_CLASS_OF, FrameLine(axiom=axiom, operands=(axiom.super,))
-    elif isinstance(axiom, _EQUIVALENTS) and (entity := _member(axiom.members, iri)) and len(axiom.members) > 1:
-        for member in axiom.members:
-            if member is not entity:
-                yield entity.kind, Section.EQUIVALENT_TO, FrameLine(axiom=axiom, operands=(member,))
-    elif isinstance(axiom, _DISJOINTS) and (entity := _member(axiom.members, iri)) and len(axiom.members) > 1:
-        others = tuple(member for member in axiom.members if member is not entity)
+    elif isinstance(axiom, _EQUIVALENTS) and (entity := _member(axiom.members, iri)):
+        # One member, from `C owl:equivalentClass C`: the entity is its own equivalent.
+        for member in [member for member in axiom.members if member is not entity] or [entity]:
+            yield entity.kind, Section.EQUIVALENT_TO, FrameLine(axiom=axiom, operands=(member,))
+    elif isinstance(axiom, _DISJOINTS) and (entity := _member(axiom.members, iri)):
+        # One member, from `C owl:disjointWith C`: the entity is disjoint with itself, so it's empty.
+        others = tuple(member for member in axiom.members if member is not entity) or (entity,)
         yield entity.kind, Section.DISJOINT_WITH, FrameLine(axiom=axiom, operands=others)
-    elif isinstance(axiom, owl.DisjointUnion) and _is(axiom.class_, iri):
+    elif isinstance(axiom, owl.DisjointUnion) and _is(axiom.class_, iri) and axiom.members:
         yield EntityKind.CLASS, Section.DISJOINT_UNION_OF, FrameLine(axiom=axiom, operands=axiom.members)
-    elif isinstance(axiom, owl.HasKey) and _is(axiom.class_, iri):
-        keys = (*axiom.object_properties, *axiom.data_properties)
+    elif (
+        isinstance(axiom, owl.HasKey)
+        and _is(axiom.class_, iri)
+        and (keys := (*axiom.object_properties, *axiom.data_properties))
+    ):
         yield EntityKind.CLASS, Section.KEYS, FrameLine(axiom=axiom, operands=keys)
     elif isinstance(axiom, _CLASS_AXIOMS):
         yield EntityKind.CLASS, Section.GENERAL, FrameLine(axiom=axiom)
@@ -253,10 +244,10 @@ def _place(axiom: AnyAxiom, iri: str) -> Iterator[tuple[EntityKind | None, Secti
         yield axiom.sub.kind, Section.SUB_PROPERTY_OF, FrameLine(axiom=axiom, operands=(axiom.super,))
     elif isinstance(axiom, owl.SubPropertyChainOf) and _is(axiom.super, iri):
         yield axiom.super.kind, Section.CHAINS, FrameLine(axiom=axiom, operands=axiom.chain)
-    elif isinstance(axiom, owl.InverseObjectProperties) and _is(axiom.first, iri) and not _is(axiom.second, iri):
-        yield axiom.first.kind, Section.INVERSE_OF, FrameLine(axiom=axiom, operands=(axiom.second,))
-    elif isinstance(axiom, owl.InverseObjectProperties) and _is(axiom.second, iri) and not _is(axiom.first, iri):
-        yield axiom.second.kind, Section.INVERSE_OF, FrameLine(axiom=axiom, operands=(axiom.first,))
+    elif isinstance(axiom, owl.InverseObjectProperties) and (entity := _member((axiom.first, axiom.second), iri)):
+        # The other side; or the entity itself, if it's its own inverse (`p owl:inverseOf p`).
+        other = axiom.second if entity is axiom.first else axiom.first
+        yield entity.kind, Section.INVERSE_OF, FrameLine(axiom=axiom, operands=(other,))
     else:
         yield None, Section.OTHER, FrameLine(axiom=axiom)
 
@@ -267,8 +258,8 @@ def _is(node: owl.Node, iri: str) -> TypeGuard[Entity]:
 
 
 def _member(members: Sequence[owl.Node], iri: str) -> Entity | None:
-    """Return the member of an n-ary axiom that is the entity, if one is."""
-    return next((member for member in members if isinstance(member, Entity) and member.iri == iri), None)
+    """Return the member of an n-ary axiom, or the side of an inverse axiom, that is the entity, if one is."""
+    return next((member for member in members if _is(member, iri)), None)
 
 
 def _section_key(key: tuple[EntityKind | None, Section]) -> tuple[int, int]:
@@ -276,8 +267,7 @@ def _section_key(key: tuple[EntityKind | None, Section]) -> tuple[int, int]:
     kind, section = key
     if kind is None:
         return len(EntityKind), 0
-    order = _CLASS_ORDER if kind is EntityKind.CLASS else _PROPERTY_ORDER
-    return list(EntityKind).index(kind), order.index(section)
+    return _KIND_INDEX[kind], _SECTION_INDEX[kind][section]
 
 
 def _shown_text(tokens: Iterable[Token], shown_name: Callable[[str], str]) -> str:

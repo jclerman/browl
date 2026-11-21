@@ -726,6 +726,7 @@ ENTITIES = [
     (f"{NS}Plant", EntityType.CLASS),
     (f"{NS}Person", EntityType.CLASS),
     (f"{NS}Dog", EntityType.CLASS),
+    (f"{NS}Adult", EntityType.CLASS),
     (f"{NS}partOf", EntityType.OBJECT_PROPERTY),
     (f"{NS}hasPart", EntityType.OBJECT_PROPERTY),
     (f"{NS}hasUncle", EntityType.OBJECT_PROPERTY),
@@ -753,6 +754,9 @@ def test_page(fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) ->
         person = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "Person", "panel": "1"}).text
         comment = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "comment", "panel": "1"}).text
         uncle = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "hasUncle", "panel": "1"}).text
+        animal = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "Animal", "panel": "1"}).text
+        adult = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "Adult", "panel": "1"}).text
+        part_of = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "partOf", "panel": "1"}).text
     heart_link = '<a href="/axioms#Heart"><bdi>&lt;b&gt;Heart&lt;/b&gt; &amp; &#34;soul&#34;</bdi></a>'
     keyword = '<span class="keyword">{}</span>'.format
     assert re.search(r'<dt>SubClass Of</dt>\s*<dd dir="ltr"><a href="/axioms#Organ"><bdi>organ</bdi></a></dd>', page)
@@ -773,3 +777,14 @@ def test_page(fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) ->
     chain = f'<code dir="ltr">&lt;{NS}hasParent&gt;</code> {keyword("o")} <code dir="ltr">&lt;{NS}hasBrother&gt;</code>'
     assert re.search(rf'<dt>SuperProperty Of \(Chain\)</dt>\s*<dd dir="ltr">{re.escape(chain)}</dd>', uncle)
     assert "SubClass Of" not in comment and "None." not in page
+    # Sections from n-ary and symmetric axioms, as the OWLAPI converts them.
+    assert '<dl class="frame">' in animal
+    disjoint = f'<a href="/axioms#Plant"><bdi>{NS}Plant</bdi></a>'
+    assert re.search(rf'<dt>Disjoint With</dt>\s*<dd dir="ltr">{code(f"{NS}Fungus")}, {disjoint}</dd>', animal)
+    # The store holds a three-way equivalence as pairwise triples, so only one is Adult's; the other member comes
+    # from the equivalence group, which this test's derived database doesn't have.
+    living = f'<dd dir="ltr">{code(f"{NS}LivingThing")}</dd>'
+    assert re.search(rf"<dt>Equivalent To</dt>\s*{living}\s*</dl>", adult)
+    has_part = f'<a href="/axioms#hasPart"><bdi>{NS}hasPart</bdi></a>'
+    assert re.search(rf'<dt>Characteristics</dt>\s*<dd dir="ltr">{keyword("Transitive")}</dd>', part_of)
+    assert re.search(rf'<dt>Inverse Of</dt>\s*<dd dir="ltr">{has_part}</dd>', part_of)

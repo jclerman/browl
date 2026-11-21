@@ -150,6 +150,28 @@ def test_frame(monkeypatch: pytest.MonkeyPatch) -> None:
     implied = '<dd dir="ltr"><a href="/onto#AD"><bdi>dee</bdi></a> <small class="implied">(implied)</small></dd>'
     assert re.search(rf'<dt>Equivalent To</dt>\s*<dd dir="ltr"><a href="/onto#AC">.*</dd>\s*{re.escape(implied)}', page)
     assert page.count("(implied)") == 1  # not C, which an axiom states
+    assert "more equivalents" not in page
+
+
+@pytest.mark.usefixtures("no_annotations")
+@pytest.mark.parametrize(
+    ("viewed", "cap", "implied", "more"), [("C", 5, 2, False), ("C", 1, 1, True), ("B", 5, 0, False)]
+)
+def test_implied_equivalents(monkeypatch: pytest.MonkeyPatch, viewed: str, cap: int, implied: int, more: bool) -> None:
+    """Check a class's implied equivalents: on a member that isn't the representative, cut at the cap, or none."""
+    monkeypatch.setattr(browl.overview, "_read_axioms", no_axioms)
+    monkeypatch.setattr(browl.overview, "MAX_EQUIVALENTS", cap)
+    a, b, c, d = (f"{IRI}{name}" for name in ("", "B", "C", "D"))
+    app = make_app()
+    with TestClient(app) as test_client:
+        stage = derived_stage([(each, EntityType.CLASS) for each in (a, b, c, d)], equivalence_groups=[[a, c, d]])
+        app.state.jobs.register(Stage.PRE_CACHING, stage)
+        test_client.portal.call(app.state.jobs.start)
+        test_client.portal.call(app.state.jobs.wait)
+        page = test_client.get("/_browl/hash", params={**PANEL, "fragment": f"A{viewed}"}).text
+    assert page.count("(implied)") == implied
+    assert ("This class has more equivalents than can be shown here." in page) == more
+    assert f'href="/onto#A{viewed}"' not in page  # not itself
 
 
 def test_usage_tab_untouched(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:

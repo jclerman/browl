@@ -853,28 +853,33 @@ Tabs (U-28; see [2.9](#29-page-layout)):
   - **Limits:** an entity with more than 1,000 values (`MAX_ANNOTATIONS`), or whose values come to more than 4 Mi
     characters as Fuseki sends them (`MAX_ANNOTATIONS_CHARS`, so huge values can't exhaust the app's memory), gets a
     note instead, as for too many axioms. A failed query fails only this panel, as the axioms' does (below).
-- **Logical-axioms panel:** grouped by axiom kind under familiar section names (SubClass Of, Equivalent To, …), one
-  Manchester-syntax axiom per line. Empty groups are omitted. _(P-16b, P-16c)_
-  - **Classes:** SubClass Of (named parents first, then class expressions), Equivalent To (equivalent classes from the
-    derived database, then expressions), Disjoint With, Disjoint Union Of, Keys, and General class axioms that mention
-    the class.
-  - **Properties** (U-31): Domains, Ranges, Characteristics (functional, transitive, …), SubProperty Of, Equivalent To,
-    Inverse Of, Disjoint With, and SuperProperty Of (Chain), the chains that imply the property. An annotation
-    property has only Domains, Ranges and SubProperty Of.
+- **Logical-axioms panel:** grouped by axiom kind under familiar section names (Equivalent To, SubClass Of, …), in
+  frame style (below). Empty sections are omitted. _(P-16b, P-16c)_
+  - **Classes:** Equivalent To, SubClass Of, Disjoint With, Disjoint Union Of, Keys, and General class axioms that
+    mention the class.
+  - **Properties** (U-31): Equivalent To, SubProperty Of, Domains, Ranges, Characteristics (functional, transitive,
+    …), Inverse Of, Disjoint With, and SuperProperty Of (Chain), the chains that imply the property. An annotation
+    property has only SubProperty Of, Domains and Ranges.
   - **Frame-style lines** (`browl.frames`): a line shows an axiom by its operands that aren't the entity, from its
-    named roles: on Heart's page, `Heart SubClassOf Organ` is `Organ` under SubClass Of. An n-ary disjointness is one
-    line, its other members separated by commas, as are a disjoint union's members and a key's properties; a chain's
-    properties are separated by `o`; a characteristic is its keyword (`Functional`). Under Equivalent To each
-    equivalent is a line of its own, shown once, though axioms may state it more than once. An axiom whose entity
-    isn't where its section expects it is shown whole: under General class axioms if it's a class axiom (a subclass,
-    equivalence, disjointness, disjoint-union or key axiom), such as `hasPart some Heart SubClassOf Vertebrate`;
-    else under Other axioms, last, such as `inverse (p) Domain C` on p's page, or a punned individual's assertions.
+    named roles: on Heart's page, `Heart SubClassOf Organ` is `Organ` under SubClass Of.
+    - An n-ary disjointness is one line, its other members separated by commas, as are a disjoint union's members and
+      a key's properties.
+    - A chain's properties are separated by `o`, and a characteristic is its keyword (`Functional`).
+    - Under Equivalent To each equivalent is a line of its own, shown once, though axioms may state it more than once.
+    - An axiom with the entity on both sides shows the entity: `C owl:equivalentClass C` and `p owl:inverseOf p`
+      under Equivalent To and Inverse Of, and `C owl:disjointWith C` (C is empty) under Disjoint With.
+    - An axiom whose entity isn't where its section expects it, or an empty key or disjoint union, is shown whole:
+      under General class axioms if it's a class axiom, such as `hasPart some Heart SubClassOf Vertebrate`, else
+      under Other axioms, last, such as `inverse (p) Domain C` on p's page, or a punned individual's assertions.
   - **Implied equivalents:** a member of the class's equivalence group (`equiv_group`, 2.5) that no axiom of the
-    class states, being equivalent through a chain of equivalences or a cycle of subclass axioms, is a line under
-    Equivalent To marked "(implied)", read from the derived database with the links.
+    class states is a line under Equivalent To marked "(implied)". It's equivalent through a chain of equivalences or a
+    cycle of subclass axioms. That includes a three-way `EquivalentClasses`, which the store holds as pairwise
+    triples. The group has no bound, unlike the class's axioms, since a cycle of n subclass axioms makes a group of n.
+    So a page reads at most 1,000 of its members (`MAX_EQUIVALENTS`), with the links, in the thread pool. If there are
+    more, a note says not all are shown.
   - **Order:** a class's sections in the order above, then each property type's, then Other axioms. Within a section,
-    lines that show one named entity first, by the name the page shows for it, case-insensitively, then the others by
-    their text, with the names the page shows.
+    lines that show one named entity come first, stated and implied alike, by the name the page shows for it,
+    case-insensitively. Then come the others, by their text with the names the page shows, then by IRI.
   - **Punning:** an IRI with several types has each type's sections; where two of them share a label, both add their
     type ("Equivalent To (object property)").
   - **Data:** each section (`AxiomGroup`) holds its label and lines; a line (`FrameLine`) its axiom, None for an
