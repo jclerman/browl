@@ -6,6 +6,7 @@ lookup gives the links for both.
 
 import asyncio
 import logging
+import sqlite3
 from collections.abc import Mapping
 
 from fastapi import Request
@@ -20,7 +21,8 @@ from browl.annotations import (
     group_annotations,
 )
 from browl.axioms import TooManyAxiomsError, entity_axioms, fetch_fragment
-from browl.derived import NotCurrentError
+from browl.derived import EntityType, NotCurrentError
+from browl.frames import AxiomGroup, frame_groups
 from browl.fuseki import UNION_FROM, SparqlError, dataset_clause
 from browl.jobs import JobState
 from browl.links import EntityLink, read_entity_links
@@ -34,6 +36,10 @@ from browl.rdf import IRI, RDFSyntaxError
 from browl.settings import Settings
 
 logger = logging.getLogger(__name__)
+
+MAX_EQUIVALENTS = 1_000
+"""The most members of a class's equivalence group a page reads and shows as its implied equivalents, as the group,
+unlike the class's axioms, has no bound: a cycle of n subclass axioms makes a group of n."""
 
 
 class AnnotationsPanel(BaseModel):
@@ -52,18 +58,21 @@ class AnnotationsPanel(BaseModel):
 
 
 class AxiomsPanel(BaseModel):
-    """The entity's axioms.
+    """The entity's logical axioms, as a frame's sections (`browl.frames`).
 
     Attributes:
-        axioms: The axioms (`browl.axioms.entity_axioms`); None if they couldn't be read, or are too many to show, when
-            the page says so.
+        groups: The sections, in the order shown (`browl.frames.frame_groups`); None if the axioms couldn't be read, or
+            are too many to show, when the page says so.
         too_many: Whether the axioms are too many to show (`browl.axioms.TooManyAxiomsError`).
+        more_equivalents: Whether the class's equivalence group has more members than `MAX_EQUIVALENTS`, so not all
+            its implied equivalents are shown.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    axioms: list[AnyAxiom] | None
+    groups: list[AxiomGroup] | None
     too_many: bool = False
+    more_equivalents: bool = False
 
 
 class Overview(BaseModel):
@@ -138,9 +147,18 @@ async def read_overview(request: Request, state: JobState, iri: str) -> Overview
     settings: Settings = request.app.state.settings
     prefix = settings.reserved_prefix
     root = link_root(request.scope)
-    links = await read_derived(
-        request, lambda connection: read_entity_links(connection, mentioned, prefix, root), state
-    )
+
+    def read_links(connection: sqlite3.Connection) -> tuple[dict[str, EntityLink], list[AxiomGroup] | None, bool]:
+        """Read the links, and, as it's CPU-bound, group the axioms here too, off the event loop."""
+        if axioms is None:
+            return read_entity_links(connection, mentioned, prefix, root), None, False
+        equivalents = _read_equivalents(connection, iri)
+        more = len(equivalents) > MAX_EQUIVALENTS
+        del equivalents[MAX_EQUIVALENTS:]
+        links = read_entity_links(connection, [*mentioned, *equivalents], prefix, root)
+        return links, frame_groups(axioms, iri, equivalents, lambda each: shown_name(each, links)), more
+
+    links, axiom_groups, more_equivalents = await read_derived(request, read_links, state)
     groups = None
     if annotations is not None:
         groups = group_annotations(
@@ -151,7 +169,7 @@ async def read_overview(request: Request, state: JobState, iri: str) -> Overview
         )
     return Overview(
         annotations=AnnotationsPanel(groups=groups, too_many=too_many_annotations),
-        axioms=AxiomsPanel(axioms=axioms, too_many=too_many_axioms),
+        axioms=AxiomsPanel(groups=axiom_groups, too_many=too_many_axioms, more_equivalents=more_equivalents),
         links=links,
     )
 
@@ -187,3 +205,24 @@ async def _read_axioms(request: Request, dataset: str, iri: str, clause: str) ->
     except (SparqlError, RDFSyntaxError, FragmentError):
         logger.exception("Couldn't show the axioms of %s", logged_iri(iri))
         return None, False
+
+
+def _read_equivalents(connection: sqlite3.Connection, iri: str) -> list[IRI]:
+    """Return the IRIs of the other members of a class's equivalence group (the `equiv_group` table), if it's in one.
+
+    At most `MAX_EQUIVALENTS` + 1 of them, so the caller can tell whether there are more; unsorted, so a huge group's
+    query stops early.
+    """
+    rows = connection.execute(
+        "SELECT o.iri FROM entity AS e JOIN equiv_group AS g ON g.entity = e.id"
+        " JOIN equiv_group AS m ON m.representative = g.representative JOIN entity AS o ON o.id = m.entity"
+        " WHERE e.iri = ? AND e.type = ? AND o.id != e.id LIMIT ?",
+        (iri, EntityType.CLASS, MAX_EQUIVALENTS + 1),
+    )
+    equivalents = []
+    for (each,) in rows:
+        try:
+            equivalents.append(IRI(each))
+        except RDFSyntaxError:  # the loaders check IRIs, so it shouldn't happen; but it fails only this line
+            logger.warning("Not showing an equivalent of %s with an invalid IRI: %s", logged_iri(iri), logged_iri(each))
+    return equivalents

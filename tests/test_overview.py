@@ -3,6 +3,7 @@
 import asyncio
 import dataclasses
 import logging
+import re
 import threading
 import urllib.parse
 from collections.abc import Iterator
@@ -20,6 +21,7 @@ from browl import owl
 from browl.annotations import AnnotationGroup, IRIValue
 from browl.axioms import fetch_fragment
 from browl.derived import EntityType
+from browl.frames import frame_groups
 from browl.fuseki import UNION_FROM, FusekiClient, SparqlError
 from browl.jobs import JobState, Stage
 from browl.jobtypes import ImportResult
@@ -123,6 +125,53 @@ def test_axioms_fail_alone(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "This entity has too many axioms to show here." in page
     assert '<dt><a href="/onto#note">' in page
     assert '<dd><a href="/onto#A">' in page
+
+
+@pytest.mark.usefixtures("no_annotations")
+def test_frame(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check the axioms panel's frame: sections and their lines, the class's implied equivalents linked and marked."""
+    a, b, c, d = (owl.Entity(kind=owl.EntityKind.CLASS, iri=f"{IRI}{name}") for name in ("", "B", "C", "D"))
+
+    async def axioms(*args: object) -> tuple[list[owl.AnyAxiom], bool]:
+        return [owl.SubClassOf(sub=a, super=b), owl.EquivalentClasses(members=(a, c))], False
+
+    monkeypatch.setattr(browl.overview, "_read_axioms", axioms)
+    app = make_app()
+    with TestClient(app) as test_client:
+        entities = [(each.iri, EntityType.CLASS) for each in (a, b, c, d)]
+        stage = derived_stage(
+            entities, names={c.iri: ("cee", None), d.iri: ("dee", None)}, equivalence_groups=[[a.iri, c.iri, d.iri]]
+        )
+        app.state.jobs.register(Stage.PRE_CACHING, stage)
+        test_client.portal.call(app.state.jobs.start)
+        test_client.portal.call(app.state.jobs.wait)
+        page = test_client.get("/_browl/hash", params=PANEL).text
+    assert re.search(r'<dt>SubClass Of</dt>\s*<dd dir="ltr"><a href="/onto#AB">', page)
+    implied = '<dd dir="ltr"><a href="/onto#AD"><bdi>dee</bdi></a> <small class="implied">(implied)</small></dd>'
+    assert re.search(rf'<dt>Equivalent To</dt>\s*<dd dir="ltr"><a href="/onto#AC">.*</dd>\s*{re.escape(implied)}', page)
+    assert page.count("(implied)") == 1  # not C, which an axiom states
+    assert "more equivalents" not in page
+
+
+@pytest.mark.usefixtures("no_annotations")
+@pytest.mark.parametrize(
+    ("viewed", "cap", "implied", "more"), [("C", 5, 2, False), ("C", 1, 1, True), ("B", 5, 0, False)]
+)
+def test_implied_equivalents(monkeypatch: pytest.MonkeyPatch, viewed: str, cap: int, implied: int, more: bool) -> None:
+    """Check a class's implied equivalents: on a member that isn't the representative, cut at the cap, or none."""
+    monkeypatch.setattr(browl.overview, "_read_axioms", no_axioms)
+    monkeypatch.setattr(browl.overview, "MAX_EQUIVALENTS", cap)
+    a, b, c, d = (f"{IRI}{name}" for name in ("", "B", "C", "D"))
+    app = make_app()
+    with TestClient(app) as test_client:
+        stage = derived_stage([(each, EntityType.CLASS) for each in (a, b, c, d)], equivalence_groups=[[a, c, d]])
+        app.state.jobs.register(Stage.PRE_CACHING, stage)
+        test_client.portal.call(app.state.jobs.start)
+        test_client.portal.call(app.state.jobs.wait)
+        page = test_client.get("/_browl/hash", params={**PANEL, "fragment": f"A{viewed}"}).text
+    assert page.count("(implied)") == implied
+    assert ("This class has more equivalents than can be shown here." in page) == more
+    assert f'href="/onto#A{viewed}"' not in page  # not itself
 
 
 def test_usage_tab_untouched(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
@@ -350,7 +399,8 @@ def test_too_many(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPa
 def test_panel_json() -> None:
     """Check that a panel's axioms serialize with their fields, which typing them as the base `Axiom` would drop."""
     a, b = (owl.Entity(kind=owl.EntityKind.CLASS, iri=f"{IRI}{name}") for name in "12")
-    panel = browl.overview.AxiomsPanel(axioms=[owl.SubClassOf(sub=a, super=b)])
+    groups = frame_groups([owl.SubClassOf(sub=a, super=b)], a.iri, [f"{IRI}3"], str)
+    panel = browl.overview.AxiomsPanel(groups=groups)
     adapter = TypeAdapter(browl.overview.AxiomsPanel)
     assert adapter.validate_json(adapter.dump_json(panel)) == panel
 
@@ -360,7 +410,7 @@ def test_overview_json() -> None:
     group = AnnotationGroup(property=RDFIRI(f"{IRI}p"), values=(IRIValue(iri=RDFIRI(IRI)),))
     overview = browl.overview.Overview(
         annotations=browl.overview.AnnotationsPanel(groups=[group]),
-        axioms=browl.overview.AxiomsPanel(axioms=None, too_many=True),
+        axioms=browl.overview.AxiomsPanel(groups=None, too_many=True),
         links={IRI: EntityLink(IRI, "A", "/onto#A"), f"{IRI}p": EntityLink(f"{IRI}p", f"{IRI}p", None)},
     )
     assert browl.overview.Overview.model_validate_json(overview.model_dump_json()) == overview
@@ -370,7 +420,7 @@ def test_panels_checked() -> None:
     """Check that the panels' models validate their data and are frozen."""
     with pytest.raises(ValidationError):
         browl.overview.AnnotationsPanel(groups=["not a group"])
-    panel = browl.overview.AxiomsPanel(axioms=None)
+    panel = browl.overview.AxiomsPanel(groups=None)
     with pytest.raises(ValidationError):
         panel.too_many = True  # type: ignore[misc]
 
