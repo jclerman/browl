@@ -52,7 +52,7 @@ ONTO_TITLE = iso("The &lt;Onto&gt;")
 
 def entity_heading(name: str) -> str:
     """Return an entity page's heading for an HTML-escaped name: the name, isolated, and whole in its tooltip."""
-    return f'<h1 title="{iso(name)}"><bdi>{name}</bdi></h1>'
+    return f'<h1 title="{iso(name)}" dir="auto">{name}</h1>'
 
 
 def run(

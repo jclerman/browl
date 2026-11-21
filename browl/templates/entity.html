@@ -2,13 +2,13 @@
 {% from "tabs.html" import tab_list, tab_panel %}
 {% block title %}{{ name | isolate }}{% endblock %}
 {% block content %}
-{# The page fills the window (DESIGN.md §2.9), unless it's in the one-page view (U-44): on small screens, in print, or with
-   the toggle, which works without JS through `:has(:checked)`; `static/one-page.js` remembers it. #}
+{# The window-filling frame and the one-page view: `browl.css`. #}
 <div class="entity-page">
   {# The header (DESIGN.md §2.8), of fixed height: its type and IRI first, then the name, clamped. #}
   <div class="entity-header">
     <div class="entity-meta">
-      <p class="entity-type" title="{{ types | join(' · ') }}">{{ types | join(" · ") }}</p>
+      {% set type_text = types | join(" · ") %}
+      <p class="entity-type" title="{{ type_text }}">{{ type_text }}</p>
       <details class="entity-iri">
         <summary>IRI</summary>
         <dl>
@@ -21,11 +21,11 @@
         </dl>
       </details>
     </div>
-    <h1 title="{{ name | isolate }}"><bdi>{{ name }}</bdi></h1>
+    <h1 title="{{ name | isolate }}" dir="auto">{{ name }}</h1>
   </div>
   <div class="tab-bar">
     {{ tab_list(tabs, "Entity") }}
-    <label class="one-page-toggle"><input type="checkbox" id="one-page"> Scroll as one page</label>
+    <label class="one-page-toggle"><input type="checkbox" id="one-page" autocomplete="off"> Scroll as one page</label>
   </div>
   {% call tab_panel(tabs) %}{% include "entity_panel.html" %}{% endcall %}
 </div>

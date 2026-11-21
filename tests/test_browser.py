@@ -1095,7 +1095,7 @@ def test_header_fixed_height(page: Page, varied: LiveServer) -> None:
     line = box(heading)["height"]
     assert box(page.locator(".entity-meta"))["x"] < box(heading)["x"]  # type and IRI first
     shown = panels(page)
-    heading.locator("bdi").evaluate("(each) => { each.textContent = 'long name '.repeat(60); }")
+    heading.evaluate("(each) => { each.textContent = 'long name '.repeat(60); }")
     assert 1.5 * line < box(heading)["height"] < 2.5 * line
     assert panels(page) == shown
     page.locator(".entity-iri summary").click()
