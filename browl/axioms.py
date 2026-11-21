@@ -12,7 +12,6 @@ super-properties; not its annotation assertions, nor its usage in other entities
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses
 import functools
 import logging
@@ -29,6 +28,7 @@ from browl.owl import EntityKind
 from browl.owlapi import FragmentError, check_java_thread, ntriples_ontology
 from browl.precache.core import PREFIXES, sparql_file
 from browl.rdf import IRI, RDFSyntaxError, ntriples_iris
+from browl.tasks import task_group
 
 logger = logging.getLogger(__name__)
 
@@ -74,13 +74,9 @@ async def fetch_fragment(sparql: FusekiClient, dataset: str, iri: str, dataset_c
         TooManyAxiomsError: The triples mention more than `MAX_FRAGMENT_IRIS` IRIs.
     """
     entity = {_ENTITY: f"<{IRI(iri)}>"}
-    try:
-        # A task group, unlike `gather`, cancels the other query when one fails.
-        async with asyncio.TaskGroup() as group:
-            own = group.create_task(sparql.construct(dataset, filled_query(_AXIOMS, dataset_clause, entity)))
-            symmetric = group.create_task(sparql.construct(dataset, filled_query(_SYMMETRIC, dataset_clause, entity)))
-    except ExceptionGroup as errors:
-        raise errors.exceptions[0]  # noqa: B904 -- the query's own error, with the group as its context
+    async with task_group() as group:
+        own = group.create_task(sparql.construct(dataset, filled_query(_AXIOMS, dataset_clause, entity)))
+        symmetric = group.create_task(sparql.construct(dataset, filled_query(_SYMMETRIC, dataset_clause, entity)))
     triples = own.result() + symmetric.result()
     mentioned = ntriples_iris(triples)
     if len(mentioned) > MAX_FRAGMENT_IRIS:

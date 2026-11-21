@@ -27,6 +27,7 @@ from browl.precache.header import header_meta
 from browl.precache.hierarchies import hierarchies
 from browl.precache.keys import build_keys
 from browl.precache.names import names
+from browl.precache.owner_map import owner_map
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ FUSEKI_WAIT_S = 120.0
 FUSEKI_RETRY_S = (0.5, 5.0)
 """The first and the longest wait between pings while waiting for Fuseki; each wait doubles the last."""
 
-HOOKS: tuple[Hook, ...] = (entities, names, hierarchies)
+HOOKS: tuple[Hook, ...] = (entities, names, hierarchies, owner_map)
 """The hooks the app runs, in order: a hook may read tables an earlier one filled.
 
 A hook creates the indexes of each table it fills once it's done (`DerivedWriter.create_indexes`), so later hooks can

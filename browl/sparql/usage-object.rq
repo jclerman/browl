@@ -1,0 +1,7 @@
+# The usages of an entity as a triple's object, by other IRIs (browl.usages.read_usages; DESIGN.md §2.8). `$entity`
+# stands for the entity's IRI, and browl.usages adds the dataset clause before WHERE.
+SELECT ?subject ?predicate
+WHERE {
+  ?subject ?predicate $entity
+  FILTER (isIRI(?subject) && ?subject != $entity)
+}

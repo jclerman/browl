@@ -21,6 +21,11 @@ SPARQL_DIR = Path(browl.__file__).parent / "sparql"
 FILES = sorted(SPARQL_DIR.glob("*.rq"))
 # Reached through `namespace`: imported into this module, pytest probes them and rdflib warns.
 STANDARD = (namespace.RDF, namespace.RDFS, namespace.OWL, namespace.XSD)
+ALLOWED = {
+    URIRef("http://jena.apache.org/ARQ/function#bnode"),  # a blank node's store label, which Fuseki's Jena has
+    URIRef("http://www.w3.org/2003/11/swrl#Imp"),  # a SWRL rule, in OWL's RDF mapping, for the blank-node owner map
+}
+"""The IRIs, outside the standard vocabularies, that browl's queries may name."""
 
 
 def algebra(text: str) -> object:
@@ -59,7 +64,9 @@ def iris(node: object) -> Iterator[URIRef]:
 
 def nonstandard(iris: set[URIRef]) -> list[str]:
     """Return the IRIs that aren't terms of the standard vocabularies, sorted."""
-    return sorted(str(iri) for iri in iris if not any(iri in vocabulary for vocabulary in STANDARD))
+    return sorted(
+        str(iri) for iri in iris if iri not in ALLOWED and not any(iri in vocabulary for vocabulary in STANDARD)
+    )
 
 
 def test_files_found() -> None:
@@ -75,7 +82,7 @@ def test_parses(path: Path) -> None:
 
 @pytest.mark.parametrize("path", FILES, ids=lambda path: path.name)
 def test_standard_terms_only(path: Path) -> None:
-    """Check that every IRI the file names is a term defined in the RDF, RDFS, OWL or XSD vocabulary."""
+    """Check that every IRI the file names is a term defined in the RDF, RDFS, OWL or XSD vocabulary, or `ALLOWED`."""
     text = path.read_text()
     found = set(iris(algebra(text)))
     assert found or not re.search(r"PREFIX|<\S*>", text)  # a query may name no IRI, as the triple count doesn't

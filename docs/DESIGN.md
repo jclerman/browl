@@ -57,7 +57,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **U-15** · If `http://` and `https://` forms of the same IRI are both declared, their shared URL shows a page for choosing between them. _(Q1a)_ | v1 |
 | **U-16** · While an ontology is being loaded or replaced, the site shows a "loading" page. _(Q14a)_ | v1 |
 | **U-17** · Pages work without JavaScript, except for hash IRIs, which need it. Trees and autocomplete are keyboard-accessible. _(Q20)_ | v1 |
-| **U-26** · Each entity page has a **Usage** tab (inspired by Protégé's), not shown by default: the axioms in which other entities refer to this entity (logical axioms, annotation assertions whose value is this entity, and, for a property, the assertions that use it), rendered in Manchester syntax, grouped by referring entity and sorted by its display name, with a total count of axioms and paging (next, previous, go to page). Axioms not about a single entity (general class axioms, `DisjointClasses(A, B, C)`) are listed under every named entity they mention. | v1 |
+| **U-26** · Each entity page has a **Usage** tab (inspired by Protégé's), not shown by default: the axioms in which other entities refer to this entity (logical axioms, annotation assertions whose value is this entity, and, for a property, the assertions that use it), rendered in Manchester syntax, grouped by referring entity and sorted by its display name, with a total count of axioms and paging (next, previous, go to page). Axioms with no single subject (general class axioms, `DisjointClasses(A, B, C)`) are on the Overview tab of every class they mention, not in its Usage tab; a property's Usage tab lists those that mention it, in a group of their own. | v1 |
 | **U-27** · A persistent navigation bar on every page links to the ontology home page, the search, and the tree page for each entity type. | v1 |
 | **U-28** · Page-specific content is organized in tabs within the page (e.g. an entity's Overview and Usage; for classes, later, Individuals). The tabs are visually distinct from the navigation bar. | v1 |
 | **U-29** · The layout makes good use of space and is as readable as possible without looking harsh. | v1 |
@@ -97,6 +97,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **A-6** · If a stage fails, the upload page says which stage failed and why. For a reasoner failure caused by a limit, it says which limit (time or memory) was hit, where possible. _(Q7)_ | v1 |
 | **A-7** · Admins can add and remove admin email addresses. The seed admins (O-6) can't be removed through the UI. _(Q16a)_ | v1 |
 | **A-8** · Detailed logs for each stage, inline or on a linked page. _(Q7b)_ | Later |
+| **A-10** · An admin can cancel a running load, rebuild or background build (such as P-27c's usage table), e.g. if it's taking too long. A cancelled load leaves the ontology being served as it was. | v1 |
 | **A-9** · Several ontologies loaded and ready to serve. Whether one or many are served at a time is to be decided. _(Q14)_ | Later |
 
 ### 1.4 Operator requirements
@@ -582,7 +583,7 @@ are documented in [`SCHEMA.md`](SCHEMA.md):
 | `edge` | Parent → child per hierarchy (classes; each property type), between equivalence-group representatives | The edges query (subclass, sub-property and equivalent-class triples): 20–21 s on NCBITaxon, 3.02 M rows. The whole hook, which also groups, counts and inserts `equiv_group` and `counts`, takes about 42 s and 0.9 GB, and `edge`, `counts` and their index 164 MiB; on Uberon and HPO, 0.5 s ([P-12 findings](../research/P-12/README.md)) |
 | `equiv_group` | Entity → group representative, for groups of more than one | Union-find over `owl:equivalentClass` between named classes, and over cycles of edges (below) |
 | `counts` | Per node: immediate children, distinct descendants | `edge`, in Python (below) |
-| `usage_root` | The blank-node owner map (P-27): each blank-node root's owner, predicate and TDB2 label; the IRIs it mentions; per IRI, its triples with a blank subject | Two bulk queries over the blank nodes, found by their OWL types: 5–7 s on Uberon and HPO; on NCBITaxon 26 s, 2.69 M rows, 50 MiB ([S-7 findings](../research/S-7/README.md)) |
+| `usage_root`, `usage_ref`, `usage_blank` | The blank-node owner map (P-27): each blank-node root that's a usage, with its kind, owner, predicate and store label; the entities each is a usage of; per entity, its triples with a blank subject | One bulk query over the blank nodes, found by their types and predicates (`owner-map.rq`, `browl.precache.owner_map`): 5–7 s on Uberon and HPO; on NCBITaxon 26 s, 2.69 M rows ([S-7 findings](../research/S-7/README.md)). The whole hook takes 9 s on Uberon, and 34–49 s on NCBITaxon, where it grows the process by 0.33 GB; NCBITaxon's tables are 78 MiB (P-27a) |
 | `hash_prefix` | Distinct URL paths that have hash entities under them | `entity` |
 | `prefix` | CURIE prefix → namespace | The built-in ones, overridden by the ontology file's own, overridden by `EXTRA_PREFIXES` ([2.7](#27-display-names)) |
 | `meta` | Ontology IRI, version IRI, title, `owl:versionInfo`, reasoner used, load time (the job's start), generation number | The ontology header query (below) and the job |
@@ -658,18 +659,33 @@ page (P-17) queries Fuseki for them.
 An earlier design had a `usage` table in the derived database, because the OWLAPI can't find annotation assertions
 by value. Fuseki can (`?s ?p <entity>`), so P-27 keeps two things instead ([S-7 findings](../research/S-7/README.md)):
 
-- **The blank-node owner map** (`usage_root`), built by a pre-caching hook, so the Usage tab can find references that
-  reach an entity through blank nodes ([2.8](#28-entity-pages)). It holds:
+- **The blank-node owner map** (`usage_root`, `usage_ref`, `usage_blank`), built by a pre-caching hook
+  (`browl.precache.owner_map`), so the Usage tab can find references that reach an entity through blank nodes
+  ([2.8](#28-entity-pages)). It holds:
   - one root per top-level triple with a blank object: its owner, predicate and blank-node label (stable for a
     TDB2 store). A store can share one blank node between several subjects' axioms, as Uberon's does, so a root is
     the triple, not the blank node;
   - one root per blank node nothing links to (general class axioms, n-ary axioms, negative property assertions, SWRL
     rules), with no owner;
-  - one root per reified `owl:Axiom` with IRIs in its annotations, owned by its `owl:annotatedSource`. Only its
-    annotations' IRIs count as references: its source, property and target repeat an axiom counted already;
+  - one root per reified `owl:Axiom` with IRIs in its annotations, owned by its `owl:annotatedSource` if that's an
+    IRI. Only its annotations' IRIs count as references: its source, property and target repeat an axiom counted
+    already. An annotation on a blank node's axiom (a general class axiom's, or an axiom annotation's, which is an
+    `owl:Annotation`) is part of that node's root, as it's the same axiom. A blank `owl:annotatedTarget`, or a blank
+    `owl:annotatedSource` that doesn't hold the main triple, is a copy of the main triple's node, and no root;
   - each root's IRIs: the objects reached through blank nodes (but OWL and RDF types, and `rdf:nil`), and the
-    properties of annotations on any blank node;
-  - per IRI, how many triples with a blank subject have it as object or predicate, which the count subtracts.
+    properties of annotations on any blank node. Only entities are kept, by their IRI's first `entity.id`, as only
+    entities have a Usage tab: `usage_ref` records which roots are which entities' usages. A root isn't a usage of its
+    owner, nor of a class named where a class goes in the logical part of a root with no owner that's a general class
+    axiom or n-ary `DisjointClasses`, nor of a property among an n-ary property axiom's members: those are their own
+    axioms, which their Overview lists. (A class punned as a property, named only as a restriction's property, is
+    such an axiom's usage.) Deciding that at load keeps the Usage tab's reads to one range of `usage_ref`; a root
+    that's no one's usage isn't stored;
+  - per entity, how many triples with a blank subject have it as object or predicate (`usage_blank`), which the count
+    subtracts.
+
+  The walks from the roots may visit at most a million blank nodes more than the store holds
+  (`owner_map.WALK_BUDGET`), so a store whose roots share blank nodes widely fails the stage rather than run for
+  hours; Uberon's and NCBITaxon's visit each about once.
 
   The blank nodes are found by their types (`owl:Axiom`, `owl:Restriction`, the n-ary and SWRL types) and by the
   predicates of anonymous classes, lists, datatypes and inverse properties. That takes 26 s on NCBITaxon. Filtering
@@ -681,8 +697,10 @@ by value. Fuseki can (`?s ?p <entity>`), so P-27 keeps two things instead ([S-7 
   range read ([2.8](#28-entity-pages)). It's in its own SQLite file per generation, keyed by code like the derived
   database, and used only once complete; a restart during the build starts it again. Estimated at 2–4 minutes and
   about 0.8 GB for NCBITaxon's 21.9 M usages, and about 5 s and 20 MB for Uberon's 603 K and HPO's 467 K. P-27
-  measures the build first. Its subjects' name-order positions come from `entity` (an index on the sort key, or ids
-  numbered in name order), not a separate table, which cost 490 MiB on NCBITaxon in S-7.
+  measures the build first. If NCBITaxon's takes over 5 minutes, the table holds only the entities over 20,000 usages
+  (about 3 minutes and 658 MiB in S-7: 87% of NCBITaxon's usages), and smaller ones keep streaming. Its subjects'
+  name-order positions come from `entity` (an index on the sort key, or ids numbered in name order), not a separate
+  table, which cost 490 MiB on NCBITaxon in S-7.
 
 **Hierarchies** (P-12, `browl.precache.hierarchies`). Named direct parents: `rdfs:subClassOf` and `rdfs:subPropertyOf`
 triples with an IRI on both sides (asserted, or inferred if a reasoner ran), from one bulk query with the
@@ -835,24 +853,36 @@ Tabs (U-28; see [2.9](#29-page-layout)):
 - **Usage** (U-26), labeled with its count, e.g. "Usage (128)", filled in after the page renders, so the Overview
   never waits for it. The tab isn't the default. _(P-27; [S-7 findings](../research/S-7/README.md).)_
   - **Usages** are axioms, from three sources: triples with the entity as object (`?s ?p <entity>`); for a property,
-    triples that use it as predicate (`?s <entity> ?o`); and references through blank nodes (class expressions,
-    lists such as property chains and n-ary axioms, annotations on reified axioms), whose owners come from the
-    blank-node owner map ([2.5](#25-derived-data-pre-caching)). They match the OWLAPI's referencing axioms and
-    annotation assertions by value, less the entity's own axioms, for every entity S-7 checked: 325 in Uberon, 324 in
-    HPO and 325 in NCBITaxon (hubs over 200 K usages there by count only). The only differences are the ontology's
-    own annotations, which the OWLAPI holds as ontology annotations. General class axioms and symmetric axioms stated
-    on another entity show on both the Overview and the Usage tab.
+    triples that use it as predicate (`?s <entity> ?o`, looked for whatever the entity's type, so an IRI also used as
+    an undeclared property gets them too); and references through blank nodes (class expressions,
+    lists such as property chains, annotations on reified axioms), whose owners come from the blank-node owner map
+    ([2.5](#25-derived-data-pre-caching)). They match the OWLAPI's referencing axioms and annotation assertions by
+    value, less the entity's own axioms, for every entity S-7 checked: 325 in Uberon, 324 in HPO and 325 in
+    NCBITaxon (hubs over 200 K usages there by count only). The only differences are the ontology's own
+    annotations, which the OWLAPI holds as ontology annotations, and annotation properties' domains and ranges, which
+    it holds as IRIs, not as references to the entity (P-27a's test checks every entity of `tests/data/axioms.ofn`,
+    which has every kind of OWL 2 axiom). A symmetric axiom stated on another entity, such as
+    `B DisjointWith A`, is on both of A's tabs: the Overview (P-15) and, under B, the Usage tab.
+  - **Axioms with no single subject** (general class axioms, n-ary axioms such as `DisjointClasses(A, B, C)`,
+    negative property assertions) aren't in a class's Usage tab: the Overview tab already lists them for every class
+    they mention (P-15). So each usage has exactly one subject, and nothing is counted twice. A property's Overview
+    doesn't list the general class axioms that mention it, since P-15's walk never steps back over
+    `owl:onProperty`; its Usage tab lists them, and the negative property assertions that mention it, from the owner
+    map's roots with no owner, in a group of their own after the others. A SWRL rule is on no Overview, so it's in
+    that group for every entity it names. Showing them on the property's Overview instead, from the owner map, can be
+    revisited; the ontologies browl targets have few general class axioms.
   - **The count** is of axioms, as Protégé counts "uses", not of referring entities: Fuseki's counts of the first
     two sources, without a filter on `?s`, less the entity's triples about itself and the owner map's blank-subject
-    counts, plus the owner map's roots. That's 2 ms for most entities, and 0.21–0.26 s for NCBITaxon's largest
-    (2.5–3.1 M), 0.47 s just after a restart; filtering `?s` to IRIs makes TDB2 decode every subject, 12–19 s. Counts
-    over 100 ms (13 entities in NCBITaxon) are kept in memory per generation. Once the usage table is ready, counts
-    come from it.
-  - **Order and pages:** axioms sorted by their subject's display name, then IRI; then general class axioms, which
-    have no subject; then subjects not in `entity` (individuals and undeclared IRIs, until U-18 adds individuals: 261
-    usages in Uberon, none in HPO or NCBITaxon). Pages of 50 axioms, so the page count is known from the count: next,
-    previous and go to page. An entity split across pages is marked "(continued)". A property's usages carry their
-    objects in the stream, so each page holds exactly 50.
+    counts, plus the owner map's roots that are usages. Blank nodes the owner map misses, such as anonymous
+    individuals (U-18), are counted but not listed. That's 2 ms for most entities, and 0.21–0.26 s for NCBITaxon's
+    largest (2.5–3.1 M), 0.47 s just after a restart; filtering `?s` to IRIs makes TDB2 decode every subject,
+    12–19 s. An entity's counts over 100 ms (13 entities in NCBITaxon) are kept in memory per generation, at most
+    1,000. Once the usage table is ready, counts come from it.
+  - **Order and pages:** axioms sorted by their subject's casefolded display name, then IRI; then, for a property,
+    the general class axioms that mention it; then subjects not in `entity` (individuals and undeclared IRIs, until
+    U-18 adds individuals: 261 usages in Uberon, none in HPO or NCBITaxon). Pages of 50 axioms, so the page count is
+    known from the count: next, previous and go to page. An entity split across pages is marked "(continued)". A
+    property's usages carry their objects in the stream, so each page holds exactly 50.
   - **Before the usage table is ready** (2–4 minutes after a NCBITaxon load; seconds for Uberon and HPO): an entity
     with up to T = 20,000 usages streams them all, sorts and slices, per request: at most 0.21 s on NCBITaxon
     (8–11 µs per usage) and 0.1 s on Uberon and HPO (2–4 µs). That's every entity but 28 in NCBITaxon, 7 in Uberon and
@@ -1399,6 +1429,7 @@ flowchart LR
         P29["P-29 Compressed load files"]
         P31["P-31 Load progress"]
         P32["P-32 Reasoner progress"]
+        P36["P-36 Cancel a load"]
     end
     S5b["S-5b OLS4 comparison"]
 
@@ -1406,6 +1437,7 @@ flowchart LR
     P17 & P18 & P19 & P27 --> P33
     P18 & P20 --> P25
     P22 --> P23
+    P22 & P31 --> P36
     P31 --> P32
 ```
 
@@ -1465,7 +1497,7 @@ go into this document.
 | P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout; panel data built apart from its HTML (2.8); entity pages fill the window, the panels at fixed positions and scrolling within themselves, with a one-page view for printing, small screens and on demand (2.9) | U-3, U-9, U-30, U-31, U-32, U-44 | P-12, P-15b | Done | [#37](https://github.com/jclerman/browl/issues/37) (sub-issues [#29](https://github.com/jclerman/browl/issues/29), [#38](https://github.com/jclerman/browl/issues/38), [#39](https://github.com/jclerman/browl/issues/39), [#103](https://github.com/jclerman/browl/issues/103)) |
 | P-17 | Ontology home page, with the dropped-imports warning and the triple counts the job state keeps (P-8); link the ontology and version IRIs only if `http` or `https` (`browl.derived.Meta`) | U-1 | P-14 | To do | [#30](https://github.com/jclerman/browl/issues/30) |
 | P-18 | Hierarchy trees with lazy loading (htmx) and keyboard support | U-7, U-17 | P-12, P-14 | To do | [#31](https://github.com/jclerman/browl/issues/31) |
-| P-27 | Usage tab on entity pages: the blank-node owner map, streaming up to 20 K usages per request, and the usage table built in the background after a load (2.5, 2.8) | U-26 | P-9, P-16, S-4, S-7 | To do | [#41](https://github.com/jclerman/browl/issues/41) |
+| P-27 | Usage tab on entity pages: the blank-node owner map, streaming up to 20 K usages per request, and the usage table built in the background after a load (2.5, 2.8) | U-26 | P-9, P-16, S-4, S-7 | To do | [#41](https://github.com/jclerman/browl/issues/41) (sub-issues [#108](https://github.com/jclerman/browl/issues/108), [#109](https://github.com/jclerman/browl/issues/109), [#110](https://github.com/jclerman/browl/issues/110)) |
 
 ### Phase 5: Search, caching, auth
 
@@ -1475,7 +1507,7 @@ go into this document.
 | P-20 | Autocomplete UI (accessible combobox) with type and property filters | U-10, U-17 | P-19, P-14 | To do | [#32](https://github.com/jclerman/browl/issues/32) |
 | P-33 | JSON API over the pages' data: routes under `api/` returning the models the pages render (2.8, 2.13) | U-42 | P-16, P-17, P-18, P-19, P-27 | To do | [#76](https://github.com/jclerman/browl/issues/76) |
 | P-21 | Page cache keyed by generation | O-10, N-3 | P-16 | To do | [#40](https://github.com/jclerman/browl/issues/40) |
-| P-22 | Google sign-in, admin-route protection, dev no-auth mode; then consider an admin action that cancels a running job or rebuild, and a time limit on pre-caching | A-1, O-6, O-7 | P-6 | To do | [#17](https://github.com/jclerman/browl/issues/17) |
+| P-22 | Google sign-in, admin-route protection, dev no-auth mode (cancelling a job: P-36) | A-1, O-6, O-7 | P-6 | To do | [#17](https://github.com/jclerman/browl/issues/17) |
 | P-23 | Admin list management page and persistence | A-7 | P-22 | To do | [#19](https://github.com/jclerman/browl/issues/19) |
 
 ### Phase 6: Hardening
@@ -1485,8 +1517,9 @@ go into this document.
 | P-24 | Performance check against N-1–N-3 targets at scale; whether streaming extraction alongside the TDB2 load is worth it | N-1–N-3 | all above | To do | [#42](https://github.com/jclerman/browl/issues/42) |
 | P-25 | Accessibility pass (trees, combobox, no-JS pages) | U-17 | P-18, P-20 | To do | [#35](https://github.com/jclerman/browl/issues/35) |
 | P-29 | Store the upload, fetched imports and ROBOT's output compressed at rest (gzip shrank Uberon 13–16×, P-8), and accept compressed uploads; measure the cost first | A-2 | P-8 | To do | [#71](https://github.com/jclerman/browl/issues/71) |
-| P-31 | Show load progress: each stage's elapsed time, ROBOT's current step, triples loaded of the total, the import being handled | A-5 | P-8 | To do | [#73](https://github.com/jclerman/browl/issues/73) |
+| P-31 | Show load progress: each stage's elapsed time, ROBOT's current step, triples loaded of the total, the import being handled; for pre-caching, each hook's name, elapsed time and rows written (of the expected total where known); and background builds after a load (P-27c's usage table), with their progress | A-5 | P-8 | To do | [#73](https://github.com/jclerman/browl/issues/73) |
 | P-32 | Show the reasoner's own progress (per task, as Protégé does), running ROBOT's reasoning through its Java API with a progress monitor | A-5 | P-31, P-30 | To do | [#74](https://github.com/jclerman/browl/issues/74) |
+| P-36 | Cancel from the admin status page: a running load or rebuild (the job stops, its new store and derived files are removed, and the served ontology is unchanged) or a background build after a load; and a time limit on pre-caching | A-10 | P-22, P-31 | To do | [#111](https://github.com/jclerman/browl/issues/111) |
 | P-26 | Update README: remove Owlready2 and Fuseki (now the OWLAPI via JPype); replace "cached once built" with the bounded cache | | | Done | [#7](https://github.com/jclerman/browl/pull/7) |
 
 ### Later

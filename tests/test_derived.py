@@ -69,6 +69,16 @@ COLUMNS = {
         ("direct", "INTEGER", 1, 0),
     ],
     "prefix": [("prefix", "TEXT", 1, 1), ("namespace", "TEXT", 1, 0)],
+    "usage_blank": [("entity", "INTEGER", 0, 1), ("object", "INTEGER", 1, 0), ("predicate", "INTEGER", 1, 0)],
+    "usage_ref": [("entity", "INTEGER", 1, 1), ("root", "INTEGER", 1, 2)],
+    "usage_root": [
+        ("id", "INTEGER", 0, 1),
+        ("kind", "TEXT", 1, 0),
+        ("label", "TEXT", 1, 0),
+        ("owner", "INTEGER", 0, 0),
+        ("owner_iri", "TEXT", 0, 0),
+        ("predicate", "TEXT", 0, 0),
+    ],
 }
 """Each table's columns, as (name, type, not null, place in the primary key)."""
 INDEXES = {
