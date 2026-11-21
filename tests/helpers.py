@@ -226,11 +226,29 @@ EDGE_HEADER = f"?child\t?relation\t?parent\t?{END_VARIABLE}\n"
 EDGE_END = "\t\t\ttrue\n"
 EDGE_RESULT = EDGE_HEADER + EDGE_END
 
+OWNER_MAP_HEADER = f"?node\t?predicate\t?object\t?blank\t?parent\t?{END_VARIABLE}\n"
+OWNER_MAP_END = "\t\t\t\t\ttrue\n"
+_RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+RDFS = "http://www.w3.org/2000/01/rdf-schema#"
+OWNER_MAP_RESULT = (
+    OWNER_MAP_HEADER
+    # x SubClassOf p some A; an axiom annotated with A; A in an n-ary DisjointClasses, which is its own.
+    + f'"r"\t<{RDFS}subClassOf>\t\t\t<{EX}x>\t\n"r"\t<{OWL}someValuesFrom>\t<{EX}onto#A>\t\t\t\n'
+    + f'"r"\t<{OWL}onProperty>\t<{EX}p>\t\t\t\n'
+    + f'"a"\t<{_RDF}type>\t<{OWL}Axiom>\t\t\t\n"a"\t<{OWL}annotatedSource>\t<{EX}x>\t\t\t\n'
+    + f'"a"\t{LABEL}\t<{EX}onto#A>\t\t\t\n"a"\t{LABEL}\t"note"\t\t\t\n'
+    + f'"d"\t<{_RDF}type>\t<{OWL}AllDisjointClasses>\t\t\t\n"d"\t<{OWL}members>\t\t"l"\t\t\n'
+    + f'"l"\t<{_RDF}first>\t<{EX}onto#A>\t\t\t\n"l"\t<{_RDF}rest>\t<{_RDF}nil>\t\t\t\n'
+    + OWNER_MAP_END
+)
+
 
 def answer(query: str) -> str:
-    """Return a stubbed Fuseki's answer: the entity list's, the name values', the edges', else the header's."""
+    """Return a stubbed Fuseki's answer: the entity list's, names', edges', owner map's, else the header's."""
     if "?entity ?type" in query:
         return ENTITY_RESULT
+    if "?node ?predicate" in query:
+        return OWNER_MAP_RESULT
     if "?entity ?name" in query:
         return NAME_RESULT
     if "?child ?relation" in query:

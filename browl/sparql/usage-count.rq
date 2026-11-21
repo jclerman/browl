@@ -1,0 +1,10 @@
+# How many triples have an entity as object, as predicate, and as subject with itself as object or predicate, for
+# its usage count (browl.usages.count_usages; DESIGN.md §2.8). No filter on the subjects: testing them makes TDB2
+# decode every one, 50–70 times slower on NCBITaxon's largest (S-7); the owner map's counts take out blank subjects.
+# `$entity` stands for the entity's IRI, and browl.usages adds the dataset clause before WHERE.
+SELECT ?object ?predicate ?self
+WHERE {
+  { SELECT (COUNT(*) AS ?object) WHERE { ?s ?p $entity } }
+  { SELECT (COUNT(*) AS ?predicate) WHERE { ?s $entity ?o } }
+  { SELECT (COUNT(*) AS ?self) WHERE { { $entity ?p $entity } UNION { $entity $entity ?o } } }
+}

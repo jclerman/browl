@@ -583,7 +583,7 @@ are documented in [`SCHEMA.md`](SCHEMA.md):
 | `edge` | Parent → child per hierarchy (classes; each property type), between equivalence-group representatives | The edges query (subclass, sub-property and equivalent-class triples): 20–21 s on NCBITaxon, 3.02 M rows. The whole hook, which also groups, counts and inserts `equiv_group` and `counts`, takes about 42 s and 0.9 GB, and `edge`, `counts` and their index 164 MiB; on Uberon and HPO, 0.5 s ([P-12 findings](../research/P-12/README.md)) |
 | `equiv_group` | Entity → group representative, for groups of more than one | Union-find over `owl:equivalentClass` between named classes, and over cycles of edges (below) |
 | `counts` | Per node: immediate children, distinct descendants | `edge`, in Python (below) |
-| `usage_root` | The blank-node owner map (P-27): each blank-node root's owner, predicate and TDB2 label; the IRIs it mentions; per IRI, its triples with a blank subject | Two bulk queries over the blank nodes, found by their OWL types: 5–7 s on Uberon and HPO; on NCBITaxon 26 s, 2.69 M rows, 50 MiB ([S-7 findings](../research/S-7/README.md)) |
+| `usage_root`, `usage_ref`, `usage_blank` | The blank-node owner map (P-27): each blank-node root that's a usage, with its kind, owner, predicate and store label; the entities each is a usage of; per entity, its triples with a blank subject | One bulk query over the blank nodes, found by their OWL types (`owner-map.rq`, `browl.precache.owner_map`): 5–7 s on Uberon and HPO; on NCBITaxon 26 s, 2.69 M rows ([S-7 findings](../research/S-7/README.md)). The whole hook takes 8.8 s and 0.6 GB on Uberon, 36 s and 1.9 GB on NCBITaxon, whose tables are 78 MiB (P-27a) |
 | `hash_prefix` | Distinct URL paths that have hash entities under them | `entity` |
 | `prefix` | CURIE prefix → namespace | The built-in ones, overridden by the ontology file's own, overridden by `EXTRA_PREFIXES` ([2.7](#27-display-names)) |
 | `meta` | Ontology IRI, version IRI, title, `owl:versionInfo`, reasoner used, load time (the job's start), generation number | The ontology header query (below) and the job |
@@ -659,8 +659,9 @@ page (P-17) queries Fuseki for them.
 An earlier design had a `usage` table in the derived database, because the OWLAPI can't find annotation assertions
 by value. Fuseki can (`?s ?p <entity>`), so P-27 keeps two things instead ([S-7 findings](../research/S-7/README.md)):
 
-- **The blank-node owner map** (`usage_root`), built by a pre-caching hook, so the Usage tab can find references that
-  reach an entity through blank nodes ([2.8](#28-entity-pages)). It holds:
+- **The blank-node owner map** (`usage_root`, `usage_ref`, `usage_blank`), built by a pre-caching hook
+  (`browl.precache.owner_map`), so the Usage tab can find references that reach an entity through blank nodes
+  ([2.8](#28-entity-pages)). It holds:
   - one root per top-level triple with a blank object: its owner, predicate and blank-node label (stable for a
     TDB2 store). A store can share one blank node between several subjects' axioms, as Uberon's does, so a root is
     the triple, not the blank node;
@@ -669,8 +670,14 @@ by value. Fuseki can (`?s ?p <entity>`), so P-27 keeps two things instead ([S-7 
   - one root per reified `owl:Axiom` with IRIs in its annotations, owned by its `owl:annotatedSource`. Only its
     annotations' IRIs count as references: its source, property and target repeat an axiom counted already;
   - each root's IRIs: the objects reached through blank nodes (but OWL and RDF types, and `rdf:nil`), and the
-    properties of annotations on any blank node;
-  - per IRI, how many triples with a blank subject have it as object or predicate, which the count subtracts.
+    properties of annotations on any blank node. Only entities are kept, by their IRI's first `entity.id`, as only
+    entities have a Usage tab: `usage_ref` records which roots are which entities' usages. A root isn't a usage of its
+    owner, nor of a class named in the logical part of a root with no owner that's a general class axiom or n-ary
+    `DisjointClasses`, nor of a property among an n-ary property axiom's members: those are their own axioms, which
+    their Overview lists. Deciding that at load keeps the Usage tab's reads to one range of `usage_ref`; a root that's
+    no one's usage isn't stored;
+  - per entity, how many triples with a blank subject have it as object or predicate (`usage_blank`), which the count
+    subtracts.
 
   The blank nodes are found by their types (`owl:Axiom`, `owl:Restriction`, the n-ary and SWRL types) and by the
   predicates of anonymous classes, lists, datatypes and inverse properties. That takes 26 s on NCBITaxon. Filtering
@@ -838,20 +845,24 @@ Tabs (U-28; see [2.9](#29-page-layout)):
 - **Usage** (U-26), labeled with its count, e.g. "Usage (128)", filled in after the page renders, so the Overview
   never waits for it. The tab isn't the default. _(P-27; [S-7 findings](../research/S-7/README.md).)_
   - **Usages** are axioms, from three sources: triples with the entity as object (`?s ?p <entity>`); for a property,
-    triples that use it as predicate (`?s <entity> ?o`); and references through blank nodes (class expressions,
+    triples that use it as predicate (`?s <entity> ?o`, looked for whatever the entity's type, so an IRI also used as
+    an undeclared property gets them too); and references through blank nodes (class expressions,
     lists such as property chains, annotations on reified axioms), whose owners come from the blank-node owner map
     ([2.5](#25-derived-data-pre-caching)). They match the OWLAPI's referencing axioms and annotation assertions by
     value, less the entity's own axioms, for every entity S-7 checked: 325 in Uberon, 324 in HPO and 325 in
     NCBITaxon (hubs over 200 K usages there by count only). The only differences are the ontology's own
-    annotations, which the OWLAPI holds as ontology annotations. A symmetric axiom stated on another entity, such as
+    annotations, which the OWLAPI holds as ontology annotations, and annotation properties' domains and ranges, which
+    it holds as IRIs, not as references to the entity (P-27a's test checks every entity of `tests/data/axioms.ofn`,
+    which has every kind of OWL 2 axiom). A symmetric axiom stated on another entity, such as
     `B DisjointWith A`, is on both of A's tabs: the Overview (P-15) and, under B, the Usage tab.
   - **Axioms with no single subject** (general class axioms, n-ary axioms such as `DisjointClasses(A, B, C)`,
     negative property assertions) aren't in a class's Usage tab: the Overview tab already lists them for every class
     they mention (P-15). So each usage has exactly one subject, and nothing is counted twice. A property's Overview
     doesn't list the general class axioms that mention it, since P-15's walk never steps back over
-    `owl:onProperty`; its Usage tab lists them, from the owner map's roots with no owner, in a group of their own
-    after the others. Showing them on the property's Overview instead, from the owner map, can be revisited; the
-    ontologies browl targets have few general class axioms.
+    `owl:onProperty`; its Usage tab lists them, and the negative property assertions that mention it, from the owner
+    map's roots with no owner, in a group of their own after the others. A SWRL rule is on no Overview, so it's in
+    that group for every entity it names. Showing them on the property's Overview instead, from the owner map, can be
+    revisited; the ontologies browl targets have few general class axioms.
   - **The count** is of axioms, as Protégé counts "uses", not of referring entities: Fuseki's counts of the first
     two sources, without a filter on `?s`, less the entity's triples about itself and the owner map's blank-subject
     counts, plus the owner map's roots that are usages. That's 2 ms for most entities, and 0.21–0.26 s for

@@ -85,6 +85,24 @@ CREATE TABLE counts (
     descendants INTEGER NOT NULL,
     PRIMARY KEY (hierarchy, node)
 ) WITHOUT ROWID;
+CREATE TABLE usage_root (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    label TEXT NOT NULL,
+    owner INTEGER,
+    owner_iri TEXT,
+    predicate TEXT
+);
+CREATE TABLE usage_ref (
+    entity INTEGER NOT NULL,
+    root INTEGER NOT NULL,
+    PRIMARY KEY (entity, root)
+) WITHOUT ROWID;
+CREATE TABLE usage_blank (
+    entity INTEGER PRIMARY KEY,
+    object INTEGER NOT NULL,
+    predicate INTEGER NOT NULL
+);
 CREATE TABLE hash_prefix (
     path TEXT PRIMARY KEY
 ) WITHOUT ROWID;
@@ -152,6 +170,25 @@ class EntityType(StrEnum):
     OBJECT_PROPERTY = "object_property"
     DATA_PROPERTY = "data_property"
     ANNOTATION_PROPERTY = "annotation_property"
+
+
+PROPERTY_TYPES = frozenset({EntityType.OBJECT_PROPERTY, EntityType.DATA_PROPERTY, EntityType.ANNOTATION_PROPERTY})
+"""The entity types that are properties."""
+
+
+class UsageRootKind(StrEnum):
+    """What a root of the blank-node owner map is, as `usage_root.kind` stores it (DESIGN.md §2.5).
+
+    Attributes:
+        TRIPLE: A triple with an IRI subject, its owner, and a blank object (`owner predicate _:label`).
+        AXIOM: A reified axiom (`_:label a owl:Axiom`), owned by its `owl:annotatedSource` if that's an IRI.
+        GENERAL: A blank node nothing links to, with no owner: a general class axiom, an n-ary axiom, a negative
+            property assertion, a SWRL rule.
+    """
+
+    TRIPLE = "triple"
+    AXIOM = "axiom"
+    GENERAL = "general"
 
 
 TYPE_LABELS = {
