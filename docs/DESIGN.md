@@ -61,9 +61,10 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **U-27** · A persistent navigation bar on every page links to the ontology home page, the search, and the tree page for each entity type. | v1 |
 | **U-28** · Page-specific content is organized in tabs within the page (e.g. an entity's Overview and Usage; for classes, later, Individuals). The tabs are visually distinct from the navigation bar. | v1 |
 | **U-29** · The layout makes good use of space and is as readable as possible without looking harsh. | v1 |
-| **U-30** · An entity's Overview tab shows annotations in one panel and logical axioms in another. | v1 |
+| **U-30** · An entity's Overview tab shows annotations in one panel and logical axioms in another. For a given window size, each panel has the same position and size on every entity page, whatever the entity's content, and scrolls within itself, independently of the other. | v1 |
 | **U-31** · Property pages show the property's domains and ranges, if any, in the logical-axioms panel. | v1 |
 | **U-32** · The panels are compact: each annotation value or axiom takes one line, wrapping only when it doesn't fit. A property with several values (e.g. 10 synonyms) is named once, with one line per value. | v1 |
+| **U-44** · A "show everything" view of an entity page: all of its content in one page scroll, with no panel scrolling on its own. Used for printing and on small screens (phones, short windows), and on demand with a toggle. | v1 |
 | **U-18** · Named individuals have pages, and each class page lists its individuals in an Individuals tab, with paging. _(Q17)_ | Later |
 | **U-19** · Autocomplete also matches from the start of any word. _(Q8)_ | Later |
 | **U-20** · Autocomplete tolerates typos. _(Q8)_ | Later |
@@ -794,11 +795,15 @@ Header, above the tabs (U-5):
   "Class · Object property". _(P-14c)_
 - A `<details>` element with the full IRI and CURIE, closed at first. The IRI is text, not a link: on a browl site it
   often resolves to the page it's on. _(P-14c)_
+- A fixed height, so the panels below start at the same place on every entity page (U-30): the title is clamped to two
+  lines, with the full name in its tooltip; the type and the IRI's `<details>` sit to its right, the type on one line,
+  cut short if need be, with all the types in its tooltip; the opened IRI and CURIE overlay the page rather than push
+  it down. The "show everything" view (U-44, 2.9) shows the title and types whole. _(P-16d)_
 
 Tabs (U-28; see [2.9](#29-page-layout)):
 
-- **Overview** (default; U-3, U-9, U-30–U-32): two panels, stacked, inspired by Protégé's description views but more
-  compact. Details below.
+- **Overview** (default; U-3, U-9, U-30–U-32): two panels, side by side or one above the other by window size
+  ([2.9](#29-page-layout)), inspired by Protégé's description views but more compact. Details below.
 - **Usage** (U-26), labeled with its count, e.g. "Usage (128)": referring entities a page at a time (e.g. 50), each
   with its axioms that mention this entity, rendered on demand. References come from Fuseki (`?s ?p <entity>`), paged
   in the store's index order, since sorting doesn't scale (15.5 s for 2.5 M references). Counting takes 2 ms for most
@@ -1047,14 +1052,16 @@ Every page has the same frame (U-27, U-28, U-29):
 ```text
 ┌──────────────────────────────────────────────────────────────────────┐
 │ browl · <ontology name>   [ Search… ]   Classes  Object props        │  navigation bar
-│                                         Data props  Annotation props │
+│                                Data props  Annotation props  Sign in │
 ├──────────────────────────────────────────────────────────────────────┤
-│  Heart                                            Class              │  page header
-│  ▸ IRI                                                               │
-│  ──────────────────────────────────────────────                      │
-│  Overview   Usage (128)                                              │  page tabs
-│  ═════════                                                           │
-│  …tab content…                                                       │
+│  Heart                                                        Class  │  page header
+│                                                               ▸ IRI  │
+│  Overview   Usage (128)                            ☐ Show everything │  page tabs
+│  ═════════────────────────────────────────────────────────────────── │
+│  ┌ Annotations ───────────────┐  ┌ Logical axioms ────────────────┐  │  tab panel: the rest
+│  │ …                         ▲│  │ …                             ▲│  │  of the window, each
+│  │                           ▼│  │                               ▼│  │  panel scrolling
+│  └────────────────────────────┘  └────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1063,7 +1070,9 @@ Every page has the same frame (U-27, U-28, U-29):
 - Contents: the ontology name (a link to the home page), the autocomplete search box, and links to the four tree pages.
 - The full search page with type and property filters (U-10) is reached from the search box, e.g. "All results…".
 - An admin link appears only for signed-in admins: the base template shows it when `request.state.is_admin` is true,
-  which P-22 sets. Sign-in itself is a small link in the page footer, to the admin upload page, whose sign-in P-22 adds.
+  which P-22 sets. Sign-in itself is a small link at the bar's end, to the admin upload page, whose sign-in P-22 adds.
+  It was in a page footer until P-16d; an entity page, filling the window, has no room for one, so pages have no
+  footer now.
 - On narrow screens, the tree links collapse into a menu: a `<details>` element, so it opens without JS.
 - The ontology name is its title, else its IRI, capped in length; it's read once per generation (`PageFrame`). The bar
   has no in-page (`#…`) links, such as a skip link, since on a path hash entities share the hash-IRI script would look
@@ -1102,6 +1111,30 @@ script, is exempt; every response, it included, gets `X-Frame-Options: DENY` and
   shows the page served for the path again, or reloads it if a tab was chosen since, so the page matches its URL.
   _(P-14b)_
 - The page cache key includes the tab shown and whether the response is a panel alone (2.10).
+
+**Window-filling frame** (U-30, U-44): an entity page fills the window, and the page itself doesn't scroll. The
+navigation bar, the page header (2.8) and the tabs keep their heights, and the tab panel takes the rest of the window
+(`100dvh`, a grid, `min-height: 0`); what doesn't fit scrolls within it. So every tab, the Usage tab and later the
+Individuals tab included, fills the same area. Plain CSS, keyed on the page's content (`:has(.entity-page)`), so a
+page the hash-IRI script moves into `<main>` gets it too; a browser without `:has` shows everything. _(P-16d)_
+
+- **Wide** (64rem and up): the Overview's panels side by side, Annotations on the left and Logical axioms on the
+  right, each the tab panel's full height.
+- **Medium** (40rem to 64rem): one above the other, at a fixed split, 40% Annotations and 60% Logical axioms, each at
+  least 10rem high.
+- **Show everything** (U-44): a window narrower than 40rem, or shorter than 36rem at any width, shows the page as
+  before: all of it in one page scroll, with no height limits, the panels one above the other. Printing always gets
+  it, as the frame applies only to `@media screen`.
+- **The toggle:** a "Show everything" checkbox, at the tab bar's end, gives that view on screen too, e.g. to read a
+  long entity in one go. It's shown only where the frame applies. It works without JS, through `:has(:checked)`, and
+  a small script (`static/show-all.js`) remembers it in `localStorage` for every page, also those the hash-IRI script
+  moves in; storage that fails is ignored. No cookie, so the server's pages don't vary with it, and no URL parameter.
+- **The panels** have light borders, and their headings stay in view while they scroll. Each panel is a `<section>`,
+  named by its heading (`aria-labelledby`), with `tabindex="0"` and a visible focus ring, so the keyboard can scroll
+  it.
+- **Room for a hierarchy:** a narrow, hideable column for the entity's hierarchy, on medium and wide windows, may come
+  later. The frame's grid has named areas (`header`, `tabs`, `panel`) and sets its columns in one place, so a `tree`
+  area can be added on its left, and taken away again by a button, without changing the panels' layout.
 
 **Visual design** (U-29):
 
@@ -1374,7 +1407,7 @@ go into this document.
 | P-14 | Base templates and page frame: navigation bar, page header, tab component, stylesheet and themes; links rendered from display names; IRI `<details>` | U-4, U-5, U-6, U-17, U-27, U-28, U-29 | P-11, P-13 | Done | [#27](https://github.com/jclerman/browl/issues/27) (sub-issues [#28](https://github.com/jclerman/browl/issues/28), [#33](https://github.com/jclerman/browl/issues/33), [#34](https://github.com/jclerman/browl/issues/34)) |
 | P-15 | Manchester rendering via the OWLAPI from fetched fragments, including n-ary disjointness and general class axioms; link substitution and keyword styling, in the template layer, not the renderer (2.8) | U-3 | S-1, S-4, P-14 | Done | [#36](https://github.com/jclerman/browl/issues/36) |
 | P-15b | Axioms as a typed tree of Pydantic nodes, rendered to Manchester syntax in Python; tokens for templates, so no regex runs over ontology text (2.8) | U-3 | P-15 | Done | [#98](https://github.com/jclerman/browl/issues/98) |
-| P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout; panel data built apart from its HTML (2.8) | U-3, U-9, U-30, U-31, U-32 | P-12, P-15b | To do | [#37](https://github.com/jclerman/browl/issues/37) (sub-issues [#29](https://github.com/jclerman/browl/issues/29), [#38](https://github.com/jclerman/browl/issues/38), [#39](https://github.com/jclerman/browl/issues/39)) |
+| P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout; panel data built apart from its HTML (2.8); entity pages fill the window, the panels at fixed positions and scrolling within themselves, with a "show everything" view for printing, small screens and on demand (2.9) | U-3, U-9, U-30, U-31, U-32, U-44 | P-12, P-15b | To do | [#37](https://github.com/jclerman/browl/issues/37) (sub-issues [#29](https://github.com/jclerman/browl/issues/29), [#38](https://github.com/jclerman/browl/issues/38), [#39](https://github.com/jclerman/browl/issues/39), [#103](https://github.com/jclerman/browl/issues/103)) |
 | P-17 | Ontology home page, with the dropped-imports warning and the triple counts the job state keeps (P-8); link the ontology and version IRIs only if `http` or `https` (`browl.derived.Meta`) | U-1 | P-14 | To do | [#30](https://github.com/jclerman/browl/issues/30) |
 | P-18 | Hierarchy trees with lazy loading (htmx) and keyboard support | U-7, U-17 | P-12, P-14 | To do | [#31](https://github.com/jclerman/browl/issues/31) |
 | P-27 | Usage tab on entity pages, from Fuseki, with paging (first decide: references inside class expressions; counts on first view or up front; any `usage` table) | U-26 | P-9, P-16, S-4 | To do | [#41](https://github.com/jclerman/browl/issues/41) |
