@@ -1,6 +1,7 @@
 ---
 name: 4-lens-review
-description: Review a PR or branch through four lenses (correctness, efficiency & clarity, security, test coverage including the issue's acceptance criteria), one sub-agent per lens, then give one combined report ranked by severity. Use when asked for a 4-lens review, or a multi-part review of a PR or branch.
+description: Review a PR or branch through four lenses (correctness, efficiency & clarity, security, test coverage including the issue's acceptance criteria), one sub-agent per lens, then give one combined report ranked by severity, saved under docs/pr_reviews unless --no-save. Use when asked for a 4-lens review, or a multi-part review of a PR or branch.
+argument-hint: "[PR number | URL | branch] [--no-save]"
 ---
 
 # 4-lens review
@@ -10,6 +11,7 @@ Review a change through four lenses, each in its own sub-agent, then combine the
 ## Target
 
 - The argument, if given: a PR number or URL, or a branch name. Otherwise the current branch's diff from `main`.
+- `--no-save`, anywhere in the arguments: don't write the report to a file (see "Saving the report").
 - Skip `research/` unless the user says to include it.
 - For a PR, find its issue from the body (e.g. "Closes #14") or the branch name (`p-5-…` → the plan item's issue in
   `docs/DESIGN.md` §3). The test-coverage lens needs its acceptance criteria.
@@ -52,6 +54,15 @@ Once all four return, give one combined report:
   mark the ones that don't hold up.
 - The acceptance-criteria table from the test-coverage lens.
 - Keep it concise: one or two lines per finding, with `file:line`.
+
+## Saving the report
+
+Unless `--no-save` was given, also write the combined report to `docs/pr_reviews/pr-<N>-4-lens-review.md` (for a
+branch without a PR, `<branch>-4-lens-review.md`), following `docs/pr_reviews/TEMPLATE-4-lens-review.md`. The
+directory is gitignored, so don't stage it. Say in the reply where it is.
+
+After fixes, update that file: mark each finding FIXED or WON'T FIX with its resolution, and fill in the Decisions
+table.
 
 ## After the report
 
