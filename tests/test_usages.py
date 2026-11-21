@@ -290,6 +290,14 @@ async def test_query_fails(store: UsageStore) -> None:
             await read_usages(unreachable, f"{NS}Animal")
         with pytest.raises(SparqlError):
             await count_usages(unreachable, f"{NS}Animal")
-    missing = UsageStore(store.sparql, store.derived, store.generation + 1)  # no such generation's database
-    with pytest.raises(NotCurrentError):
-        await read_usages(missing, f"{NS}Animal")
+
+    async def never(request: httpx2.Request) -> httpx2.Response:
+        await asyncio.Event().wait()  # so the derived read fails first, and the Fuseki reads are cancelled
+        raise AssertionError
+
+    async with httpx2.AsyncClient(base_url="http://fuseki", transport=httpx2.MockTransport(never)) as http:
+        missing = UsageStore(FusekiClient(http), store.derived, store.generation + 1)  # no such generation's database
+        with pytest.raises(NotCurrentError):
+            await read_usages(missing, f"{NS}Animal")
+        with pytest.raises(NotCurrentError):
+            await count_usages(missing, f"{NS}Animal")
