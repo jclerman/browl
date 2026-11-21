@@ -57,7 +57,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **U-15** · If `http://` and `https://` forms of the same IRI are both declared, their shared URL shows a page for choosing between them. _(Q1a)_ | v1 |
 | **U-16** · While an ontology is being loaded or replaced, the site shows a "loading" page. _(Q14a)_ | v1 |
 | **U-17** · Pages work without JavaScript, except for hash IRIs, which need it. Trees and autocomplete are keyboard-accessible. _(Q20)_ | v1 |
-| **U-26** · Each entity page has a **Usage** tab (inspired by Protégé's), not shown by default: the axioms in which other entities refer to this entity (logical axioms, annotation assertions whose value is this entity, and, for a property, the assertions that use it), rendered in Manchester syntax, grouped by referring entity and sorted by its display name, with a total count of axioms and paging (next, previous, go to page). An axiom with no single subject is listed under each of the named entities that play the subject's part: a general class axiom under each named entity on its left-hand side, `DisjointClasses(A, B, C)` under each of its members. | v1 |
+| **U-26** · Each entity page has a **Usage** tab (inspired by Protégé's), not shown by default: the axioms in which other entities refer to this entity (logical axioms, annotation assertions whose value is this entity, and, for a property, the assertions that use it), rendered in Manchester syntax, grouped by referring entity and sorted by its display name, with a total count of axioms and paging (next, previous, go to page). Axioms with no single subject (general class axioms, `DisjointClasses(A, B, C)`) are on the Overview tab of every class they mention, not in its Usage tab; a property's Usage tab lists those that mention it, in a group of their own. | v1 |
 | **U-27** · A persistent navigation bar on every page links to the ontology home page, the search, and the tree page for each entity type. | v1 |
 | **U-28** · Page-specific content is organized in tabs within the page (e.g. an entity's Overview and Usage; for classes, later, Individuals). The tabs are visually distinct from the navigation bar. | v1 |
 | **U-29** · The layout makes good use of space and is as readable as possible without looking harsh. | v1 |
@@ -668,9 +668,7 @@ by value. Fuseki can (`?s ?p <entity>`), so P-27 keeps two things instead ([S-7 
   - one root per reified `owl:Axiom` with IRIs in its annotations, owned by its `owl:annotatedSource`. Only its
     annotations' IRIs count as references: its source, property and target repeat an axiom counted already;
   - each root's IRIs: the objects reached through blank nodes (but OWL and RDF types, and `rdf:nil`), and the
-    properties of annotations on any blank node. For a general class axiom, those on its left-hand side (reached
-    from the root without crossing its `rdfs:subClassOf` or `owl:equivalentClass`) are marked, since the Usage tab
-    places the axiom under them;
+    properties of annotations on any blank node;
   - per IRI, how many triples with a blank subject have it as object or predicate, which the count subtracts.
 
   The blank nodes are found by their types (`owl:Axiom`, `owl:Restriction`, the n-ary and SWRL types) and by the
@@ -840,30 +838,30 @@ Tabs (U-28; see [2.9](#29-page-layout)):
   never waits for it. The tab isn't the default. _(P-27; [S-7 findings](../research/S-7/README.md).)_
   - **Usages** are axioms, from three sources: triples with the entity as object (`?s ?p <entity>`); for a property,
     triples that use it as predicate (`?s <entity> ?o`); and references through blank nodes (class expressions,
-    lists such as property chains and n-ary axioms, annotations on reified axioms), whose owners come from the
-    blank-node owner map ([2.5](#25-derived-data-pre-caching)). They match the OWLAPI's referencing axioms and
-    annotation assertions by value, less the entity's own axioms, for every entity S-7 checked: 325 in Uberon, 324 in
-    HPO and 325 in NCBITaxon (hubs over 200 K usages there by count only). The only differences are the ontology's
-    own annotations, which the OWLAPI holds as ontology annotations. General class axioms and symmetric axioms stated
-    on another entity show on both the Overview and the Usage tab.
-  - **Placement:** each usage axiom is listed under its subject. One with no single subject is listed under each
-    named entity that plays the subject's part: a general class axiom under each named entity on its left-hand side,
-    as other axioms sit under their subject, and an n-ary axiom such as `DisjointClasses(A, B, C)` under each member;
-    not under the entity whose tab it is. A general class axiom with no other named entity on its left-hand side,
-    e.g. `(r Self) SubClassOf B` on r's tab, goes in a group of its own.
-  - **The count** is of placements, as Protégé counts "uses", not of referring entities. That's the number of usage
-    axioms, but for an axiom placed under several entities, which counts once for each. Fuseki's counts of the first
+    lists such as property chains, annotations on reified axioms), whose owners come from the blank-node owner map
+    ([2.5](#25-derived-data-pre-caching)). They match the OWLAPI's referencing axioms and annotation assertions by
+    value, less the entity's own axioms, for every entity S-7 checked: 325 in Uberon, 324 in HPO and 325 in
+    NCBITaxon (hubs over 200 K usages there by count only). The only differences are the ontology's own
+    annotations, which the OWLAPI holds as ontology annotations. A symmetric axiom stated on another entity, such as
+    `B DisjointWith A`, is on both of A's tabs: the Overview (P-15) and, under B, the Usage tab.
+  - **Axioms with no single subject** (general class axioms, n-ary axioms such as `DisjointClasses(A, B, C)`,
+    negative property assertions) aren't in a class's Usage tab: the Overview tab already lists them for every class
+    they mention (P-15). So each usage has exactly one subject, and nothing is counted twice. A property's Overview
+    doesn't list the general class axioms that mention it, since P-15's walk never steps back over
+    `owl:onProperty`; its Usage tab lists them, from the owner map's roots with no owner, in a group of their own
+    after the others. Showing them on the property's Overview instead, from the owner map, can be revisited; the
+    ontologies browl targets have few general class axioms.
+  - **The count** is of axioms, as Protégé counts "uses", not of referring entities: Fuseki's counts of the first
     two sources, without a filter on `?s`, less the entity's triples about itself and the owner map's blank-subject
-    counts, plus the owner map's placements. That's 2 ms for most entities, and 0.21–0.26 s for NCBITaxon's largest
-    (2.5–3.1 M), 0.47 s just after a restart; filtering `?s` to IRIs makes TDB2 decode every subject, 12–19 s. Counts
-    over 100 ms (13 entities in NCBITaxon) are kept in memory per generation. Once the usage table is ready, counts
-    come from it.
-  - **Order and pages:** axioms sorted by the casefolded display name of the entity they're placed under, then its
-    IRI; then general class axioms with no other named entity on their left-hand side; then subjects not in
-    `entity` (individuals and undeclared IRIs, until U-18 adds individuals: 261 usages in Uberon, none in HPO or
-    NCBITaxon). Pages of 50 axioms, so the page count is known from the count: next,
-    previous and go to page. An entity split across pages is marked "(continued)". A property's usages carry their
-    objects in the stream, so each page holds exactly 50.
+    counts, plus the owner map's roots that are usages. That's 2 ms for most entities, and 0.21–0.26 s for
+    NCBITaxon's largest (2.5–3.1 M), 0.47 s just after a restart; filtering `?s` to IRIs makes TDB2 decode every
+    subject, 12–19 s. Counts over 100 ms (13 entities in NCBITaxon) are kept in memory per generation. Once the
+    usage table is ready, counts come from it.
+  - **Order and pages:** axioms sorted by their subject's casefolded display name, then IRI; then, for a property,
+    the general class axioms that mention it; then subjects not in `entity` (individuals and undeclared IRIs, until
+    U-18 adds individuals: 261 usages in Uberon, none in HPO or NCBITaxon). Pages of 50 axioms, so the page count is
+    known from the count: next, previous and go to page. An entity split across pages is marked "(continued)". A
+    property's usages carry their objects in the stream, so each page holds exactly 50.
   - **Before the usage table is ready** (2–4 minutes after a NCBITaxon load; seconds for Uberon and HPO): an entity
     with up to T = 20,000 usages streams them all, sorts and slices, per request: at most 0.21 s on NCBITaxon
     (8–11 µs per usage) and 0.1 s on Uberon and HPO (2–4 µs). That's every entity but 28 in NCBITaxon, 7 in Uberon and
