@@ -67,6 +67,34 @@ relations:
     def: counts.node references entity.id
     cardinality: zero_or_more
     parentCardinality: exactly_one
+  - table: usage_root
+    columns: [owner]
+    parentTable: entity
+    parentColumns: [id]
+    def: usage_root.owner references entity.id
+    cardinality: zero_or_more
+    parentCardinality: zero_or_one
+  - table: usage_ref
+    columns: [entity]
+    parentTable: entity
+    parentColumns: [id]
+    def: usage_ref.entity references entity.id
+    cardinality: zero_or_more
+    parentCardinality: exactly_one
+  - table: usage_ref
+    columns: [root]
+    parentTable: usage_root
+    parentColumns: [id]
+    def: usage_ref.root references usage_root.id
+    cardinality: one_or_more
+    parentCardinality: exactly_one
+  - table: usage_blank
+    columns: [entity]
+    parentTable: entity
+    parentColumns: [id]
+    def: usage_blank.entity references entity.id
+    cardinality: zero_or_one
+    parentCardinality: exactly_one
 comments:
   - table: meta
     tableComment: >-
@@ -151,6 +179,38 @@ comments:
       node: The node (entity.id).
       children: How many immediate children it has.
       descendants: How many distinct descendants it has, each counted once however many paths lead to it.
+  - table: usage_root
+    tableComment: >-
+      The blank-node owner map's roots (P-27, DESIGN.md 2.5, browl.precache.owner_map): the axioms that reach entities
+      through blank nodes (class expressions, lists, annotations on reified axioms), by the top-level triple, reified
+      axiom or unlinked blank node each hangs from. Only roots that are some entity's usage (usage_ref) are kept.
+    columnComments:
+      id: The root's number, dense.
+      kind: >-
+        What it is (browl.derived.UsageRootKind): triple, a triple from an IRI to a blank node (owner predicate
+        _:label); axiom, a reified axiom (owl:Axiom), with the annotations on it; general, a blank node nothing links
+        to, with no owner (a general class axiom, an n-ary axiom, a negative property assertion, a SWRL rule).
+      label: The root's blank node, by its label in the store (Jena's afn:bnode), which a query can name as <_:label>.
+      owner: >-
+        The entity whose axiom it is (entity.id, its IRI's first): a triple's subject, a reified axiom's
+        owl:annotatedSource; NULL if that's no entity (owner_iri) or there's none.
+      owner_iri: The owner's IRI, if it's no entity (an individual, an undeclared IRI); else NULL.
+      predicate: A triple's predicate, or a reified axiom's owl:annotatedProperty; NULL for a general root.
+  - table: usage_ref
+    tableComment: >-
+      Which roots are which entities' usages, stored in key order: a root is a usage of each entity it names, except
+      its owner and those whose own axiom it is, which their Overview lists (DESIGN.md 2.5).
+    columnComments:
+      entity: The entity (entity.id, its IRI's first).
+      root: The root (usage_root.id).
+  - table: usage_blank
+    tableComment: >-
+      Per entity, the triples with a blank subject that have it as object or predicate, which usage counts take from
+      Fuseki's unfiltered counts (browl.usages.count_usages). Entities with none have no row.
+    columnComments:
+      entity: The entity (entity.id, its IRI's first).
+      object: How many triples with a blank subject have it as object.
+      predicate: How many triples with a blank subject have it as predicate.
   - table: hash_prefix
     tableComment: >-
       Every distinct URL path that has hash entities (entity.fragment not NULL) under it, for the hash-IRI script

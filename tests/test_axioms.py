@@ -387,7 +387,7 @@ def test_facets() -> None:
 def test_every_kind(rendered: tuple[list[owl.Axiom], dict[str, list[owl.Axiom]]]) -> None:
     """Check that the test ontology has every kind of axiom, each on one line."""
     every, _ = rendered
-    assert {axiom.kind for axiom in every} == kinds()
+    assert {axiom.kind for axiom in every} == kinds() | {"Rule"}  # a rule's kind, though no `NodeType`'s
     for axiom in every:
         assert axiom.manchester
         assert "\n" not in axiom.manchester

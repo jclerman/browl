@@ -18,6 +18,9 @@ browl builds one such SQLite file per load, `DATA_DIR/derived/{generation}.sqlit
 | [edge](edge.md)               | 3       | The hierarchies' named direct parent-child edges, between equivalence-group representatives, stored in key order.                                                                                                                                                                                                                                                                        | table |
 | [equiv_group](equiv_group.md) | 2       | Groups of named classes linked by owl:equivalentClass (union-find), and of a hierarchy's entities in a cycle of edges. Only groups of more than one entity have rows; any other entity is its own representative.                                                                                                                                                                        | table |
 | [counts](counts.md)           | 4       | Each hierarchy node's numbers of children and of distinct descendants (DESIGN.md 2.5): a row for every entity of the hierarchy's type that is a group's representative or in no group, except owl:Thing and the other top and bottom entities.                                                                                                                                           | table |
+| [usage_root](usage_root.md)   | 6       | The blank-node owner map's roots (P-27, DESIGN.md 2.5, browl.precache.owner_map): the axioms that reach entities through blank nodes (class expressions, lists, annotations on reified axioms), by the top-level triple, reified axiom or unlinked blank node each hangs from. Only roots that are some entity's usage (usage_ref) are kept.                                             | table |
+| [usage_ref](usage_ref.md)     | 2       | Which roots are which entities' usages, stored in key order: a root is a usage of each entity it names, except its owner and those whose own axiom it is, which their Overview lists (DESIGN.md 2.5).                                                                                                                                                                                    | table |
+| [usage_blank](usage_blank.md) | 3       | Per entity, the triples with a blank subject that have it as object or predicate, which usage counts take from Fuseki's unfiltered counts (browl.usages.count_usages). Entities with none have no row.                                                                                                                                                                                   | table |
 | [hash_prefix](hash_prefix.md) | 1       | Every distinct URL path that has hash entities (entity.fragment not NULL) under it, for the hash-IRI script (U-13), stored in key order.                                                                                                                                                                                                                                                 | table |
 | [prefix](prefix.md)           | 2       | CURIE prefixes, for entity.curie: the built-in ones, overridden by those the ontology file declares, overridden by EXTRA_PREFIXES.                                                                                                                                                                                                                                                       | table |
 
@@ -32,6 +35,10 @@ erDiagram
 "equiv_group" |o--|| "entity" : "equiv_group.entity references entity.id"
 "equiv_group" }o--|| "entity" : "equiv_group.representative references entity.id"
 "counts" }o--|| "entity" : "counts.node references entity.id"
+"usage_root" }o--o| "entity" : "usage_root.owner references entity.id"
+"usage_ref" }o--|| "entity" : "usage_ref.entity references entity.id"
+"usage_ref" }|--|| "usage_root" : "usage_ref.root references usage_root.id"
+"usage_blank" |o--|| "entity" : "usage_blank.entity references entity.id"
 
 "meta" {
   INTEGER id
@@ -78,6 +85,23 @@ erDiagram
   INTEGER node PK
   INTEGER children
   INTEGER descendants
+}
+"usage_root" {
+  INTEGER id
+  TEXT kind
+  TEXT label
+  INTEGER owner
+  TEXT owner_iri
+  TEXT predicate
+}
+"usage_ref" {
+  INTEGER entity PK
+  INTEGER root PK
+}
+"usage_blank" {
+  INTEGER entity
+  INTEGER object
+  INTEGER predicate
 }
 "hash_prefix" {
   TEXT path PK

@@ -5,7 +5,8 @@ Prefix(rdfs:=<http://www.w3.org/2000/01/rdf-schema#>)
 Prefix(xsd:=<http://www.w3.org/2001/XMLSchema#>)
 
 # Every kind of OWL 2 axiom, for the Manchester rendering tests (tests/test_axioms.py). Each entity's axioms are
-# rendered from a fragment fetched from Fuseki and compared with those from the whole ontology.
+# rendered from a fragment fetched from Fuseki and compared with those from the whole ontology. The usage tests
+# (tests/test_usages.py) compare each entity's usages with the OWLAPI's.
 
 Ontology(<http://example.org/axioms>
 Annotation(rdfs:label "Axioms & <friends>")
@@ -65,6 +66,10 @@ Declaration(NamedIndividual(:Dog))
 AnnotationAssertion(rdfs:label :Heart "<b>Heart</b> & \"soul\"")
 AnnotationAssertion(rdfs:label :Tricky "a <script>alert(1)</script> 'quote'")
 AnnotationAssertion(rdfs:label :partOf "part of")
+# Annotations whose values are entities: usages by value (tests/test_usages.py); and triples about themselves.
+AnnotationAssertion(:remark :Cat :Dog)
+AnnotationAssertion(rdfs:seeAlso :Mineral :Mineral)
+AnnotationAssertion(:remark :remark :remark)
 
 # Class axioms.
 SubClassOf(:Dog :Animal)
@@ -86,11 +91,13 @@ SubClassOf(:Person DataMaxCardinality(1 :ssn))
 SubClassOf(:Person DataExactCardinality(1 :age DataIntersectionOf(xsd:integer DataOneOf("1"^^xsd:integer "2"^^xsd:integer))))
 SubClassOf(:Pet ObjectOneOf(:rex :tom))
 SubClassOf(:Child ObjectSomeValuesFrom(ObjectInverseOf(:hasChild) :Parent))
-SubClassOf(:Tricky :Animal)
+SubClassOf(Annotation(:remark :Fungus) :Tricky :Animal)
+SubClassOf(Annotation(Annotation(:remark :Plant) :note "nested") :Liver :Organ)
+SubClassOf(:Pet ObjectUnionOf(:Dog :Cat))
 EquivalentClasses(:Parent ObjectIntersectionOf(:Person ObjectSomeValuesFrom(:hasChild :Person)))
 EquivalentClasses(:Adult :Vertebrate :LivingThing)
 DisjointClasses(:Dog :Cat)
-DisjointClasses(Annotation(:note "n-ary") :Animal :Plant :Fungus)
+DisjointClasses(Annotation(:note "n-ary") Annotation(:remark :Mineral) :Animal :Plant :Fungus)
 DisjointClasses(:Mineral ObjectSomeValuesFrom(:partOf :Animal))
 DisjointUnion(:LivingThing :Animal :Plant)
 
@@ -150,6 +157,9 @@ NegativeDataPropertyAssertion(:age :bob "7"^^xsd:integer)
 SameIndividual(:carol :dave)
 DifferentIndividuals(:alice :bob)
 DifferentIndividuals(:alice :carol :tom)
+
+# Rules.
+DLSafeRule(Body(ClassAtom(:Dog Variable(:x))) Head(ClassAtom(:Animal Variable(:x))))
 
 # Annotation property axioms.
 SubAnnotationPropertyOf(:remark :comment)
