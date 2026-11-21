@@ -3,7 +3,7 @@
 {% block title %}{{ name | isolate }}{% endblock %}
 {% block content %}
 {# The page fills the window (DESIGN.md §2.9), unless it's in the one-page view (U-44): on small screens, in print, or with
-   the toggle, which works without JS through `:has(:checked)`; `static/show-all.js` remembers it. #}
+   the toggle, which works without JS through `:has(:checked)`; `static/one-page.js` remembers it. #}
 <div class="entity-page">
   {# The header (DESIGN.md §2.8), of fixed height: its type and IRI first, then the name, clamped. #}
   <div class="entity-header">
@@ -25,7 +25,7 @@
   </div>
   <div class="tab-bar">
     {{ tab_list(tabs, "Entity") }}
-    <label class="show-all"><input type="checkbox" id="show-all"> Scroll as one page</label>
+    <label class="one-page-toggle"><input type="checkbox" id="one-page"> Scroll as one page</label>
   </div>
   {% call tab_panel(tabs) %}{% include "entity_panel.html" %}{% endcall %}
 </div>

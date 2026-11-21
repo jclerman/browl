@@ -3,8 +3,8 @@
 // into <main>. Storage that fails (e.g. blocked) just leaves the toggle unremembered.
 (() => {
   "use strict";
-  const KEY = "browl.showAll";
-  const ID = "show-all";
+  const KEY = "browl.onePage";
+  const ID = "one-page";
 
   function restore() {
     const toggle = document.getElementById(ID);

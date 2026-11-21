@@ -336,7 +336,7 @@ code {
   border-bottom: none;
 }
 
-.show-all {
+.one-page-toggle {
   display: none; /* where the frame applies, below */
   align-items: center;
   gap: calc(var(--space) / 4);
@@ -472,11 +472,11 @@ code {
    checked, or a browser without `:has`, gets the one-page view (U-44): it all scrolls as one page. */
 
 @media screen and (width >= 40rem) and (height >= 36rem) {
-  .show-all {
+  .one-page-toggle {
     display: inline-flex;
   }
 
-  body:has(.entity-page):not(:has(#show-all:checked)) {
+  body:has(.entity-page):not(:has(#one-page:checked)) {
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
     height: 100vh;
@@ -554,7 +554,7 @@ code {
 }
 
 @media screen and (width >= 64rem) and (height >= 36rem) {
-  body:has(.entity-page):not(:has(#show-all:checked)) .overview {
+  body:has(.entity-page):not(:has(#one-page:checked)) .overview {
     grid-template: "annotations axioms" minmax(0, 1fr) / minmax(0, 1fr) minmax(0, 1fr);
   }
 }
