@@ -374,6 +374,24 @@ and the walk's time limit.
 
 ## Reproducing
 
+The data is regenerated, not committed: `data/` is ignored by git. The spike reads S-4's TDB2 stores, which these
+build:
+
+```sh
+make robot-jar                    # .cache/robot.jar, which check.py and bench.py use
+research/S-1/fetch.sh             # Uberon 2026-11-05 into research/S-1/data/downloads/
+research/S-3/fetch.sh             # NCBITaxon v2026-11-09 into research/S-3/data/
+research/S-4/fetch.sh             # Jena and Fuseki 6.2.0 into research/S-4/lib/
+mkdir -p research/S-4/data/hpo && curl -fsSL -o research/S-4/data/hpo/hp.owl \
+  http://purl.obolibrary.org/obo/hp/releases/2026-09-01/hp.owl   # HPO 2026-09-01, as P-12
+cd research/S-4
+lib/apache-jena-6.2.0/bin/tdb2.tdbloader --loc data/tdb-uberon ../S-1/data/downloads/uberon.owl
+lib/apache-jena-6.2.0/bin/tdb2.tdbloader --loc data/tdb-hpo data/hpo/hp.owl
+lib/apache-jena-6.2.0/bin/tdb2.xloader --loc data/tdb-ncbitaxon --tmpdir data/tmp ../S-3/data/ncbitaxon.owl
+```
+
+Then, from the repository's root:
+
 ```sh
 export JAVA_HOME=$(/usr/libexec/java_home -v 21)
 research/S-7/fuseki.sh research/S-4/data/tdb-uberon 8g       # or tdb-hpo, tdb-ncbitaxon; port 3031, /gen-1
