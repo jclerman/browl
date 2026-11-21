@@ -14,8 +14,8 @@ changes how the count must be queried.**
 - **The owner map gives the OWLAPI's usages exactly:** 323 of 325 Uberon entities and 323 of 324 HPO entities, hubs
   included, have the same usage axioms as the OWLAPI's referencing axioms (plus annotations by value) minus their own
   axioms, and every count equals its usage axioms; the three differences are the ontology header's annotations, which
-  the OWLAPI keeps as ontology annotations rather than axioms. NCBITaxon wasn't checked against the OWLAPI (section 1
-  says why); its counts match the filtered queries for its 30 largest. Getting there took three fixes to the tentative
+  the OWLAPI keeps as ontology annotations rather than axioms. NCBITaxon's check, rerun with a 14 GB heap once
+  memory was free, matches for all 325 entities checked (section 1). Getting there took three fixes to the tentative
   map, below: a root is a top-level triple, not a blank node, since stores share blank nodes between subjects; a
   reified axiom's source, property and target aren't its references; and annotations on any blank node count.
 - **Counts must not filter the subject.** `FILTER (isIRI(?s))` makes TDB2 decode every subject: NCBITaxon's largest
@@ -119,10 +119,13 @@ PATO_0000460 in HPO).
 | OWLAPI's set covered by own axioms and usages | 325 | 324 | — |
 | Count (section 2) equals the usage axioms | 325 | 324 | — |
 
-- **NCBITaxon wasn't checked.** Loading it in the OWLAPI ran out of a 6 GB heap; P-15 used 12 GB, and with the
-  machine already swapping (Setup), a 14 GB run stalled in the load and was stopped. Little rides on it: NCBITaxon has
-  no class expressions, and its owner-map roots are 539 K reified synonym axioms, the structure Uberon (92 K) and HPO
-  (63 K) check; its counts equal the filtered queries' for its 30 largest entities (section 2).
+- **NCBITaxon matches too, for all 325 entities checked.** The first attempt ran out of a 6 GB heap, and a 14 GB run
+  stalled with the machine swapping (Setup). Rerun with a 14 GB heap once memory was free (2026-11-20, Fuseki's 8 GB
+  alongside), the OWLAPI loaded NCBITaxon in 116 s. It covered 300 sampled entities and 25 hubs, with `--max-usages
+  200000` leaving out the hubs whose usages wouldn't fit the heap as fragments. The largest checked has 134 K usages
+  (`TAXRANK_0000005` and `NCBITaxon_genus`), 1.17 M usages in all. Every usage set equals the OWLAPI's minus the
+  entity's own axioms, and every count equals its usage axioms. Hubs over 200 K usages rest on the counts matching the
+  filtered queries for NCBITaxon's 30 largest entities (section 2).
 
 - **The differences are the ontology header's annotations:** `dc:contributor` (41) and `rdfs:comment` (1) on the
   ontology IRI in Uberon, `rdfs:comment` in HPO. The OWLAPI holds them as ontology annotations, not axioms; browl
@@ -386,6 +389,6 @@ poetry run python research/S-7/bench.py $U uberon pages --top 20 --sample 150 --
 poetry run python research/S-7/check.py $U uberon research/S-1/data/downloads/uberon.owl --sample 300
 ```
 
-For HPO the file is `research/S-4/data/hpo/hp.owl`, for NCBITaxon `research/S-3/data/ncbitaxon.owl` (not run here:
-it needs a heap over 6 GB; `--max-usages` leaves out the largest hubs). For the clustered walks, `--runs 1 --limit
-90`. Each command writes its results to `data/NAME-COMMAND.json`; `data/` is ignored by git.
+For HPO the file is `research/S-4/data/hpo/hp.owl`, for NCBITaxon `research/S-3/data/ncbitaxon.owl`, with
+`--heap 14g --max-usages 200000` (`--max-usages` leaves out the hubs too large for the heap). For the clustered
+walks, `--runs 1 --limit 90`. Each command writes its results to `data/NAME-COMMAND.json`; `data/` is ignored by git.
