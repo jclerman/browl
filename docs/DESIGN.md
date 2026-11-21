@@ -1129,7 +1129,9 @@ CSS nesting gets the one-page view, without the toggle. _(P-16d)_
 - **The toggle:** a "Scroll as one page" checkbox, at the tab bar's end, gives that view on screen too, e.g. to read a
   long entity in one go. It's shown only where the frame applies. It works without JS, through `:has(:checked)`, and
   a small script (`static/one-page.js`) remembers it in `localStorage` for every page, also those the hash-IRI script
-  moves in; storage that fails is ignored. No cookie, so the server's pages don't vary with it, and no URL parameter.
+  moves in; storage that fails is ignored. The script isn't deferred, so the page isn't first drawn in the frame, and
+  it also restores the state on a page from the back-forward cache and on another tab's change. No cookie, so the
+  server's pages don't vary with it, and no URL parameter.
 - **The panels** have light borders, and their headings stay in view while they scroll. Each panel is a `<section>`,
   named by its heading (`aria-labelledby`), with `tabindex="0"` and a visible focus ring, so the keyboard can scroll
   it.
