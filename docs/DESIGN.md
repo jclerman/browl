@@ -850,7 +850,7 @@ Tabs (U-28; see [2.9](#29-page-layout)):
     named entity that plays the subject's part: a general class axiom under each named entity on its left-hand side,
     as other axioms sit under their subject, and an n-ary axiom such as `DisjointClasses(A, B, C)` under each member;
     not under the entity whose tab it is. A general class axiom with no other named entity on its left-hand side,
-    e.g. `(r some X) SubClassOf B` on r's tab, goes in a group of its own.
+    e.g. `(r Self) SubClassOf B` on r's tab, goes in a group of its own.
   - **The count** is of placements, as Protégé counts "uses", not of referring entities. That's the number of usage
     axioms, but for an axiom placed under several entities, which counts once for each. Fuseki's counts of the first
     two sources, without a filter on `?s`, less the entity's triples about itself and the owner map's blank-subject
