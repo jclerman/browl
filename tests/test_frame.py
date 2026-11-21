@@ -1,4 +1,4 @@
-"""Tests for the page frame (P-14a, DESIGN.md §2.9): the navigation bar, footer, stylesheet and security headers."""
+"""Tests for the page frame (P-14a, DESIGN.md §2.9): the navigation bar, stylesheet and security headers."""
 
 import asyncio
 import html.parser
@@ -39,20 +39,20 @@ SIGN_IN = ("/_browl/admin/upload", "Sign in")
 
 
 class Frame(html.parser.HTMLParser):
-    """A page's frame: the links in its navigation bar and footer, as (href, text), and the bar's text.
+    """A page's frame: its navigation bar's links, as (href, text), and text, and whether it has a footer.
 
     Attributes:
         nav: The navigation bar's links.
-        footer: The footer's links.
         nav_text: The navigation bar's text, with entities decoded.
+        footer: Whether the page has a `<footer>`.
     """
 
     def __init__(self, page: str) -> None:
         """Parse a page."""
         super().__init__()
         self.nav: list[tuple[str, str]] = []
-        self.footer: list[tuple[str, str]] = []
         self.nav_text = ""
+        self.footer = False
         self._part: list[tuple[str, str]] | None = None
         self._link: tuple[str, list[str]] | None = None
         self.feed(page)
@@ -62,13 +62,13 @@ class Frame(html.parser.HTMLParser):
         if tag == "header":
             self._part = self.nav
         elif tag == "footer":
-            self._part = self.footer
+            self.footer = True
         elif tag == "a" and self._part is not None:
             self._link = (dict(attrs).get("href") or "", [])
 
     def handle_endtag(self, tag: str) -> None:
         """End a part, or a link in one."""
-        if tag in {"header", "footer"}:
+        if tag == "header":
             self._part = None
         elif tag == "a" and self._link is not None and self._part is not None:
             self._part.append((self._link[0], "".join(self._link[1]).strip()))
@@ -135,14 +135,14 @@ def client(app: FastAPI) -> Iterator[TestClient]:
     ],
 )
 def test_frame_on_every_page(client: TestClient, path: str) -> None:
-    """Check that every kind of page has the navigation bar, its links, and the footer, with no in-page links.
+    """Check that every kind of page has the navigation bar and its links, sign-in last, and no in-page links or footer.
 
     An in-page link (`#…`) would be looked up as an entity by the hash-IRI script on a path hash entities share.
     """
     page = frame(client, path)
-    assert page.nav == [("/onto", "browl · The <Onto>"), *TREE_LINKS]
-    assert page.footer == [SIGN_IN]
-    assert not [link for link, _ in page.nav + page.footer if link.startswith("#")]
+    assert page.nav == [("/onto", "browl · The <Onto>"), *TREE_LINKS, SIGN_IN]
+    assert not page.footer
+    assert not [link for link, _ in page.nav if link.startswith("#")]
 
 
 @pytest.mark.parametrize("loaded", [False, True])
@@ -162,9 +162,8 @@ def test_frame_on_unavailable_pages(app: FastAPI, loaded: bool) -> None:
         assert ("Retry-After" in response.headers) is loaded
         assert response.headers["Content-Security-Policy"] == CONTENT_SECURITY_POLICY
         page = Frame(response.text)
-        assert page.nav[-len(TREE_LINKS) :] == TREE_LINKS
+        assert page.nav[-len(TREE_LINKS) - 1 :] == [*TREE_LINKS, SIGN_IN]
         assert ("The <Onto>" in page.nav_text) is loaded
-        assert page.footer == [SIGN_IN]
 
 
 def admin_marker(value: object) -> type:
@@ -195,8 +194,9 @@ def test_no_ontology_iri(app: FastAPI) -> None:
     with TestClient(app) as client:
         run(client, app, ontology=None, title=None)
         page = frame(client)
-        assert page.nav == TREE_LINKS
-        assert page.nav_text.split() == ["browl", "Browse", *" ".join(label for _, label in TREES).split()]
+        assert page.nav == [*TREE_LINKS, SIGN_IN]
+        labels = " ".join(label for _, label in TREES).split()
+        assert page.nav_text.split() == ["browl", "Browse", *labels, "Sign", "in"]
 
 
 def test_ontology_without_page(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -205,7 +205,7 @@ def test_ontology_without_page(client: TestClient, monkeypatch: pytest.MonkeyPat
     client.app.state.derived.close()  # type: ignore[attr-defined]
     run(client, client.app, title="Unlinked")  # type: ignore[arg-type]
     page = frame(client)
-    assert page.nav == TREE_LINKS
+    assert page.nav == [*TREE_LINKS, SIGN_IN]
     assert "browl · Unlinked" in page.nav_text
     assert title(client).endswith(" · \u2068Unlinked\u2069")
 
@@ -242,9 +242,8 @@ def test_under_root_path(app: FastAPI) -> None:
         page = frame(client, "/site/example.org/x")
         assert page.nav == [
             ("/site/onto", "browl · The <Onto>"),
-            *[(f"/site{link}", text) for link, text in TREE_LINKS],
+            *[(f"/site{link}", text) for link, text in [*TREE_LINKS, SIGN_IN]],
         ]
-        assert page.footer == [(f"/site{SIGN_IN[0]}", SIGN_IN[1])]
 
 
 @pytest.mark.parametrize(
@@ -272,7 +271,7 @@ def test_unreadable_name(
         for path in ["/_browl/admin/upload", "/_browl/admin/status"]:
             response = client.get(path)
             assert response.status_code == 200
-            assert Frame(response.text).nav == TREE_LINKS
+            assert Frame(response.text).nav == [*TREE_LINKS, SIGN_IN]
             assert " · browl</title>" in response.text
     assert len(calls) == 1  # the failure is kept until RETRY_AFTER_S has passed
     assert bool(caplog.records) is not isinstance(error, NotCurrentError)

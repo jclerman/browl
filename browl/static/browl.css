@@ -124,19 +124,29 @@ code {
   list-style: none;
 }
 
-/* Narrow screens: the name and the menu button share the top row, the search box gets its own, and the menu opens as
-   a panel under its button. */
+.sign-in {
+  margin-inline-start: auto;
+  font-size: 0.875rem;
+}
+
+/* Narrow screens: the name, the sign-in link and the menu button share the top row, the search box gets its own, and
+   the menu opens as a panel under its button. */
 @media (width < 48rem) {
   .site-name {
     flex: 1 1 0;
   }
 
-  .site-menu {
+  .sign-in {
     order: 1;
+    margin-inline-start: 0;
+  }
+
+  .site-menu {
+    order: 2; /* last in the row, so its panel opens under it at the bar's end */
   }
 
   .site-search {
-    order: 2;
+    order: 3;
     flex-basis: 100%;
   }
 
@@ -187,13 +197,6 @@ code {
 
 .content {
   padding: var(--space);
-}
-
-.site-footer {
-  padding: var(--space);
-  border-top: 1px solid var(--border);
-  color: var(--muted);
-  font-size: 0.875rem;
 }
 
 .stages .done {
