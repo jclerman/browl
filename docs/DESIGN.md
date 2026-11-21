@@ -97,6 +97,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **A-6** · If a stage fails, the upload page says which stage failed and why. For a reasoner failure caused by a limit, it says which limit (time or memory) was hit, where possible. _(Q7)_ | v1 |
 | **A-7** · Admins can add and remove admin email addresses. The seed admins (O-6) can't be removed through the UI. _(Q16a)_ | v1 |
 | **A-8** · Detailed logs for each stage, inline or on a linked page. _(Q7b)_ | Later |
+| **A-10** · An admin can cancel a running load, rebuild or background build (such as P-27c's usage table), e.g. if it's taking too long. A cancelled load leaves the ontology being served as it was. | v1 |
 | **A-9** · Several ontologies loaded and ready to serve. Whether one or many are served at a time is to be decided. _(Q14)_ | Later |
 
 ### 1.4 Operator requirements
@@ -1408,6 +1409,7 @@ flowchart LR
         P29["P-29 Compressed load files"]
         P31["P-31 Load progress"]
         P32["P-32 Reasoner progress"]
+        P36["P-36 Cancel a load"]
     end
     S5b["S-5b OLS4 comparison"]
 
@@ -1415,6 +1417,7 @@ flowchart LR
     P17 & P18 & P19 & P27 --> P33
     P18 & P20 --> P25
     P22 --> P23
+    P22 & P31 --> P36
     P31 --> P32
 ```
 
@@ -1484,7 +1487,7 @@ go into this document.
 | P-20 | Autocomplete UI (accessible combobox) with type and property filters | U-10, U-17 | P-19, P-14 | To do | [#32](https://github.com/jclerman/browl/issues/32) |
 | P-33 | JSON API over the pages' data: routes under `api/` returning the models the pages render (2.8, 2.13) | U-42 | P-16, P-17, P-18, P-19, P-27 | To do | [#76](https://github.com/jclerman/browl/issues/76) |
 | P-21 | Page cache keyed by generation | O-10, N-3 | P-16 | To do | [#40](https://github.com/jclerman/browl/issues/40) |
-| P-22 | Google sign-in, admin-route protection, dev no-auth mode; then consider an admin action that cancels a running job or rebuild, and a time limit on pre-caching | A-1, O-6, O-7 | P-6 | To do | [#17](https://github.com/jclerman/browl/issues/17) |
+| P-22 | Google sign-in, admin-route protection, dev no-auth mode (cancelling a job: P-36) | A-1, O-6, O-7 | P-6 | To do | [#17](https://github.com/jclerman/browl/issues/17) |
 | P-23 | Admin list management page and persistence | A-7 | P-22 | To do | [#19](https://github.com/jclerman/browl/issues/19) |
 
 ### Phase 6: Hardening
@@ -1494,8 +1497,9 @@ go into this document.
 | P-24 | Performance check against N-1–N-3 targets at scale; whether streaming extraction alongside the TDB2 load is worth it | N-1–N-3 | all above | To do | [#42](https://github.com/jclerman/browl/issues/42) |
 | P-25 | Accessibility pass (trees, combobox, no-JS pages) | U-17 | P-18, P-20 | To do | [#35](https://github.com/jclerman/browl/issues/35) |
 | P-29 | Store the upload, fetched imports and ROBOT's output compressed at rest (gzip shrank Uberon 13–16×, P-8), and accept compressed uploads; measure the cost first | A-2 | P-8 | To do | [#71](https://github.com/jclerman/browl/issues/71) |
-| P-31 | Show load progress: each stage's elapsed time, ROBOT's current step, triples loaded of the total, the import being handled | A-5 | P-8 | To do | [#73](https://github.com/jclerman/browl/issues/73) |
+| P-31 | Show load progress: each stage's elapsed time, ROBOT's current step, triples loaded of the total, the import being handled; for pre-caching, each hook's name, elapsed time and rows written (of the expected total where known); and background builds after a load (P-27c's usage table), with their progress | A-5 | P-8 | To do | [#73](https://github.com/jclerman/browl/issues/73) |
 | P-32 | Show the reasoner's own progress (per task, as Protégé does), running ROBOT's reasoning through its Java API with a progress monitor | A-5 | P-31, P-30 | To do | [#74](https://github.com/jclerman/browl/issues/74) |
+| P-36 | Cancel from the admin status page: a running load or rebuild (the job stops, its new store and derived files are removed, and the served ontology is unchanged) or a background build after a load; and a time limit on pre-caching | A-10 | P-22, P-31 | To do | [#111](https://github.com/jclerman/browl/issues/111) |
 | P-26 | Update README: remove Owlready2 and Fuseki (now the OWLAPI via JPype); replace "cached once built" with the bounded cache | | | Done | [#7](https://github.com/jclerman/browl/pull/7) |
 
 ### Later
