@@ -66,8 +66,10 @@ Declaration(NamedIndividual(:Dog))
 AnnotationAssertion(rdfs:label :Heart "<b>Heart</b> & \"soul\"")
 AnnotationAssertion(rdfs:label :Tricky "a <script>alert(1)</script> 'quote'")
 AnnotationAssertion(rdfs:label :partOf "part of")
-# Annotations whose values are entities: usages by value (tests/test_usages.py).
+# Annotations whose values are entities: usages by value (tests/test_usages.py); and triples about themselves.
 AnnotationAssertion(:remark :Cat :Dog)
+AnnotationAssertion(rdfs:seeAlso :Mineral :Mineral)
+AnnotationAssertion(:remark :remark :remark)
 
 # Class axioms.
 SubClassOf(:Dog :Animal)
@@ -90,10 +92,12 @@ SubClassOf(:Person DataExactCardinality(1 :age DataIntersectionOf(xsd:integer Da
 SubClassOf(:Pet ObjectOneOf(:rex :tom))
 SubClassOf(:Child ObjectSomeValuesFrom(ObjectInverseOf(:hasChild) :Parent))
 SubClassOf(Annotation(:remark :Fungus) :Tricky :Animal)
+SubClassOf(Annotation(Annotation(:remark :Plant) :note "nested") :Liver :Organ)
+SubClassOf(:Pet ObjectUnionOf(:Dog :Cat))
 EquivalentClasses(:Parent ObjectIntersectionOf(:Person ObjectSomeValuesFrom(:hasChild :Person)))
 EquivalentClasses(:Adult :Vertebrate :LivingThing)
 DisjointClasses(:Dog :Cat)
-DisjointClasses(Annotation(:note "n-ary") :Animal :Plant :Fungus)
+DisjointClasses(Annotation(:note "n-ary") Annotation(:remark :Mineral) :Animal :Plant :Fungus)
 DisjointClasses(:Mineral ObjectSomeValuesFrom(:partOf :Animal))
 DisjointUnion(:LivingThing :Animal :Plant)
 
@@ -153,6 +157,9 @@ NegativeDataPropertyAssertion(:age :bob "7"^^xsd:integer)
 SameIndividual(:carol :dave)
 DifferentIndividuals(:alice :bob)
 DifferentIndividuals(:alice :carol :tom)
+
+# Rules.
+DLSafeRule(Body(ClassAtom(:Dog Variable(:x))) Head(ClassAtom(:Animal Variable(:x))))
 
 # Annotation property axioms.
 SubAnnotationPropertyOf(:remark :comment)

@@ -4,7 +4,7 @@ import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator, Iterator
-from contextlib import closing
+from contextlib import asynccontextmanager, closing
 from pathlib import Path
 from typing import Any
 
@@ -13,17 +13,27 @@ import jpype
 import pytest
 
 from browl import axioms, owlapi
+from browl import usages as usages_module
 from browl.derived import DerivedReader, NotCurrentError, UsageRootKind
-from browl.fuseki import FusekiClient, SparqlError
+from browl.fuseki import UNION_FROM, FusekiClient, SparqlError
 from browl.jobs import JobContext
-from browl.jobtypes import Reasoner
+from browl.jobtypes import ImportResult, Reasoner
 from browl.loading import dataset_name
 from browl.precache.core import PREFIXES
 from browl.precache.keys import build_keys
 from browl.precache.stage import HOOKS, pre_cache
-from browl.rdf import IRI, RDFS, BlankNode, Literal, Term, ntriples_iris
+from browl.rdf import IRI, RDF, RDFS, BlankNode, Literal, Term, ntriples_iris
 from browl.settings import Settings
-from browl.usages import CACHED_COUNT_S, Usage, UsageCounts, UsageSource, UsageStore, count_usages, read_usages
+from browl.usages import (
+    CACHED_COUNT_S,
+    TooManyUsagesError,
+    Usage,
+    UsageCounts,
+    UsageSource,
+    UsageStore,
+    count_usages,
+    read_usages,
+)
 from tests.helpers import connect, make_settings
 
 pytestmark = [pytest.mark.anyio, pytest.mark.fuseki, pytest.mark.jvm]
@@ -70,26 +80,56 @@ def settings(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Settings]:
         yield make_settings()
 
 
-@pytest.fixture(scope="module")
-async def store(fuseki_url: str, ntriples: bytes, settings: Settings) -> AsyncIterator[UsageStore]:
-    """Yield a store of the test ontology: an in-memory Fuseki dataset, and the derived database built from it."""
+@asynccontextmanager
+async def loaded(
+    fuseki_url: str, settings: Settings, graphs: dict[str | None, bytes], dataset_clause: str
+) -> AsyncIterator[UsageStore]:
+    """Yield a store of N-Triples by graph (None: the default): an in-memory Fuseki dataset, and its derived database.
+
+    The named graphs are imports, which the pre-caching stage sees.
+    """
     generation = 900_000 + uuid.uuid4().int % 100_000
     name = dataset_name(generation)
     async with httpx2.AsyncClient(base_url=fuseki_url, timeout=60) as http:
         (await http.post("/$/datasets", data={"dbName": name, "dbType": "mem"})).raise_for_status()
         try:
-            response = await http.post(
-                f"/{name}/data", content=ntriples, headers={"Content-Type": "application/n-triples"}
-            )
-            response.raise_for_status()
-            await pre_cache(JobContext(generation, settings, Reasoner.NONE), http)
+            for graph, triples in graphs.items():
+                params = {"default": ""} if graph is None else {"graph": graph}
+                headers = {"Content-Type": "application/n-triples"}
+                (await http.post(f"/{name}/data", params=params, content=triples, headers=headers)).raise_for_status()
+            imports = [ImportResult(graph, triples=1) for graph in graphs if graph is not None]
+            await pre_cache(JobContext(generation, settings, Reasoner.NONE, imports=imports), http)
             reader = DerivedReader(settings.data_dir, build_keys(settings, HOOKS))
             try:
-                yield UsageStore(FusekiClient(http), reader, generation)
+                yield UsageStore(FusekiClient(http), reader, generation, dataset_clause)
             finally:
                 reader.close()
         finally:
             await http.delete(f"/$/datasets/{name}")
+
+
+@pytest.fixture(scope="module")
+async def store(fuseki_url: str, ntriples: bytes, settings: Settings) -> AsyncIterator[UsageStore]:
+    """Yield a store of the test ontology."""
+    async with loaded(fuseki_url, settings, {None: ntriples}, "") as found:
+        yield found
+
+
+SPLIT = (f"<{NS}Dog> ", f"<{NS}Cat> ", f"<{NS}likes> ", f"<{NS}Liver> ")
+"""The subjects of the triples `split_store` puts in a named graph, as an import's, but those with a blank object: blank
+nodes stay in the default graph, since each load names its own."""
+
+
+@pytest.fixture(scope="module")
+async def split_store(fuseki_url: str, ntriples: bytes, settings: Settings) -> AsyncIterator[UsageStore]:
+    """Yield a store of the test ontology with `SPLIT`'s triples in a named graph, read with the imports' clause."""
+    lines = ntriples.decode().splitlines(keepends=True)
+    split = [line.startswith(SPLIT) and " _:" not in line for line in lines]
+    named = "".join(line for line, moved in zip(lines, split, strict=True) if moved).encode()
+    rest = "".join(line for line, moved in zip(lines, split, strict=True) if not moved).encode()
+    assert named.count(b"\n") >= 10
+    async with loaded(fuseki_url, settings, {None: rest, "http://example.org/imported": named}, UNION_FROM) as found:
+        yield found
 
 
 def normal(axiom: Any) -> str:
@@ -235,19 +275,44 @@ async def test_usages_kinds(store: UsageStore) -> None:
     triple, axiom, general = UsageRootKind.TRIPLE, UsageRootKind.AXIOM, UsageRootKind.GENERAL
     # Through a class expression, and as an annotation's value on a reified axiom; not in either general class axiom.
     assert await usages("Fungus") == [("root", axiom, "Tricky"), ("root", triple, "Liver")]
-    # Cat DisjointWith Dog and an annotation by value; rex's class assertion. Its general class axiom is its own.
-    assert await usages("Dog") == [("object", "", "Cat"), ("object", "", "Cat"), ("object", "", "rex")]
+    # Cat DisjointWith Dog and an annotation by value; rex's class assertion; a SWRL rule; Pet's union. Its general
+    # class axiom is its own.
+    assert await usages("Dog") == [
+        ("object", "", "Cat"),
+        ("object", "", "Cat"),
+        ("object", "", "rex"),
+        ("root", general, ""),
+        ("root", triple, "Pet"),
+    ]
+    # In an annotation on an axiom annotation: the annotated axiom's subject's usage.
+    assert await usages("Plant") == [
+        ("root", axiom, "Liver"),
+        ("root", triple, "Heart"),
+        ("root", triple, "LivingThing"),
+    ]
+    # Only in an annotation of an n-ary DisjointClasses, so not its own; its triple about itself isn't a usage.
+    assert await usages("Mineral") == [("root", general, "")]
     assert await usages("hasPart") == [("root", general, ""), ("root", general, "")]  # two general class axioms
     assert await usages("hates") == [("root", general, "")]  # a negative property assertion
-    # On an annotated general class axiom, on Cat's annotated axiom, and on the n-ary DisjointClasses.
-    assert await usages("note") == [("root", axiom, ""), ("root", axiom, "Cat"), ("root", general, "")]
+    # On Cat's and Liver's annotated axioms, an annotated general class axiom, and the n-ary DisjointClasses.
+    assert await usages("note") == [
+        ("root", axiom, "Cat"),
+        ("root", axiom, "Liver"),
+        ("root", general, ""),
+        ("root", general, ""),
+    ]
     assert await usages("age") == [
         ("predicate", "", "alice"),
         ("root", general, ""),  # its negative assertion; not DisjointDataProperties(age, weight), its own
         ("root", triple, "Person"),
         ("root", triple, "Person"),
     ]
-    assert await usages("remark") == [("predicate", "", "Cat"), ("root", axiom, "Tricky")]
+    assert await usages("remark") == [
+        ("predicate", "", "Cat"),
+        ("root", axiom, "Liver"),  # on the annotation of Liver's axiom
+        ("root", axiom, "Tricky"),
+        ("root", general, ""),  # on the n-ary DisjointClasses
+    ]
     [annotation] = [usage for usage in await read_usages(store, f"{NS}remark") if usage.source == "predicate"]
     assert annotation == Usage(UsageSource.PREDICATE, IRI(f"{NS}Cat"), object=IRI(f"{NS}Dog"))
     [subclass] = [usage for usage in await read_usages(store, f"{NS}Parent") if usage.root]
@@ -255,20 +320,95 @@ async def test_usages_kinds(store: UsageStore) -> None:
 
 
 async def test_count_kept(store: UsageStore, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Check that a count that takes longer than `CACHED_COUNT_S` is kept for its generation, and only then."""
+    """Check that an entity's count that takes longer than `CACHED_COUNT_S` is kept, and only then.
+
+    An IRI that's no entity's never is.
+    """
+    assert CACHED_COUNT_S == 0.1
     cache = UsageCounts()
-    iri = f"{NS}Animal"
+    iri, generation = f"{NS}Animal", store.generation
+    monkeypatch.setattr("browl.usages.CACHED_COUNT_S", 3600.0)
     count = await count_usages(store, iri, cache)
-    assert cache.generation(store.generation) == {}  # quick
-    assert CACHED_COUNT_S > 0
+    assert cache.get(generation, iri) is None
     monkeypatch.setattr("browl.usages.CACHED_COUNT_S", 0.0)
     assert await count_usages(store, iri, cache) == count
-    assert cache.generation(store.generation) == {iri: count}
-    cache.generation(store.generation)[iri] = -1
+    assert cache.get(generation, iri) == count
+    await count_usages(store, f"{NS}rex", cache)
+    assert cache.get(generation, f"{NS}rex") is None
+    cache.keep(generation, iri, -1)
     assert await count_usages(store, iri, cache) == -1  # read from the cache
-    assert cache.generation(store.generation - 1) == {}  # an older generation's aren't kept
-    assert cache.generation(store.generation + 1) == {}  # a newer one's replace them
-    assert cache.generation(store.generation) == {}
+    assert cache.get(generation - 1, iri) is None
+
+
+def test_counts_kept_per_generation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that counts are kept for the newest generation only, at most `MAX_KEPT_COUNTS`, the oldest dropped."""
+    monkeypatch.setattr("browl.usages.MAX_KEPT_COUNTS", 2)
+    cache = UsageCounts()
+    cache.keep(5, "a", 1)
+    cache.keep(4, "b", 2)  # older: not kept
+    assert (cache.get(5, "a"), cache.get(4, "b"), cache.get(5, "b")) == (1, None, None)
+    cache.keep(5, "b", 2)
+    cache.keep(5, "a", 3)  # replaced, still the oldest
+    cache.keep(5, "c", 4)
+    assert [cache.get(5, iri) for iri in "abc"] == [None, 2, 4]
+    cache.keep(6, "d", 5)  # newer: replaces them all
+    assert [cache.get(6, iri) for iri in "bcd"] == [None, None, 5]
+    assert cache.get(5, "d") is None
+
+
+async def test_limit(store: UsageStore) -> None:
+    """Check that an entity with more usages than the limit fails the read, from each source."""
+    for name in ("Animal", "age", "remark"):
+        usages = await read_usages(store, f"{NS}{name}")
+        assert await read_usages(store, f"{NS}{name}", len(usages)) == usages
+        with pytest.raises(TooManyUsagesError, match=f"^the entity has more than {len(usages) - 1} usages$"):
+            await read_usages(store, f"{NS}{name}", len(usages) - 1)
+    with pytest.raises(TooManyUsagesError):  # every source over the limit at once
+        await read_usages(store, f"{NS}age", 0)
+    # Each source reads no more than it needs to tell.
+    animal = f"{NS}Animal"
+    assert len(await usages_module._object_usages(store, animal, 2)) == 2
+    assert len(await usages_module._predicate_usages(store, f"{NS}remark", 0)) == 0
+    assert len(await store.derived.read(store.generation, lambda c: usages_module._root_usages(c, animal, 1))) == 1
+
+
+def normalized(usages: list[Usage]) -> list[tuple[str, ...]]:
+    """Return usages without their store's blank node labels and root numbers."""
+    return sorted(
+        (
+            usage.source,
+            str(usage.subject),
+            str(usage.predicate),
+            "_:" if isinstance(usage.object, BlankNode) else str(usage.object),
+            usage.root.kind if usage.root else "",
+        )
+        for usage in usages
+    )
+
+
+async def test_imports(store: UsageStore, split_store: UsageStore, settings: Settings) -> None:
+    """Check that with some triples in a named graph, as an import's, each entity has the same usages and count."""
+    with closing(connect(settings, store.generation)) as connection:
+        iris = sorted({iri for (iri,) in connection.execute("SELECT iri FROM entity")})
+    for iri in iris:
+        usages = await read_usages(split_store, iri)
+        assert normalized(usages) == normalized(await read_usages(store, iri)), iri
+        assert await count_usages(split_store, iri) == len(usages), iri
+
+
+async def test_anonymous_individuals(fuseki_url: str, settings: Settings) -> None:
+    """Check that an anonymous individual's axioms are counted but not listed: the owner map doesn't hold it (U-18)."""
+    owl = "http://www.w3.org/2002/07/owl#"
+    pet, heart, likes = (f"<{NS}{name}>" for name in ("Pet", "Heart", "likes"))
+    triples = (
+        f"{pet} <{RDF}type> <{owl}Class> .\n{heart} <{RDF}type> <{owl}Class> .\n"
+        f"{likes} <{RDF}type> <{owl}ObjectProperty> .\n"
+        f"_:a <{RDF}type> {pet} .\n_:a {likes} {heart} .\n"  # ClassAssertion(Pet _:a), likes(_:a Heart)
+    )
+    async with loaded(fuseki_url, settings, {None: triples.encode()}, "") as anonymous:
+        for name in ("Pet", "Heart", "likes"):
+            assert await read_usages(anonymous, f"{NS}{name}") == [], name
+            assert await count_usages(anonymous, f"{NS}{name}") == 1, name
 
 
 async def test_not_an_entity(store: UsageStore) -> None:
@@ -285,7 +425,7 @@ async def test_not_an_entity(store: UsageStore) -> None:
 async def test_query_fails(store: UsageStore) -> None:
     """Check that a failed query, or a derived database that isn't current, fails the read and the count."""
     async with httpx2.AsyncClient(base_url="http://127.0.0.1:9") as http:  # nothing listens there
-        unreachable = UsageStore(FusekiClient(http), store.derived, store.generation)
+        unreachable = UsageStore(FusekiClient(http), store.derived, store.generation, "")
         with pytest.raises(SparqlError):
             await read_usages(unreachable, f"{NS}Animal")
         with pytest.raises(SparqlError):
@@ -296,7 +436,7 @@ async def test_query_fails(store: UsageStore) -> None:
         raise AssertionError
 
     async with httpx2.AsyncClient(base_url="http://fuseki", transport=httpx2.MockTransport(never)) as http:
-        missing = UsageStore(FusekiClient(http), store.derived, store.generation + 1)  # no such generation's database
+        missing = UsageStore(FusekiClient(http), store.derived, store.generation + 1, "")  # no generation's database
         with pytest.raises(NotCurrentError):
             await read_usages(missing, f"{NS}Animal")
         with pytest.raises(NotCurrentError):

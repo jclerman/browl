@@ -188,8 +188,8 @@ comments:
       id: The root's number, dense.
       kind: >-
         What it is (browl.derived.UsageRootKind): triple, a triple from an IRI to a blank node (owner predicate
-        _:label); axiom, a reified axiom (owl:Axiom or owl:Annotation); general, a blank node nothing links to, with
-        no owner (a general class axiom, an n-ary axiom, a negative property assertion, a SWRL rule).
+        _:label); axiom, a reified axiom (owl:Axiom), with the annotations on it; general, a blank node nothing links
+        to, with no owner (a general class axiom, an n-ary axiom, a negative property assertion, a SWRL rule).
       label: The root's blank node, by its label in the store (Jena's afn:bnode), which a query can name as <_:label>.
       owner: >-
         The entity whose axiom it is (entity.id, its IRI's first): a triple's subject, a reified axiom's
@@ -198,9 +198,8 @@ comments:
       predicate: A triple's predicate, or a reified axiom's owl:annotatedProperty; NULL for a general root.
   - table: usage_ref
     tableComment: >-
-      Which roots are which entities' usages, stored in key order: a root is a usage of each entity it names but its
-      owner, and but a class in a general class axiom or n-ary class axiom, or a property in an n-ary property axiom,
-      which are their own axioms (DESIGN.md 2.8).
+      Which roots are which entities' usages, stored in key order: a root is a usage of each entity it names, except
+      its owner and those whose own axiom it is, which their Overview lists (DESIGN.md 2.5).
     columnComments:
       entity: The entity (entity.id, its IRI's first).
       root: The root (usage_root.id).

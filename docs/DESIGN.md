@@ -583,7 +583,7 @@ are documented in [`SCHEMA.md`](SCHEMA.md):
 | `edge` | Parent → child per hierarchy (classes; each property type), between equivalence-group representatives | The edges query (subclass, sub-property and equivalent-class triples): 20–21 s on NCBITaxon, 3.02 M rows. The whole hook, which also groups, counts and inserts `equiv_group` and `counts`, takes about 42 s and 0.9 GB, and `edge`, `counts` and their index 164 MiB; on Uberon and HPO, 0.5 s ([P-12 findings](../research/P-12/README.md)) |
 | `equiv_group` | Entity → group representative, for groups of more than one | Union-find over `owl:equivalentClass` between named classes, and over cycles of edges (below) |
 | `counts` | Per node: immediate children, distinct descendants | `edge`, in Python (below) |
-| `usage_root`, `usage_ref`, `usage_blank` | The blank-node owner map (P-27): each blank-node root that's a usage, with its kind, owner, predicate and store label; the entities each is a usage of; per entity, its triples with a blank subject | One bulk query over the blank nodes, found by their OWL types (`owner-map.rq`, `browl.precache.owner_map`): 5–7 s on Uberon and HPO; on NCBITaxon 26 s, 2.69 M rows ([S-7 findings](../research/S-7/README.md)). The whole hook takes 8.8 s and 0.6 GB on Uberon, 36 s and 1.9 GB on NCBITaxon, whose tables are 78 MiB (P-27a) |
+| `usage_root`, `usage_ref`, `usage_blank` | The blank-node owner map (P-27): each blank-node root that's a usage, with its kind, owner, predicate and store label; the entities each is a usage of; per entity, its triples with a blank subject | One bulk query over the blank nodes, found by their types and predicates (`owner-map.rq`, `browl.precache.owner_map`): 5–7 s on Uberon and HPO; on NCBITaxon 26 s, 2.69 M rows ([S-7 findings](../research/S-7/README.md)). The whole hook takes 8.8 s and 0.6 GB on Uberon, 36 s and 1.9 GB on NCBITaxon, whose tables are 78 MiB (P-27a) |
 | `hash_prefix` | Distinct URL paths that have hash entities under them | `entity` |
 | `prefix` | CURIE prefix → namespace | The built-in ones, overridden by the ontology file's own, overridden by `EXTRA_PREFIXES` ([2.7](#27-display-names)) |
 | `meta` | Ontology IRI, version IRI, title, `owl:versionInfo`, reasoner used, load time (the job's start), generation number | The ontology header query (below) and the job |
@@ -667,17 +667,25 @@ by value. Fuseki can (`?s ?p <entity>`), so P-27 keeps two things instead ([S-7 
     the triple, not the blank node;
   - one root per blank node nothing links to (general class axioms, n-ary axioms, negative property assertions, SWRL
     rules), with no owner;
-  - one root per reified `owl:Axiom` with IRIs in its annotations, owned by its `owl:annotatedSource`. Only its
-    annotations' IRIs count as references: its source, property and target repeat an axiom counted already;
+  - one root per reified `owl:Axiom` with IRIs in its annotations, owned by its `owl:annotatedSource` if that's an
+    IRI. Only its annotations' IRIs count as references: its source, property and target repeat an axiom counted
+    already. An annotation on a blank node's axiom (a general class axiom's, or an axiom annotation's, which is an
+    `owl:Annotation`) is part of that node's root, as it's the same axiom. A blank `owl:annotatedTarget`, or a blank
+    `owl:annotatedSource` that doesn't hold the main triple, is a copy of the main triple's node, and no root;
   - each root's IRIs: the objects reached through blank nodes (but OWL and RDF types, and `rdf:nil`), and the
     properties of annotations on any blank node. Only entities are kept, by their IRI's first `entity.id`, as only
     entities have a Usage tab: `usage_ref` records which roots are which entities' usages. A root isn't a usage of its
-    owner, nor of a class named in the logical part of a root with no owner that's a general class axiom or n-ary
-    `DisjointClasses`, nor of a property among an n-ary property axiom's members: those are their own axioms, which
-    their Overview lists. Deciding that at load keeps the Usage tab's reads to one range of `usage_ref`; a root that's
-    no one's usage isn't stored;
+    owner, nor of a class named where a class goes in the logical part of a root with no owner that's a general class
+    axiom or n-ary `DisjointClasses`, nor of a property among an n-ary property axiom's members: those are their own
+    axioms, which their Overview lists. (A class punned as a property, named only as a restriction's property, is
+    such an axiom's usage.) Deciding that at load keeps the Usage tab's reads to one range of `usage_ref`; a root
+    that's no one's usage isn't stored;
   - per entity, how many triples with a blank subject have it as object or predicate (`usage_blank`), which the count
     subtracts.
+
+  The walks from the roots may visit at most a million blank nodes more than the store holds
+  (`owner_map.WALK_BUDGET`), so a store whose roots share blank nodes widely fails the stage rather than run for
+  hours; Uberon's and NCBITaxon's visit each about once.
 
   The blank nodes are found by their types (`owl:Axiom`, `owl:Restriction`, the n-ary and SWRL types) and by the
   predicates of anonymous classes, lists, datatypes and inverse properties. That takes 26 s on NCBITaxon. Filtering
@@ -865,10 +873,11 @@ Tabs (U-28; see [2.9](#29-page-layout)):
     revisited; the ontologies browl targets have few general class axioms.
   - **The count** is of axioms, as Protégé counts "uses", not of referring entities: Fuseki's counts of the first
     two sources, without a filter on `?s`, less the entity's triples about itself and the owner map's blank-subject
-    counts, plus the owner map's roots that are usages. That's 2 ms for most entities, and 0.21–0.26 s for
-    NCBITaxon's largest (2.5–3.1 M), 0.47 s just after a restart; filtering `?s` to IRIs makes TDB2 decode every
-    subject, 12–19 s. Counts over 100 ms (13 entities in NCBITaxon) are kept in memory per generation. Once the
-    usage table is ready, counts come from it.
+    counts, plus the owner map's roots that are usages. Blank nodes the owner map misses, such as anonymous
+    individuals (U-18), are counted but not listed. That's 2 ms for most entities, and 0.21–0.26 s for NCBITaxon's
+    largest (2.5–3.1 M), 0.47 s just after a restart; filtering `?s` to IRIs makes TDB2 decode every subject,
+    12–19 s. An entity's counts over 100 ms (13 entities in NCBITaxon) are kept in memory per generation, at most
+    1,000. Once the usage table is ready, counts come from it.
   - **Order and pages:** axioms sorted by their subject's casefolded display name, then IRI; then, for a property,
     the general class axioms that mention it; then subjects not in `entity` (individuals and undeclared IRIs, until
     U-18 adds individuals: 261 usages in Uberon, none in HPO or NCBITaxon). Pages of 50 axioms, so the page count is

@@ -1,38 +1,22 @@
-"""The owner-map pre-caching hook (P-27): the blank-node owner map, `usage_root`, `usage_ref` and `usage_blank`.
+"""The owner-map pre-caching hook (P-27): `usage_root`, `usage_ref` and `usage_blank`, which DESIGN.md §2.5 describes.
 
-The Usage tab finds most of an entity's usages in Fuseki (`?s ?p <entity>`, `?s <entity> ?o`), but not those that
-reach it through blank nodes: class expressions, lists, annotations on reified axioms. The owner map holds those, by
-root: the top-level triple, reified axiom or unlinked blank node that each such axiom hangs from (DESIGN.md §2.5,
-[S-7 findings](../research/S-7/README.md)). One bulk query (`owner-map.rq`) streams the blank nodes' triples and IRI
-parents; the roots, and the entities each is a usage of, are worked out on the database's thread.
-
-- **Roots** (`browl.derived.UsageRootKind`): one per triple with an IRI subject and a blank object, as a store can
-  share a blank node between several subjects' axioms; one per reified axiom (`owl:Axiom`, `owl:Annotation`), owned by
-  its source if that's an IRI; one per other blank node nothing links to (general class axioms, n-ary axioms, negative
-  property assertions, SWRL rules), with no owner. A blank node linked only as a reified axiom's target is a copy of
-  its main triple's, and isn't a root.
-- **The IRIs in a root** are the objects reached from it through blank nodes, but OWL and RDF types and `rdf:nil`,
-  and the properties and values of annotations. A reified axiom's are only its annotations': its source, property and
-  target are the main triple's, counted from it.
-- **A root is a usage** of each entity it names (`usage_ref`), but its owner; and but an entity whose own axiom it is,
-  as its Overview lists it (DESIGN.md §2.8): a class named in the logical part of a general class axiom or n-ary
-  class axiom, a property among the members of an n-ary property axiom. Roots that are no one's usage aren't stored.
-- **`usage_blank`** counts, per entity, the triples with a blank subject that have it as object or predicate, which
-  the usage count takes from Fuseki's unfiltered counts (`browl.usages.count_usages`).
-
-Entities are referred to by the first `entity.id` of their IRI, as usages are an IRI's, whatever its types.
+One bulk query (`owner-map.rq`) streams the blank nodes' triples and IRI parents; the roots, and the entities each is a
+usage of, are worked out on the database's thread. Entities are referred to by the first `entity.id` of their IRI.
 """
 
 import functools
 import logging
 import sqlite3
+import sys
 from collections import Counter
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
-from enum import Enum, auto
+from enum import Enum, IntEnum, auto
+from typing import NamedTuple
 
 from browl.derived import PROPERTY_TYPES, EntityType, UsageRootKind
 from browl.fuseki import SparqlError
+from browl.jobtypes import StageError
 from browl.precache.core import PreCacheContext, batched, hook, sparql_file
 from browl.rdf import IRI, OWL, RDF, RDFS, XSD, Literal, Term
 
@@ -41,7 +25,13 @@ logger = logging.getLogger(__name__)
 SWRL = "http://www.w3.org/2003/11/swrl#"
 """The SWRL vocabulary, which OWL's RDF mapping uses for rules."""
 
+WALK_BUDGET = 1_000_000
+"""How many visits to blank nodes the roots' walks may make beyond one per node, as roots can share blank nodes; a
+store that needs more fails the stage, rather than run for hours."""
+
 _TYPE = f"{RDF}type"
+_FIRST = f"{RDF}first"
+_REST = f"{RDF}rest"
 _NIL = f"{RDF}nil"
 _SOURCE = f"{OWL}annotatedSource"
 _PROPERTY = f"{OWL}annotatedProperty"
@@ -50,7 +40,22 @@ _ANNOTATED = frozenset({_SOURCE, _PROPERTY, _TARGET})
 _REIFIED_TYPES = frozenset({f"{OWL}Axiom", f"{OWL}Annotation"})
 _CLASS_AXIOM_PREDICATES = frozenset({f"{RDFS}subClassOf", f"{OWL}equivalentClass", f"{OWL}disjointWith"})
 _LOGICAL_RDFS = frozenset({f"{RDFS}{name}" for name in ("subClassOf", "subPropertyOf", "domain", "range")})
-_BLANK = "_:"  # a blank object's key in `Triples.children` is its label after this; no IRI starts with it
+_NOT_CLASS = frozenset(
+    f"{OWL}{name}"
+    for name in (
+        "onProperty",
+        "onProperties",
+        "inverseOf",
+        "hasValue",
+        "oneOf",
+        "onDataRange",
+        "onDatatype",
+        "datatypeComplementOf",
+        "withRestrictions",
+    )
+)
+"""The predicates of class expressions and data ranges whose objects, or list's members, aren't classes."""
+_BLANK = "_:"  # a blank object's key in `_Triples.children` is its label after this; no IRI starts with it
 
 type _Object = str | int
 """A blank node's triple's object: an IRI, a blank node as `_BLANK` and its label, or a literal's hash."""
@@ -64,9 +69,29 @@ class _Form(Enum):
     OTHER = auto()  # a negative property assertion, a SWRL rule, n-ary DifferentIndividuals, …
 
 
+class _Named(IntEnum):
+    """How a root names an IRI: the most of the ways it does."""
+
+    ANNOTATION = 0  # only in annotations
+    LOGICAL = 1  # in its logical part, where no class goes, such as a restriction's property
+    CLASS = 2  # in its logical part, where a class goes
+
+
+class _Columns(NamedTuple):
+    """The owner-map query's columns' numbers."""
+
+    node: int
+    predicate: int
+    object: int
+    blank: int
+    parent: int
+
+
 @dataclass
-class Triples:
+class _Triples:
     """The owner-map query's rows, deduplicated, as the query may give a node's rows several times.
+
+    IRIs are interned, as a few predicates and objects recur in millions of rows.
 
     Attributes:
         children: Each blank node's triples, as (predicate, object), by its label.
@@ -76,25 +101,21 @@ class Triples:
     children: dict[str, set[tuple[str, _Object]]] = field(default_factory=dict)
     parents: dict[str, set[tuple[str, str]]] = field(default_factory=dict)
 
-    def add(self, rows: Iterable[tuple[Term | None, ...]], columns: tuple[int, ...]) -> None:
-        """Add a batch of rows, given the node, predicate, object, blank and parent columns."""
-        node_column, predicate_column, object_column, blank_column, parent_column = columns
+    def add(self, rows: Iterable[tuple[Term | None, ...]], columns: _Columns) -> None:
+        """Add a batch of rows."""
         for row in rows:
-            node = _label(row[node_column])
-            predicate = str(row[predicate_column])
-            parent = row[parent_column]
+            node = _label(row[columns.node])
+            predicate = sys.intern(str(row[columns.predicate]))
+            parent = row[columns.parent]
             if parent is not None:
-                self.parents.setdefault(node, set()).add((str(parent), predicate))
+                self.parents.setdefault(node, set()).add((sys.intern(str(parent)), predicate))
                 continue
-            blank = row[blank_column]
-            value = row[object_column]
-            item: _Object = _BLANK + _label(blank) if blank is not None else _object_key(value)
+            blank = row[columns.blank]
+            item = _BLANK + _label(blank) if blank is not None else _object_key(row[columns.object])
             self.children.setdefault(node, set()).add((predicate, item))
 
 
-def _add(
-    triples: Triples, rows: list[tuple[Term | None, ...]], columns: tuple[int, ...], connection: sqlite3.Connection
-) -> None:
+def _add(triples: _Triples, rows: list[tuple[Term | None, ...]], columns: _Columns, _: sqlite3.Connection) -> None:
     """Add a batch of rows to the triples, on the database's thread (`DerivedWriter.run` passes the connection)."""
     triples.add(rows, columns)
 
@@ -108,14 +129,24 @@ def _label(term: Term | None) -> str:
 
 def _object_key(term: Term | None) -> _Object:
     if isinstance(term, IRI):
-        return str(term)
+        return sys.intern(str(term))
     if isinstance(term, Literal):
         return hash(term)  # only told apart from the node's other objects, so a hash will do
     raise SparqlError(f"the owner map's query gave an object that isn't an IRI or a literal: {term!r}")
 
 
+def _blank(item: _Object | None) -> str | None:
+    """Return an object's label if it's a blank node, else None."""
+    return item[len(_BLANK) :] if isinstance(item, str) and item.startswith(_BLANK) else None
+
+
+def _named(item: _Object | None) -> str | None:
+    """Return an object if it's an IRI, else None."""
+    return item if isinstance(item, str) and not item.startswith(_BLANK) else None
+
+
 @dataclass(frozen=True, slots=True)
-class Root:
+class _Root:
     """A root of the owner map, with the IRIs it names.
 
     Attributes:
@@ -123,7 +154,7 @@ class Root:
         label: Its blank node's store label.
         owner: Its owner's IRI; None if it has none.
         predicate: A triple's predicate, or a reified axiom's `owl:annotatedProperty`; else None.
-        iris: The IRIs it names, each with whether its logical part does, rather than only its annotations.
+        iris: The IRIs it names, each with how.
         form: For a root with no owner, what its axiom is; else None.
     """
 
@@ -131,7 +162,7 @@ class Root:
     label: str
     owner: str | None
     predicate: str | None
-    iris: dict[str, bool]
+    iris: dict[str, _Named]
     form: _Form | None = None
 
 
@@ -140,52 +171,120 @@ async def owner_map(context: PreCacheContext) -> None:
     """Fill `usage_root`, `usage_ref` and `usage_blank` from one bulk query (`owner-map.rq`), with the imports.
 
     The rows are gathered, and the roots worked out and written, on the database's thread, off the event loop.
+
+    Raises:
+        StageError: The roots' walks would exceed `WALK_BUDGET`.
     """
-    triples = Triples()
+    triples = _Triples()
     async with context.bulk_select(sparql_file("owner-map.rq")) as stream:
-        columns = tuple(stream.variables.index(name) for name in ("node", "predicate", "object", "blank", "parent"))
+        columns = _Columns(*(stream.variables.index(name) for name in _Columns._fields))
         async for batch in batched(stream):
             await context.db.run(functools.partial(_add, triples, batch, columns))
-    await context.db.run(functools.partial(write_owner_map, triples))
+    await context.db.run(functools.partial(_write_owner_map, triples))
     for table in ("usage_root", "usage_ref", "usage_blank"):
         await context.db.create_indexes(table)
 
 
-def find_roots(triples: Triples) -> Iterator[Root]:
-    """Yield the owner map's roots (the module's docstring says which), with the IRIs each names."""
-    children = triples.children
-    reified = {node for node, edges in children.items() if any(p == _TYPE and o in _REIFIED_TYPES for p, o in edges)}
-    linked: set[str] = set()  # blank nodes with a blank parent, but as a reified axiom's source or target
-    targets: set[str] = set()  # blank nodes that are a reified axiom's target
-    for edges in children.values():
-        for predicate, item in edges:
-            if not (isinstance(item, str) and item.startswith(_BLANK)):
-                continue
-            if predicate == _TARGET:
-                targets.add(item[2:])
-            elif predicate != _SOURCE:
-                linked.add(item[2:])
-    for node, parents in triples.parents.items():
-        iris = _inside(node, children, reified)
-        for owner, predicate in sorted(parents):
-            yield Root(UsageRootKind.TRIPLE, node, owner, predicate, iris)
-    for node in sorted((children.keys() | targets) - linked - triples.parents.keys()):
-        edges = children.get(node, set())
-        iris = _inside(node, children, reified)
-        if node in reified:
-            annotated = {p: o for p, o in edges if p in _ANNOTATED}
-            for each in annotated.values():  # the main triple's, counted from it
-                if isinstance(each, str):
-                    iris.pop(each, None)
-            source, property_ = annotated.get(_SOURCE), annotated.get(_PROPERTY)
-            yield Root(UsageRootKind.AXIOM, node, _named(source), _named(property_), iris)
-        elif node not in targets:  # a target's copy of its main triple's blank node, else
-            yield Root(UsageRootKind.GENERAL, node, None, None, iris, _form(edges))
+class _Walk:
+    """Finds the owner map's roots (DESIGN.md §2.5), and walks from each to the IRIs it names."""
 
+    def __init__(self, triples: _Triples) -> None:
+        """Find which blank nodes are reified, which are part of another's root, and which are copies."""
+        self._triples = triples
+        children = triples.children
+        self._reified = {
+            node for node, edges in children.items() if any(p == _TYPE and o in _REIFIED_TYPES for p, o in edges)
+        }
+        # The reified nodes whose source is a blank node: a general class axiom's, or a reified axiom's, so another
+        # annotation; each is part of that node's root.
+        self._annotations: dict[str, list[str]] = {}
+        self._linked: set[str] = set()  # blank nodes in another's root
+        self._copies: set[str] = set()  # copies of a main triple's blank node, as a reified axiom's target or source
+        for node, edges in children.items():
+            reified = node in self._reified
+            property_ = next((o for p, o in edges if p == _PROPERTY), None) if reified else None
+            for predicate, item in edges:
+                if (label := _blank(item)) is None:
+                    continue
+                if reified and predicate == _TARGET:
+                    self._copies.add(label)
+                elif reified and predicate == _SOURCE:
+                    if any(p == property_ for p, _ in children.get(label, ())):  # it holds the main triple
+                        self._annotations.setdefault(label, []).append(node)
+                        self._linked.add(node)
+                    else:
+                        self._copies.add(label)
+                else:
+                    self._linked.add(label)
+        self._steps_left = len(children) + WALK_BUDGET
 
-def _named(item: _Object | None) -> str | None:
-    """Return an object if it's an IRI, else None."""
-    return item if isinstance(item, str) and not item.startswith(_BLANK) else None
+    def roots(self) -> Iterator[_Root]:
+        """Yield the roots: the triples' by blank node label, then the others by label.
+
+        Raises:
+            StageError: The walks would exceed `WALK_BUDGET`.
+        """
+        children, parents = self._triples.children, self._triples.parents
+        for node in sorted(parents):
+            iris = self._inside(node)
+            for owner, predicate in sorted(parents[node]):
+                yield _Root(UsageRootKind.TRIPLE, node, owner, predicate, iris)
+        unlinked = children.keys() - self._linked - parents.keys()
+        for node in sorted(unlinked - (self._copies - self._reified)):
+            iris = self._inside(node)
+            edges = children[node]
+            if node in self._reified:
+                annotated = {p: o for p, o in edges if p in _ANNOTATED}
+                for each in annotated.values():  # the main triple's, counted from it
+                    if isinstance(each, str):
+                        iris.pop(each, None)
+                source, property_ = annotated.get(_SOURCE), annotated.get(_PROPERTY)
+                yield _Root(UsageRootKind.AXIOM, node, _named(source), _named(property_), iris)
+            else:
+                yield _Root(UsageRootKind.GENERAL, node, None, None, iris, _form(edges))
+
+    def _inside(self, root: str) -> dict[str, _Named]:
+        """Return the IRIs reached from a root's blank node through blank nodes and the annotations on them, with how.
+
+        A reified axiom's source, property and target are skipped: they're the main triple's, counted from it. A list's
+        member is named as the predicate the list is the object of names it.
+
+        Raises:
+            StageError: The walks would exceed `WALK_BUDGET`.
+        """
+        found: dict[str, _Named] = {}
+        stack: list[tuple[str, str | None]] = [(root, None)]  # each node, with its list's predicate
+        seen = {root}
+        while stack:
+            self._steps_left -= 1
+            if self._steps_left < 0:
+                raise StageError(f"the owner map's roots share blank nodes too much, over {WALK_BUDGET:,} visits")
+            node, role = stack.pop()
+            reified = node in self._reified
+            for each in self._annotations.get(node, ()):
+                if each not in seen:
+                    seen.add(each)
+                    stack.append((each, None))
+            for predicate, item in self._triples.children.get(node, ()):
+                if reified and predicate in _ANNOTATED:
+                    continue
+                annotation = _is_annotation(predicate)
+                if annotation:
+                    found.setdefault(predicate, _Named.ANNOTATION)
+                if isinstance(item, int):
+                    continue
+                if (label := _blank(item)) is not None:
+                    if label not in seen:
+                        seen.add(label)
+                        stack.append((label, role if predicate in (_FIRST, _REST) else predicate))
+                elif not (item == _NIL or (predicate == _TYPE and item.startswith((OWL, RDF)))):
+                    position = role if predicate == _FIRST else predicate
+                    if annotation:
+                        named = _Named.ANNOTATION
+                    else:
+                        named = _Named.LOGICAL if position in _NOT_CLASS else _Named.CLASS
+                    found[item] = max(found.get(item, _Named.ANNOTATION), named)
+        return found
 
 
 def _form(edges: set[tuple[str, _Object]]) -> _Form:
@@ -197,6 +296,7 @@ def _form(edges: set[tuple[str, _Object]]) -> _Form:
     return _Form.OTHER
 
 
+@functools.lru_cache(maxsize=4096)
 def _is_annotation(predicate: str) -> bool:
     """Return whether a blank node's predicate is an annotation property.
 
@@ -204,34 +304,6 @@ def _is_annotation(predicate: str) -> bool:
     one of RDFS's axiom properties.
     """
     return not (predicate.startswith((OWL, RDF, SWRL, XSD)) or predicate in _LOGICAL_RDFS)
-
-
-def _inside(root: str, children: dict[str, set[tuple[str, _Object]]], reified: set[str]) -> dict[str, bool]:
-    """Return the IRIs reached from a blank node through blank nodes, each with whether a logical triple reaches it.
-
-    A reified axiom's source, property and target are skipped, but not their annotations.
-    """
-    found: dict[str, bool] = {}
-    stack = [root]
-    seen = {root}
-    while stack:
-        node = stack.pop()
-        skip = _ANNOTATED if node in reified else frozenset()
-        for predicate, item in children.get(node, ()):
-            if predicate in skip:
-                continue
-            annotation = _is_annotation(predicate)
-            if annotation:
-                found.setdefault(predicate, False)
-            if isinstance(item, int):
-                continue
-            if item.startswith(_BLANK):
-                if item[2:] not in seen:
-                    seen.add(item[2:])
-                    stack.append(item[2:])
-            elif not (item == _NIL or (predicate == _TYPE and item.startswith((OWL, RDF)))):
-                found[item] = found.get(item, False) or not annotation
-    return found
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,50 +331,45 @@ def _read_entities(connection: sqlite3.Connection, iris: Iterable[str]) -> dict[
         connection.execute("DROP TABLE temp.owner_map_iri")
 
 
-def _is_own(root: Root, entity: _Entity, logical: bool) -> bool:
-    """Return whether a root is an entity's own axiom, not its usage (the module's docstring says which)."""
-    if root.owner is not None:
-        return False
-    return logical and (
-        (root.form is _Form.CLASS_AXIOM and entity.is_class)
-        or (root.form is _Form.PROPERTY_AXIOM and entity.is_property)
-    )
+def _is_own(root: _Root, entity: _Entity, named: _Named) -> bool:
+    """Return whether a root is an entity's own axiom, which its Overview lists, not its usage (DESIGN.md §2.5)."""
+    if root.form is _Form.CLASS_AXIOM:
+        return entity.is_class and named is _Named.CLASS
+    if root.form is _Form.PROPERTY_AXIOM:
+        return entity.is_property and named >= _Named.LOGICAL
+    return False
 
 
-def write_owner_map(triples: Triples, connection: sqlite3.Connection) -> None:
-    """Work out the roots (`find_roots`) and fill `usage_root`, `usage_ref` and `usage_blank`.
+def _write_owner_map(triples: _Triples, connection: sqlite3.Connection) -> None:
+    """Work out the roots (`_Walk`) and fill `usage_root`, `usage_ref` and `usage_blank`.
 
     Only IRIs in `entity` are kept: an IRI that's no entity has no Usage tab, and an owner that's none is kept as its
     IRI (`usage_root.owner_iri`).
     """
-    roots = list(find_roots(triples))
     blank_object: Counter[str] = Counter()
     blank_predicate: Counter[str] = Counter()
     for edges in triples.children.values():
         for predicate, item in edges:
             blank_predicate[predicate] += 1
-            if isinstance(item, str) and not item.startswith(_BLANK):
-                blank_object[item] += 1
-    iris = {iri for root in roots for iri in root.iris}
-    iris.update(root.owner for root in roots if root.owner is not None)
-    iris.update(blank_object, blank_predicate)
-    entities = _read_entities(connection, iris)
+            if (iri := _named(item)) is not None:
+                blank_object[iri] += 1
+    # Every IRI a root names or is owned by is a blank node's predicate or object, or a triple's subject.
+    owners = {owner for parents in triples.parents.values() for owner, _ in parents}
+    entities = _read_entities(connection, blank_object.keys() | blank_predicate.keys() | owners)
     root_rows: list[tuple[int, str, str, int | None, str | None, str | None]] = []
     refs: list[tuple[int, int]] = []
-    for root in roots:
-        owner = entities.get(root.owner) if root.owner is not None else None
-        number = len(root_rows) + 1
+    for root in _Walk(triples).roots():
         used = sorted(
             {
                 entity.id
-                for iri, logical in root.iris.items()
-                if (entity := entities.get(iri)) is not None
-                and iri != root.owner
-                and not _is_own(root, entity, logical)
+                for iri, named in root.iris.items()
+                if (entity := entities.get(iri)) is not None and iri != root.owner and not _is_own(root, entity, named)
             }
         )
         if not used:
             continue
+        number = len(root_rows) + 1
+        owner = entities.get(root.owner) if root.owner is not None else None
         owner_iri = root.owner if owner is None else None
         root_rows.append(
             (number, root.kind, root.label, None if owner is None else owner.id, owner_iri, root.predicate)
@@ -318,8 +385,5 @@ def write_owner_map(triples: Triples, connection: sqlite3.Connection) -> None:
         "INSERT INTO usage_root (id, kind, label, owner, owner_iri, predicate) VALUES (?, ?, ?, ?, ?, ?)", root_rows
     )
     connection.executemany("INSERT INTO usage_ref (entity, root) VALUES (?, ?)", refs)
-    connection.executemany(
-        "INSERT INTO usage_blank (entity, object, predicate) VALUES (?, ?, ?)",
-        blank_rows,
-    )
+    connection.executemany("INSERT INTO usage_blank (entity, object, predicate) VALUES (?, ?, ?)", blank_rows)
     logger.info("The owner map has %d roots that are usages, and %d usages through them", len(root_rows), len(refs))

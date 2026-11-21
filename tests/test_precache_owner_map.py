@@ -7,11 +7,13 @@ from pathlib import Path
 import pytest
 
 from browl.fuseki import UNION_FROM
-from browl.jobtypes import ImportResult
+from browl.jobtypes import ImportResult, StageError
+from browl.precache import owner_map as owner_map_module
 from browl.precache.core import Hook
 from browl.precache.entities import entities
 from browl.precache.owner_map import owner_map
 from browl.precache.stage import pre_caching_stage
+from browl.rdf import RDF, RDFS
 from browl.settings import Settings
 from tests.helpers import (
     ENTITY_END,
@@ -22,7 +24,6 @@ from tests.helpers import (
     OWL,
     OWNER_MAP_END,
     OWNER_MAP_HEADER,
-    OWNER_MAP_RESULT,
     connect,
     fuseki,
     job,
@@ -32,9 +33,7 @@ from tests.helpers import (
 pytestmark = pytest.mark.anyio
 
 HOOKS_USED: Sequence[Hook] = (entities, owner_map)
-RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-RDFS = "http://www.w3.org/2000/01/rdf-schema#"
-A, B, P = f"<{EX}onto#A>", f"<{EX}onto#B>", f"<{EX}onto#p>"
+A, B, C, P, N = (f"<{EX}onto#{name}>" for name in ("A", "B", "C", "p", "n"))
 
 
 @pytest.fixture
@@ -61,7 +60,7 @@ def tables(settings: Settings, generation: int) -> tuple[list[tuple], list[tuple
 
 
 async def test_owner_map(settings: Settings) -> None:
-    """Check the roots the stub's answer gives (`OWNER_MAP_RESULT`).
+    """Check the roots the stub's answer gives (`tests.helpers.OWNER_MAP_RESULT`).
 
     Two are owned by an IRI that isn't an entity, one a reified axiom naming A only in an annotation; A's own n-ary
     DisjointClasses isn't stored.
@@ -70,7 +69,6 @@ async def test_owner_map(settings: Settings) -> None:
     async with fuseki(queries=queries) as http:
         await pre_caching_stage(job(settings, 1, [ImportResult(f"{EX}i", triples=1)]), http, hooks=HOOKS_USED)
     assert "?node ?predicate" in queries[-1] and UNION_FROM in queries[-1]  # the imports' blank nodes too
-    assert OWNER_MAP_RESULT  # the stub's
     roots, refs, blank = tables(settings, 1)
     assert roots == [
         (1, "triple", "r", None, f"{EX}x", f"{RDFS}subClassOf"),
@@ -134,3 +132,80 @@ async def test_owner_map_shared_and_own(settings: Settings) -> None:
     ]
     assert refs == [(b, 1), (p, 1), (p, 2), (p, 3)]  # x names B only as its target, so it's no usage
     assert blank == [(a, 3, 0), (b, 5, 0), (p, 3, 0)]
+
+
+def entity_result(*rows: tuple[str, str]) -> str:
+    """Return an entity-list result of (IRI, OWL type) rows."""
+    return ENTITY_HEADER + "".join(f"{iri}\t<{OWL}{kind}>\t\n" for iri, kind in rows) + ENTITY_END
+
+
+async def test_owner_map_annotations_copies_and_puns(settings: Settings) -> None:
+    """Check annotations on a general class axiom or an annotation, a copied source, and a punned property.
+
+    An annotation on a blank node's axiom is part of that node's root, so its owner and own axioms are the root's; a
+    copy of a general class axiom's node, as a reified axiom's source, is no root; a class that's also a property is
+    named by a general class axiom as a property, which makes it a usage.
+    """
+    classes = [(iri, "Class") for iri in (A, B, C, P)]
+    known = entity_result(*classes, (P, "ObjectProperty"), (N, "AnnotationProperty"))
+    axiom, annotation = f"<{OWL}Axiom>", f"<{OWL}Annotation>"
+    type_ = f"<{RDF}type>"
+    source, property_, target = (f"<{OWL}annotated{name}>" for name in ("Source", "Property", "Target"))
+    subclass = f"<{RDFS}subClassOf>"
+    owner_map_rows = rows(
+        # A general class axiom, p some A SubClassOf B, annotated with A and C: A's own still, and C's usage.
+        ('"g"', f"<{OWL}onProperty>", P, "", ""),
+        ('"g"', f"<{OWL}someValuesFrom>", A, "", ""),
+        ('"g"', subclass, B, "", ""),
+        ('"w"', type_, axiom, "", ""),
+        ('"w"', source, "", '"g"', ""),
+        ('"w"', property_, subclass, "", ""),
+        ('"w"', target, B, "", ""),
+        ('"w"', N, A, "", ""),
+        ('"w"', N, C, "", ""),
+        # A SubClassOf B, annotated with "v", itself annotated with C: the root is A's axiom.
+        ('"x"', type_, axiom, "", ""),
+        ('"x"', source, A, "", ""),
+        ('"x"', property_, subclass, "", ""),
+        ('"x"', target, B, "", ""),
+        ('"x"', N, '"v"', "", ""),
+        ('"y"', type_, annotation, "", ""),
+        ('"y"', source, "", '"x"', ""),
+        ('"y"', property_, N, "", ""),
+        ('"y"', target, '"v"', "", ""),
+        ('"y"', N, C, "", ""),
+        # A reified axiom whose source is a copy of a general class axiom's node, without its main triple.
+        ('"z"', type_, axiom, "", ""),
+        ('"z"', source, "", '"c"', ""),
+        ('"z"', property_, subclass, "", ""),
+        ('"z"', target, B, "", ""),
+        ('"z"', N, C, "", ""),
+        ('"c"', f"<{OWL}onProperty>", P, "", ""),
+        ('"c"', f"<{OWL}someValuesFrom>", C, "", ""),
+    )
+    async with fuseki(ONTOLOGY_RESULT, known, owner_map_rows) as http:
+        await pre_caching_stage(job(settings, 3), http, hooks=HOOKS_USED)
+    roots, refs, blank = tables(settings, 3)
+    a, b, c, p, n = (iri.strip("<>") for iri in (A, B, C, P, N))
+    assert [(kind, label, owner, predicate) for _, kind, label, owner, _, predicate in roots] == [
+        ("general", "g", None, None),
+        ("axiom", "x", a, f"{RDFS}subClassOf"),
+        ("axiom", "z", None, f"{RDFS}subClassOf"),
+    ]
+    assert sorted(refs) == sorted([(p, 1), (n, 1), (c, 1), (n, 2), (c, 2), (n, 3), (c, 3)])
+    assert blank == [(a, 3, 0), (b, 4, 0), (c, 4, 0), (n, 1, 5), (p, 2, 0)]
+
+
+async def test_owner_map_walk_budget(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that roots whose walks visit blank nodes more than `WALK_BUDGET` times over fail the stage."""
+    monkeypatch.setattr(owner_map_module, "WALK_BUDGET", 0)
+    shared = rows(  # two general class axioms that share a node, walked from each
+        ('"g"', f"<{OWL}someValuesFrom>", "", '"s"', ""),
+        ('"g"', f"<{RDFS}subClassOf>", B, "", ""),
+        ('"h"', f"<{OWL}someValuesFrom>", "", '"s"', ""),
+        ('"h"', f"<{RDFS}subClassOf>", A, "", ""),
+        ('"s"', f"<{OWL}onProperty>", P, "", ""),
+    )
+    async with fuseki(ONTOLOGY_RESULT, entity_result((A, "Class"), (B, "Class")), shared) as http:
+        with pytest.raises(StageError, match=r"share blank nodes too much, over 0 visits"):
+            await pre_caching_stage(job(settings, 4), http, hooks=HOOKS_USED)

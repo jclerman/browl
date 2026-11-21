@@ -4,7 +4,6 @@ The entity's annotations (`browl.annotations`) and axioms (`browl.axioms`), fetc
 lookup gives the links for both.
 """
 
-import asyncio
 import logging
 import sqlite3
 from collections.abc import Mapping
@@ -34,6 +33,7 @@ from browl.pages import link_root, read_derived, templates
 from browl.precache.core import has_loaded_imports, logged_iri
 from browl.rdf import IRI, RDFSyntaxError
 from browl.settings import Settings
+from browl.tasks import task_group
 
 logger = logging.getLogger(__name__)
 
@@ -130,13 +130,9 @@ async def read_overview(request: Request, state: JobState, iri: str) -> Overview
     # started meanwhile, seeing the imports' graphs too is always right, if slower.
     clause = dataset_clause(has_loaded_imports(state.imports)) if state.generation == generation else UNION_FROM
     dataset = dataset_name(generation)
-    try:
-        # A task group, unlike `gather`, cancels the other read when one fails unexpectedly.
-        async with asyncio.TaskGroup() as group:
-            annotations_task = group.create_task(_read_annotations(request, dataset, iri, clause))
-            axioms_task = group.create_task(_read_axioms(request, dataset, iri, clause))
-    except ExceptionGroup as errors:
-        raise errors.exceptions[0]  # noqa: B904 -- the read's own error, with the group as its context
+    async with task_group() as group:
+        annotations_task = group.create_task(_read_annotations(request, dataset, iri, clause))
+        axioms_task = group.create_task(_read_axioms(request, dataset, iri, clause))
     annotations, too_many_annotations = annotations_task.result()
     axioms, too_many_axioms = axioms_task.result()
     mentioned = [each for axiom in axioms or () for each in axiom.iris()]

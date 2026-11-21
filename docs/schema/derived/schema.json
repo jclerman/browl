@@ -487,7 +487,7 @@
           "name": "kind",
           "type": "TEXT",
           "nullable": false,
-          "comment": "What it is (browl.derived.UsageRootKind): triple, a triple from an IRI to a blank node (owner predicate _:label); axiom, a reified axiom (owl:Axiom or owl:Annotation); general, a blank node nothing links to, with no owner (a general class axiom, an n-ary axiom, a negative property assertion, a SWRL rule)."
+          "comment": "What it is (browl.derived.UsageRootKind): triple, a triple from an IRI to a blank node (owner predicate _:label); axiom, a reified axiom (owl:Axiom), with the annotations on it; general, a blank node nothing links to, with no owner (a general class axiom, an n-ary axiom, a negative property assertion, a SWRL rule)."
         },
         {
           "name": "label",
@@ -530,7 +530,7 @@
     {
       "name": "usage_ref",
       "type": "table",
-      "comment": "Which roots are which entities' usages, stored in key order: a root is a usage of each entity it names but its owner, and but a class in a general class axiom or n-ary class axiom, or a property in an n-ary property axiom, which are their own axioms (DESIGN.md 2.8).",
+      "comment": "Which roots are which entities' usages, stored in key order: a root is a usage of each entity it names, except its owner and those whose own axiom it is, which their Overview lists (DESIGN.md 2.5).",
       "columns": [
         {
           "name": "entity",

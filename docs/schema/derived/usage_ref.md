@@ -2,7 +2,7 @@
 
 ## Description
 
-Which roots are which entities' usages, stored in key order: a root is a usage of each entity it names but its owner, and but a class in a general class axiom or n-ary class axiom, or a property in an n-ary property axiom, which are their own axioms (DESIGN.md 2.8).
+Which roots are which entities' usages, stored in key order: a root is a usage of each entity it names, except its owner and those whose own axiom it is, which their Overview lists (DESIGN.md 2.5).
 
 <details>
 <summary><strong>Table Definition</strong></summary>
