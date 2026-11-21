@@ -1316,14 +1316,12 @@ milestones mirror the phases.
 ### Remaining work
 
 The graph shows the work items not yet done and their **Depends on** links among themselves; links to done items are
-left out. The thick border marks the first useful entity page (P-16), which nothing left blocks. The dotted link isn't a
-**Depends on** entry: S-5b waits for pages to render. P-24 depends on everything above it, so it has no edges. Update
-the graph whenever an item's status or dependencies change.
+left out. P-24 depends on everything above it, so it has no edges. Update the graph whenever an item's status or
+dependencies change.
 
 ```mermaid
 flowchart LR
     subgraph P4["Phase 4: Browsing"]
-        P16["P-16 Overview tab"]
         P17["P-17 Home page"]
         P18["P-18 Hierarchy trees"]
         P27["P-27 Usage tab"]
@@ -1345,17 +1343,11 @@ flowchart LR
     end
     S5b["S-5b OLS4 comparison"]
 
-    P16 --> P27
-    P16 --> P21
     P19 --> P20
-    P16 & P17 & P18 & P19 & P27 --> P33
+    P17 & P18 & P19 & P27 --> P33
     P18 & P20 --> P25
     P22 --> P23
     P31 --> P32
-    P16 -.-> S5b
-
-    classDef critical stroke-width:3px
-    class P16 critical
 ```
 
 ### Phase 0: Spikes
@@ -1410,7 +1402,7 @@ go into this document.
 | P-14 | Base templates and page frame: navigation bar, page header, tab component, stylesheet and themes; links rendered from display names; IRI `<details>` | U-4, U-5, U-6, U-17, U-27, U-28, U-29 | P-11, P-13 | Done | [#27](https://github.com/jclerman/browl/issues/27) (sub-issues [#28](https://github.com/jclerman/browl/issues/28), [#33](https://github.com/jclerman/browl/issues/33), [#34](https://github.com/jclerman/browl/issues/34)) |
 | P-15 | Manchester rendering via the OWLAPI from fetched fragments, including n-ary disjointness and general class axioms; link substitution and keyword styling, in the template layer, not the renderer (2.8) | U-3 | S-1, S-4, P-14 | Done | [#36](https://github.com/jclerman/browl/issues/36) |
 | P-15b | Axioms as a typed tree of Pydantic nodes, rendered to Manchester syntax in Python; tokens for templates, so no regex runs over ontology text (2.8) | U-3 | P-15 | Done | [#98](https://github.com/jclerman/browl/issues/98) |
-| P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout; panel data built apart from its HTML (2.8); entity pages fill the window, the panels at fixed positions and scrolling within themselves, with a one-page view for printing, small screens and on demand (2.9) | U-3, U-9, U-30, U-31, U-32, U-44 | P-12, P-15b | To do | [#37](https://github.com/jclerman/browl/issues/37) (sub-issues [#29](https://github.com/jclerman/browl/issues/29), [#38](https://github.com/jclerman/browl/issues/38), [#39](https://github.com/jclerman/browl/issues/39), [#103](https://github.com/jclerman/browl/issues/103)) |
+| P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout; panel data built apart from its HTML (2.8); entity pages fill the window, the panels at fixed positions and scrolling within themselves, with a one-page view for printing, small screens and on demand (2.9) | U-3, U-9, U-30, U-31, U-32, U-44 | P-12, P-15b | Done | [#37](https://github.com/jclerman/browl/issues/37) (sub-issues [#29](https://github.com/jclerman/browl/issues/29), [#38](https://github.com/jclerman/browl/issues/38), [#39](https://github.com/jclerman/browl/issues/39), [#103](https://github.com/jclerman/browl/issues/103)) |
 | P-17 | Ontology home page, with the dropped-imports warning and the triple counts the job state keeps (P-8); link the ontology and version IRIs only if `http` or `https` (`browl.derived.Meta`) | U-1 | P-14 | To do | [#30](https://github.com/jclerman/browl/issues/30) |
 | P-18 | Hierarchy trees with lazy loading (htmx) and keyboard support | U-7, U-17 | P-12, P-14 | To do | [#31](https://github.com/jclerman/browl/issues/31) |
 | P-27 | Usage tab on entity pages, from Fuseki, with paging (first decide: references inside class expressions; counts on first view or up front; any `usage` table) | U-26 | P-9, P-16, S-4 | To do | [#41](https://github.com/jclerman/browl/issues/41) |
