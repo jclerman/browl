@@ -14,6 +14,8 @@
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --space: 1rem;
   --measure: 75ch;
+  --title-size: 1.75rem;
+  --title-leading: 1.25;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -239,10 +241,36 @@ code {
   color: var(--muted);
 }
 
-/* An entity page's header (U-5): its name, its type below in muted text, and its IRI and CURIE folded away. */
+/* An entity page (DESIGN.md §2.9): named grid areas, its columns set here alone, so a hierarchy column can be added
+   later as a `tree` area on the left (e.g. "tree header" "tree tabs" "tree panel", columns 16rem minmax(0, 1fr)) without
+   changing the rest. The window-filling frame, below, sets the rows. */
+
+.entity-page {
+  display: grid;
+  grid-template-areas: "header" "tabs" "panel";
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Its header (U-5): its name; to its right, its type in muted text, and its IRI and CURIE folded away, opening over
+   the page rather than pushing it down. */
+
+.entity-header {
+  display: grid;
+  grid-area: header;
+  grid-template-columns: minmax(0, 1fr) fit-content(40%);
+  align-items: center;
+  column-gap: var(--space);
+}
 
 .entity-header h1 {
-  margin-bottom: 0;
+  margin: 0;
+  font-size: var(--title-size);
+  line-height: var(--title-leading);
+}
+
+.entity-meta {
+  min-width: 0;
+  text-align: end;
 }
 
 .entity-type {
@@ -251,21 +279,34 @@ code {
 }
 
 .entity-iri {
-  margin-top: calc(var(--space) / 2);
+  position: relative;
   font-size: 0.9rem;
 }
 
 .entity-iri summary {
   width: fit-content;
+  margin-inline-start: auto;
   color: var(--muted);
   cursor: pointer;
 }
 
 .entity-iri dl {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 2;
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
   gap: calc(var(--space) / 4) var(--space);
-  margin: calc(var(--space) / 2) 0 0;
+  width: max-content;
+  max-width: min(40rem, calc(100vw - 2 * var(--space)));
+  margin: calc(var(--space) / 4) 0 0;
+  padding: calc(var(--space) / 2) var(--space);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 4px 8px rgb(0 0 0 / 15%);
+  text-align: start;
 }
 
 .entity-iri dt {
@@ -276,7 +317,34 @@ code {
   margin: 0;
 }
 
-/* Page tabs (U-28): underlined text on the page background, unlike the tinted navigation bar. */
+/* Page tabs (U-28): underlined text on the page background, unlike the tinted navigation bar. On an entity page they
+   share a bar with the "show everything" toggle. */
+
+.tab-bar {
+  display: flex;
+  flex-wrap: wrap;
+  grid-area: tabs;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0 var(--space);
+  margin-top: var(--space);
+  border-bottom: 1px solid var(--border);
+}
+
+.tab-bar .tabs {
+  margin: 0;
+  border-bottom: none;
+}
+
+.show-all {
+  display: none; /* where the frame applies, below */
+  align-items: center;
+  gap: calc(var(--space) / 4);
+  padding: calc(var(--space) / 4) 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
 
 .tabs {
   display: flex;
@@ -306,6 +374,7 @@ code {
 }
 
 .tab-panel {
+  grid-area: panel;
   padding-top: var(--space);
 }
 
@@ -318,8 +387,24 @@ code {
    line per value in the second, wrapped lines indented; lines tight within a group, a little apart between groups.
    Prose, such as a definition, wraps within the readable measure. On a phone the values go below their label. */
 
-.annotations h2,
-.axioms h2 {
+.panel {
+  padding: 0 var(--space) calc(var(--space) / 2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.panel + .panel {
+  margin-top: var(--space);
+}
+
+.panel:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px; /* inside, so a scrolling parent doesn't clip it */
+}
+
+.panel h2 {
+  margin: 0;
+  padding: calc(var(--space) / 2) 0;
   font-size: 1.1rem;
 }
 
@@ -378,4 +463,98 @@ code {
 
 .keyword {
   color: var(--muted);
+}
+
+/* The window-filling frame (DESIGN.md §2.9, U-30): on screen, an entity page fills the window, and the page itself
+   doesn't scroll. The navigation bar, the header and the tab bar keep their heights, and the tab panel takes the rest;
+   it scrolls what doesn't fit, and the Overview's panels scroll within themselves. Medium windows stack the panels at
+   a fixed split, wide ones put them side by side. Everything else, i.e. narrow or short windows, print, the toggle
+   checked, or a browser without `:has`, shows everything in one page scroll (U-44). */
+
+@media screen and (width >= 40rem) and (height >= 36rem) {
+  .show-all {
+    display: inline-flex;
+  }
+
+  body:has(.entity-page):not(:has(#show-all:checked)) {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100vh;
+    height: 100dvh;
+
+    & .content {
+      display: grid;
+      grid-template-rows: minmax(0, 1fr);
+      min-height: 0;
+    }
+
+    & .entity-page {
+      grid-template-rows: auto auto minmax(0, 1fr);
+      min-height: 0;
+    }
+
+    /* Two title lines high whatever the name; a longer one is cut, whole in its tooltip, as are many types. */
+    & .entity-header {
+      grid-template-rows: calc(2 * var(--title-size) * var(--title-leading));
+    }
+
+    & .entity-header h1 {
+      display: -webkit-box;
+      overflow: hidden;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      line-clamp: 2;
+    }
+
+    & .entity-type {
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    & .tab-bar {
+      flex-wrap: nowrap;
+    }
+
+    & .tab-panel {
+      min-height: 0;
+      overflow: auto;
+    }
+
+    & .overview {
+      display: grid;
+      grid-template:
+        "annotations" minmax(10rem, 2fr)
+        "axioms" minmax(10rem, 3fr)
+        / minmax(0, 1fr);
+      gap: var(--space);
+      height: 100%;
+    }
+
+    & .annotations {
+      grid-area: annotations;
+    }
+
+    & .axioms {
+      grid-area: axioms;
+    }
+
+    & .panel {
+      min-height: 0;
+      margin: 0;
+      overflow: auto;
+    }
+
+    & .panel h2 {
+      position: sticky;
+      top: 0;
+      background: var(--bg);
+    }
+  }
+}
+
+@media screen and (width >= 64rem) and (height >= 36rem) {
+  body:has(.entity-page):not(:has(#show-all:checked)) .overview {
+    grid-template: "annotations axioms" minmax(0, 1fr) / minmax(0, 1fr) minmax(0, 1fr);
+  }
 }

@@ -5,6 +5,8 @@
 {% if tab.slug == "usage" %}
 <p class="note">Where other entities use this one will be shown here.</p>
 {% else %}
-{{ annotation_list(overview.annotations, overview.links) }}
-{{ axiom_frame(overview.axioms, overview.links) }}
+<div class="overview">
+  {{ annotation_list(overview.annotations, overview.links) }}
+  {{ axiom_frame(overview.axioms, overview.links) }}
+</div>
 {% endif %}

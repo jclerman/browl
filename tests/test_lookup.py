@@ -50,6 +50,11 @@ ONTO_TITLE = iso("The &lt;Onto&gt;")
 """How titles end with the test ontology's title."""
 
 
+def entity_heading(name: str) -> str:
+    """Return an entity page's heading for an HTML-escaped name: the name, isolated, and whole in its tooltip."""
+    return f'<h1 title="{iso(name)}"><bdi>{name}</bdi></h1>'
+
+
 def run(
     client: TestClient,
     app: FastAPI,
@@ -163,8 +168,8 @@ def test_hash_prefix(client: TestClient) -> None:
 @pytest.mark.parametrize(
     ("path", "fragment", "expected"),
     [
-        ("/other.org/vocab", "C", "<h1><bdi>http://other.org/vocab#C</bdi></h1>"),
-        ("/onto", "A", "<h1><bdi>http://example.org/onto#A</bdi></h1>"),
+        ("/other.org/vocab", "C", entity_heading("http://other.org/vocab#C")),
+        ("/onto", "A", entity_heading("http://example.org/onto#A")),
         ("/other.org/vocab", "E", "<h1>Choose an entity</h1>"),
     ],
 )
@@ -550,8 +555,8 @@ def test_entity_header(app: FastAPI) -> None:
         run(client, app, names=NAMES)
         text = client.get("/other.org/y").text
     assert f"<title>{iso('Why &lt;y&gt;')} · {ONTO_TITLE}</title>" in text
-    assert "<h1><bdi>Why &lt;y&gt;</bdi></h1>" in text
-    assert '<p class="entity-type">Class · Object property</p>' in text
+    assert entity_heading("Why &lt;y&gt;") in text
+    assert '<p class="entity-type" title="Class · Object property">Class · Object property</p>' in text
     start = text.index('<details class="entity-iri">')
     details = text[start : text.index("</details>", start)]
     assert f"<dd>{CODE}http://other.org/y</code></dd>" in details
@@ -562,7 +567,7 @@ def test_entity_header(app: FastAPI) -> None:
 def test_entity_header_without_names(client: TestClient) -> None:
     """Check that an entity without a display name is named by its IRI, and that one without a CURIE shows none."""
     text = client.get("/other.org/y").text
-    assert "<h1><bdi>http://other.org/y</bdi></h1>" in text
+    assert entity_heading("http://other.org/y") in text
     assert f"<title>{iso('http://other.org/y')} · {ONTO_TITLE}</title>" in text
     assert f"<dd>{CODE}http://other.org/y</code></dd>" in text
     assert "CURIE" not in text
@@ -574,7 +579,7 @@ def test_entity_long_name(app: FastAPI) -> None:
         run(client, app, names=NAMES)
         text = client.get("/_browl/hash?path=/onto&fragment=A").text
     cut = "a" * (MAX_NAME_CHARS - 1) + "…"
-    assert f"<h1><bdi>{cut}</bdi></h1>" in text
+    assert entity_heading(cut) in text
     assert f"<title>{iso(cut)} · {ONTO_TITLE}</title>" in text
 
 

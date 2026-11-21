@@ -2,22 +2,31 @@
 {% from "tabs.html" import tab_list, tab_panel %}
 {% block title %}{{ name | isolate }}{% endblock %}
 {% block content %}
-{# The header (DESIGN.md §2.8). #}
-<div class="entity-header">
-  <h1><bdi>{{ name }}</bdi></h1>
-  <p class="entity-type">{{ types | join(" · ") }}</p>
-  <details class="entity-iri">
-    <summary>IRI</summary>
-    <dl>
-      <dt>IRI</dt>
-      <dd><code dir="ltr">{{ entity.iri }}</code></dd>
-      {% if entity.curie %}
-      <dt>CURIE</dt>
-      <dd><code dir="ltr">{{ entity.curie }}</code></dd>
-      {% endif %}
-    </dl>
-  </details>
+{# The page fills the window (DESIGN.md §2.9), unless it shows everything (U-44): on small screens, in print, or with
+   the toggle, which works without JS through `:has(:checked)`; `static/show-all.js` remembers it. #}
+<div class="entity-page">
+  {# The header (DESIGN.md §2.8), of fixed height: the name clamped, its type and IRI beside it. #}
+  <div class="entity-header">
+    <h1 title="{{ name | isolate }}"><bdi>{{ name }}</bdi></h1>
+    <div class="entity-meta">
+      <p class="entity-type" title="{{ types | join(' · ') }}">{{ types | join(" · ") }}</p>
+      <details class="entity-iri">
+        <summary>IRI</summary>
+        <dl>
+          <dt>IRI</dt>
+          <dd><code dir="ltr">{{ entity.iri }}</code></dd>
+          {% if entity.curie %}
+          <dt>CURIE</dt>
+          <dd><code dir="ltr">{{ entity.curie }}</code></dd>
+          {% endif %}
+        </dl>
+      </details>
+    </div>
+  </div>
+  <div class="tab-bar">
+    {{ tab_list(tabs, "Entity") }}
+    <label class="show-all"><input type="checkbox" id="show-all"> Show everything</label>
+  </div>
+  {% call tab_panel(tabs) %}{% include "entity_panel.html" %}{% endcall %}
 </div>
-{{ tab_list(tabs, "Entity") }}
-{% call tab_panel(tabs) %}{% include "entity_panel.html" %}{% endcall %}
 {% endblock %}
