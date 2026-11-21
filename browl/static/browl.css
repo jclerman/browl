@@ -318,7 +318,7 @@ code {
 }
 
 /* Page tabs (U-28): underlined text on the page background, unlike the tinted navigation bar. On an entity page they
-   share a bar with the "show everything" toggle. */
+   share a bar with the "Scroll as one page" toggle. */
 
 .tab-bar {
   display: flex;
@@ -469,7 +469,7 @@ code {
    doesn't scroll. The navigation bar, the header and the tab bar keep their heights, and the tab panel takes the rest;
    it scrolls what doesn't fit, and the Overview's panels scroll within themselves. Medium windows stack the panels at
    a fixed split, wide ones put them side by side. Everything else, i.e. narrow or short windows, print, the toggle
-   checked, or a browser without `:has`, shows everything in one page scroll (U-44). */
+   checked, or a browser without `:has`, gets the one-page view (U-44): it all scrolls as one page. */
 
 @media screen and (width >= 40rem) and (height >= 36rem) {
   .show-all {

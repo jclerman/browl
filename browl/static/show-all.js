@@ -1,4 +1,4 @@
-// The "show everything" toggle (DESIGN.md §2.9, U-44). The stylesheet reacts to the checkbox itself, so it works
+// The "Scroll as one page" toggle (DESIGN.md §2.9, U-44). The stylesheet reacts to the checkbox itself, so it works
 // without JS; this only remembers its state in localStorage, across pages, including those the hash-IRI script moves
 // into <main>. Storage that fails (e.g. blocked) just leaves the toggle unremembered.
 (() => {

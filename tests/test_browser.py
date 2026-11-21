@@ -640,7 +640,7 @@ def test_tab_keyboard(page: Page, server: LiveServer) -> None:
     expect(tab(page, "Usage")).to_have_attribute("tabindex", "0")
     expect(tab(page, "Overview")).to_have_attribute("tabindex", "-1")
     page.keyboard.press("Tab")
-    expect(page.get_by_label("Show everything")).to_be_focused()  # at the tab bar's end
+    expect(page.get_by_label("Scroll as one page")).to_be_focused()  # at the tab bar's end
     page.keyboard.press("Tab")
     expect(page.get_by_role("tabpanel")).to_be_focused()
 
@@ -829,11 +829,11 @@ def test_annotations_grid_wide(page: Page, annotated: LiveServer) -> None:
 
     A group's first value is on its label's row, the rest below it, one per line, in one column for every group; a long
     label wraps rather than squeezing the values; a long value wraps within the readable measure; language tags are
-    small and muted. The page shows everything, so the panel is the page's width.
+    small and muted. The page is in the one-page view, so the panel is the page's width.
     """
     page.set_viewport_size(WIDE)
     page.goto(f"{annotated.url}/example.org/thing")
-    show_everything(page)
+    scroll_as_one_page(page)
     terms = page.locator(".annotations dt")
     values = page.locator(".annotations dd")
     expect(terms).to_have_count(4)
@@ -873,12 +873,12 @@ def test_annotations_grid_narrow(page: Page, annotated: LiveServer) -> None:
 def test_annotations_layout(page: Page, annotated: LiveServer) -> None:
     """Check the annotations panel's finer layout, wide.
 
-    Showing everything, it comes before the axioms panel; its labels are muted; a value's wrapped lines are indented;
+    In the one-page view, it comes before the axioms panel; its labels are muted; a value's wrapped lines are indented;
     groups are a little further apart than a group's values.
     """
     page.set_viewport_size(WIDE)
     page.goto(f"{annotated.url}/example.org/thing")
-    show_everything(page)
+    scroll_as_one_page(page)
     assert box(page.locator("section.annotations"))["y"] < box(page.locator("section.axioms"))["y"]
     muted = page.evaluate("getComputedStyle(document.querySelector('.note')).color")
     assert page.locator(".annotations dt").first.evaluate("each => getComputedStyle(each).color") == muted
@@ -899,9 +899,9 @@ def test_annotations_layout(page: Page, annotated: LiveServer) -> None:
     assert between > within + 4
 
 
-def show_everything(page: Page) -> None:
-    """Check the page's "show everything" toggle."""
-    page.get_by_label("Show everything").check()
+def scroll_as_one_page(page: Page) -> None:
+    """Check the page's "Scroll as one page" toggle."""
+    page.get_by_label("Scroll as one page").check()
 
 
 # The window-filling frame (P-16d, DESIGN.md §2.9, U-30, U-44)
@@ -909,7 +909,7 @@ def show_everything(page: Page) -> None:
 MEDIUM = {"width": 800, "height": 800}
 """Between the frame's breakpoints, 40rem and 64rem wide: the panels one above the other."""
 SHORT = {"width": 1280, "height": 500}
-"""Shorter than 36rem: the page shows everything."""
+"""Shorter than 36rem: the one-page view."""
 FEW, MANY = "plain", "thing"
 """Entities with one annotation, and with `MANY_VALUES`."""
 MANY_VALUES = 80
@@ -1001,8 +1001,8 @@ def test_panel_scrolls(page: Page, varied: LiveServer) -> None:
     expect(page.get_by_role("region", name="Logical axioms")).to_have_attribute("tabindex", "0")
 
 
-def expect_everything(page: Page) -> None:
-    """Check that the page shows everything: it scrolls, the panels don't, and the axioms come after the annotations."""
+def expect_one_page(page: Page) -> None:
+    """Check the one-page view: the page scrolls, the panels don't, and the axioms come after the annotations."""
     assert page_scrolls(page)
     annotations, axioms = panels(page)
     assert not overflows(page.locator("section.annotations"))
@@ -1010,34 +1010,34 @@ def expect_everything(page: Page) -> None:
 
 
 @pytest.mark.parametrize("size", [NARROW, SHORT], ids=["narrow", "short"])
-def test_small_windows_show_everything(page: Page, varied: LiveServer, size: dict[str, int]) -> None:
-    """Check that a narrow or short window shows everything, without the toggle, which would change nothing."""
+def test_small_windows_one_page(page: Page, varied: LiveServer, size: dict[str, int]) -> None:
+    """Check that a narrow or short window gets the one-page view, without the toggle, which would change nothing."""
     page.set_viewport_size(size)
     page.goto(f"{varied.url}/example.org/{MANY}")
-    expect_everything(page)
-    expect(page.get_by_label("Show everything")).to_be_hidden()
+    expect_one_page(page)
+    expect(page.get_by_label("Scroll as one page")).to_be_hidden()
 
 
-def test_print_shows_everything(page: Page, varied: LiveServer) -> None:
-    """Check that printing shows everything, whatever the window size, and without the toggle."""
+def test_print_one_page(page: Page, varied: LiveServer) -> None:
+    """Check that printing gets the one-page view, whatever the window size, and without the toggle."""
     page.set_viewport_size(WIDE)
     page.emulate_media(media="print")
     page.goto(f"{varied.url}/example.org/{MANY}")
-    expect_everything(page)
-    expect(page.get_by_label("Show everything")).to_be_hidden()
+    expect_one_page(page)
+    expect(page.get_by_label("Scroll as one page")).to_be_hidden()
 
 
 def test_toggle_remembered(page: Page, varied: LiveServer) -> None:
-    """Check that the toggle shows everything, and is remembered on other pages, a hash entity's too."""
+    """Check that the toggle gives the one-page view, and is remembered on other pages, a hash entity's too."""
     page.set_viewport_size(WIDE)
     page.goto(f"{varied.url}/example.org/{MANY}")
-    toggle = page.get_by_label("Show everything")
+    toggle = page.get_by_label("Scroll as one page")
     expect(toggle).not_to_be_checked()
     toggle.check()
-    expect_everything(page)
+    expect_one_page(page)
     page.reload()
     expect(toggle).to_be_checked()
-    expect_everything(page)
+    expect_one_page(page)
     page.goto(f"{varied.url}/example.org/vocab#Gamma")  # its <main> moved in by the hash-IRI script
     expect(page.locator("main h1")).to_have_text(f"{EX}/vocab#Gamma")
     expect(toggle).to_be_checked()
@@ -1054,21 +1054,21 @@ def test_toggle_keeps_header(page: Page, varied: LiveServer, entity: str) -> Non
     page.goto(f"{varied.url}/example.org/{entity}")
     parts = [page.locator(each) for each in ("main h1", ".entity-type", ".entity-iri summary")]
     before = [box(each) for each in parts]
-    page.get_by_label("Show everything").check()
+    page.get_by_label("Scroll as one page").check()
     if entity == MANY:
-        expect_everything(page)
+        expect_one_page(page)
     assert [box(each) for each in parts] == before
 
 
 @NO_JS
 def test_toggle_without_javascript(page: Page, varied: LiveServer) -> None:
-    """Check that, without JavaScript, the toggle still shows everything, though it isn't remembered."""
+    """Check that, without JavaScript, the toggle still gives the one-page view, though it isn't remembered."""
     page.set_viewport_size(WIDE)
     page.goto(f"{varied.url}/example.org/{MANY}")
-    show_everything(page)
-    expect_everything(page)
+    scroll_as_one_page(page)
+    expect_one_page(page)
     page.reload()
-    page.get_by_label("Show everything").uncheck()  # the browser may restore a reloaded form's state
+    page.get_by_label("Scroll as one page").uncheck()  # the browser may restore a reloaded form's state
     assert not page_scrolls(page)
 
 
@@ -1079,8 +1079,8 @@ def test_storage_blocked(page: Page, varied: LiveServer) -> None:
     )
     page.set_viewport_size(WIDE)
     page.goto(f"{varied.url}/example.org/{MANY}")
-    show_everything(page)
-    expect_everything(page)
+    scroll_as_one_page(page)
+    expect_one_page(page)
 
 
 def test_header_fixed_height(page: Page, varied: LiveServer) -> None:
