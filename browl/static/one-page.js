@@ -1,6 +1,6 @@
 // The "Scroll as one page" toggle (DESIGN.md §2.9, U-44). The stylesheet reacts to the checkbox itself, so it works
 // without JS; this only remembers its state in localStorage, across pages, including those the hash-IRI script moves
-// into <main>. Storage that fails (e.g. blocked) just leaves the toggle unremembered.
+// into <main>.
 (() => {
   "use strict";
   const KEY = "browl.onePage";
@@ -25,6 +25,18 @@
       } catch {
         // not remembered
       }
+    }
+  });
+
+  // A page from the back-forward cache, or another tab's change, may show a stale state.
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) {
+      restore();
+    }
+  });
+  window.addEventListener("storage", (event) => {
+    if (event.key === KEY) {
+      restore();
     }
   });
 
