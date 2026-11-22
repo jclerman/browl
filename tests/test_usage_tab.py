@@ -266,7 +266,7 @@ def test_subjects(client: TestClient) -> None:
         "DLSafeRule(Body(ClassAtom(<:Dog> Variable(<:x>))) Head(ClassAtom(<:Animal> Variable(<:x>))))",
         ("Type", ":Dog"),
     ]
-    assert "usage-count" not in dog  # the count is in the tab's label only
+    assert "5 usages" not in plain(dog) and "usage-count" not in dog  # the count is in the tab's label only
     age = panel(client, "age").text
     assert subjects_shown(age) == [f"{NS}Person", "No single subject", f"{NS}alice"]
     assert lines_shown(age)[2:] == ["not (<:bob> :age 7)", "<:alice> :age 42"]

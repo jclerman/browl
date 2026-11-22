@@ -456,7 +456,8 @@ code {
 }
 
 .lang,
-.implied {
+.implied,
+.continued {
   color: var(--muted);
   font-size: 0.8em;
 }
@@ -498,6 +499,7 @@ code {
 }
 
 .frame.usage-frame dd {
+  position: relative; /* holds its visually hidden subject, which would otherwise make the page scroll */
   grid-column: 2 / -1;
   max-width: none; /* axioms, not prose */
 }
@@ -537,11 +539,6 @@ code {
   .frame.usage-frame dd {
     grid-column: 1 / -1;
   }
-}
-
-.continued {
-  color: var(--muted);
-  font-size: 0.8em;
 }
 
 .axiom-annotations {
