@@ -13,7 +13,7 @@ import pytest
 from browl import axioms, owlapi
 from browl import usages as usages_module
 from browl.derived import NotCurrentError, UsageRootKind
-from browl.fuseki import UNION_FROM, FusekiClient, SparqlError
+from browl.fuseki import UNION_FROM, FusekiClient, SelectResult, SparqlError
 from browl.precache.core import PREFIXES
 from browl.rdf import IRI, RDF, RDFS, BlankNode, Literal, Term, ntriples_iris
 from browl.settings import Settings
@@ -26,6 +26,7 @@ from browl.usages import (
     UsageStore,
     count_usages,
     read_usages,
+    read_values,
 )
 from tests.helpers import connect, loaded, make_settings, ontology_ntriples
 
@@ -159,13 +160,15 @@ async def usage_triples(store: UsageStore, iri: str, usage: Usage) -> bytes:
     match usage.source:
         case UsageSource.OBJECT:
             triples = f"<{usage.subject}> <{usage.predicate}> <{iri}> .\n".encode()
-        case UsageSource.PREDICATE if isinstance(usage.object, BlankNode):
-            node = f"<_:{usage.object}>"
-            triple = f"<{usage.subject}> <{iri}> ?b"
-            queries += [f"CONSTRUCT {{ {triple} }} WHERE {{ BIND ({node} AS ?b) {triple} }}", f"DESCRIBE {node}"]
         case UsageSource.PREDICATE:
-            assert usage.object is not None
-            triples = f"<{usage.subject}> <{iri}> {ntriples_term(usage.object)} .\n".encode()
+            assert usage.subject is not None
+            value = (await read_values(store, iri, [usage.subject]))[usage.subject][usage.index]
+            if isinstance(value, BlankNode):
+                node = f"<_:{value}>"
+                triple = f"<{usage.subject}> <{iri}> ?b"
+                queries += [f"CONSTRUCT {{ {triple} }} WHERE {{ BIND ({node} AS ?b) {triple} }}", f"DESCRIBE {node}"]
+            else:
+                triples = f"<{usage.subject}> <{iri}> {ntriples_term(value)} .\n".encode()
         case UsageSource.ROOT:
             assert usage.root is not None
             node = f"<_:{usage.root.label}>"
@@ -269,7 +272,8 @@ async def test_usages_kinds(store: UsageStore) -> None:
         ("root", general, ""),  # on the n-ary DisjointClasses
     ]
     [annotation] = [usage for usage in await read_usages(store, f"{NS}remark") if usage.source == "predicate"]
-    assert annotation == Usage(UsageSource.PREDICATE, IRI(f"{NS}Cat"), object=IRI(f"{NS}Dog"))
+    assert annotation == Usage(UsageSource.PREDICATE, IRI(f"{NS}Cat"))
+    assert await read_values(store, f"{NS}remark", [f"{NS}Cat"]) == {f"{NS}Cat": [IRI(f"{NS}Dog")]}
     [subclass] = [usage for usage in await read_usages(store, f"{NS}Parent") if usage.root]
     assert (subclass.predicate, subclass.root and subclass.root.kind) == (f"{RDFS}subClassOf", triple)
 
@@ -334,7 +338,7 @@ def normalized(usages: list[Usage]) -> list[tuple[str, ...]]:
             usage.source,
             str(usage.subject),
             str(usage.predicate),
-            "_:" if isinstance(usage.object, BlankNode) else str(usage.object),
+            str(usage.index),
             usage.root.kind if usage.root else "",
         )
         for usage in usages
@@ -396,3 +400,16 @@ async def test_query_fails(store: UsageStore) -> None:
             await read_usages(missing, f"{NS}Animal")
         with pytest.raises(NotCurrentError):
             await count_usages(missing, f"{NS}Animal")
+
+
+async def test_values_checked(store: UsageStore) -> None:
+    """Check that a values query whose row has no value fails, and that no subjects need no query."""
+    assert await read_values(store, f"{NS}remark", []) == {}
+
+    class Unbound:
+        async def select(self, *args: object, **kwargs: object) -> SelectResult:
+            return SelectResult(("subject", "object", "blank"), [(IRI(f"{NS}Cat"), None, None)])
+
+    broken = UsageStore(Unbound(), store.derived, store.generation, store.dataset_clause)  # type: ignore[arg-type]
+    with pytest.raises(SparqlError, match="gave no value"):
+        await read_values(broken, f"{NS}remark", [f"{NS}Cat"])

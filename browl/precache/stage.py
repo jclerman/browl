@@ -10,7 +10,7 @@ import logging
 import sqlite3
 from collections.abc import AsyncIterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import AbstractContextManager, asynccontextmanager, suppress
+from contextlib import AbstractAsyncContextManager, AbstractContextManager, asynccontextmanager, suppress
 from pathlib import Path
 
 import httpx2
@@ -36,6 +36,9 @@ FUSEKI_WAIT_S = 120.0
 
 FUSEKI_RETRY_S = (0.5, 5.0)
 """The first and the longest wait between pings while waiting for Fuseki; each wait doubles the last."""
+
+INTERRUPT_CHECK_STEPS = 10_000
+"""How many SQLite virtual machine steps an interruptible build's statements take between checks for an interrupt."""
 
 HOOKS: tuple[Hook, ...] = (entities, names, hierarchies, owner_map)
 """The hooks the app runs, in order: a hook may read tables an earlier one filled.
@@ -126,18 +129,33 @@ async def wait_for_fuseki(http: httpx2.AsyncClient, limit_s: float | None = None
         pause = min(pause * 2, longest)
 
 
-@asynccontextmanager
-async def build(data_dir: Path, meta: Meta, keys: Mapping[str, str]) -> AsyncIterator[DerivedWriter]:
-    """Build a generation's derived database on a thread of its own (`browl.derived.build`), yielding its writer.
+def build(data_dir: Path, meta: Meta, keys: Mapping[str, str]) -> AbstractAsyncContextManager[DerivedWriter]:
+    """Build a generation's derived database on a thread of its own (`browl.derived.build`, `on_thread`).
 
     On a clean exit the database is swapped in; if the block fails or is cancelled, the temporary file is deleted.
-    Either way the build's end runs on the connection's thread after any work still queued there, and is waited for,
-    even if this is cancelled meanwhile: the end, e.g. the rename into place, mustn't outlive the job lock. A
-    cancellation then propagates once the end is done, even if the database was swapped in.
+    """
+    return on_thread(derived.build(data_dir, meta, keys), "derived-build")
+
+
+@asynccontextmanager
+async def on_thread(
+    manager: AbstractContextManager[sqlite3.Connection], name: str, interrupt: bool = False
+) -> AsyncIterator[DerivedWriter]:
+    """Enter a database build's context manager on a thread of its own, yielding a writer for its connection.
+
+    The build's end, the manager's exit, runs on the connection's thread after any work still queued there, and is
+    waited for, even if this is cancelled meanwhile: the end, e.g. the rename into place, mustn't outlive the job
+    lock. A cancellation then propagates once the end is done, even if the database was swapped in.
+
+    Args:
+        manager: The build, e.g. `browl.derived.build`, which yields a connection.
+        name: The thread's name's prefix, which names the build in the log, e.g. "derived-build".
+        interrupt: Whether a cancellation interrupts the statement running on the connection
+            (`sqlite3.Connection.interrupt`), and any the work queued starts after, so the end needn't wait for them.
     """
     loop = asyncio.get_running_loop()
-    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="derived-build")
-    building = _Build(derived.build(data_dir, meta, keys))
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=name)
+    building = _Build(manager, interrupt)
     error: BaseException | None = None
     try:
         yield DerivedWriter(executor, await loop.run_in_executor(executor, building.enter))
@@ -147,6 +165,8 @@ async def build(data_dir: Path, meta: Meta, keys: Mapping[str, str]) -> AsyncIte
     finally:
         end = loop.run_in_executor(executor, building.exit, error)
         executor.shutdown(wait=False)
+        if interrupt and isinstance(error, asyncio.CancelledError):
+            building.interrupt()
         try:
             await asyncio.shield(end)
         except asyncio.CancelledError:
@@ -154,27 +174,40 @@ async def build(data_dir: Path, meta: Meta, keys: Mapping[str, str]) -> AsyncIte
                 with suppress(asyncio.CancelledError):
                     await asyncio.wait({end})
             if not end.cancelled() and (end_error := end.exception()) is not None:
-                logger.warning("The cancelled derived build's end failed", exc_info=end_error)
+                logger.warning("The cancelled %s's end failed", name.replace("-", " "), exc_info=end_error)
             raise
 
 
 class _Build:
     """`derived.build`'s context manager, entered and exited by calls on the connection's thread."""
 
-    def __init__(self, manager: AbstractContextManager[sqlite3.Connection]) -> None:
+    def __init__(self, manager: AbstractContextManager[sqlite3.Connection], interruptible: bool) -> None:
         self._manager = manager
+        self._interruptible = interruptible
+        self._interrupted = False
         self._entered = False
+        self._connection: sqlite3.Connection | None = None
 
     def enter(self) -> sqlite3.Connection:
-        connection = self._manager.__enter__()
+        connection = self._connection = self._manager.__enter__()
         self._entered = True
+        if self._interruptible:  # so a statement that starts after `interrupt` stops too
+            connection.set_progress_handler(lambda: self._interrupted, INTERRUPT_CHECK_STEPS)
         return connection
+
+    def interrupt(self) -> None:
+        """Interrupt the statement running on the connection, if any, and any that starts after; from any thread."""
+        self._interrupted = True
+        if self._connection is not None:
+            self._connection.interrupt()
 
     def exit(self, error: BaseException | None) -> None:
         """Finish the build, or on an error discard it; nothing if it was never entered."""
         if not self._entered:
             return
         self._entered = False
+        if self._connection is not None:
+            self._connection.set_progress_handler(None, 0)  # the end may run statements
         if error is None:
             self._manager.__exit__(None, None, None)
         else:

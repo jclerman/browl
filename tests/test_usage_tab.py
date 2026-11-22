@@ -7,7 +7,8 @@ import re
 import sqlite3
 from collections import Counter
 from collections.abc import AsyncIterator, Iterator
-from contextlib import closing
+from contextlib import closing, contextmanager
+from typing import Any
 
 import httpx2
 import jpype
@@ -21,6 +22,7 @@ import browl.lookup
 import browl.owlapi
 import browl.precache.stage
 import browl.usage_tab
+import browl.usage_tables
 import browl.usages
 from browl import owl, owlapi
 from browl.axioms import axioms_about, convert_axioms, entity_axioms, fetch_fragment, is_declaration
@@ -31,7 +33,7 @@ from browl.loading import dataset_name
 from browl.owlapi import ntriples_ontology
 from browl.pages import templates
 from browl.precache.stage import pre_cache
-from browl.rdf import IRI, Literal
+from browl.rdf import IRI
 from browl.settings import Settings
 from browl.usage_tab import (
     UsageGroup,
@@ -121,7 +123,8 @@ async def test_every_usage_once(
         pages = max(1, math.ceil(len(usages) / size))
         for page in range(1, pages + 1):
             chunk = ordered[(page - 1) * size : page * size]
-            groups = await read_usage_page(store, iri, ordered, page)
+            continued = page > 1 and bool(chunk) and ordered[(page - 1) * size - 1].subject == chunk[0].subject
+            groups = await read_usage_page(store, iri, chunk, continued)
             assert [group.subject for group in groups] == list(dict.fromkeys(usage.subject for usage in chunk))
             for group in groups:
                 on_page = sum(usage.subject == group.subject for usage in chunk)
@@ -140,9 +143,9 @@ def client(fuseki_url: str, ntriples: bytes, tmp_path_factory: pytest.TempPathFa
 
     with pytest.MonkeyPatch.context() as patch, fuseki_dataset(fuseki_url, {None: ntriples}) as name:
         patch.setenv("DATA_DIR", str(tmp_path_factory.mktemp("app")))
-        for module in (browl.precache.stage, browl.usages):
+        for module in (browl.precache.stage, browl.usages, browl.usage_tables):
             patch.setattr(module, "dataset_name", name_of)
-        app = make_app(FUSEKI_URL=fuseki_url)
+        app = make_app(FUSEKI_URL=fuseki_url)  # its tests build the usage table when they need it (`usage_table`)
 
         async def stage(context: JobContext) -> None:
             generations.append(context.generation)
@@ -154,6 +157,22 @@ def client(fuseki_url: str, ntriples: bytes, tmp_path_factory: pytest.TempPathFa
             test_client.portal.call(app.state.jobs.start)
             test_client.portal.call(app.state.jobs.wait)
             yield test_client
+
+
+@contextmanager
+def usage_table(client: TestClient) -> Iterator[None]:
+    """Build the usage table of the client's app's generation, so its pages read it; then delete it."""
+    app: Any = client.app
+    tables, generation = app.state.usage_tables, app.state.jobs.state.ready_generation
+    assert client.portal is not None
+    client.portal.call(tables.start, generation, "")
+    client.portal.call(tables.wait)
+    assert not tables.failed(generation)
+    try:
+        yield
+    finally:
+        client.portal.call(tables.close)
+        browl.usage_tables.table_path(app.state.settings.data_dir, generation).unlink()
 
 
 def panel(client: TestClient, name: str, **params: str) -> httpx2.Response:
@@ -180,15 +199,15 @@ def test_order() -> None:
         connection.executemany("INSERT INTO entity VALUES (?, ?, ?)", rows)
         names = ["z", "a", "b", "pun", "m"]
         usages = [Usage(UsageSource.OBJECT, IRI(f"{NS}{name}"), predicate=IRI(f"{NS}p")) for name in names]
-        usages.append(Usage(UsageSource.PREDICATE, IRI(f"{NS}a"), object=Literal("1")))
-        usages.append(Usage(UsageSource.PREDICATE, IRI(f"{NS}a"), object=IRI(f"{NS}v")))
+        usages.append(Usage(UsageSource.PREDICATE, IRI(f"{NS}a"), index=1))
+        usages.append(Usage(UsageSource.PREDICATE, IRI(f"{NS}a"), index=0))
         usages.append(Usage(UsageSource.OBJECT, IRI("http://other.org/x"), predicate=IRI(f"{NS}p")))
         usages.append(Usage(UsageSource.OBJECT, IRI("http://another.org/x"), predicate=IRI(f"{NS}p")))
         usages.append(Usage(UsageSource.OBJECT, None))
         ordered = sorted_usages(connection, usages)
         assert sorted_usages(connection, reversed(usages)) == ordered
         with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(browl.usage_tab, "_BATCH", 2)  # the names read in several queries
+            patch.setattr(browl.usage_tab, "LOOKUP_BATCH", 2)  # the names read in several queries
             assert sorted_usages(connection, usages) == ordered
     subjects = [usage.subject and usage.subject.removeprefix(NS) for usage in ordered]
     assert subjects == ["z", "a", "a", "a", "b", "pun", "m", None, "http://another.org/x", "http://other.org/x"]
@@ -388,7 +407,7 @@ def test_preparing(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: 
     with monkeypatch.context() as patch:
         patch.setattr(browl.usage_tab, "read_usages", never)
         page = panel(client, "Animal").text
-    assert '<p class="note" id="usage-preparing">10 usages. Preparing…</p>' in page
+    assert preparing(page) == ("10 usages. Preparing…", POLL)
     assert "<dl" not in page
     assert panel(client, "Animal", page="1").text == page
 
@@ -396,8 +415,87 @@ def test_preparing(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: 
         return 3
 
     monkeypatch.setattr(browl.usage_tab, "count_usages", three)  # fewer than it lists, which can't happen
-    assert '<p class="note" id="usage-preparing">3 usages. Preparing…</p>' in panel(client, "Animal").text
+    assert preparing(panel(client, "Animal").text) == ("3 usages. Preparing…", POLL)
     assert "Preparing the usages of http://example.org/axioms#Animal" in caplog.text
+
+
+@pytest.mark.fuseki
+@pytest.mark.jvm
+def test_table_pages(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that once the usage table is ready, every entity's pages and label are those streamed before.
+
+    An entity with more usages than are streamed is shown, not "Preparing…"; nothing is streamed or counted by Fuseki.
+    """
+    monkeypatch.setattr(browl.usage_tab, "PAGE_USAGES", 3)
+    names = sorted({iri.removeprefix(NS) for iri in tab_iris(client) if iri.startswith(NS)})
+    expected = {}
+    for name in names:
+        pages, page = [], 1
+        while (response := panel(client, name, **({"page": str(page)} if page > 1 else {}))).status_code == 200:
+            pages.append(response.text)
+            page += 1
+        count = client.get("/_browl/usage-count", params={"iri": f"{NS}{name}"}).text
+        expected[name] = (pages, count)
+
+    async def never(*args: object) -> None:
+        raise AssertionError("streamed or counted by Fuseki")
+
+    monkeypatch.setattr(browl.usage_tab, "read_usages", never)
+    monkeypatch.setattr(browl.usages, "_corrections", never)
+    monkeypatch.setattr(browl.usage_tab, "MAX_STREAMED_USAGES", 0)
+    client.app.state.usage_counts = browl.usages.UsageCounts()  # type: ignore[attr-defined]
+    with usage_table(client):
+        for name, (pages, count) in expected.items():
+            for number, page in enumerate(pages, 1):
+                assert panel(client, name, **({"page": str(number)} if number > 1 else {})).text == page, (name, number)
+            assert panel(client, name, page=str(len(pages) + 1)).status_code == 404
+            assert client.get("/_browl/usage-count", params={"iri": f"{NS}{name}"}).text == count
+
+
+def tab_iris(client: TestClient) -> list[str]:
+    """Return the IRIs of the entities the client's app serves."""
+    app = client.app
+    generation = app.state.jobs.state.ready_generation  # type: ignore[attr-defined]
+    rows = client.portal.call(  # type: ignore[union-attr]
+        app.state.derived.read,  # type: ignore[attr-defined]
+        generation,
+        lambda connection: connection.execute("SELECT DISTINCT iri FROM entity WHERE type != 'ontology'").fetchall(),
+    )
+    return [iri for (iri,) in rows]
+
+
+POLL = "/_browl/hash?path=%2Faxioms&amp;fragment=Animal&amp;tab=usage&amp;panel=1"
+"""Where Animal's tab panel, preparing, polls itself."""
+
+
+def preparing(page: str) -> tuple[str, str | None] | None:
+    """Return a Usage tab panel's "Preparing…" note, and the URL it polls, if any; None if it has none."""
+    match = re.search(r'<p class="note" id="usage-preparing"(.*?)>(.*?)</p>', page, re.DOTALL)
+    if match is None:
+        return None
+    attributes, text = match.groups()
+    poll = re.fullmatch(r' hx-get="([^"]*)" hx-trigger="every 5s" hx-target="#tab-panel"', attributes)
+    return " ".join(text.split()), poll and poll.group(1)
+
+
+@pytest.mark.fuseki
+@pytest.mark.jvm
+def test_preparing_polls(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that "Preparing…" polls its own page's panel, and says how long the table's build has left if known.
+
+    If the build failed, it says the usages can't be shown, without polling.
+    """
+    monkeypatch.setattr(browl.usage_tab, "MAX_STREAMED_USAGES", 4)
+    monkeypatch.setattr(browl.usage_tab, "PAGE_USAGES", 3)
+    tables = client.app.state.usage_tables  # type: ignore[attr-defined]
+    poll = POLL.replace("&amp;panel=1", "&amp;page=2&amp;panel=1")
+    assert preparing(panel(client, "Animal", page="2").text) == ("10 usages. Preparing…", poll)
+    monkeypatch.setattr(tables, "remaining_s", lambda generation: 130.0)
+    assert preparing(panel(client, "Animal").text) == ("10 usages. Preparing… Ready in about 3 minutes.", POLL)
+    monkeypatch.setattr(tables, "failed", lambda generation: True)
+    page = panel(client, "Animal").text
+    assert preparing(page) is None
+    assert MESSAGE in page
 
 
 @pytest.mark.fuseki
@@ -460,14 +558,15 @@ def test_too_many_iris(client: TestClient, monkeypatch: pytest.MonkeyPatch, capl
 @pytest.mark.fuseki
 @pytest.mark.jvm
 def test_too_large(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    """Check that a page whose fragments are larger than a query's result may be says so, rather than parse them.
+    """Check that a page whose fragments, or a property's values, are too large for a query's result says so.
 
-    A property's literal objects are written into its fragment, not fetched, so no query's cap holds them.
+    The triples whose terms are known are written into the fragment, not fetched, so no query's cap holds them.
     """
     monkeypatch.setattr(browl.usage_tab, "CONSTRUCT_MAX_BYTES", 40)
-    page = panel(client, "age").text  # `<:alice> :age 42`, and its roots' triples
-    assert TOO_LARGE in page
+    assert TOO_LARGE in panel(client, "Animal").text  # its usages' triples, written in
     assert "bytes, more than 40" in caplog.text
+    assert TOO_LARGE in panel(client, "age").text  # `<:alice> :age 42`: its values, read first
+    assert "the page's values are too large: the result is longer than 40 characters" in caplog.text
 
 
 @pytest.mark.fuseki
@@ -546,7 +645,7 @@ def test_unclaimed_on_page(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(browl.usage_tab, "fetch_usage_fragments", fragments)
     monkeypatch.setattr(browl.usage_tab, "run_java", parsed)
     usage = Usage(UsageSource.OBJECT, subject.iri, predicate=IRI(f"{NS}p"))
-    groups = asyncio.run(read_usage_page(None, entity.iri, [usage], 1))  # type: ignore[arg-type]
+    groups = asyncio.run(read_usage_page(None, entity.iri, [usage], False))  # type: ignore[arg-type]
     assert groups == [UsageGroup(subject=subject.iri, axioms=[claimed]), UsageGroup(subject=None, axioms=[stray])]
 
 
@@ -618,7 +717,7 @@ async def test_blank_object(fuseki_url: str, settings: Settings) -> None:
     triples = f"{CLASSES}{remark} {RDF_TYPE} <{OWL_NS}AnnotationProperty> .\n<{NS}A> {remark} _:x .\n"
     async with loaded(fuseki_url, settings, {None: triples.encode()}, "") as blank:
         [usage] = await read_usages(blank, f"{NS}remark")
-        [group] = await read_usage_page(blank, f"{NS}remark", [usage], 1)
+        [group] = await read_usage_page(blank, f"{NS}remark", [usage], False)
     assert group.subject == f"{NS}A"
     assert [axiom.manchester for axiom in group.axioms] == [f"<{NS}A> <{NS}remark> _:b1"]
 
@@ -643,7 +742,7 @@ async def test_imports(fuseki_url: str, ntriples: bytes, settings: Settings, sto
             for each in (store, split):
                 usages = await read_usages(each, iri)
                 ordered = await each.derived.read(each.generation, lambda c, found=usages: sorted_usages(c, found))
-                pages.append(await read_usage_page(each, iri, ordered, 1))
+                pages.append(await read_usage_page(each, iri, ordered[: browl.usage_tab.PAGE_USAGES], False))
             assert pages[0] == pages[1], name
             assert pages[0]
 
@@ -797,7 +896,7 @@ async def test_symmetric_on_both_tabs(fuseki_url: str, settings: Settings) -> No
     triples = symmetric_triples("disjointWith", "Class")
     async with loaded(fuseki_url, settings, {None: triples}, "") as small:
         [usage] = await read_usages(small, f"{NS}A")
-        [group] = await read_usage_page(small, f"{NS}A", [usage], 1)
+        [group] = await read_usage_page(small, f"{NS}A", [usage], False)
         fragment = await fetch_fragment(small.sparql, small.dataset, f"{NS}A", small.dataset_clause)
     assert group.subject == f"{NS}Z"
     assert [axiom.manchester for axiom in group.axioms] == [f"<{NS}Z> DisjointWith <{NS}A>"]
@@ -865,3 +964,27 @@ def test_highlight(client: TestClient) -> None:
     assert "<mark>" not in "".join(re.findall(r"<dt>.*?</dt>", dog, re.DOTALL))
     mineral = panel(client, "Mineral").text  # in an n-ary axiom's annotations
     assert mark.replace("Dog", "Mineral") in mineral.split('<ul class="axiom-annotations">')[1]
+
+
+@pytest.mark.fuseki
+@pytest.mark.jvm
+def test_table_failure(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """Check that a usage table that fails to read fails only the tab's content, with a message, and is logged."""
+
+    async def fail(*args: object) -> None:
+        raise sqlite3.DatabaseError("disk gone")
+
+    monkeypatch.setattr(browl.usage_tab, "read_table_page", fail)
+    page = panel(client, "Animal").text
+    assert MESSAGE in page
+    assert "Couldn't read the usage table for http://example.org/axioms#Animal" in caplog.text
+
+
+@pytest.mark.fuseki
+@pytest.mark.jvm
+async def test_missing_value(store: UsageStore, caplog: pytest.LogCaptureFixture) -> None:
+    """Check that a property's usage past its subject's values, which can't happen, is logged and left out."""
+    usage = Usage(UsageSource.PREDICATE, IRI(f"{NS}Cat"), index=5)
+    [group] = await read_usage_page(store, f"{NS}remark", [usage], False)
+    assert group.axioms == []
+    assert f"No value 5 of {NS}remark for {NS}Cat" in caplog.text

@@ -1,0 +1,92 @@
+# tbls config for the usage table's file (docs/SCHEMA.md); `make schema-docs` regenerates docs/schema/usages/ from it.
+# The database is the one scripts/schema_dbs.py builds from browl.precache.usage_table.SCHEMA.
+name: 'Database schema: `usages`'
+desc: >
+  The schema of the SQLite database browl calls the usage table, which holds every usage of every entity in the order
+  the Usage tab shows them. These pages are generated from the code by [tbls](https://github.com/k1LoW/tbls)
+  (`make schema-docs`; overview in [docs/SCHEMA.md](../../SCHEMA.md)): edit `.tbls/usages.yml`, not them.
+
+
+  browl builds one such SQLite file per generation, `DATA_DIR/usages/{generation}.sqlite3`, in the background once the
+  generation is live, from one bulk SPARQL query over every triple and the derived database's owner map; it reads it
+  only once it's complete. Its rows refer to the derived database's `entity.id` and `usage_root.id`. It's a cache:
+  built again when its key changes, never migrated ([DESIGN.md 2.5](../../DESIGN.md#25-derived-data-pre-caching)).
+dsn: sqlite://.cache/schema-dbs/usages.sqlite3
+docPath: docs/schema/usages
+er:
+  format: mermaid
+format:
+  adjust: true
+lint:
+  requireTableComment:
+    enabled: true
+  requireColumnComment:
+    enabled: true
+relations:
+  - table: usage
+    columns: [subject_term]
+    parentTable: term
+    parentColumns: [id]
+    def: usage.subject_term references term.id
+    cardinality: zero_or_more
+    parentCardinality: zero_or_one
+  - table: usage
+    columns: [predicate]
+    parentTable: term
+    parentColumns: [id]
+    def: usage.predicate references term.id
+    cardinality: zero_or_more
+    parentCardinality: zero_or_one
+comments:
+  - table: meta
+    tableComment: >-
+      What the file was built for, one row. Its columns are read from a file built by any browl, so they keep their
+      names.
+    columnComments:
+      id: Always 1, so the table has one row.
+      generation: The generation; the file is current only for that generation.
+      key: >-
+        The file's key (browl.precache.keys.usage_table_key): a hash of the code that builds it and of the derived
+        database's build keys; the file is current only if it's the one the running code computes.
+      derived: >-
+        Which file of the generation's derived database it was built from, by its inode and modification time
+        (browl.usage_tables.derived_stamp); the file is current only while that file is in place, as the ids it refers
+        to are that file's.
+  - table: term
+    tableComment: >-
+      The IRIs the usages name that aren't referred to by entity.id: predicates, and subjects that aren't entities.
+    columnComments:
+      id: The term's number, from 1.
+      iri: Its IRI.
+  - table: usage
+    tableComment: >-
+      Every usage of every entity (browl.usages.Usage), keyed by the entity and its position in the Usage tab's order
+      (browl.usage_tab.sorted_usages), so a page is one range read.
+    columnComments:
+      entity: The entity it's a usage of, by the derived database's entity.id (its IRI's first).
+      position: Its place among the entity's usages, from 0, in the tab's order.
+      subject: >-
+        Its subject, by the derived database's entity.id (its IRI's first); NULL if it has none or it isn't an
+        entity.
+      subject_term: Its subject, by term.id, if that isn't an entity; else NULL.
+      source: >-
+        Where it was found (browl.precache.usage_table.Source): 0, a triple with the entity as object; 1, as
+        predicate; 2, a root of the owner map.
+      kind: >-
+        Its axiom's kind (browl.precache.usage_table.UsageKind), for U-34's filters: from its main predicate, an
+        assertion for any predicate not of OWL's, RDF's or RDFS's axioms; or an axiom annotation, or no subject.
+      predicate: >-
+        Its axiom's main predicate, by term.id: the triple's, for an assertion its property; a root's predicate, or a
+        reified axiom's owl:annotatedProperty; NULL for a root with no subject.
+      detail: >-
+        For a triple with the entity as predicate, its place among its subject's values of it
+        (browl.usages.Usage.index); for a root, the derived database's usage_root.id; else 0.
+  - table: usage_count
+    tableComment: >-
+      Per entity with usages, how many it has and how many can be listed; an entity with no row has none.
+    columnComments:
+      entity: The entity, by the derived database's entity.id.
+      listed: How many usages it has in the usage table.
+      count: >-
+        How many usages it has, as browl.usages.count_usages counts them: the listed ones, and those in triples with a
+        blank subject the owner map lacks, such as anonymous individuals'.

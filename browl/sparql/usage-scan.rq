@@ -1,0 +1,11 @@
+# Every triple, for the usage table (browl.precache.usage_table; DESIGN.md §2.5), with its object only if that's an IRI:
+# a usage of an entity is a triple with it as object or as predicate, and a literal object needn't be read, as a
+# property's usages are told apart by their place among their subject's values (browl.usages.Usage.index). A triple
+# with a blank subject is only counted. browl.precache.usage_table fills in the `rdf:type` objects to leave out, the
+# OWL vocabulary's that aren't entities, and adds the prologue and the dataset clause when it's run.
+SELECT ?subject ?predicate ?object
+WHERE {
+  ?subject ?predicate ?value
+  FILTER (?predicate != rdf:type || ?value NOT IN ())
+  BIND (IF(isIRI(?value), ?value, ?unbound) AS ?object)
+}

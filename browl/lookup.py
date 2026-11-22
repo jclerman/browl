@@ -39,6 +39,7 @@ from browl.links import EntityLink, entity_name
 from browl.overview import read_overview
 from browl.pages import app_path, cut_name, href, is_under, link_root, read_derived, templates
 from browl.tabs import (
+    PANEL_PARAM,
     TAB_PARAM,
     Tab,
     TabLink,
@@ -50,7 +51,16 @@ from browl.tabs import (
     with_query,
 )
 from browl.urls import FALLBACK_PATH, fallback_path
-from browl.usage_tab import USAGE_LABEL, PageNotFoundError, UsageTab, read_count, read_usage_tab, usage_label
+from browl.usage_tab import (
+    POLL_S,
+    USAGE_LABEL,
+    PageNotFoundError,
+    UsageTab,
+    read_count,
+    read_usage_tab,
+    remaining_text,
+    usage_label,
+)
 
 HASH_PATH = "hash"
 """The hash-IRI script's lookup route's path under the reserved prefix."""
@@ -75,6 +85,9 @@ _PAGE_NUMBER = re.compile(r"[1-9][0-9]{0,8}")
 
 PANEL_HEADERS = {"X-Robots-Tag": "noindex"}
 """The headers of a tab panel served alone, which isn't a page."""
+
+POLL_ID = "usage-preparing"
+"""The id of the Usage tab's "Preparing…", which polls (`usage.html`), and which htmx sends as `HX-Trigger`."""
 
 
 class _EntityRoute(APIRoute):
@@ -161,6 +174,21 @@ class _TabUrls:
     page: str
     fragment: str | None = None
     panel: str | None = None
+
+
+@dataclass(frozen=True)
+class _Poll:
+    """How the Usage tab's "Preparing…" asks for its panel again, until the usage table is ready.
+
+    Attributes:
+        url: The panel's URL, root-relative.
+        every_s: How often, in seconds.
+        remaining: About how long the table's build has left, as the page says it; None if unknown.
+    """
+
+    url: str
+    every_s: float
+    remaining: str | None
 
 
 @dataclass(frozen=True)
@@ -292,11 +320,17 @@ async def _page(
         try:
             usage = await read_usage_tab(request, state, entity.iri, page or 1)
         except PageNotFoundError:
-            if hash_path is None:
+            # A poll's page can be past those listed once the table is ready: htmx doesn't swap a 404, so it'd poll on.
+            if hash_path is None and request.headers.get("HX-Trigger") != POLL_ID:
                 return not_found(request)
             usage = await read_usage_tab(request, state, entity.iri, 1)
         context["usage"] = usage
         context["pager"] = _pager(request, at, usage)
+        context["poll"] = None
+        if usage.preparing:
+            params = [(TAB_PARAM, USAGE), *([(PAGE_PARAM, str(usage.page))] if usage.page > 1 else [])]
+            url = href(request, with_query(at.panel or at.page, [*params, (PANEL_PARAM, "1")]))
+            context["poll"] = _Poll(url, POLL_S, remaining_text(usage.remaining_s))
         count = usage.count
     context["tabs"] = _usage_label(request, links, entity.iri, count)
     if query.panel:

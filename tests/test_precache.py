@@ -22,7 +22,7 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from browl import derived
+from browl import derived, usage_tables
 from browl.derived import EntityType, Meta, NotCurrentError, derived_path, entities_at, read_meta
 from browl.fuseki import END_VARIABLE, TSV, UNION_FROM, FusekiClient, SparqlError
 from browl.jobs import (
@@ -1088,3 +1088,78 @@ async def test_entities_on_real_fuseki(fuseki_url: str, settings: Settings) -> N
         ("https://example.org/family#Person", "class", "/family", "Person"),
     ]
     assert hash_prefixes(settings, generation, HOOKS) == ["/family"]
+
+
+# The usage tables' builds (P-27c), which the app starts.
+
+
+def usage_files(settings: Settings) -> list[str]:
+    """Return the names of the files in the usage tables' directory, but the build lock."""
+    directory = settings.data_dir / "usages"
+    return sorted(path.name for path in directory.iterdir() if path.name != "build.lock") if directory.is_dir() else []
+
+
+def test_restart_builds_usage_table(settings: Settings) -> None:
+    """Check that a restart builds the ready generation's usage table once its derived database is current.
+
+    The next restart, finding it current, sends no query.
+    """
+    JobStore(settings.data_dir / STATE_DB).write(READY)
+    make_previous(settings, 2)
+    fuseki = StubFuseki()
+    app = make_app(fuseki.transport, real_stages=True, usage_tables=True)
+    with TestClient(app) as client:
+        assert client.portal is not None
+        client.portal.call(app.state.usage_tables.wait)
+        assert usage_tables.is_current(settings.data_dir, 2, app.state.usage_tables.key)
+    assert fuseki.requests == [f"/{dataset_name(2)}/sparql"] * 2  # the count and the scan
+    assert usage_files(settings) == ["2.sqlite3"]
+    again = StubFuseki()
+    app = make_app(again.transport, real_stages=True, usage_tables=True)
+    with TestClient(app) as client:
+        assert client.portal is not None
+        client.portal.call(app.state.usage_tables.wait)
+    assert again.requests == []
+
+
+def test_restart_rebuild_then_usage_table(settings: Settings) -> None:
+    """Check that a restart that rebuilds the derived database builds the usage table after, from the new file."""
+    JobStore(settings.data_dir / STATE_DB).write(READY)
+    fuseki = StubFuseki()
+    app = make_app(fuseki.transport, real_stages=True, usage_tables=True)
+    with TestClient(app) as client:
+        assert client.portal is not None
+        client.portal.call(app.state.jobs.wait)
+        client.portal.call(app.state.usage_tables.wait)
+        assert usage_tables.is_current(settings.data_dir, 2, app.state.usage_tables.key)
+    assert fuseki.requests[-2:] == [f"/{dataset_name(2)}/sparql"] * 2
+
+
+def test_restart_without_ready_generation(settings: Settings) -> None:
+    """Check that a restart with no ready generation, or one whose derived database isn't current, builds no table."""
+    fuseki = StubFuseki()
+    app = make_app(fuseki.transport, usage_tables=True)  # stages given, so no rebuild
+    with TestClient(app):
+        assert not app.state.usage_tables.building(2)
+    JobStore(settings.data_dir / STATE_DB).write(READY)
+    with TestClient(make_app(fuseki.transport, usage_tables=True)) as client:
+        assert not client.app.state.usage_tables.building(2)  # type: ignore[attr-defined]
+    assert fuseki.requests == []
+    assert usage_files(settings) == []
+
+
+def test_ready_job_builds_usage_table(settings: Settings) -> None:
+    """Check that each job reaching ready builds its usage table, and the older generation's is deleted."""
+    fuseki = StubFuseki()
+    app = make_app(fuseki.transport, usage_tables=True)
+    with TestClient(app) as client:
+        assert client.portal is not None
+        jobs = app.state.jobs
+        jobs.register(Stage.PRE_CACHING, functools.partial(pre_cache, http=app.state.fuseki_http))
+        for _ in range(2):
+            client.portal.call(jobs.start)
+            client.portal.call(jobs.wait)
+        client.portal.call(app.state.usage_tables.wait)
+        generation = jobs.state.ready_generation
+        assert usage_tables.is_current(settings.data_dir, generation, app.state.usage_tables.key)
+    assert usage_files(settings) == [f"{generation}.sqlite3"]

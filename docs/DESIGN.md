@@ -205,6 +205,7 @@ containers' own file systems hold only what's lost harmlessly (last row).
 | Job state: generation numbers, the latest job's stage, reason, imports, triple counts and the ontology file's prefixes | `DATA_DIR/state.sqlite3` (`/data`) | `data` volume | app | Authoritative. Lost, the site shows no ontology until an admin uploads again; Fuseki's store is then orphaned, and replaced by the next load (2.4) |
 | Job lock (`flock`) | `DATA_DIR/job.lock` | `data` volume | app | No; recreated |
 | Derived database: whole-ontology data and the ontology's `meta` row ([2.5](#25-derived-data-pre-caching)) | `DATA_DIR/derived/{generation}.sqlite3` | `data` volume | app | No: rebuilt from Fuseki's store. Lost, the next start rebuilds it, with the site on "loading" meanwhile (2.4) |
+| Usage tables: every usage of every entity, in the Usage tab's order ([2.5](#25-derived-data-pre-caching)) | `DATA_DIR/usages/{generation}.sqlite3` | `data` volume | app | No: rebuilt from Fuseki's store and the derived database. Lost, the next start builds it again in the background, with the largest entities' Usage tabs on "Preparing…" meanwhile |
 | The latest job's files: the upload, fetched imports, `catalog.xml`, converted and reasoned ontology | `DATA_DIR/uploads/{generation}/` | `jobs` volume | app, sandbox (both read-write) | No: nothing reads them once the job ends, and each upload deletes the previous job's. Lost, nothing changes |
 | Registered datasets and their TDB2 stores | `FUSEKI_BASE` (`/fuseki`): `configuration/`, `databases/gen-N` | `fuseki` volume | fuseki; app, whose loader builds each store there | The served ontology; rebuilt only by uploading the ontology again. Lost, pages fail until an admin does |
 | The sandbox runner's socket | `/sandbox/runner.sock` | `sandbox` volume | sandbox (creates it), app (connects) | No; recreated when the runner starts |
@@ -694,15 +695,65 @@ by value. Fuseki can (`?s ?p <entity>`), so P-27 keeps two things instead ([S-7 
   on node kind instead gives the same map in 70 s, since it makes TDB2 decode every triple's nodes; on Uberon and
   HPO both take 5–7 s. The types come from OWL's RDF mapping, so anonymous individuals would be missed; U-18
   revisits that, and the filter is the fallback.
-- **The usage table**, built in the background once a generation is live, not by pre-caching: every usage, keyed by
-  the entity it refers to and its subject's position in name order, so any page of any entity's Usage tab is one
-  range read ([2.8](#28-entity-pages)). It's in its own SQLite file per generation, keyed by code like the derived
-  database, and used only once complete; a restart during the build starts it again. Estimated at 2–4 minutes and
-  about 0.8 GB for NCBITaxon's 21.9 M usages, and about 5 s and 20 MB for Uberon's 603 K and HPO's 467 K. P-27
-  measures the build first. If NCBITaxon's takes over 5 minutes, the table holds only the entities over 20,000 usages
-  (about 3 minutes and 658 MiB in S-7: 87% of NCBITaxon's usages), and smaller ones keep streaming. Its subjects'
-  name-order positions come from `entity` (an index on the sort key, or ids numbered in name order), not a separate
-  table, which cost 490 MiB on NCBITaxon in S-7.
+- **The usage table** _(P-27c)_, built in the background once a generation is live, not by pre-caching: every usage,
+  keyed by the entity it refers to and its position in the Usage tab's order, so any page of any entity's Usage tab,
+  and its count, is one range read ([2.8](#28-entity-pages)). It's in its own SQLite file per generation
+  (`DATA_DIR/usages/{generation}.sqlite3`, `browl.precache.usage_table.SCHEMA`, [`SCHEMA.md`](SCHEMA.md)), keyed by
+  code like the derived database, and used only once complete. Measured on S-7's setup
+  ([`research/P-27c`](../research/P-27c/README.md)): NCBITaxon 253 s (21.9 M usages, from 24.0 M triples in all; a
+  528 MiB file, 25 bytes per usage; the process peaked at 1.4 GB), Uberon 6.9–7.7 s (601 K usages, 14 MiB) and HPO
+  5.3–6.0 s (467 K, 11 MiB). As NCBITaxon's took under 5 minutes, the table holds every entity, and streaming is only
+  for the minutes before it's ready.
+  - **The build** (`browl.precache.usage_table.fill_usage_table`), on a thread of its own that owns the file's
+    connection, as the derived database's is (`browl.precache.stage.on_thread`), with the generation's derived
+    database attached read-only:
+    1. Every entity IRI is ranked in name order, its first entity's casefolded display name then its IRI, as the tab
+       sorts subjects; ids aren't numbered in name order, and no sort key is stored in `entity`. Meanwhile the
+       triples the scan will read are counted, for the estimate.
+    2. One bulk query reads every triple (`usage-scan.rq`), its object only if that's an IRI: a literal object is
+       never read, since a property's usages are known by their place among their subject's values (`Usage.index`,
+       [2.8](#28-entity-pages)). It leaves out the `rdf:type` triples whose object is OWL's vocabulary
+       (`owl:Class`, `owl:Axiom`, the characteristics…) unless that IRI is an entity: 15% of NCBITaxon's triples
+       (3.6 M of 24.0 M), none of them a usage. Each triple with an entity as object or as predicate, and an IRI
+       subject that isn't that entity, is staged, with its subject's rank; one with a blank subject is only counted,
+       for the count's correction (below). The scan is three quarters of the build, and Python-bound.
+    3. The owner map's roots that are usages are staged too, under their owners.
+    4. One `INSERT … SELECT` numbers each entity's usages in the tab's order with a window function, the subject's
+       rank, then source, predicate, value and root, as `sorted_usages` orders a stream, into a `WITHOUT ROWID`
+       table keyed by (entity, position), in key order. A subject's usages of a property as predicate are alike, so
+       their place among the subject's values is the row's number less its peers' first.
+    5. Each entity's count is the listed usages plus the triples with a blank subject the owner map lacks, as Fuseki's
+       count has them (`browl.usages.count_usages`), so the label doesn't change when the table is ready.
+  - **Each row** stores the usage's source, subject (`entity.id`, else a term), the axiom's kind
+    (`UsageKind`: from its main predicate, an assertion for any predicate not among OWL's, RDF's and RDFS's axioms',
+    an axiom annotation, or no subject) and main predicate (for an assertion, its property), for U-34's filters, and
+    the value's place or the root's number.
+  - **The key** (`browl.precache.keys.usage_table_key`) hashes the code of `browl.precache.usage_table`, by the same
+    rules as a hook's (its import closure, the files it loads, the distributions, Python's version; it reads no
+    settings), and the derived database's build keys, as it refers to `entity.id` and `usage_root.id`. A file built
+    by other code, or from another derived database, isn't current, and is built again; so is one built from another
+    file of the same derived database (`meta.derived`, its inode and modification time), e.g. one deleted by hand and
+    rebuilt, whose ids may differ. `tests/test_precache_keys.py` traces the build as it does each hook.
+    `browl.usage_tables`, which runs it, isn't keyed, like the stage.
+  - **When it's built** (`browl.usage_tables.UsageTables`): after each job that reaches ready, before the previous
+    generation's derived database is deleted, and at startup if the ready generation's derived database is current
+    and its table isn't; after a rebuild, once that's ready. The job lock isn't held, so an upload can start
+    meanwhile. A newer generation going live cancels an older one's build, interrupting its SQL statements, so it
+    ends at once, and an older one's isn't started after it; the build deletes every other generation's table and any
+    temporary files when it starts. It writes a temporary file, and a scratch file for the staged rows, and renames
+    the table into place only once complete, so a restart during the build leaves only temporary files, which the
+    next start deletes as it builds the table again. A build that fails is logged, and tried again only at the next
+    start or load; meanwhile the largest entities' tabs say their usages can't be shown. A shutdown cancels it, once
+    the load job is, so none starts after.
+  - **Workers:** a build takes a lock (`usages/build.lock`, an `flock` like the job lock), waiting for one another
+    server worker holds, so two never write the same files; there's one worker (2.1).
+  - **Reads** of the newest generation read share one connection, on a thread of its own, so queued reads don't hold
+    the thread pool's threads; an older generation's read opens its own.
+  - **While it's built** the build's Python work holds the GIL, as pre-caching's does, so pages served meanwhile are
+    slower; that's accepted, as loads are rare and pages are still served. The process grows by about 1.3 GB on
+    NCBITaxon, mostly the ranks and SQLite's caches (`BUILD_CACHE_KIB`, `SCRATCH_CACHE_KIB`).
+  - **A-10 and P-31:** `UsageTables.cancel` is what P-36's admin cancel will call; the build's progress
+    (`browl.precache.usage_table.Progress`) is what P-31 will show.
 
 **Hierarchies** (P-12, `browl.precache.hierarchies`). Named direct parents: `rdfs:subClassOf` and `rdfs:subPropertyOf`
 triples with an IRI on both sides (asserted, or inferred if a reasoner ran), from one bulk query with the
@@ -890,12 +941,19 @@ Tabs (U-28; see [2.9](#29-page-layout)):
     That's 2 ms for most entities, and 0.21–0.26 s for NCBITaxon's
     largest (2.5–3.1 M), 0.47 s just after a restart; filtering `?s` to IRIs makes TDB2 decode every subject,
     12–19 s. An entity's counts over 100 ms (13 entities in NCBITaxon) are kept in memory per generation, at most
-    1,000. Once the usage table is ready, counts come from it.
+    1,000. Once the usage table is ready, counts come from it, as do the label's (`usage-count`): the same counts, as
+    its build counts the blank subjects' triples too ([2.5](#25-derived-data-pre-caching)) _(P-27c)_.
   - **Order and pages:** axioms sorted by their subject's casefolded display name, then IRI; then, for a property,
     the general class axioms that mention it; then subjects not in `entity` (individuals and undeclared IRIs, until
     U-18 adds individuals: 261 usages in Uberon, none in HPO or NCBITaxon). Pages of 50 axioms: next, previous and go
-    to page. An entity split across pages is marked "(continued)". A
-    property's usages carry their objects in the stream, so each page holds exactly 50.
+    to page. An entity split across pages is marked "(continued)". A property's usage is known by its subject and
+    its place among that subject's values of the property, in N-Triples order, a blank one's by its store label,
+    which a page reads for its own usages (`browl.usages.read_values`), so each page holds exactly 50 _(P-27c)_.
+    - _(P-27c)_ So reading a property's usages holds only their subjects, not their values: with the values, 20,000
+      literals of 100 KB each would have held 2 GB for one request (C2 of PR #113's review). A page reads its
+      subjects' values of the property with a cap on the result (`CONSTRUCT_MAX_BYTES`), above which it says it's too
+      large to show; a subject with very many values of one property is rare. The usage table stores no values
+      either.
     - _(P-27b)_ The group with no single subject comes after the named subjects for any entity, not only a property:
       a class's SWRL rules are in it. A subject's name is its first entity's display name, else its IRI; its usages
       keep one order, so each page holds the same ones every time. A page past the first is `page=N`, and each page
@@ -941,14 +999,22 @@ Tabs (U-28; see [2.9](#29-page-layout)):
     `owl:Annotation`, are a level further in, as a list within its item. Every other line has none, as on the
     Overview. The nodes (`browl.owl.Annotation`, `Axiom.annotations`, which `convert_axioms` fills from an annotated
     OWLAPI axiom) are general, so U-35 can show annotations on the Overview the same way.
-  - **Before the usage table is ready** (2–4 minutes after a NCBITaxon load; seconds for Uberon and HPO): an entity
-    with up to T = 20,000 usages streams them all, sorts and slices, per request: at most 0.21 s on NCBITaxon
+  - **Before the usage table is ready** (about 4 minutes after a NCBITaxon load; seconds for Uberon and HPO): an
+    entity with up to T = 20,000 usages streams them all, sorts and slices, per request: at most 0.21 s on NCBITaxon
     (8–11 µs per usage) and 0.1 s on Uberon and HPO (2–4 µs). That's every entity but 28 in NCBITaxon, 7 in Uberon and
     5 in HPO. Above T, the tab shows its count and "Preparing…", with an estimate, and htmx polls until the table is
-    ready. **Once it is,** every page is a range read on it.
-    - _(P-27b)_ The count is read first (2 ms for most), and above T no usage is streamed. P-27b shows the count and
-      "Preparing…" only, in an element of its own (`#usage-preparing`), with no estimate and no polling; P-27c adds
-      both, by giving that element an htmx poll of the tab's panel, which replaces it once the table is ready.
+    ready. **Once it is,** every page and count is a range read on it.
+    - _(P-27b)_ The count is read first (2 ms for most), and above T no usage is streamed.
+    - _(P-27c)_ "Preparing…" is in an element of its own (`#usage-preparing`), which polls its own page's tab panel
+      (`?tab=usage&page=N&panel=1`, or the hash route's) every 5 s (`POLL_S`) into the tab panel, so the panel
+      replaces it once the table is ready, and the next poll is the last; the tab stays selected and the URL
+      unchanged. A poll (`HX-Trigger: usage-preparing`) for a page past those listed gets the first page, as htmx
+      doesn't swap a 404 and would poll on. Without JavaScript, reloading the page shows it. The estimate, "Ready in
+      about 3 minutes" or "less than a minute", is from the build's progress (`UsageTables.remaining_s`): the scan's
+      rate so far gives its time left, and the writing after it takes about a quarter of the whole (`WRITE_SHARE`;
+      0.23–0.27 measured). The count is of the triples the scan reads, with the same filter (`usage-scan-count.rq`; 4 s
+      on NCBITaxon, alongside the ranking), so the rate isn't biased. A build in another worker, or none, gives no
+      estimate. If the build failed, the tab says its usages can't be shown, and doesn't poll.
   - **Not built:** walking `entity` in name order to fill a hub's first pages before the table is ready, and caching
     each hub's sorted list on first view. S-7 found the walk fast for the hubs too large to stream (7–75 ms for
     page 1 of the ranks and annotation properties), but slow for clustered ones: NCBITaxon's subclasses share name
@@ -960,9 +1026,10 @@ Tabs (U-28; see [2.9](#29-page-layout)):
     entities' class assertions and property characteristics join the page. Fetching, parsing and rendering a page
     takes 7–9 ms at p50 and 78 ms at most.
     - _(P-27b, `browl.usage_tab.fetch_usage_fragments`)_ Two fragments, each parsed by the OWLAPI once: the usages
-      with a subject, and those with none. A triple usage whose terms the stream holds (an IRI or literal object) is
-      written, not fetched; the others are fetched by their blank nodes' store labels, with their closures and the
-      annotations on them, and a reified axiom with the triple it annotates. Then the declaration types of every IRI
+      with a subject, and those with none. A triple usage whose terms are known (an IRI object; a property's IRI or
+      literal value, read first, _P-27c_) is written, not fetched; the others are fetched by their blank nodes'
+      store labels, with their closures and the annotations on them, and a reified axiom with the triple it
+      annotates. Then the declaration types of every IRI
       either mentions. If the fragments mention more than `MAX_FRAGMENT_IRIS` IRIs, or are larger together than one
       query's result may be (`CONSTRUCT_MAX_BYTES`, which keeps the OWLAPI's input within its heap; the literals
       written in pass no query's cap), the page says it's too large to show instead.
@@ -984,10 +1051,23 @@ Tabs (U-28; see [2.9](#29-page-layout)):
       (NCBITaxon_156408, 17,119 usages: 100 ms streaming, 169 ms sorting, its names read from 3 M entities). So N-3
       holds on all three. The count alone: 2 ms at p50 and 4–6 ms at p95. Building the derived database took 9 s,
       12 s and 207 s.
+    - **Timings once the table is ready** _(P-27c, `research/P-27c/pages.py`)_: the first page with its count, as the
+      tab reads it from the table (count and rows, the values, fragments, parse, links and HTML), for the 30
+      most-used entities and 150 at random, and their middle and last pages, 5 runs each after a warm-up on
+      NCBITaxon, 3 on Uberon and HPO: NCBITaxon's most-used, `hasDbXref` (3,075,835 usages), 26 ms at p50 and 32 ms
+      at p95; all its first pages 3 ms at p50, 15 ms at p95, 33 ms at most; deep pages 24 ms at p95. Uberon and HPO:
+      most-used (`hasDbXref`, 121,833 and 84,247 usages) 31 ms at p50, 35 and 40 ms at p95; every page 51 ms at most.
+      The table's read takes under 1 ms at p95. So N-3 holds for every entity once the table is ready. Every page
+      held one axiom per usage.
+    - **Streamed again** _(P-27c, `research/P-27c/streamed.py`, P-27b's bench with a property's values read per
+      page)_: NCBITaxon 7 ms at p50, 154 ms at p95, 207 ms at most; HPO 8 ms, 89 ms, 189 ms (`dc:date`, 13,571
+      usages); `hasRelatedSynonym` 137 ms, of which 88 ms streaming its subjects and 17 ms sorting, against 175 ms.
   - **Failures** _(P-27b)_: a count, stream, fetch or parse that fails fails only the tab's content, with "The usages
     can't be shown just now.", the full error logged, as the Overview's panels do.
   - **Data** _(P-27b)_: a page is a `UsageTab`, built apart from its HTML for the JSON API (P-33).
-  - **Filters** (U-34, Later) can read the usage table if it stores each axiom's kind and property.
+  - **Filters** (U-34, Later) can read the usage table, which stores each axiom's kind and main predicate
+    ([2.5](#25-derived-data-pre-caching)). Before it's ready, the filters would wait for it, as the largest entities
+    do.
 - **Individuals** (classes only; Later, U-18): the class's named individuals, paged.
 
 **Overview tab:**
@@ -1365,8 +1445,8 @@ An in-memory LRU of rendered HTML, keyed by `(generation, page, tab, panel only)
 (default 100). The page is the URL path plus the query parameters that name the entity, `iri` on the fallback route
 and `path` and `fragment` on the hash route, but no others, so junk queries can't fill the cache. The tab is the one
 the page shows, not the query's `tab`, which some pages ignore (2.9), with the Usage tab's `page` (2.8); `panel only`
-is whether the response is a tab panel alone (`panel=1`, 2.9). A Usage tab whose count is over T, "Preparing…", isn't
-cached until the usage table is ready (P-27c).
+is whether the response is a tab panel alone (`panel=1`, 2.9). A Usage tab showing "Preparing…" (its count over T
+before the usage table is ready, P-27c) isn't cached, as it changes once the table is ready.
 _(Q13)_ Including the generation number in the key means a reload invalidates entries in every worker without
 coordination. Pages differ for admins (the navigation bar's admin link, 2.9), so the key must also include whether
 the user is an admin, or the cache must hold pages without the frame's per-user part and add it after the lookup
@@ -1490,7 +1570,7 @@ To settle when it's built:
 | Fragment rendering misses axioms a full-ontology render would show | Resolved by P-15: a fragment adds the axioms rooted at blank nodes that reach the entity (n-ary disjointness and difference, negative property assertions, general class axioms), and the symmetric axioms other entities state. A test compares fragment with full-ontology rendering for every entity of a test ontology holding every kind of OWL 2 axiom; 598 of 598 Uberon entities and 305 of 305 NCBITaxon ones matched too (2.8). |
 | Heavily used classes make their pages slow | Finding a class's general class axioms walks back through every class expression it's in, and its subclasses; P-15 measured the cost, and the fallback if an ontology's hubs are much worse (2.8). |
 | Usage misses references inside class expressions | Resolved by S-7: the blank-node owner map (2.5) finds them; the Usage tab's usages matched the OWLAPI's for every entity checked in Uberon, HPO and NCBITaxon (2.8). |
-| Sorted Usage pages are slow for heavily used entities | Sorting needs every usage: 21–28 s for NCBITaxon's largest (2.5–3.1 M) in S-7. Entities up to 20 K usages are streamed per request; the usage table, built in the background after a load, serves the rest, which show "Preparing…" until then (2.8). Its build time is estimated; P-27 measures it first. |
+| Sorted Usage pages are slow for heavily used entities | Resolved by P-27c: sorting needs every usage, 21–28 s for NCBITaxon's largest (2.5–3.1 M) in S-7, so the usage table, built in the background after a load (253 s on NCBITaxon), serves every page as a range read: 32 ms at p95 for its most-used entity. Until it's ready, entities up to 20 K usages are streamed per request, and the rest show "Preparing…" (2.8). |
 
 ---
 
@@ -1512,7 +1592,6 @@ flowchart LR
     subgraph P4["Phase 4: Browsing"]
         P17["P-17 Home page"]
         P18["P-18 Hierarchy trees"]
-        P27["P-27 Usage tab"]
     end
     subgraph P5["Phase 5: Search, caching, auth"]
         P19["P-19 Search backend"]
@@ -1533,7 +1612,7 @@ flowchart LR
     S5b["S-5b OLS4 comparison"]
 
     P19 --> P20
-    P17 & P18 & P19 & P27 --> P33
+    P17 & P18 & P19 --> P33
     P18 & P20 --> P25
     P22 --> P23
     P22 & P31 --> P36
@@ -1596,7 +1675,7 @@ go into this document.
 | P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout; panel data built apart from its HTML (2.8); entity pages fill the window, the panels at fixed positions and scrolling within themselves, with a one-page view for printing, small screens and on demand (2.9) | U-3, U-9, U-30, U-31, U-32, U-44 | P-12, P-15b | Done | [#37](https://github.com/jclerman/browl/issues/37) (sub-issues [#29](https://github.com/jclerman/browl/issues/29), [#38](https://github.com/jclerman/browl/issues/38), [#39](https://github.com/jclerman/browl/issues/39), [#103](https://github.com/jclerman/browl/issues/103)) |
 | P-17 | Ontology home page, with the dropped-imports warning and the triple counts the job state keeps (P-8); link the ontology and version IRIs only if `http` or `https` (`browl.derived.Meta`) | U-1 | P-14 | To do | [#30](https://github.com/jclerman/browl/issues/30) |
 | P-18 | Hierarchy trees with lazy loading (htmx) and keyboard support | U-7, U-17 | P-12, P-14 | To do | [#31](https://github.com/jclerman/browl/issues/31) |
-| P-27 | Usage tab on entity pages: the blank-node owner map, streaming up to 20 K usages per request, and the usage table built in the background after a load (2.5, 2.8) | U-26 | P-9, P-16, S-4, S-7 | To do | [#41](https://github.com/jclerman/browl/issues/41) (sub-issues [#108](https://github.com/jclerman/browl/issues/108), [#109](https://github.com/jclerman/browl/issues/109), [#110](https://github.com/jclerman/browl/issues/110)) |
+| P-27 | Usage tab on entity pages: the blank-node owner map, streaming up to 20 K usages per request, and the usage table built in the background after a load (2.5, 2.8) | U-26 | P-9, P-16, S-4, S-7 | Done | [#41](https://github.com/jclerman/browl/issues/41) (sub-issues [#108](https://github.com/jclerman/browl/issues/108), [#109](https://github.com/jclerman/browl/issues/109), [#110](https://github.com/jclerman/browl/issues/110)) |
 
 ### Phase 5: Search, caching, auth
 

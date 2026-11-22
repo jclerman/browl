@@ -28,7 +28,7 @@ from browl.jobtypes import StageError
 from browl.links import EntityLink
 from browl.rdf import IRI, RDFS, XSD
 from browl.rdf import RDF as RDF_NS
-from browl.usage_tab import UsageGroup, UsageTab
+from browl.usage_tab import PageNotFoundError, UsageGroup, UsageTab
 from tests.conftest import DATA
 from tests.helpers import WAIT_S, LiveServer, derived_stage, iso, make_app, no_axioms
 
@@ -1457,3 +1457,68 @@ def test_usage_label_fills_in_on_usage_tab(page: Page, server: LiveServer) -> No
     expect(tab(page, "Usage (7)")).to_be_visible()
     expect_selected(page, "Usage (7)")
     expect(page).to_have_url(f"{server.url}/example.org/plain?tab=usage")
+
+
+def test_usage_preparing_polls(page: Page, server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that "Preparing…" polls its page's panel, and is replaced by it once the usage table is ready.
+
+    The poll keeps the tab selected and the page's URL, and the label keeps its count.
+    """
+    calls: list[int] = []
+
+    async def read_usage_tab(request: object, state: object, iri: str, number: int) -> UsageTab:
+        calls.append(number)
+        if len(calls) < 3:  # the page, then the first poll
+            return UsageTab(count=30_000, page=number, pages=600, groups=None, preparing=True, remaining_s=90)
+        subject = IRI(f"{EX}/subject")
+        axiom = owl.SubClassOf(
+            sub=owl.Entity(kind=owl.EntityKind.CLASS, iri=subject), super=owl.Entity(kind=owl.EntityKind.CLASS, iri=iri)
+        )
+        groups = [UsageGroup(subject=subject, axioms=[axiom])]
+        return UsageTab(count=30_000, page=number, pages=600, groups=groups)
+
+    monkeypatch.setattr(browl.lookup, "read_usage_tab", read_usage_tab)
+    monkeypatch.setattr(browl.lookup, "POLL_S", 0.2)
+    polls: list[str] = []
+    page.on("request", lambda request: polls.append(request.url) if "panel=1" in request.url else None)
+    page.goto(f"{server.url}/example.org/plain?tab=usage&page=2")
+    expect(page.locator("#usage-preparing")).to_have_text("30,000 usages. Preparing… Ready in about 2 minutes.")
+    expect(page.locator(".usage-frame dt")).to_have_count(1)
+    expect(page.locator("#usage-preparing")).to_have_count(0)
+    assert query_of(polls[0]) == {"tab": ["usage"], "page": ["2"], "panel": ["1"]}
+    assert len(polls) == 2  # it stops once the table is ready
+    page.wait_for_timeout(500)
+    assert len(polls) == 2
+    expect(tab(page, "Usage (30,000)")).to_have_attribute("aria-selected", "true")
+    expect(page).to_have_url(f"{server.url}/example.org/plain?tab=usage&page=2")
+
+
+def test_usage_poll_past_listed(page: Page, server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a poll whose page is past those listed, once the usage table is ready, gets the first page.
+
+    A 404 there wouldn't be swapped in, so it would poll on.
+    """
+    calls: list[int] = []
+
+    async def read_usage_tab(request: object, state: object, iri: str, number: int) -> UsageTab:
+        calls.append(number)
+        if len(calls) == 1:  # the page
+            return UsageTab(count=30_000, page=number, pages=600, groups=None, preparing=True)
+        if number > 1:  # some of the usages counted aren't listed
+            raise PageNotFoundError(f"page {number} of 1 listed")
+        subject = IRI(f"{EX}/subject")
+        axiom = owl.SubClassOf(
+            sub=owl.Entity(kind=owl.EntityKind.CLASS, iri=subject), super=owl.Entity(kind=owl.EntityKind.CLASS, iri=iri)
+        )
+        return UsageTab(count=30_000, page=number, pages=1, groups=[UsageGroup(subject=subject, axioms=[axiom])])
+
+    monkeypatch.setattr(browl.lookup, "read_usage_tab", read_usage_tab)
+    monkeypatch.setattr(browl.lookup, "POLL_S", 0.2)
+    polls: list[str] = []
+    page.on("request", lambda request: polls.append(request.url) if "panel=1" in request.url else None)
+    page.goto(f"{server.url}/example.org/plain?tab=usage&page=600")
+    expect(page.locator(".usage-frame dt")).to_have_count(1)
+    expect(page.locator("#usage-preparing")).to_have_count(0)
+    page.wait_for_timeout(500)
+    assert len(polls) == 1
+    assert calls == [600, 600, 1]

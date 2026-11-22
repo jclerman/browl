@@ -50,7 +50,7 @@ def sparql_file(name: str) -> str:
 
 
 class DerivedWriter:
-    """Writes to the derived database being built, on the one thread that owns its connection.
+    """Writes to a database being built (the derived database or a usage table) on the thread that owns its connection.
 
     Each call queues its work on that thread and waits for it. A cancelled call's work still runs; anything queued
     after it, such as the build's cleanup, runs once it's done.

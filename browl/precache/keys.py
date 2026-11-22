@@ -3,7 +3,8 @@
 A file stores a key per component: `schema` (`browl.derived.SCHEMA` and `INDEXES`), `meta` (the ontology header,
 `browl.precache.header`) and each hook, by name. The key of the header or a hook hashes its import closure within browl
 (`closure`, `code_digest`) and the `Settings` fields it declares (`settings_values`). DESIGN.md §2.5 gives the full
-rules and the reasons; `docs/SCHEMA.md` says what a contributor must do.
+rules and the reasons; `docs/SCHEMA.md` says what a contributor must do. A usage table's file stores one key, of its
+code and the derived database's keys (`usage_table_key`).
 """
 
 import ast
@@ -21,7 +22,7 @@ from pathlib import Path
 from pydantic import Secret, SecretBytes, SecretStr
 
 from browl import derived
-from browl.precache import header
+from browl.precache import header, usage_table
 from browl.precache.core import SPARQL_DIR, Hook, sparql_file
 from browl.settings import Settings
 
@@ -149,6 +150,15 @@ def build_keys(settings: Settings, hooks: Sequence[Hook]) -> dict[str, str]:
             raise ValueError(f"two build key components are named {hook.name!r}")
         keys[hook.name] = component_key(hook.module, hook.settings, settings)
     return keys
+
+
+def usage_table_key(derived_keys: Mapping[str, str]) -> str:
+    """Return the key of a usage table built from a derived database with these build keys (DESIGN.md §2.5).
+
+    It hashes the table's build code (`code_key` of `browl.precache.usage_table`), which reads no settings, and the
+    derived database's keys, as the table refers to its entities and owner map by number.
+    """
+    return _hash({"code": code_key(usage_table.__name__), "derived": dict(derived_keys)})
 
 
 def _is_secret(annotation: object) -> bool:
