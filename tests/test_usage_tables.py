@@ -7,23 +7,25 @@ import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, closing
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx2
 import pytest
 
 import browl.precache.usage_table
+import browl.usage_tab
 import browl.usage_tables
 import browl.usages
 from browl import owlapi
 from browl.fuseki import UNION_FROM, FusekiClient, SparqlError
-from browl.jobs import JobLock
+from browl.jobs import JobLock, JobState
 from browl.precache.core import DerivedWriter
 from browl.precache.keys import build_keys
 from browl.precache.stage import HOOKS, on_thread
 from browl.precache.usage_table import Progress, Source, UsageKind, fill_usage_table
 from browl.rdf import IRI, OWL, RDF, RDFS, Literal
 from browl.settings import Settings
-from browl.usage_tab import sorted_usages
+from browl.usage_tab import PageNotFoundError, UsageTab, read_usage_tab, sorted_usages
 from browl.usage_tables import (
     TableNotReadyError,
     UsageTables,
@@ -34,7 +36,7 @@ from browl.usage_tables import (
     remove_others,
     table_path,
 )
-from browl.usages import UsageSource, UsageStore, count_usages, read_table_page, read_usages
+from browl.usages import UsageCounts, UsageSource, UsageStore, count_usages, read_table_page, read_usages
 from tests.helpers import connect as connect_derived
 from tests.helpers import loaded, make_settings, ontology_ntriples
 
@@ -121,6 +123,20 @@ async def assert_table_matches(store: UsageStore, iris: list[str]) -> None:
             assert (part.previous, part.usages) == (ordered[start - 1], ordered[start : start + 2]), (iri, start)
 
 
+async def tab_page(store: UsageStore, settings: Settings, iri: str, page: int) -> UsageTab:
+    """Return a page of an entity's Usage tab, as the app reads it from the store."""
+    state = SimpleNamespace(
+        sparql=store.sparql,
+        derived=store.derived,
+        usage_tables=store.tables,
+        usage_counts=UsageCounts(),
+        settings=settings,
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=state), scope={"type": "http"})
+    jobs = JobState(generation=store.generation, ready_generation=store.generation)
+    return await read_usage_tab(request, jobs, iri, page)  # type: ignore[arg-type]
+
+
 @pytest.mark.fuseki
 @pytest.mark.jvm
 async def test_matches_streamed(store: UsageStore, settings: Settings) -> None:
@@ -147,20 +163,93 @@ async def test_imports(fuseki_url: str, ntriples: bytes, settings: Settings) -> 
 
 @pytest.mark.fuseki
 @pytest.mark.jvm
-async def test_anonymous_individuals(fuseki_url: str, settings: Settings) -> None:
-    """Check that usages in triples with a blank subject the owner map lacks are counted, not listed, as streamed."""
+async def test_anonymous_individuals(fuseki_url: str, settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that usages in triples with a blank subject the owner map lacks are counted, not listed, as streamed.
+
+    The tab's pages are of those listed: a page past them is a 404, not blank.
+    """
     a, remark = f"<{NS}A>", f"<{NS}remark>"
     triples = (
         f"{a} {RDF_TYPE} {OWL_CLASS} .\n{remark} {RDF_TYPE} <{OWL}AnnotationProperty> .\n"
-        f'_:x {RDF_TYPE} {a} .\n_:x {remark} "hi" .\n<{NS}B> {RDF_TYPE} {OWL_CLASS} .\n<{NS}B> {remark} {a} .\n'
+        f"{''.join(f'_:{blank} {RDF_TYPE} {a} .\n' for blank in 'wxyz')}"
+        f'_:x {remark} "hi" .\n<{NS}B> {RDF_TYPE} {OWL_CLASS} .\n<{NS}B> {remark} {a} .\n'
     )
+    monkeypatch.setattr(browl.usage_tab, "PAGE_USAGES", 1)
     async with (
         loaded(fuseki_url, settings, {None: triples.encode()}, "") as found,
         with_table(found, settings) as tabled,
     ):
         await assert_table_matches(tabled, [f"{NS}A", f"{NS}remark"])
         page = await read_table_page(tabled, f"{NS}A", 0, 50)
-        assert page is not None and (page.count, page.listed) == (2, 1)
+        assert page is not None and (page.count, page.listed) == (5, 1)
+        first = await tab_page(tabled, settings, f"{NS}A", 1)
+        assert (first.count, first.pages) == (5, 1)
+        with pytest.raises(PageNotFoundError):
+            await tab_page(tabled, settings, f"{NS}A", 2)
+
+
+@pytest.mark.fuseki
+@pytest.mark.jvm
+async def test_several_values(fuseki_url: str, settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check a subject's several values of one property, IRIs, a literal and a blank node, through the table.
+
+    Each is a usage by its place among the subject's values (`Usage.index`), so each page of one shows another axiom.
+    """
+    a, note = f"<{NS}A>", f"<{NS}note>"
+    values = (f"<{NS}C>", f"<{NS}B>", '"lit"@en', "_:b")
+    triples = (
+        f"{a} {RDF_TYPE} {OWL_CLASS} .\n{note} {RDF_TYPE} <{OWL}AnnotationProperty> .\n"
+        f"{''.join(f'{a} {note} {value} .\n' for value in values)}"
+    )
+    monkeypatch.setattr(browl.usage_tab, "PAGE_USAGES", 1)
+    async with (
+        loaded(fuseki_url, settings, {None: triples.encode()}, "") as found,
+        with_table(found, settings) as tabled,
+    ):
+        await assert_table_matches(tabled, [f"{NS}A", f"{NS}note"])
+        page = await read_table_page(tabled, f"{NS}note", 0, 50)
+        assert page is not None
+        assert [usage.index for usage in page.usages] == [0, 1, 2, 3]
+        shown = []
+        for number in range(1, 5):
+            tab = await tab_page(tabled, settings, f"{NS}note", number)
+            assert tab.groups is not None
+            [group] = tab.groups
+            [axiom] = group.axioms
+            shown.append(axiom.manchester.removeprefix(f"<{NS}A> <{NS}note> "))
+    # In N-Triples order: a literal's quote, then an IRI's `<`, then a blank node's `_:`.
+    assert shown[:3] == ['"lit"@en', f"<{NS}B>", f"<{NS}C>"]
+    assert shown[3].startswith("_:")
+
+
+@pytest.mark.fuseki
+@pytest.mark.jvm
+async def test_subjects_ordered(fuseki_url: str, settings: Settings) -> None:
+    """Check the order of an entity's subjects through the table, against the stream.
+
+    IRIs that are no entity's sort among themselves by IRI. A punned IRI sorts by its first entity's name.
+    """
+    a = f"<{NS}A>"
+    subclass = f"<{RDFS}subClassOf>"
+    triples = (
+        f"{a} {RDF_TYPE} {OWL_CLASS} .\n"
+        f"{''.join(f'<{NS}{name}> {subclass} {a} .\n' for name in 'zam')}"
+        f"<{NS}X> {RDF_TYPE} {OWL_CLASS} .\n<{NS}X> {RDF_TYPE} <{OWL}ObjectProperty> .\n<{NS}X> {subclass} {a} .\n"
+        f"<{NS}Y> {RDF_TYPE} {OWL_CLASS} .\n<{NS}Y> {subclass} {a} .\n"
+    )
+    async with loaded(fuseki_url, settings, {None: triples.encode()}, "") as found:
+        path = browl.usage_tables.derived.derived_path(settings.data_dir, found.generation)
+        with closing(sqlite3.connect(path)) as connection, connection:  # before any read, as reads are immutable
+            pun = [number for (number,) in connection.execute("SELECT id FROM entity WHERE iri = ?", (f"{NS}X",))]
+            assert len(pun) == 2
+            names = [("zed", min(pun)), ("alpha", max(pun))]  # its first entity's name sorts it after Y's
+            connection.executemany("UPDATE entity SET display_name = ? WHERE id = ?", names)
+            connection.execute("UPDATE entity SET display_name = 'mid' WHERE iri = ?", (f"{NS}Y",))
+        async with with_table(found, settings) as tabled:
+            await assert_table_matches(tabled, [f"{NS}A"])
+            page = await read_table_page(tabled, f"{NS}A", 0, 50)
+    assert page is not None
+    assert [usage.subject for usage in page.usages] == [f"{NS}{name}" for name in ("Y", "X", "a", "m", "z")]
 
 
 @pytest.mark.fuseki
