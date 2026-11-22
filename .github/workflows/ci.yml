@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BROWL_TEST_FUSEKI_IMAGE: browl-fuseki-ci
+      # `make test`'s test processes. The runner has 4 vCPUs, which the tests' JVM and Docker work also needs.
+      TEST_WORKERS: 3
     strategy:
       fail-fast: false
       matrix:

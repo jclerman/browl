@@ -36,6 +36,10 @@ Playwright's headless Chromium (`make browser`, about 100 MB) into Playwright's 
 downloads tbls, at the version the `Makefile` pins, for the SQLite schema docs ([`docs/SCHEMA.md`](docs/SCHEMA.md)). The
 git hook runs the linters on each commit; `make lint` runs them on every file.
 
+`make test` runs the tests in 4 processes ([pytest-xdist](https://pytest-xdist.readthedocs.io/)); `TEST_WORKERS` sets
+how many (`make test TEST_WORKERS=0` runs them in one), and `TEST_DIST` how xdist hands them out (`--dist`). A plain
+`poetry run pytest`, as for a single test or a debugger, runs in one process.
+
 On Linux, Chromium also needs system libraries: `poetry run playwright install-deps chromium-headless-shell` (it asks
 for sudo). `make doctor` says whether the browser tests can run.
 
