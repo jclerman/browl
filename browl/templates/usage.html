@@ -31,16 +31,17 @@
    nothing moves from page to page, held there as the tab panel scrolls; then a frame of the page's usages
    in three columns, each subject once, then one line per axiom (`usage_line`), in Manchester syntax. The count is in
    the tab's label only. Above the streaming limit, before the usage table is ready, the count and "Preparing…", with
-   an estimate if there's one, in an element of its own, which polls the tab's panel (`poll`, every `poll_s` seconds)
+   an estimate if there's one, in an element of its own, which polls the tab's panel (`poll`, a `browl.lookup._Poll`)
    and is replaced by it once the table is ready (`browl.lookup._page`). #}
-{% macro usage_panel(usage, pager, iri, poll=none, poll_s=none, remaining=none) -%}
+{% macro usage_panel(usage, pager, iri, poll=none) -%}
 <section class="usage">
   {% if usage.count is none %}
   <p class="note">The usages can't be shown just now.</p>
   {% elif usage.preparing %}
   <p class="note" id="usage-preparing"
-    {%- if poll %} hx-get="{{ poll }}" hx-trigger="every {{ poll_s }}s" hx-target="#tab-panel"{% endif %}>
-    {{- "{:,}".format(usage.count) }} usages. Preparing…{% if remaining %} Ready in {{ remaining }}.{% endif %}</p>
+    {%- if poll %} hx-get="{{ poll.url }}" hx-trigger="every {{ poll.every_s }}s" hx-target="#tab-panel"{% endif %}>
+    {{- "{:,}".format(usage.count) }} usages. Preparing…
+    {%- if poll and poll.remaining %} Ready in {{ poll.remaining }}.{% endif %}</p>
   {% elif usage.count == 0 %}
   <p class="note">None.</p>
   {% else %}

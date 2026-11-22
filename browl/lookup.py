@@ -174,6 +174,21 @@ class _TabUrls:
 
 
 @dataclass(frozen=True)
+class _Poll:
+    """How the Usage tab's "Preparing…" asks for its panel again, until the usage table is ready.
+
+    Attributes:
+        url: The panel's URL, root-relative.
+        every_s: How often, in seconds.
+        remaining: About how long the table's build has left, as the page says it; None if unknown.
+    """
+
+    url: str
+    every_s: float
+    remaining: str | None
+
+
+@dataclass(frozen=True)
 class _Pager:
     """The Usage tab's links to other pages, and its form to go to a page.
 
@@ -307,12 +322,11 @@ async def _page(
             usage = await read_usage_tab(request, state, entity.iri, 1)
         context["usage"] = usage
         context["pager"] = _pager(request, at, usage)
-        context |= {"poll": None, "poll_s": None, "remaining": None}
-        if usage.preparing:  # it polls its panel until the usage table is ready
+        context["poll"] = None
+        if usage.preparing:
             params = [(TAB_PARAM, USAGE), *([(PAGE_PARAM, str(usage.page))] if usage.page > 1 else [])]
-            context["poll"] = href(request, with_query(at.panel or at.page, [*params, (PANEL_PARAM, "1")]))
-            context["poll_s"] = POLL_S
-            context["remaining"] = remaining_text(usage.remaining_s)
+            url = href(request, with_query(at.panel or at.page, [*params, (PANEL_PARAM, "1")]))
+            context["poll"] = _Poll(url, POLL_S, remaining_text(usage.remaining_s))
         count = usage.count
     context["tabs"] = _usage_label(request, links, entity.iri, count)
     if query.panel:
