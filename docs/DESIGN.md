@@ -1815,6 +1815,31 @@ stop, with the page saying it's saving, is far simpler. On NCBITaxon a full rebu
 about 4), and there only the locally updated tables would be kept exact, leaving the descendant counts and usage
 positions to the background rebuild.
 
+A middle path makes the hard items exact as well, without moving the whole ontology into memory (as WebProtégé holds
+it in the OWLAPI, which would replace Fuseki and most of SQLite). Fuseki stays the store of record, and pages still
+render from the triples fetched for each:
+
+1. The locally updated tables are made writable (WAL rather than `immutable`) and updated as each edit is applied.
+2. Only the global structures are held in memory and updated per edit: the hierarchies with their counts, as arrays
+   and descendant bitsets (one is about 375 KB on NCBITaxon's 3 M nodes, so recomputing a few hundred ancestors takes
+   milliseconds), and each entity's usage order, in an order-statistic tree, so a page is found and a usage inserted
+   in O(log n). There's one worker (2.1), so nothing in memory is shared between processes.
+3. They're built from SQLite at each start, in tens of seconds on NCBITaxon, with pages falling back meanwhile as the
+   Usage tab does before its table is ready, and held throughout: tens of MB for the hierarchies, a few hundred MB for
+   NCBITaxon's 22 M usages.
+4. The usage table on disk falls behind, as rewriting its rows per edit is too slow, so a restart replays the edit log
+   on top of it, and a periodic rebuild saves the current state and shortens the log.
+
+Against the overlay, it shows the same edits as quickly; what it adds is that the descendant counts, renamed subjects'
+order and split equivalence groups are exact at once. Both need a periodic rebuild, but here it only saves the state, so
+it can wait for a quiet time (nightly, say); with the overlay it's what corrects those items, so it's wanted soon after
+each burst of edits. That matters on NCBITaxon, where a rebuild holds the GIL for minutes, and hardly at all for
+ontologies of Uberon's size. Its costs are the startup time (growing with the edits since the last rebuild), the memory
+held, the order-statistic tree, and keeping Fuseki, SQLite and memory consistent through a crash.
+
+Neither design keeps inferences current. Showing an edit's inferences at once needs an incremental reasoner held in
+memory (ELK through the OWLAPI, about 16 GB for NCBITaxon), and that is close to the fully in-memory model: a redesign.
+
 Out of scope for now: a quality report on upload (ROBOT `report`, which assumes OBO conventions that not every
 ontology follows) and version history beyond the diff between two loads that [ONTOLOGY-DIFF.md](ONTOLOGY-DIFF.md)
 considers.
