@@ -333,6 +333,9 @@ def test_pages(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     assert '<a href="/axioms?tab=usage#Dog" rel="prev">Previous</a>' in second
     assert '<a href="/axioms?tab=usage&amp;page=3#Dog" rel="next">Next</a>' in second
     assert 'rel="prev"' not in first and 'rel="next"' not in last
+    assert '<span class="pager-off" aria-disabled="true">Previous</span>' in first
+    assert '<span class="pager-off" aria-disabled="true">Next</span>' in last
+    assert "pager-off" not in second
     assert '<form method="get" action="/axioms#Dog">' in first
     assert '<input type="hidden" name="tab" value="usage">' in first
     assert 'name="page" min="1" max="5" value="1"' in first

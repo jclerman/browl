@@ -566,6 +566,10 @@ code {
   align-items: baseline;
 }
 
+.pager-off {
+  color: var(--muted); /* Previous on the first page, Next on the last: there, so nothing moves from page to page */
+}
+
 .pager input[type="number"] {
   width: 6em;
 }
@@ -661,10 +665,13 @@ code {
         background: var(--bg);
       }
 
-      /* The Usage tab's paging stays in view as its usages scroll beneath it. */
+      /* The Usage tab's paging stays in view as its usages scroll beneath it. It's pulled up over the tab panel's
+         top padding, and sticks that far up, so nothing scrolls into the gap above it. */
       & .pager {
         position: sticky;
-        top: 0;
+        top: calc(var(--space) * -1);
+        margin-top: calc(var(--space) * -1);
+        padding-top: var(--space);
         z-index: 1;
         padding-bottom: calc(var(--space) / 2);
         border-bottom: 1px solid var(--border);

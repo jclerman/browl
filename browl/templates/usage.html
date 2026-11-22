@@ -27,7 +27,8 @@
 {%- endmacro %}
 
 {# The Usage tab (`browl.usage_tab.UsageTab`, DESIGN.md §2.8) of the entity `iri`: the paging at the top, if there's
-   more than one page (`browl.lookup._Pager`), held there as the tab panel scrolls; then a frame of the page's usages
+   more than one page (`browl.lookup._Pager`), Previous and Next always there, grayed out at the ends, so
+   nothing moves from page to page, held there as the tab panel scrolls; then a frame of the page's usages
    in three columns, each subject once, then one line per axiom (`usage_line`), in Manchester syntax. The count is in
    the tab's label only. Above the streaming limit, the count and "Preparing…", in an element of its own, which
    P-27c's polling can replace. #}
@@ -42,14 +43,16 @@
   {% else %}
   {% if pager is not none %}
   <nav class="pager" aria-label="Usage pages">
-    {% if pager.previous is not none %}<a href="{{ pager.previous }}" rel="prev">Previous</a>{% endif %}
+    {% if pager.previous is not none %}<a href="{{ pager.previous }}" rel="prev">Previous</a>
+    {%- else %}<span class="pager-off" aria-disabled="true">Previous</span>{% endif %}
     <form method="get" action="{{ pager.action }}">
       {% for name, value in pager.fields %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
       <label>Page <input type="number" name="page" min="1" max="{{ usage.pages }}" value="{{ usage.page }}"
         required> of {{ "{:,}".format(usage.pages) }}</label>
       <button type="submit">Go</button>
     </form>
-    {% if pager.next is not none %}<a href="{{ pager.next }}" rel="next">Next</a>{% endif %}
+    {% if pager.next is not none %}<a href="{{ pager.next }}" rel="next">Next</a>
+    {%- else %}<span class="pager-off" aria-disabled="true">Next</span>{% endif %}
   </nav>
   {% endif %}
   {% if usage.too_many %}
