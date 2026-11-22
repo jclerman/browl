@@ -225,6 +225,8 @@ class NodeType(StrEnum):
     NEGATIVE_DATA_PROPERTY_ASSERTION = "NegativeDataPropertyAssertion"
     SAME_INDIVIDUAL = "SameIndividual"
     DIFFERENT_INDIVIDUALS = "DifferentIndividuals"
+    ANNOTATION_ASSERTION = "AnnotationAssertion"
+    ANNOTATION = "Annotation"
     OTHER_AXIOM = "OtherAxiom"
 
 
@@ -382,7 +384,7 @@ class Entity(_Named):
 
 
 class IRIReference(_Named):
-    """An IRI that isn't an entity: an annotation property's domain or range.
+    """An IRI that isn't an entity: an annotation property's domain or range, or an annotation's subject or value.
 
     Attributes:
         iri: The IRI.
@@ -909,11 +911,36 @@ class DatatypeRestriction(Node):
     restrictions: tuple[FacetRestriction, ...]
 
 
+class Annotation(Node):
+    """An annotation of an axiom, or of another annotation, written `property value` (DESIGN.md §2.8, Usage).
+
+    Attributes:
+        property: The annotation property.
+        value: The value.
+        annotations: The annotation's own annotations, nested on it.
+    """
+
+    manchester_layout = (Slot("property"), Slot("value"))
+
+    type: typing.Literal[NodeType.ANNOTATION] = NodeType.ANNOTATION
+    property: Entity
+    value: AnnotationValue
+    annotations: tuple[Annotation, ...] = ()
+
+
 # Axioms.
 
 
 class Axiom(Node):
-    """An axiom, without its annotations: what a page shows of it (DESIGN.md §2.8, Panel data apart from its HTML)."""
+    """An axiom: what a page shows of it (DESIGN.md §2.8, Panel data apart from its HTML).
+
+    Its Manchester syntax leaves its annotations out: a page shows them, if at all, apart from the axiom's line.
+
+    Attributes:
+        annotations: The axiom's annotations, where a page shows them (a usage found only through them); else empty.
+    """
+
+    annotations: tuple[Annotation, ...] = ()
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -925,6 +952,10 @@ class Axiom(Node):
     def kind(self) -> str:
         """Return the axiom's kind, by its OWL 2 functional-syntax name, as `type` does; but see `OtherAxiom`."""
         return self.type
+
+    def without_annotations(self) -> typing.Self:
+        """Return the axiom without its annotations: itself if it has none."""
+        return self.model_copy(update={"annotations": ()}) if self.annotations else self
 
 
 class SubClassOf(Axiom):
@@ -1510,6 +1541,23 @@ class DifferentIndividuals(_Nary):
     members: tuple[Individual, ...]
 
 
+class AnnotationAssertion(Axiom):
+    """An annotation assertion, written `subject property value`, as a property assertion is.
+
+    Attributes:
+        subject: The subject: an IRI, or an anonymous individual.
+        property: The annotation property.
+        value: The value.
+    """
+
+    manchester_layout = (Slot("subject"), Slot("property"), Slot("value"))
+
+    type: typing.Literal[NodeType.ANNOTATION_ASSERTION] = NodeType.ANNOTATION_ASSERTION
+    subject: AnnotationSubject
+    property: Entity
+    value: AnnotationValue
+
+
 class OtherAxiom(Axiom):
     """An axiom of a kind no other node type covers, such as a SWRL rule, as plain text in functional syntax.
 
@@ -1533,6 +1581,8 @@ class OtherAxiom(Axiom):
 
 
 Individual = Annotated[Entity | AnonymousIndividual, Field(discriminator="type")]
+AnnotationSubject = Annotated[IRIReference | AnonymousIndividual, Field(discriminator="type")]
+AnnotationValue = Annotated[IRIReference | AnonymousIndividual | Literal, Field(discriminator="type")]
 ObjectPropertyExpression = Annotated[Entity | ObjectInverseOf, Field(discriminator="type")]
 ClassExpression = Annotated[
     Entity
@@ -1596,6 +1646,7 @@ AnyAxiom = Annotated[
     | SubAnnotationPropertyOf
     | AnnotationPropertyDomain
     | AnnotationPropertyRange
+    | AnnotationAssertion
     | OtherAxiom,
     Field(discriminator="type"),
 ]
