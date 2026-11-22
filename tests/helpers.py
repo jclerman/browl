@@ -17,23 +17,27 @@ from pathlib import Path
 from typing import Any
 
 import httpx2
+import jpype
 import uvicorn
 from fastapi import FastAPI
 
 from browl import derived
 from browl.app import create_app
-from browl.fuseki import END_VARIABLE, TSV
+from browl.derived import DerivedReader
+from browl.fuseki import END_VARIABLE, TSV, FusekiClient
 from browl.imports import OWL_IMPORTS
 from browl.jobs import JobContext, StageFunction
 from browl.jobtypes import ImportResult, Reasoner
+from browl.loading import dataset_name
 from browl.precache.core import Hook
 from browl.precache.entities import Reserved, fill_hash_prefix, insert_entities
 from browl.precache.keys import build_keys
-from browl.precache.stage import HOOKS
+from browl.precache.stage import HOOKS, pre_cache
 from browl.rdf import RDF, RDFS
 from browl.sandbox import Runner
 from browl.settings import Settings
 from browl.urls import URLMapper
+from browl.usages import UsageStore
 
 
 def make_settings(**overrides: object) -> Settings:
@@ -166,6 +170,9 @@ async def serve_runs(directory: Path) -> AsyncIterator[Path]:
 
 WAIT_S = 10.0
 """How long `wait_for` waits."""
+
+AXIOMS_ONTOLOGY = Path(__file__).parent / "data" / "axioms.ofn"
+"""A small ontology with every kind of OWL 2 axiom, in functional syntax."""
 
 
 async def wait_for(path: Path, run: asyncio.Future[object] | None = None) -> int:
@@ -354,3 +361,40 @@ def fuseki_dataset(fuseki_url: str, graphs: dict[str | None, bytes]) -> Iterator
 async def no_axioms(*args: object) -> tuple[list[object], bool]:
     """Stand in for `browl.overview._read_axioms`, finding no axioms without a query."""
     return [], False
+
+
+def ontology_ntriples() -> bytes:
+    """Return the test ontology as N-Triples, as the OWLAPI writes it: the RDF that browl's store would hold."""
+    manager = jpype.JClass("org.semanticweb.owlapi.apibinding.OWLManager").createOWLOntologyManager()
+    ontology = manager.loadOntologyFromOntologyDocument(jpype.JClass("java.io.File")(str(AXIOMS_ONTOLOGY)))
+    out = jpype.JClass("java.io.ByteArrayOutputStream")()
+    manager.saveOntology(ontology, jpype.JClass("org.semanticweb.owlapi.formats.NTriplesDocumentFormat")(), out)
+    return bytes(out.toByteArray())
+
+
+@asynccontextmanager
+async def loaded(
+    fuseki_url: str, settings: Settings, graphs: dict[str | None, bytes], dataset_clause: str
+) -> AsyncIterator[UsageStore]:
+    """Yield a store of N-Triples by graph (None: the default): an in-memory Fuseki dataset, and its derived database.
+
+    The named graphs are imports, which the pre-caching stage sees.
+    """
+    generation = 900_000 + uuid.uuid4().int % 100_000
+    name = dataset_name(generation)
+    async with httpx2.AsyncClient(base_url=fuseki_url, timeout=60) as http:
+        (await http.post("/$/datasets", data={"dbName": name, "dbType": "mem"})).raise_for_status()
+        try:
+            for graph, triples in graphs.items():
+                params = {"default": ""} if graph is None else {"graph": graph}
+                headers = {"Content-Type": "application/n-triples"}
+                (await http.post(f"/{name}/data", params=params, content=triples, headers=headers)).raise_for_status()
+            imports = [ImportResult(graph, triples=1) for graph in graphs if graph is not None]
+            await pre_cache(JobContext(generation, settings, Reasoner.NONE, imports=imports), http)
+            reader = DerivedReader(settings.data_dir, build_keys(settings, HOOKS))
+            try:
+                yield UsageStore(FusekiClient(http), reader, generation, dataset_clause)
+            finally:
+                reader.close()
+        finally:
+            await http.delete(f"/$/datasets/{name}")

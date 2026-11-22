@@ -2,10 +2,8 @@
 
 import asyncio
 import json
-import uuid
 from collections.abc import AsyncIterator, Iterator
-from contextlib import asynccontextmanager, closing
-from pathlib import Path
+from contextlib import closing
 from typing import Any
 
 import httpx2
@@ -14,14 +12,9 @@ import pytest
 
 from browl import axioms, owlapi
 from browl import usages as usages_module
-from browl.derived import DerivedReader, NotCurrentError, UsageRootKind
+from browl.derived import NotCurrentError, UsageRootKind
 from browl.fuseki import UNION_FROM, FusekiClient, SparqlError
-from browl.jobs import JobContext
-from browl.jobtypes import ImportResult, Reasoner
-from browl.loading import dataset_name
 from browl.precache.core import PREFIXES
-from browl.precache.keys import build_keys
-from browl.precache.stage import HOOKS, pre_cache
 from browl.rdf import IRI, RDF, RDFS, BlankNode, Literal, Term, ntriples_iris
 from browl.settings import Settings
 from browl.usages import (
@@ -34,11 +27,10 @@ from browl.usages import (
     count_usages,
     read_usages,
 )
-from tests.helpers import connect, make_settings
+from tests.helpers import connect, loaded, make_settings, ontology_ntriples
 
 pytestmark = [pytest.mark.anyio, pytest.mark.fuseki, pytest.mark.jvm]
 
-ONTOLOGY = Path(__file__).parent / "data" / "axioms.ofn"
 NS = "http://example.org/axioms#"
 DECLARATION_TYPES = (
     "owl:Class owl:ObjectProperty owl:DatatypeProperty owl:AnnotationProperty owl:NamedIndividual rdfs:Datatype"
@@ -56,15 +48,6 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
-def ontology_ntriples() -> bytes:
-    """Return the test ontology as N-Triples, as the OWLAPI writes it: the RDF that browl's store would hold."""
-    manager = jpype.JClass("org.semanticweb.owlapi.apibinding.OWLManager").createOWLOntologyManager()
-    ontology = manager.loadOntologyFromOntologyDocument(jpype.JClass("java.io.File")(str(ONTOLOGY)))
-    out = jpype.JClass("java.io.ByteArrayOutputStream")()
-    manager.saveOntology(ontology, jpype.JClass("org.semanticweb.owlapi.formats.NTriplesDocumentFormat")(), out)
-    return bytes(out.toByteArray())
-
-
 @pytest.fixture(scope="module")
 def ntriples(jvm: None) -> bytes:
     """Return the test ontology as N-Triples."""
@@ -78,34 +61,6 @@ def settings(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Settings]:
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("DATA_DIR", str(data_dir))
         yield make_settings()
-
-
-@asynccontextmanager
-async def loaded(
-    fuseki_url: str, settings: Settings, graphs: dict[str | None, bytes], dataset_clause: str
-) -> AsyncIterator[UsageStore]:
-    """Yield a store of N-Triples by graph (None: the default): an in-memory Fuseki dataset, and its derived database.
-
-    The named graphs are imports, which the pre-caching stage sees.
-    """
-    generation = 900_000 + uuid.uuid4().int % 100_000
-    name = dataset_name(generation)
-    async with httpx2.AsyncClient(base_url=fuseki_url, timeout=60) as http:
-        (await http.post("/$/datasets", data={"dbName": name, "dbType": "mem"})).raise_for_status()
-        try:
-            for graph, triples in graphs.items():
-                params = {"default": ""} if graph is None else {"graph": graph}
-                headers = {"Content-Type": "application/n-triples"}
-                (await http.post(f"/{name}/data", params=params, content=triples, headers=headers)).raise_for_status()
-            imports = [ImportResult(graph, triples=1) for graph in graphs if graph is not None]
-            await pre_cache(JobContext(generation, settings, Reasoner.NONE, imports=imports), http)
-            reader = DerivedReader(settings.data_dir, build_keys(settings, HOOKS))
-            try:
-                yield UsageStore(FusekiClient(http), reader, generation, dataset_clause)
-            finally:
-                reader.close()
-        finally:
-            await http.delete(f"/$/datasets/{name}")
 
 
 @pytest.fixture(scope="module")
