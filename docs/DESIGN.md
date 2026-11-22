@@ -700,32 +700,28 @@ by value. Fuseki can (`?s ?p <entity>`), so P-27 keeps two things instead ([S-7 
   and its count, is one range read ([2.8](#28-entity-pages)). It's in its own SQLite file per generation
   (`DATA_DIR/usages/{generation}.sqlite3`, `browl.precache.usage_table.SCHEMA`, [`SCHEMA.md`](SCHEMA.md)), keyed by
   code like the derived database, and used only once complete. Measured on S-7's setup
-  (`research/P-27c/bench.py`, the Mac, the stores served as S-7 served them): NCBITaxon 253 s (21.9 M usages of
-  24.0 M triples, a 528 MiB file, 25 bytes per usage; the build's process peaked at 1.4 GB), Uberon 6.9–7.7 s
-  (601 K usages, 14 MiB) and HPO 5.3–6.0 s (467 K, 11 MiB). As NCBITaxon's took under 5 minutes, the table holds
-  every entity, and streaming is only for the minutes before it's ready. A first version took 302 s, with the
-  scan's rows handled in plain Python and the ranks sorted in SQL; the scan's own code, leaving out declarations
-  (below) and sorting in Python brought it down.
+  ([`research/P-27c`](../research/P-27c/README.md)): NCBITaxon 253 s (21.9 M usages, from 24.0 M triples in all; a
+  528 MiB file, 25 bytes per usage; the process peaked at 1.4 GB), Uberon 6.9–7.7 s (601 K usages, 14 MiB) and HPO
+  5.3–6.0 s (467 K, 11 MiB). As NCBITaxon's took under 5 minutes, the table holds every entity, and streaming is only
+  for the minutes before it's ready.
   - **The build** (`browl.precache.usage_table.fill_usage_table`), on a thread of its own that owns the file's
     connection, as the derived database's is (`browl.precache.stage.on_thread`), with the generation's derived
     database attached read-only:
     1. Every entity IRI is ranked in name order, its first entity's casefolded display name then its IRI, as the tab
-       sorts subjects; ids aren't numbered in name order, and no sort key is stored in `entity` (6 s on NCBITaxon).
-       Meanwhile the store's triples are counted, for the estimate (3 s).
+       sorts subjects; ids aren't numbered in name order, and no sort key is stored in `entity`. Meanwhile the
+       triples the scan will read are counted, for the estimate.
     2. One bulk query reads every triple (`usage-scan.rq`), its object only if that's an IRI: a literal object is
        never read, since a property's usages are known by their place among their subject's values (`Usage.index`,
        [2.8](#28-entity-pages)). It leaves out the `rdf:type` triples whose object is OWL's vocabulary
-       (`owl:Class`, `owl:Axiom`, the characteristics…) unless that IRI is an entity: 3.6 M of NCBITaxon's triples,
-       none of them a usage. Each triple with an entity as object or as predicate, and an IRI subject that isn't that
-       entity, is staged, with its subject's rank; one with a blank subject is only counted, for the count's
-       correction (below). The scan is Python-bound, at 9 µs per triple on NCBITaxon (186 s): parsing the TSV takes
-       half; Fuseki sends it in 86 s.
+       (`owl:Class`, `owl:Axiom`, the characteristics…) unless that IRI is an entity: 15% of NCBITaxon's triples
+       (3.6 M of 24.0 M), none of them a usage. Each triple with an entity as object or as predicate, and an IRI
+       subject that isn't that entity, is staged, with its subject's rank; one with a blank subject is only counted,
+       for the count's correction (below). The scan is three quarters of the build, and Python-bound.
     3. The owner map's roots that are usages are staged too, under their owners.
     4. One `INSERT … SELECT` numbers each entity's usages in the tab's order with a window function, the subject's
        rank, then source, predicate, value and root, as `sorted_usages` orders a stream, into a `WITHOUT ROWID`
-       table keyed by (entity, position), in key order (68 s on NCBITaxon, sorting 21.9 M rows). A subject's usages of
-       a property as predicate are alike, so their place among the subject's values is the row's number less its
-       peers' first.
+       table keyed by (entity, position), in key order. A subject's usages of a property as predicate are alike, so
+       their place among the subject's values is the row's number less its peers' first.
     5. Each entity's count is the listed usages plus the triples with a blank subject the owner map lacks, as Fuseki's
        count has them (`browl.usages.count_usages`), so the label doesn't change when the table is ready.
   - **Each row** stores the usage's source, subject (`entity.id`, else a term), the axiom's kind
@@ -735,8 +731,10 @@ by value. Fuseki can (`?s ?p <entity>`), so P-27 keeps two things instead ([S-7 
   - **The key** (`browl.precache.keys.usage_table_key`) hashes the code of `browl.precache.usage_table`, by the same
     rules as a hook's (its import closure, the files it loads, the distributions, Python's version; it reads no
     settings), and the derived database's build keys, as it refers to `entity.id` and `usage_root.id`. A file built
-    by other code, or from another derived database, isn't current, and is built again. `tests/test_precache_keys.py`
-    traces the build as it does each hook. `browl.usage_tables`, which runs it, isn't keyed, like the stage.
+    by other code, or from another derived database, isn't current, and is built again; so is one built from another
+    file of the same derived database (`meta.derived`, its inode and modification time), e.g. one deleted by hand and
+    rebuilt, whose ids may differ. `tests/test_precache_keys.py` traces the build as it does each hook.
+    `browl.usage_tables`, which runs it, isn't keyed, like the stage.
   - **When it's built** (`browl.usage_tables.UsageTables`): after each job that reaches ready, before the previous
     generation's derived database is deleted, and at startup if the ready generation's derived database is current
     and its table isn't; after a rebuild, once that's ready. The job lock isn't held, so an upload can start
@@ -753,8 +751,7 @@ by value. Fuseki can (`?s ?p <entity>`), so P-27 keeps two things instead ([S-7 
     the thread pool's threads; an older generation's read opens its own.
   - **While it's built** the build's Python work holds the GIL, as pre-caching's does, so pages served meanwhile are
     slower; that's accepted, as loads are rare and pages are still served. The process grows by about 1.3 GB on
-    NCBITaxon, mostly the ranks (an IRI → rank dict of 3 M entries) and SQLite's caches (256 MiB for the table, whose
-    sort spills to temporary files beyond it, and 64 MiB for the scratch file).
+    NCBITaxon, mostly the ranks and SQLite's caches (`BUILD_CACHE_KIB`, `SCRATCH_CACHE_KIB`).
   - **A-10 and P-31:** `UsageTables.cancel` is what P-36's admin cancel will call; the build's progress
     (`browl.precache.usage_table.Progress`) is what P-31 will show.
 
@@ -1014,8 +1011,9 @@ Tabs (U-28; see [2.9](#29-page-layout)):
       unchanged. Without JavaScript, reloading the page shows it. The estimate, "Ready in about 3 minutes" or "less
       than a minute", is from the build's progress (`UsageTables.remaining_s`): the scan's rate so far gives its
       time left, and the writing after it takes about a quarter of the whole (`WRITE_SHARE`; 0.23–0.27 measured).
-      It's rough: the scan counts every triple, but reads an eighth fewer on NCBITaxon. A build in another worker,
-      or none, gives no estimate. If the build failed, the tab says its usages can't be shown, and doesn't poll.
+      The count is of the triples the scan reads, with the same filter (`usage-scan-count.rq`; 4 s on NCBITaxon,
+      alongside the ranking), so the rate isn't biased. A build in another worker, or none, gives no estimate. If
+      the build failed, the tab says its usages can't be shown, and doesn't poll.
   - **Not built:** walking `entity` in name order to fill a hub's first pages before the table is ready, and caching
     each hub's sorted list on first view. S-7 found the walk fast for the hubs too large to stream (7–75 ms for
     page 1 of the ranks and annotation properties), but slow for clustered ones: NCBITaxon's subclasses share name
