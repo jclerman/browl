@@ -867,7 +867,8 @@ Tabs (U-28; see [2.9](#29-page-layout)):
     annotations, which the OWLAPI holds as ontology annotations, and annotation properties' domains and ranges, which
     it holds as IRIs, not as references to the entity (P-27a's test checks every entity of `tests/data/axioms.ofn`,
     which has every kind of OWL 2 axiom). A symmetric axiom stated on another entity, such as
-    `B DisjointWith A`, is on both of A's tabs: the Overview (P-15) and, under B, the Usage tab.
+    `B DisjointWith A`, is on both of A's tabs: the Overview (P-15), as `B` under Disjoint With, and, under B, the
+    Usage tab, as `B DisjointWith A` (Layout, below).
   - **Axioms with no single subject** (general class axioms, n-ary axioms such as `DisjointClasses(A, B, C)`,
     negative property assertions) aren't in a class's Usage tab: the Overview tab already lists them for every class
     they mention (P-15). So each usage has exactly one subject, and nothing is counted twice. A property's Overview
@@ -896,9 +897,28 @@ Tabs (U-28; see [2.9](#29-page-layout)):
       small GET form (its hidden fields carry the page URL's own query, such as a fallback URL's `iri`, and the tab),
       with no script: a page is a full page load, which costs little, as it's the Usage tab alone.
   - **Layout** _(P-27b)_: a frame-like `<dl>`, as on the Overview: each subject once, in the label column, linked to
-    its page (`named_iri`), "No single subject" for the group with none; its axioms beneath, one per line, each
-    whole, in Manchester syntax with the Overview's tokens (`manchester`), sorted by kind and text. The count, and
-    the page number when there are several, above it.
+    its page (`named_iri`), "No single subject" for the group with none; its axioms beneath, one per line, in
+    Manchester syntax with the Overview's tokens (`manchester`), sorted by kind and text. The count, and the page
+    number when there are several, above it.
+    - **Three columns:** the subject; the axiom's keyword (`SubClassOf`, `EquivalentTo`, `DisjointWith`, `Domain`,
+      `Type`, an assertion's property, such as an annotation assertion's); and the rest of the axiom. Each line is a
+      CSS subgrid of the last two, so the keywords line up down the tab. The split comes from the node, not its text
+      (`browl.owl.Axiom.subject_split`): the layout's first item is the subject, the second a keyword or an entity.
+      The subject's repeat at the start of the line isn't shown, but is in visually hidden text, as text, not a
+      link, so a screen reader reads the line as the whole axiom. A line that doesn't start with its subject and a
+      keyword spans both columns: a property chain, which the property it implies owns
+      (`p o q SubPropertyOf: r`); a characteristic (`Functional: p`); an n-ary axiom written as a list
+      (`DisjointClasses: A, B, C`); a negative assertion (`not (…)`); an `OtherAxiom`; and every line with no
+      subject. An axiom's annotations stay beneath it, indented, under both columns. On a phone the subject goes
+      above its lines, which keep the two columns.
+    - **Symmetric axioms subject first:** `EquivalentTo`, `DisjointWith`, `SameAs`, `DifferentFrom`, equivalent and
+      disjoint properties and `InverseOf`, in their two-member form, are written with their members sorted, so the
+      subject could be on the right. A line has its subject first (`browl.owl.Axiom.with_first`): on Y's tab,
+      `X DisjointWith Y`, stated on X, is under X as `X DisjointWith Y`, though Y sorts first. Only the order it's
+      written in changes, not the axiom; the page data holds it so.
+    - **The entity highlighted:** wherever the page's entity is in a line, its keyword column and the annotations
+      beneath it included, it's in a `<mark>`, with a background and bold, so not by color alone (WCAG AA in light
+      and dark: `--mark-bg`); a link stays a link. The macros compare IRIs, not names. Not in the subject column.
   - **Annotation assertions** _(P-27b)_: most usages are annotation assertions (`S P <entity>`, or `S <entity> V` for
     an annotation property), so they have a node of their own (`browl.owl.AnnotationAssertion`), shown
     `subject property value`, as a property assertion is, and as the OWLAPI's renderer writes it. The Overview's
@@ -1036,6 +1056,14 @@ Tabs (U-28; see [2.9](#29-page-layout)):
     case-insensitively. Then come the others, by their text with the names the page shows, then by IRI.
   - **Punning:** an IRI with several types has each type's sections; where two of them share a label, both add their
     type ("Equivalent To (object property)").
+  - **Symmetric axioms:** one stated on another entity shows the page's entity first. A section shows only the
+    other members (`B` under Disjoint With on A's page); an axiom shown whole, such as an individual's `SameAs` under
+    Other axioms, is written with the entity first (`browl.owl.Axiom.with_first`), as on the Usage tab. _(P-27b)_
+  - **The entity highlighted** where a line shows it, such as in a general class axiom, as on the Usage tab
+    (`<mark>`); not in the annotations panel. The frame keeps its two columns. _(P-27b)_
+  - **Line breaks and keyword styles** (P-37): long axioms, with more than one set of parentheses, will be broken
+    across lines by their structure, with leading operators, and keywords and constructors styled apart, on this
+    panel and the Usage tab.
   - **Data:** each section (`AxiomGroup`) holds its label and lines; a line (`FrameLine`) its axiom, None for an
     implied equivalent, and the operands it shows, so the JSON API (U-42) returns the frame as the page shows it.
 - **Compact layout** (U-32): label column and value column in a two-column grid; tight line spacing within a group and a
@@ -1582,6 +1610,7 @@ go into this document.
 | P-31 | Show load progress: each stage's elapsed time, ROBOT's current step, triples loaded of the total, the import being handled; for pre-caching, each hook's name, elapsed time and rows written (of the expected total where known); and background builds after a load (P-27c's usage table), with their progress | A-5 | P-8 | To do | [#73](https://github.com/jclerman/browl/issues/73) |
 | P-32 | Show the reasoner's own progress (per task, as Protégé does), running ROBOT's reasoning through its Java API with a progress monitor | A-5 | P-31, P-30 | To do | [#74](https://github.com/jclerman/browl/issues/74) |
 | P-36 | Cancel from the admin status page: a running load or rebuild (the job stops, its new store and derived files are removed, and the served ontology is unchanged) or a background build after a load; and a time limit on pre-caching | A-10 | P-22, P-31 | To do | [#111](https://github.com/jclerman/browl/issues/111) |
+| P-37 | Axioms broken across lines by their structure, with leading operators indented by depth, where they have more than one set of parentheses; axiom keywords bold and class-expression constructors in an accent color; on the Overview's Logical axioms panel and the Usage tab (2.8, 2.9); amends U-32 | U-32 | P-15, P-16, P-27 | To do | [#114](https://github.com/jclerman/browl/issues/114) |
 | P-26 | Update README: remove Owlready2 and Fuseki (now the OWLAPI via JPype); replace "cached once built" with the bounded cache | | | Done | [#7](https://github.com/jclerman/browl/pull/7) |
 
 ### Later
