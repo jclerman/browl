@@ -152,16 +152,23 @@ def is_current(data_dir: Path, generation: int, key: str) -> bool:
 
 
 def remove_others(data_dir: Path, keep: int) -> None:
-    """Delete every usage table but `keep`'s, and every temporary file a build left; the caller holds the lock."""
+    """Delete every usage table but `keep`'s, and every temporary file a build left; the caller holds the lock.
+
+    A file it can't delete is logged, and left.
+    """
     directory = data_dir / USAGES_DIR
     if not directory.is_dir():
         return
     for path in directory.iterdir():
         stem = path.name.removesuffix(_SCRATCH_SUFFIX).removesuffix(_TEMP_SUFFIX).removesuffix(_SUFFIX)
         temporary = path.name.endswith(_TEMP_SUFFIX)
-        if temporary or (path.name.endswith(_SUFFIX) and stem.isascii() and stem.isdigit() and int(stem) != keep):
+        old = path.name.endswith(_SUFFIX) and stem.isascii() and stem.isdigit() and int(stem) != keep
+        if (temporary or old) and path.is_file():
             logger.info("Deleting %s", path)
-            path.unlink(missing_ok=True)
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as error:
+                logger.warning("Couldn't delete %s: %s", path, error)
 
 
 @dataclass(frozen=True)

@@ -475,6 +475,27 @@ async def test_built_elsewhere_meanwhile(tables: UsageTables, tmp_path: Path, mo
     assert is_current(tmp_path, 8, tables.key)
 
 
+def test_remove_others_leaves_what_it_cant_delete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Check that a directory, or a file that can't be deleted, is left, and the rest deleted."""
+    directory = tmp_path / "usages"
+    (directory / "x.tmp").mkdir(parents=True)
+    for name in ("1.sqlite3", "2.sqlite3", "3.sqlite3"):
+        (directory / name).write_text("")
+    unlink = Path.unlink
+
+    def guarded(path: Path, missing_ok: bool = False) -> None:
+        if path.name == "1.sqlite3":
+            raise PermissionError("not allowed")
+        unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", guarded)
+    remove_others(tmp_path, 3)
+    assert sorted(path.name for path in directory.iterdir()) == ["1.sqlite3", "3.sqlite3", "x.tmp"]
+    assert "Couldn't delete" in caplog.text and "not allowed" in caplog.text and "x.tmp" not in caplog.text
+
+
 @pytest.mark.fuseki
 @pytest.mark.jvm
 async def test_count_table_failure(
