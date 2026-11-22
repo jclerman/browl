@@ -21,7 +21,7 @@ import browl.precache.stage
 import browl.usage_tab
 import browl.usages
 from browl import owl, owlapi
-from browl.axioms import axioms_about, convert_axioms, entity_axioms, fetch_fragment
+from browl.axioms import axioms_about, convert_axioms, entity_axioms, fetch_fragment, is_declaration
 from browl.frames import frame_groups
 from browl.jobs import JobContext, Stage
 from browl.links import EntityLink
@@ -83,12 +83,12 @@ def entity_iris(settings: Settings, store: UsageStore) -> list[str]:
 
 
 def lone_axiom(ntriples: bytes) -> owl.AnyAxiom:
-    """Return the one axiom a usage's triples parse as, but declarations, without annotations."""
+    """Return the one axiom a usage's triples parse as, but unannotated declarations, without annotations."""
     with ntriples_ontology(ntriples) as ontology:
         found = [
             axiom.getAxiomWithoutAnnotations()
             for axiom in ontology.getAxioms()
-            if str(axiom.getAxiomType().getName()) != "Declaration"
+            if axiom.isAnnotated() or not is_declaration(axiom)
         ]
     [node] = convert_axioms(found)
     return node
@@ -576,6 +576,7 @@ SPLIT_KINDS = {
 """The kinds of axiom in `axioms.ofn` shown in columns under their subject: those that start with it and a keyword."""
 WHOLE_KINDS = {
     "AsymmetricObjectProperty",
+    "Declaration",  # annotated, in functional syntax (`browl.owl.OtherAxiom`)
     "DifferentIndividuals",  # with three members, a list, as are the others below
     "DisjointClasses",
     "DisjointDataProperties",

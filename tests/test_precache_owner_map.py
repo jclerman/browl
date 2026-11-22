@@ -143,8 +143,9 @@ async def test_owner_map_annotations_copies_and_puns(settings: Settings) -> None
     """Check annotations on a general class axiom or an annotation, a copied source, and a punned property.
 
     An annotation on a blank node's axiom is part of that node's root, so its owner and own axioms are the root's; a
-    copy of a general class axiom's node, as a reified axiom's source, is no root; a class that's also a property is
-    named by a general class axiom as a property, which makes it a usage.
+    copy of a general class axiom's node, as a reified axiom's source, is no root, and what it names isn't the reified
+    axiom's usage; a class that's also a property is named by a general class axiom as a property, which makes it a
+    usage.
     """
     classes = [(iri, "Class") for iri in (A, B, C, P)]
     known = entity_result(*classes, (P, "ObjectProperty"), (N, "AnnotationProperty"))
@@ -174,7 +175,8 @@ async def test_owner_map_annotations_copies_and_puns(settings: Settings) -> None
         ('"y"', property_, N, "", ""),
         ('"y"', target, '"v"', "", ""),
         ('"y"', N, C, "", ""),
-        # A reified axiom whose source is a copy of a general class axiom's node, without its main triple.
+        # A reified axiom whose source is a copy of a general class axiom's node, without its main triple, annotated
+        # with C, which the axiom names already: the root is only N's usage, as C is in more than its annotations.
         ('"z"', type_, axiom, "", ""),
         ('"z"', source, "", '"c"', ""),
         ('"z"', property_, subclass, "", ""),
@@ -192,7 +194,7 @@ async def test_owner_map_annotations_copies_and_puns(settings: Settings) -> None
         ("axiom", "x", a, f"{RDFS}subClassOf"),
         ("axiom", "z", None, f"{RDFS}subClassOf"),
     ]
-    assert sorted(refs) == sorted([(p, 1), (n, 1), (c, 1), (n, 2), (c, 2), (n, 3), (c, 3)])
+    assert sorted(refs) == sorted([(p, 1), (n, 1), (c, 1), (n, 2), (c, 2), (n, 3)])
     assert blank == [(a, 3, 0), (b, 4, 0), (c, 4, 0), (n, 1, 5), (p, 2, 0)]
 
 

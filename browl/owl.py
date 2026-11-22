@@ -1654,7 +1654,8 @@ class OtherAxiom(Axiom):
 
     Attributes:
         axiom_type: Its kind, as the OWLAPI names it (`AxiomType`).
-        functional: The axiom in functional syntax, as the OWLAPI writes it.
+        functional: The axiom in functional syntax, as the OWLAPI writes it, without its annotations, which are in
+            `annotations` where a page shows them.
     """
 
     type: typing.Literal[NodeType.OTHER_AXIOM] = NodeType.OTHER_AXIOM

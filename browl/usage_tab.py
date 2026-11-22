@@ -20,7 +20,7 @@ from fastapi import Request
 from pydantic import BaseModel, ConfigDict
 
 from browl import owl
-from browl.axioms import MAX_FRAGMENT_IRIS, TooManyAxiomsError, axioms_about, convert_axioms
+from browl.axioms import MAX_FRAGMENT_IRIS, TooManyAxiomsError, axioms_about, convert_axioms, is_declaration
 from browl.derived import UsageRootKind
 from browl.fuseki import SparqlError, filled_query
 from browl.jobs import JobState
@@ -379,7 +379,7 @@ def usage_axioms(
                 unclaimed = _assign(ontology, subjects, found)
         if general_triples:
             with ntriples_ontology(general_triples) as ontology:
-                general = [axiom for axiom in ontology.getAxioms() if not _is_declaration(axiom)]
+                general = [axiom for axiom in ontology.getAxioms() if _is_usage(axiom)]
         if unclaimed:
             logger.warning(
                 "Showing %d axioms of the usages of %s with no subject, as they're about none of the page's subjects",
@@ -392,12 +392,17 @@ def usage_axioms(
         raise FragmentError(f"the OWLAPI failed on a Usage tab's fragment: {error}") from error
 
 
-def _is_declaration(axiom: Any) -> bool:
-    return str(axiom.getAxiomType().getName()) == "Declaration"
+def _is_usage(axiom: Any) -> bool:
+    """Return whether a fragment's axiom can be a usage: any but a declaration without annotations.
+
+    The declaration types every page fetches (`fetch_usage_fragments`) are such; an annotated declaration is a usage of
+    the entity its annotations name.
+    """
+    return axiom.isAnnotated() or not is_declaration(axiom)
 
 
 def _assign(ontology: Any, subjects: Sequence[tuple[str, int]], found: dict[str, list[Any]]) -> list[Any]:
-    """Add each axiom of an ontology but declarations to its subject's in `found`; return those about none."""
+    """Add each axiom that can be a usage (`_is_usage`) to its subject's in `found`; return those about none."""
     claims: dict[Any, list[str]] = {}
     for subject, _ in subjects:
         for axiom in axioms_about(ontology, subject):
@@ -405,9 +410,9 @@ def _assign(ontology: Any, subjects: Sequence[tuple[str, int]], found: dict[str,
     needed = dict(subjects)
     shared, unclaimed = [], []
     for axiom in ontology.getAxioms():
-        owners = claims.get(axiom)
-        if _is_declaration(axiom):
+        if not _is_usage(axiom):
             continue
+        owners = claims.get(axiom)
         if owners is None:
             unclaimed.append(axiom)
         elif len(owners) == 1:

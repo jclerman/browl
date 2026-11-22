@@ -148,7 +148,10 @@ def _anonymous(converter: _Converter, individual: Any) -> owl.Node:
 
 
 def _other(converter: _Converter, axiom: Any) -> owl.Node:
-    return owl.OtherAxiom(axiom_type=str(axiom.getAxiomType().getName()), functional=str(axiom))
+    """Make an `OtherAxiom`, without its annotations, which `_axiom_node` adds as any axiom's."""
+    return owl.OtherAxiom(
+        axiom_type=str(axiom.getAxiomType().getName()), functional=str(axiom.getAxiomWithoutAnnotations())
+    )
 
 
 _PROPERTY_FILLER = {"property": "getProperty", "filler": "getFiller"}
@@ -320,12 +323,18 @@ def entity_closure(ontology: Any, iri: str) -> list[Any]:
     return list(found)
 
 
+def is_declaration(axiom: Any) -> bool:
+    """Return whether an OWLAPI axiom is a declaration."""
+    return str(axiom.getAxiomType().getName()) == "Declaration"
+
+
 def axioms_about(ontology: Any, iri: str) -> list[Any]:
     """Return the axioms in an ontology whose subject is an IRI, as OWL's RDF mapping writes them, with annotations.
 
-    That's what the OWLAPI lists for each entity with the IRI (`getAxioms(entity)`), but declarations, with a class's
-    `HasKey` axioms, the property chains that imply an object property, and the annotation assertions about the IRI.
-    The two-member axioms, such as `DisjointClasses(A, B)`, are listed for both members.
+    That's what the OWLAPI lists for each entity with the IRI (`getAxioms(entity)`), with a class's `HasKey` axioms, the
+    property chains that imply an object property, the annotation assertions about the IRI, and its annotated
+    declarations, whose annotations can name another entity, whose usage they are. The two-member axioms, such as
+    `DisjointClasses(A, B)`, are listed for both members.
 
     Args:
         ontology: The `OWLOntology`.
@@ -340,12 +349,13 @@ def axioms_about(ontology: Any, iri: str) -> list[Any]:
     found: dict[Any, None] = dict.fromkeys(ontology.getAnnotationAssertionAxioms(subject))
     for entity in ontology.getEntitiesInSignature(subject):
         own = list(ontology.getAxioms(entity, java.excluded))
+        own += (axiom for axiom in ontology.getDeclarationAxioms(entity) if axiom.isAnnotated())
         if entity.isOWLClass():
             own += ontology.getHasKeyAxioms(entity)
         elif entity.isOWLObjectProperty():
             chains = ontology.getAxioms(java.AxiomType.SUB_PROPERTY_CHAIN_OF, java.excluded)
             own += (axiom for axiom in chains if axiom.getSuperProperty().equals(entity))
-        found.update((axiom, None) for axiom in own if str(axiom.getAxiomType().getName()) != "Declaration")
+        found.update(dict.fromkeys(own))
     return list(found)
 
 
@@ -447,7 +457,7 @@ def _axiom_node(converter: _Converter, axiom: Any) -> owl.AnyAxiom:
         raise FragmentError(f"an axiom nests too deep for browl: {error}") from error
     if not isinstance(node, owl.Axiom):
         raise FragmentError(f"not an axiom: {node.type}")
-    if axiom.isAnnotated() and not isinstance(node, owl.OtherAxiom):  # whose text has them
+    if axiom.isAnnotated():
         try:
             annotations = converter.value(axiom.getAnnotations())
         except (ValidationError, RDFSyntaxError) as error:

@@ -93,9 +93,9 @@ def normal(axiom: Any) -> str:
 
 
 def parsed(ntriples: bytes) -> set[str]:
-    """Return the axioms the OWLAPI parses from N-Triples, but declarations, without annotations."""
+    """Return the axioms the OWLAPI parses from N-Triples, but unannotated declarations, without annotations."""
     with owlapi.ntriples_ontology(ntriples) as ontology:
-        return {normal(each) for each in ontology.getAxioms() if str(each.getAxiomType().getName()) != "Declaration"}
+        return {normal(each) for each in ontology.getAxioms() if each.isAnnotated() or not axioms.is_declaration(each)}
 
 
 def owlapi_usages(ntriples: bytes, described: dict[str, bytes], subjects: bytes) -> dict[str, set[str]]:
