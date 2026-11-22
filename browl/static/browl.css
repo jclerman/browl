@@ -486,13 +486,8 @@ code {
   white-space: nowrap;
 }
 
-/* The Usage tab (U-26): a frame of subjects and their axioms; an axiom's annotations, when shown, beneath it in small
-   text, nested ones indented further; then the paging. */
-
-.usage-count {
-  margin-top: 0;
-  color: var(--muted);
-}
+/* The Usage tab (U-26): the paging at the top; then a frame of subjects and their axioms; an axiom's annotations, when
+   shown, beneath it in small text, nested ones indented further. */
 
 /* Three columns: the subject, the keyword (`SubClassOf`, an annotation assertion's property, …) and the rest of the
    axiom, each line a subgrid of the last two, so the keywords line up down the tab. A line that doesn't start with its
@@ -562,7 +557,7 @@ code {
   flex-wrap: wrap;
   gap: var(--space);
   align-items: baseline;
-  margin-top: var(--space);
+  margin-bottom: var(--space);
 }
 
 .pager form {
@@ -663,6 +658,16 @@ code {
       & .panel h2 {
         position: sticky;
         top: 0;
+        background: var(--bg);
+      }
+
+      /* The Usage tab's paging stays in view as its usages scroll beneath it. */
+      & .pager {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        padding-bottom: calc(var(--space) / 2);
+        border-bottom: 1px solid var(--border);
         background: var(--bg);
       }
     }

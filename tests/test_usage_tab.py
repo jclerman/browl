@@ -266,7 +266,7 @@ def test_subjects(client: TestClient) -> None:
         "DLSafeRule(Body(ClassAtom(<:Dog> Variable(<:x>))) Head(ClassAtom(<:Animal> Variable(<:x>))))",
         ("Type", ":Dog"),
     ]
-    assert '<p class="usage-count">5 usages</p>' in dog
+    assert "usage-count" not in dog  # the count is in the tab's label only
     age = panel(client, "age").text
     assert subjects_shown(age) == [f"{NS}Person", "No single subject", f"{NS}alice"]
     assert lines_shown(age)[2:] == ["not (<:bob> :age 7)", "<:alice> :age 42"]
@@ -328,7 +328,8 @@ def test_pages(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     assert subjects_shown(first) == [f"{NS}Cat"]
     assert subjects_shown(second) == [f"{NS}Cat (continued)"]
     assert '<small class="continued">(continued)</small>' in second
-    assert "page 2 of 5" in second
+    assert 'value="2"\n        required> of 5</label>' in second
+    assert second.index('<nav class="pager"') < second.index('<dl class="frame usage-frame">')
     assert '<a href="/axioms?tab=usage#Dog" rel="prev">Previous</a>' in second
     assert '<a href="/axioms?tab=usage&amp;page=3#Dog" rel="next">Next</a>' in second
     assert 'rel="prev"' not in first and 'rel="next"' not in last
@@ -424,7 +425,6 @@ def test_failure(
     response = panel(client, "Dog")
     assert response.status_code == 200
     assert MESSAGE in response.text
-    assert ("5 usages" in response.text) == (failing != "count_usages")
     [record] = [record for record in caplog.records if record.name == "browl.usage_tab"]
     assert record.levelname == "ERROR"
     assert record.exc_info is not None

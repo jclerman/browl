@@ -893,9 +893,12 @@ Tabs (U-28; see [2.9](#29-page-layout)):
       a class's SWRL rules are in it. A subject's name is its first entity's display name, else its IRI; its usages
       keep one order (by source, predicate, object and root), so each page holds the same ones every time. A page
       past the first is `page=N`; a `page` that isn't a positive integer without leading zeros, is repeated, or is
-      past the last page is a 404, so each page has one URL. The paging is links to the previous and next pages and a
-      small GET form (its hidden fields carry the page URL's own query, such as a fallback URL's `iri`, and the tab),
-      with no script: a page is a full page load, which costs little, as it's the Usage tab alone.
+      past the last page is a 404, so each page has one URL. The paging, at the top of the tab, is links to the
+      previous and next pages and a small GET form, "Page N of M" (its hidden fields carry the page URL's own query,
+      such as a fallback URL's `iri`, and the tab), with no script: a page is a full page load, which costs little, as
+      it's the Usage tab alone. In the window-filling frame it stays in view as the tab panel scrolls (`position:
+      sticky`), within the panel rather than in the tab bar, which holds only tabs and the one-page toggle; in the
+      one-page view it scrolls with the page. The count is in the tab's label only, not repeated above the usages.
   - **Layout** _(P-27b)_: a frame-like `<dl>`, as on the Overview: each subject once, in the label column, linked to
     its page (`named_iri`), "No single subject" for the group with none; its axioms beneath, one per line, in
     Manchester syntax with the Overview's tokens (`manchester`), sorted by kind and text. The count, and the page

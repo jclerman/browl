@@ -26,10 +26,11 @@
   {%- if axiom.annotations %}{{ annotation_list(axiom.annotations, links, mark) }}{% endif %}</dd>
 {%- endmacro %}
 
-{# The Usage tab (`browl.usage_tab.UsageTab`, DESIGN.md §2.8) of the entity `iri`: the count; a frame of the page's
-   usages in three columns, each subject once, then one line per axiom (`usage_line`), in Manchester syntax; and the
-   paging (`browl.lookup._Pager`). Above the streaming limit, the count and "Preparing…", in an element of its own,
-   which P-27c's polling can replace. #}
+{# The Usage tab (`browl.usage_tab.UsageTab`, DESIGN.md §2.8) of the entity `iri`: the paging at the top, if there's
+   more than one page (`browl.lookup._Pager`), held there as the tab panel scrolls; then a frame of the page's usages
+   in three columns, each subject once, then one line per axiom (`usage_line`), in Manchester syntax. The count is in
+   the tab's label only. Above the streaming limit, the count and "Preparing…", in an element of its own, which
+   P-27c's polling can replace. #}
 {% macro usage_panel(usage, pager, iri) -%}
 <section class="usage">
   {% if usage.count is none %}
@@ -39,8 +40,18 @@
   {% elif usage.count == 0 %}
   <p class="note">None.</p>
   {% else %}
-  <p class="usage-count">{{ "{:,}".format(usage.count) }} usage{{ "" if usage.count == 1 else "s" }}
-    {%- if usage.pages > 1 %} · page {{ "{:,}".format(usage.page) }} of {{ "{:,}".format(usage.pages) }}{% endif %}</p>
+  {% if pager is not none %}
+  <nav class="pager" aria-label="Usage pages">
+    {% if pager.previous is not none %}<a href="{{ pager.previous }}" rel="prev">Previous</a>{% endif %}
+    <form method="get" action="{{ pager.action }}">
+      {% for name, value in pager.fields %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+      <label>Page <input type="number" name="page" min="1" max="{{ usage.pages }}" value="{{ usage.page }}"
+        required> of {{ "{:,}".format(usage.pages) }}</label>
+      <button type="submit">Go</button>
+    </form>
+    {% if pager.next is not none %}<a href="{{ pager.next }}" rel="next">Next</a>{% endif %}
+  </nav>
+  {% endif %}
   {% if usage.too_many %}
   <p class="note">This page's usages mention too many entities to show here.</p>
   {% elif usage.groups is none %}
@@ -56,18 +67,6 @@
     {% endfor %}
     {% endfor %}
   </dl>
-  {% endif %}
-  {% if pager is not none %}
-  <nav class="pager" aria-label="Usage pages">
-    {% if pager.previous is not none %}<a href="{{ pager.previous }}" rel="prev">Previous</a>{% endif %}
-    {% if pager.next is not none %}<a href="{{ pager.next }}" rel="next">Next</a>{% endif %}
-    <form method="get" action="{{ pager.action }}">
-      {% for name, value in pager.fields %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
-      <label>Page <input type="number" name="page" min="1" max="{{ usage.pages }}" value="{{ usage.page }}"
-        required></label>
-      <button type="submit">Go</button>
-    </form>
-  </nav>
   {% endif %}
   {% endif %}
 </section>
