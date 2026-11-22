@@ -73,8 +73,9 @@ class UsageGroup(BaseModel):
         subject: The IRI whose axioms they are; None for the usages with no single subject, such as general class
             axioms that mention a property.
         continued: Whether the subject's usages started on an earlier page.
-        axioms: The usages' axioms, sorted by kind and text (`browl.axioms.convert_axioms`); with their annotations
-            only where the usage is found through them alone (`browl.owl.Axiom.annotations`).
+        axioms: The usages' axioms, sorted by kind and text (`browl.axioms.convert_axioms`), a symmetric one between
+            two written with the subject first (`browl.owl.Axiom.with_first`); with their annotations only where the
+            usage is found through them alone (`browl.owl.Axiom.annotations`).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -385,7 +386,7 @@ def usage_axioms(
                 len(unclaimed),
                 logged_iri(iri),
             )
-        by_subject = {subject: _usage_nodes(axioms, iri) for subject, axioms in found.items()}
+        by_subject = {subject: _usage_nodes(axioms, iri, subject) for subject, axioms in found.items()}
         return by_subject, _usage_nodes([*general, *unclaimed], iri)
     except jpype.JException as error:
         raise FragmentError(f"the OWLAPI failed on a Usage tab's fragment: {error}") from error
@@ -419,10 +420,16 @@ def _assign(ontology: Any, subjects: Sequence[tuple[str, int]], found: dict[str,
     return unclaimed
 
 
-def _usage_nodes(axioms: Iterable[Any], iri: str) -> list[owl.AnyAxiom]:
-    """Return axioms as nodes, each with its annotations only if the entity is in them and not in the rest."""
-    nodes = convert_axioms(axioms)
-    return [
+def _usage_nodes(axioms: Iterable[Any], iri: str, subject: str | None = None) -> list[owl.AnyAxiom]:
+    """Return axioms as nodes, each with its annotations only if the entity is in them and not in the rest.
+
+    With a subject, a symmetric axiom between two is written with the subject first (`browl.owl.Axiom.with_first`), and
+    the axioms sorted again by kind and text, as `convert_axioms` sorts them.
+    """
+    nodes = [
         node.without_annotations() if node.annotations and iri in node.without_annotations().iris() else node
-        for node in nodes
+        for node in convert_axioms(axioms)
     ]
+    if subject is None:
+        return nodes
+    return sorted((node.with_first(subject) for node in nodes), key=lambda node: (node.kind, node.manchester))

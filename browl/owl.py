@@ -141,6 +141,21 @@ def manchester_text(tokens: Iterable[Token]) -> str:
 
 
 @dataclass(frozen=True, slots=True)
+class SubjectSplit:
+    """An axiom's Manchester tokens split after its subject and its keyword (`Axiom.subject_split`).
+
+    Attributes:
+        subject: The subject, an IRI token.
+        keyword: The keyword after it (`SubClassOf`), or an assertion's property, with its spacing.
+        rest: The rest of the axiom, with its spacing; no space before its first token.
+    """
+
+    subject: Token
+    keyword: tuple[Token, ...]
+    rest: tuple[Token, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class Slot:
     """A field in a node's Manchester layout (`Node.manchester_layout`).
 
@@ -294,16 +309,30 @@ class Node(BaseModel):
     def unspaced_manchester_tokens(self) -> Iterator[Token]:
         """Yield the node's Manchester tokens, without spacing; a node calls this on the nodes in its fields."""
         for item in self._manchester_layout():
-            if isinstance(item, Token):
-                yield item
-            elif isinstance(item, Node):
-                yield from item.unspaced_manchester_tokens()
-            else:
-                value = getattr(self, item.name)
-                for index, each in enumerate(value if isinstance(value, tuple) else (value,)):
-                    if index and item.separator is not None:
-                        yield item.separator
-                    yield from _child_manchester_tokens(each, item.nested)
+            yield from self._item_tokens(item)
+
+    def _item_tokens(self, item: LayoutItem) -> Iterator[Token]:
+        """Yield the unspaced Manchester tokens of an item of the node's layout."""
+        if isinstance(item, Token):
+            yield item
+        elif isinstance(item, Node):
+            yield from item.unspaced_manchester_tokens()
+        else:
+            value = getattr(self, item.name)
+            for index, each in enumerate(value if isinstance(value, tuple) else (value,)):
+                if index and item.separator is not None:
+                    yield item.separator
+                yield from _child_manchester_tokens(each, item.nested)
+
+    def _item_value(self, item: LayoutItem) -> Any:
+        """Return what an item of the node's layout holds: a node, or a slot's field's value; None for a token."""
+        if isinstance(item, Token):
+            return None
+        return item if isinstance(item, Node) else getattr(self, item.name)
+
+    def _replaced(self, **changes: Any) -> typing.Self:
+        """Return a copy of the node with some fields changed, rendered afresh (`model_copy` keeps cached tokens)."""
+        return type(self)(**{name: getattr(self, name) for name in type(self).model_fields} | changes)
 
     def manchester_tokens(self) -> tuple[Token, ...]:
         """Return the node in Manchester syntax, as tokens with their spacing."""
@@ -369,6 +398,11 @@ class _Named(Node):
     @override
     def iri_mentions(self) -> Iterator[str]:
         yield self.iri
+
+
+def _is_named(node: Node, iri: str) -> bool:
+    """Return whether a node is the IRI itself, not an expression that mentions it."""
+    return isinstance(node, _Named) and node.iri == iri
 
 
 class Entity(_Named):
@@ -957,6 +991,51 @@ class Axiom(Node):
         """Return the axiom without its annotations: itself if it has none."""
         return self.model_copy(update={"annotations": ()}) if self.annotations else self
 
+    def with_first(self, iri: str) -> typing.Self:
+        """Return the axiom written with the entity `iri` first, if it's a symmetric axiom between two; else itself.
+
+        Only the order it's written in changes, not its meaning: `A DisjointWith B` is `B DisjointWith A`.
+
+        Example:
+            >>> a, b = (Entity(kind=EntityKind.CLASS, iri=f"http://example.org/{name}") for name in "ab")
+            >>> DisjointClasses(members=(a, b)).with_first(b.iri).manchester
+            '<http://example.org/b> DisjointWith <http://example.org/a>'
+        """
+        return self
+
+    def subject_split(self, iri: str) -> SubjectSplit | None:
+        """Return the axiom's tokens split after its subject and keyword, if it starts with the entity `iri`, then one.
+
+        The keyword is a keyword token (`SubClassOf`, `Type`), or the named property of an assertion
+        (`alice knows bob`, `Heart rdfs:label "heart"`); the axiom must have something after it. Else, such as for a
+        property chain, a characteristic (`Functional: p`) or an `OtherAxiom`, None: a page shows the axiom whole.
+
+        Example:
+            >>> heart = Entity(kind=EntityKind.CLASS, iri="http://example.org/Heart")
+            >>> organ = Entity(kind=EntityKind.CLASS, iri="http://example.org/Organ")
+            >>> split = SubClassOf(sub=heart, super=organ).subject_split(heart.iri)
+            >>> split.subject.text, manchester_text(split.keyword), manchester_text(split.rest)
+            ('<http://example.org/Heart>', 'SubClassOf', '<http://example.org/Organ>')
+            >>> SubClassOf(sub=heart, super=organ).subject_split(organ.iri) is None
+            True
+        """
+        layout = self._manchester_layout()
+        if len(layout) < 3:
+            return None
+        first, keyword, *rest = layout
+        subject = self._item_value(first)
+        if not (isinstance(subject, _Named) and subject.iri == iri):
+            return None
+        if isinstance(keyword, Token) and keyword.kind != TokenKind.KEYWORD:
+            return None
+        if not isinstance(keyword, Token) and not isinstance(self._item_value(keyword), Entity):
+            return None
+        return SubjectSplit(
+            subject=_iri_token(subject.iri),
+            keyword=tuple(_manchester_spaced(self._item_tokens(keyword))),
+            rest=tuple(_manchester_spaced(token for item in rest for token in self._item_tokens(item))),
+        )
+
 
 class SubClassOf(Axiom):
     """A subclass axiom.
@@ -993,6 +1072,12 @@ class _Nary(Axiom):
         if len(self.members) == 2 and self.pair is not None:
             return self.members[0], _keyword(self.pair), self.members[1]
         return _keyword(self.listed), Slot("members", _COMMA)
+
+    @override
+    def with_first(self, iri: str) -> typing.Self:
+        if len(self.members) == 2 and self.pair is not None and _is_named(self.members[1], iri):
+            return self._replaced(members=self.members[::-1])
+        return self
 
 
 class EquivalentClasses(_Nary):
@@ -1200,6 +1285,12 @@ class InverseObjectProperties(Axiom):
     type: typing.Literal[NodeType.INVERSE_OBJECT_PROPERTIES] = NodeType.INVERSE_OBJECT_PROPERTIES
     first: ObjectPropertyExpression
     second: ObjectPropertyExpression
+
+    @override
+    def with_first(self, iri: str) -> typing.Self:
+        if _is_named(self.second, iri):
+            return self._replaced(first=self.second, second=self.first)
+        return self
 
 
 class _Domain(Axiom):

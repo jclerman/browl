@@ -3,11 +3,13 @@
    as HTML (DESIGN.md §2.8): an IRI with a page as a link to it; any other as text, a standard vocabulary's by its
    prefixed name (`xsd:integer`), the rest in full; keywords styled lightly (§2.9). Literals and an `OtherAxiom`'s
    functional syntax, which come from the ontology, are isolated from the text around them, as names are in links;
-   they, IRIs shown as text, and other text are cut short if long. #}
-{% macro manchester(tokens, links) -%}
+   they, IRIs shown as text, and other text are cut short if long. The IRI `mark`, the page's entity, is highlighted
+   wherever it appears (`<mark>`), by its IRI, not its name. #}
+{% macro manchester(tokens, links, mark=none) -%}
 {%- for token in tokens -%}
 {%- if token.space %} {% endif -%}
-{%- if token.kind == "iri" %}{{ named_iri(token.iri, links, token.text) }}
+{%- if token.kind == "iri" and mark is not none and token.iri == mark %}<mark>{{ named_iri(token.iri, links, token.text) }}</mark>
+{%- elif token.kind == "iri" %}{{ named_iri(token.iri, links, token.text) }}
 {%- elif token.kind == "keyword" %}<span class="keyword">{{ token.text }}</span>
 {%- elif token.kind in ("literal", "functional") %}<bdi>{{ token.text | cut_text(MAX_LITERAL_CHARS) }}</bdi>
 {%- else %}{{ token.text | cut_text(MAX_LITERAL_CHARS) }}{% endif -%}
@@ -15,8 +17,9 @@
 {%- endmacro %}
 
 {# An entity's logical axioms (`browl.overview.AxiomsPanel`), from `links`, as a frame in a two-column grid (U-32):
-   each section's label once, then one line per axiom; an equivalent only its equivalence group implies is marked. #}
-{% macro axiom_frame(panel, links) -%}
+   each section's label once, then one line per axiom; an equivalent only its equivalence group implies is marked.
+   The entity, `iri`, is highlighted where a line shows it. #}
+{% macro axiom_frame(panel, links, iri) -%}
 <section class="axioms panel" tabindex="0" aria-labelledby="axioms-heading">
   <h2 id="axioms-heading">Logical axioms</h2>
   {% if panel.too_many %}
@@ -30,7 +33,7 @@
     {% for group in panel.groups %}
     <dt>{{ group.label }}</dt>
     {% for line in group.lines %}
-    <dd dir="ltr">{{ manchester(line.manchester_tokens(), links) }}
+    <dd dir="ltr">{{ manchester(line.manchester_tokens(), links, iri) }}
       {%- if line.axiom is none %} <small class="implied">(implied)</small>{% endif %}</dd>
     {% endfor %}
     {% endfor %}

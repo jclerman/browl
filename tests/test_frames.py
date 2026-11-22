@@ -291,3 +291,28 @@ def test_class_and_property_labels() -> None:
         "Disjoint With (class)",
         "Disjoint With (object property)",
     ]
+
+
+A, Z = entity("A", EntityKind.NAMED_INDIVIDUAL), entity("Z", EntityKind.NAMED_INDIVIDUAL)
+
+
+@pytest.mark.parametrize(
+    ("axiom", "expected"),
+    [
+        (owl.DisjointClasses(members=(entity("A"), entity("Z"))), [("Disjoint With", [iri("A")])]),
+        (owl.EquivalentClasses(members=(entity("A"), entity("Z"))), [("Equivalent To", [iri("A")])]),
+        (
+            owl.InverseObjectProperties(first=entity("A", P.kind), second=entity("Z", P.kind)),
+            [("Inverse Of", [iri("A")])],
+        ),
+        (owl.SameIndividual(members=(A, Z)), [("Other axioms", [f"{iri('Z')} SameAs {iri('A')}"])]),
+        (owl.DifferentIndividuals(members=(A, Z)), [("Other axioms", [f"{iri('Z')} DifferentFrom {iri('A')}"])]),
+    ],
+    ids=["disjoint", "equivalent", "inverse", "same", "different"],
+)
+def test_symmetric_entity_first(axiom: owl.AnyAxiom, expected: list[tuple[str, list[str]]]) -> None:
+    """Check that a symmetric axiom between two, written with the other first, shows on Z's page with Z first.
+
+    A frame's section shows only the other; an axiom shown whole, such as an individual's, is written with Z first.
+    """
+    assert text(frame_groups([axiom], f"{NS}Z", [], shown_name)) == expected

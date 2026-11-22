@@ -1,20 +1,36 @@
 {% from "axioms.html" import manchester %}
-{% from "links.html" import named_iri %}
+{% from "links.html" import named_iri, named_text %}
 {# An axiom's annotations (`browl.owl.Annotation`), each `property value` on a line of its own beneath the axiom, an
-   annotation's own annotations nested beneath it. #}
-{% macro annotation_list(annotations, links) -%}
+   annotation's own annotations nested beneath it; the entity, `mark`, highlighted. #}
+{% macro annotation_list(annotations, links, mark) -%}
 <ul class="axiom-annotations">
   {%- for annotation in annotations %}
-  <li>{{ manchester(annotation.manchester_tokens(), links) }}
-    {%- if annotation.annotations %}{{ annotation_list(annotation.annotations, links) }}{% endif %}</li>
+  <li>{{ manchester(annotation.manchester_tokens(), links, mark) }}
+    {%- if annotation.annotations %}{{ annotation_list(annotation.annotations, links, mark) }}{% endif %}</li>
   {%- endfor %}
 </ul>
 {%- endmacro %}
 
-{# The Usage tab (`browl.usage_tab.UsageTab`, DESIGN.md §2.8): the count; a frame of the page's usages, each subject
-   once, then one line per axiom, in Manchester syntax; and the paging (`browl.lookup._Pager`). Above the streaming
-   limit, the count and "Preparing…", in an element of its own, which P-27c's polling can replace. #}
-{% macro usage_panel(usage, pager) -%}
+{# A line of the Usage tab: an axiom of `subject`'s, the entity, `mark`, highlighted. One that starts with its subject
+   then a keyword (`browl.owl.Axiom.subject_split`) is in two columns, the keyword and the rest, its subject in text
+   only screen readers read, so the line still reads as the whole axiom; any other spans both. #}
+{% macro usage_line(axiom, subject, links, mark) -%}
+{%- set split = none if subject is none else axiom.subject_split(subject) -%}
+{%- if split is none -%}
+<dd dir="ltr" class="usage-line usage-whole"><span class="usage-axiom">{{ manchester(axiom.manchester_tokens(), links, mark) }}</span>
+{%- else -%}
+<dd dir="ltr" class="usage-line"><span class="visually-hidden">{{ named_text(subject, links, split.subject.text) }} </span>
+  <span class="usage-keyword">{{ manchester(split.keyword, links, mark) }}</span>
+  <span class="usage-axiom">{{ manchester(split.rest, links, mark) }}</span>
+{%- endif %}
+  {%- if axiom.annotations %}{{ annotation_list(axiom.annotations, links, mark) }}{% endif %}</dd>
+{%- endmacro %}
+
+{# The Usage tab (`browl.usage_tab.UsageTab`, DESIGN.md §2.8) of the entity `iri`: the count; a frame of the page's
+   usages in three columns, each subject once, then one line per axiom (`usage_line`), in Manchester syntax; and the
+   paging (`browl.lookup._Pager`). Above the streaming limit, the count and "Preparing…", in an element of its own,
+   which P-27c's polling can replace. #}
+{% macro usage_panel(usage, pager, iri) -%}
 <section class="usage">
   {% if usage.count is none %}
   <p class="note">The usages can't be shown just now.</p>
@@ -36,8 +52,7 @@
       {%- if group.subject is none %}No single subject{% else %}{{ named_iri(group.subject, usage.links) }}{% endif %}
       {%- if group.continued %} <small class="continued">(continued)</small>{% endif %}</dt>
     {% for axiom in group.axioms %}
-    <dd dir="ltr">{{ manchester(axiom.manchester_tokens(), usage.links) }}
-      {%- if axiom.annotations %}{{ annotation_list(axiom.annotations, usage.links) }}{% endif %}</dd>
+    {{ usage_line(axiom, group.subject, usage.links, iri) }}
     {% endfor %}
     {% endfor %}
   </dl>

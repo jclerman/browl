@@ -792,6 +792,7 @@ ENTITIES = [
     (f"{NS}Person", EntityType.CLASS),
     (f"{NS}Dog", EntityType.CLASS),
     (f"{NS}Adult", EntityType.CLASS),
+    (f"{NS}Mineral", EntityType.CLASS),
     (f"{NS}partOf", EntityType.OBJECT_PROPERTY),
     (f"{NS}hasPart", EntityType.OBJECT_PROPERTY),
     (f"{NS}hasUncle", EntityType.OBJECT_PROPERTY),
@@ -822,13 +823,14 @@ def test_page(fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) ->
         animal = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "Animal", "panel": "1"}).text
         adult = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "Adult", "panel": "1"}).text
         part_of = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "partOf", "panel": "1"}).text
+        mineral = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "Mineral", "panel": "1"}).text
     heart_link = '<a href="/axioms#Heart"><bdi>&lt;b&gt;Heart&lt;/b&gt; &amp; &#34;soul&#34;</bdi></a>'
     keyword = '<span class="keyword">{}</span>'.format
     assert re.search(r'<dt>SubClass Of</dt>\s*<dd dir="ltr"><a href="/axioms#Organ"><bdi>organ</bdi></a></dd>', page)
     assert (
         f'<dd dir="ltr"><a href="/axioms#hasPart"><bdi>http://example.org/axioms#hasPart</bdi></a> {keyword("some")} '
-        f'{heart_link} {keyword("SubClassOf")} <code dir="ltr">&lt;{NS}Vertebrate&gt;</code></dd>'
-    ) in page  # a general class axiom, shown whole
+        f'<mark>{heart_link}</mark> {keyword("SubClassOf")} <code dir="ltr">&lt;{NS}Vertebrate&gt;</code></dd>'
+    ) in page  # a general class axiom, shown whole, the entity highlighted
     assert f"{keyword('value')} <bdi>&#34;see &lt;{NS}Dog&gt; &amp; \\&#34;friends\\&#34;&#34;@en</bdi>" in person
     label = re.escape('<bdi class="value">&lt;b&gt;Heart&lt;/b&gt; &amp; &#34;soul&#34;</bdi>')
     assert re.search(rf'<dt><code dir="ltr">rdfs:label</code></dt>\s*<dd>{label}</dd>', page)  # the annotations panel
@@ -853,3 +855,9 @@ def test_page(fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) ->
     has_part = f'<a href="/axioms#hasPart"><bdi>{NS}hasPart</bdi></a>'
     assert re.search(rf'<dt>Characteristics</dt>\s*<dd dir="ltr">{keyword("Transitive")}</dd>', part_of)
     assert re.search(rf'<dt>Inverse Of</dt>\s*<dd dir="ltr">{has_part}</dd>', part_of)
+    # The entity is highlighted in its axioms, but not in its annotations: Mineral's own `rdfs:seeAlso Mineral`.
+    annotations, axioms = mineral.split('<section class="axioms panel"')
+    mineral_link = f'<a href="/axioms#Mineral"><bdi>{NS}Mineral</bdi></a>'
+    assert mineral_link in annotations and "<mark>" not in annotations
+    assert axioms.count(f"<mark>{mineral_link}</mark>") == 1  # in a general class axiom
+    assert "<mark>" not in part_of

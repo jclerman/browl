@@ -4,10 +4,10 @@
 {% from "axioms.html" import axiom_frame %}
 {% from "usage.html" import usage_panel %}
 {% if tab.slug == "usage" %}
-{{ usage_panel(usage, pager) }}
+{{ usage_panel(usage, pager, entity.iri) }}
 {% else %}
 <div class="overview">
   {{ annotation_list(overview.annotations, overview.links) }}
-  {{ axiom_frame(overview.axioms, overview.links) }}
+  {{ axiom_frame(overview.axioms, overview.links, entity.iri) }}
 </div>
 {% endif %}

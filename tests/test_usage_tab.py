@@ -21,10 +21,13 @@ import browl.precache.stage
 import browl.usage_tab
 import browl.usages
 from browl import owl, owlapi
-from browl.axioms import convert_axioms
+from browl.axioms import axioms_about, convert_axioms, entity_axioms, fetch_fragment
+from browl.frames import frame_groups
 from browl.jobs import JobContext, Stage
+from browl.links import EntityLink
 from browl.loading import dataset_name
 from browl.owlapi import ntriples_ontology
+from browl.pages import templates
 from browl.precache.stage import pre_cache
 from browl.rdf import IRI, Literal
 from browl.settings import Settings
@@ -79,8 +82,8 @@ def entity_iris(settings: Settings, store: UsageStore) -> list[str]:
         return sorted({iri for (iri,) in connection.execute("SELECT iri FROM entity")})
 
 
-def lone_axiom(ntriples: bytes) -> str:
-    """Return the text of the one axiom a usage's triples parse as, but declarations, without annotations."""
+def lone_axiom(ntriples: bytes) -> owl.AnyAxiom:
+    """Return the one axiom a usage's triples parse as, but declarations, without annotations."""
     with ntriples_ontology(ntriples) as ontology:
         found = [
             axiom.getAxiomWithoutAnnotations()
@@ -88,7 +91,7 @@ def lone_axiom(ntriples: bytes) -> str:
             if str(axiom.getAxiomType().getName()) != "Declaration"
         ]
     [node] = convert_axioms(found)
-    return node.manchester
+    return node
 
 
 @pytest.mark.fuseki
@@ -99,7 +102,8 @@ async def test_every_usage_once(
 ) -> None:
     """Check that every usage of every entity is on exactly one page, as the axiom it is alone, under its subject.
 
-    Each page but the last holds exactly `PAGE_USAGES` axioms, one per usage, a property's too.
+    Each page but the last holds exactly `PAGE_USAGES` axioms, one per usage, a property's too. A symmetric axiom
+    between two is written with its subject first.
     """
     monkeypatch.setattr(browl.usage_tab, "PAGE_USAGES", size)
     for iri in entity_iris(settings, store):
@@ -107,8 +111,9 @@ async def test_every_usage_once(
         ordered = await store.derived.read(store.generation, lambda c, found=usages: sorted_usages(c, found))
         expected: Counter[tuple[str | None, str]] = Counter()
         for usage in usages:
-            text = await owlapi.run_java(lone_axiom, await usage_triples(store, iri, usage))
-            expected[usage.subject, text] += 1
+            axiom = await owlapi.run_java(lone_axiom, await usage_triples(store, iri, usage))
+            subject = usage.subject
+            expected[subject, (axiom if subject is None else axiom.with_first(subject)).manchester] += 1
         found: Counter[tuple[str | None, str]] = Counter()
         pages = max(1, math.ceil(len(usages) / size))
         for page in range(1, pages + 1):
@@ -190,10 +195,36 @@ def subjects_shown(page: str) -> list[str]:
     return [html.unescape(re.sub(r"<[^>]+>", "", heading)).strip() for heading in found]
 
 
+LINE = re.compile(
+    r'<dd dir="ltr" class="usage-line( usage-whole)?">(.*?)(?:<ul class="axiom-annotations">|</dd>)', re.DOTALL
+)
+"""A Usage tab line: whether it spans the keyword's and the rest's columns, and its markup, without annotations."""
+SPLIT = re.compile(
+    r'<span class="visually-hidden">(.*?)</span>\s*<span class="usage-keyword">(.*?)</span>\s*'
+    r'<span class="usage-axiom">(.*)</span>\s*$',
+    re.DOTALL,
+)
+"""A line in columns: the subject, for screen readers alone; the keyword; the rest."""
+
+
+def plain(markup: str) -> str:
+    """Return markup's text, as a screen reader reads it: without tags, spaces collapsed, the namespace `:`."""
+    return " ".join(html.unescape(re.sub(r"<[^>]+>", "", markup)).split()).replace(NS, ":")
+
+
 def lines_shown(page: str) -> list[str]:
     """Return the text of a Usage tab panel's axiom lines, in order, without their annotations or markup."""
-    lines = re.findall(r'<dd dir="ltr">(.*?)(?:<ul class="axiom-annotations">|</dd>)', page, re.DOTALL)
-    return [html.unescape(re.sub(r"<[^>]+>", "", line)).replace(NS, ":") for line in lines]
+    return [plain(line) for _, line in LINE.findall(page)]
+
+
+def columns_shown(page: str) -> list[tuple[str, str] | str]:
+    """Return a Usage tab panel's lines: each in columns as its keyword and the rest, or whole, as text."""
+    found: list[tuple[str, str] | str] = []
+    for whole, line in LINE.findall(page):
+        split = SPLIT.match(line)
+        assert (split is None) == bool(whole), line
+        found.append(plain(line) if split is None else (plain(split[2]), plain(split[3])))
+    return found
 
 
 def annotations_shown(page: str) -> list[str]:
@@ -214,7 +245,11 @@ def annotations_shown(page: str) -> list[str]:
 @pytest.mark.fuseki
 @pytest.mark.jvm
 def test_subjects(client: TestClient) -> None:
-    """Check a class's and a property's subjects: by name, then those with no single subject, then non-entities."""
+    """Check a class's and a property's subjects: by name, then those with no single subject, then non-entities.
+
+    Each line reads, for a screen reader, as its whole axiom, its subject in text only it reads where the line is in
+    columns.
+    """
     dog = panel(client, "Dog").text
     assert subjects_shown(dog) == [f"{NS}Cat", f"{NS}Pet", "No single subject", f"{NS}rex"]
     assert lines_shown(dog) == [
@@ -223,6 +258,13 @@ def test_subjects(client: TestClient) -> None:
         ":Pet SubClassOf :Cat or :Dog",
         "DLSafeRule(Body(ClassAtom(<:Dog> Variable(<:x>))) Head(ClassAtom(<:Animal> Variable(<:x>))))",
         "<:rex> Type :Dog",
+    ]
+    assert columns_shown(dog) == [
+        (":remark", ":Dog"),
+        ("DisjointWith", ":Dog"),
+        ("SubClassOf", ":Cat or :Dog"),
+        "DLSafeRule(Body(ClassAtom(<:Dog> Variable(<:x>))) Head(ClassAtom(<:Animal> Variable(<:x>))))",
+        ("Type", ":Dog"),
     ]
     assert '<p class="usage-count">5 usages</p>' in dog
     age = panel(client, "age").text
@@ -499,3 +541,220 @@ async def test_imports(fuseki_url: str, ntriples: bytes, settings: Settings, sto
                 pages.append(await read_usage_page(each, iri, ordered, 1))
             assert pages[0] == pages[1], name
             assert pages[0]
+
+
+SPLIT_KINDS = {
+    "AnnotationAssertion",
+    "AnnotationPropertyDomain",
+    "AnnotationPropertyRange",
+    "ClassAssertion",
+    "DataPropertyAssertion",
+    "DataPropertyDomain",
+    "DataPropertyRange",
+    "DatatypeDefinition",
+    "DifferentIndividuals",
+    "DisjointClasses",
+    "DisjointDataProperties",
+    "DisjointObjectProperties",
+    "DisjointUnion",
+    "EquivalentClasses",
+    "EquivalentObjectProperties",
+    "HasKey",
+    "InverseObjectProperties",
+    "ObjectPropertyAssertion",
+    "ObjectPropertyDomain",
+    "ObjectPropertyRange",
+    "SameIndividual",
+    "SubAnnotationPropertyOf",
+    "SubClassOf",
+    "SubDataPropertyOf",
+    "SubObjectPropertyOf",
+}
+"""The kinds of axiom in `axioms.ofn` shown in columns under their subject: those that start with it and a keyword."""
+WHOLE_KINDS = {
+    "AsymmetricObjectProperty",
+    "DifferentIndividuals",  # with three members, a list, as are the others below
+    "DisjointClasses",
+    "DisjointDataProperties",
+    "DisjointObjectProperties",
+    "EquivalentDataProperties",  # always a list
+    "FunctionalDataProperty",
+    "FunctionalObjectProperty",
+    "InverseFunctionalObjectProperty",
+    "IrreflexiveObjectProperty",
+    "NegativeDataPropertyAssertion",
+    "NegativeObjectPropertyAssertion",
+    "ReflexiveObjectProperty",
+    "SubPropertyChainOf",  # owned by the property it implies, which comes last
+    "SymmetricObjectProperty",
+    "TransitiveObjectProperty",
+}
+"""The kinds shown whole under their subject, spanning both columns: those that don't start with it and a keyword."""
+
+
+def column_kinds(ntriples: bytes) -> tuple[set[tuple[str, bool]], list[tuple[str, str]]]:
+    """Return each kind of axiom about each IRI in the ontology, and whether it's in columns under that IRI.
+
+    Also return, for each in columns, its subject, keyword and rest put together, and its whole text.
+    """
+    kinds: set[tuple[str, bool]] = set()
+    texts: list[tuple[str, str]] = []
+    with ntriples_ontology(ntriples) as ontology:
+        for entity in ontology.getSignature():
+            iri = str(entity.getIRI())
+            for node in convert_axioms(axioms_about(ontology, iri)):
+                node = node.with_first(iri)
+                split = node.subject_split(iri)
+                kinds.add((node.kind, split is not None))
+                if split is not None:
+                    parts = (split.subject,), split.keyword, split.rest
+                    texts.append((" ".join(owl.manchester_text(part) for part in parts), node.manchester))
+    return kinds, texts
+
+
+@pytest.mark.jvm
+@pytest.mark.usefixtures("jvm")
+def test_columns_by_kind(ntriples: bytes) -> None:
+    """Check which kinds of axiom are shown in columns under their subject, and that their parts make the whole."""
+    kinds, texts = asyncio.run(owlapi.run_java(column_kinds, ntriples))
+    assert kinds == {(kind, True) for kind in SPLIT_KINDS} | {(kind, False) for kind in WHOLE_KINDS}
+    assert texts
+    for joined, whole in texts:
+        assert joined == whole
+    other = owl.OtherAxiom(axiom_type="DLSafeRule", functional="DLSafeRule(Body() Head())")
+    assert other.subject_split(f"{NS}Dog") is None
+
+
+@pytest.mark.fuseki
+@pytest.mark.jvm
+def test_columns(client: TestClient) -> None:
+    """Check the columns: a line in them reads, for a screen reader, as the whole axiom; others span both.
+
+    Those are a chain, which its implied property owns, an n-ary axiom in the group with no subject, and a general
+    class axiom; an `OtherAxiom` is in `test_subjects`.
+    """
+    has_parent = panel(client, "hasParent").text
+    assert columns_shown(has_parent) == [
+        ":hasParent o :hasParent SubPropertyOf: :hasAncestor",
+        ("InverseOf", ":hasParent"),
+        ("SubPropertyOf:", ":hasParent"),
+        ":hasParent o :hasBrother SubPropertyOf: :hasUncle",
+        ("SubClassOf", ":hasParent max 2 owl:Thing"),
+        ("SubClassOf", ":hasParent min 1 :Person"),
+    ]
+    assert lines_shown(has_parent)[1:3] == [":hasChild InverseOf :hasParent", ":hasMother SubPropertyOf: :hasParent"]
+    assert columns_shown(panel(client, "note").text)[2:] == [
+        "DisjointClasses: :Animal, :Fungus, :Plant",
+        ':hasPart some <b>Heart</b> & "soul" SubClassOf :Vertebrate',
+    ]
+    assert subjects_shown(panel(client, "note").text)[2:] == ["No single subject"]
+
+
+OBJECT_PROPERTY = "ObjectProperty"
+SYMMETRIC = [
+    ("disjointWith", "Class", "DisjointWith"),
+    ("equivalentClass", "Class", "EquivalentTo"),
+    ("sameAs", "NamedIndividual", "SameAs"),
+    ("differentFrom", "NamedIndividual", "DifferentFrom"),
+    ("equivalentProperty", OBJECT_PROPERTY, "EquivalentTo"),
+    ("propertyDisjointWith", OBJECT_PROPERTY, "DisjointWith"),
+    ("inverseOf", OBJECT_PROPERTY, "InverseOf"),
+]
+"""Symmetric axioms between two: each's predicate, its members' type, and its keyword."""
+
+
+def symmetric_triples(predicate: str, type_: str) -> bytes:
+    """Return a symmetric axiom stated on Z about A, which sorts first, with their declarations."""
+    declared = "".join(f"<{NS}{name}> {RDF_TYPE} <{OWL_NS}{type_}> .\n" for name in "AZ")
+    return f"{declared}<{NS}Z> <{OWL_NS}{predicate}> <{NS}A> .\n".encode()
+
+
+@pytest.mark.jvm
+@pytest.mark.usefixtures("jvm")
+@pytest.mark.parametrize(("predicate", "type_", "keyword"), SYMMETRIC)
+def test_symmetric_subject_first(predicate: str, type_: str, keyword: str) -> None:
+    """Check that a symmetric axiom stated on Z, on A's Usage tab, is written with Z, its subject, first."""
+    triples = symmetric_triples(predicate, type_)
+    found, _ = asyncio.run(owlapi.run_java(browl.usage_tab.usage_axioms, triples, b"", f"{NS}A", [(f"{NS}Z", 1)]))
+    [axiom] = found[f"{NS}Z"]
+    assert axiom.manchester == f"<{NS}Z> {keyword} <{NS}A>"
+    split = axiom.subject_split(f"{NS}Z")
+    assert split is not None
+    assert (owl.manchester_text(split.keyword), owl.manchester_text(split.rest)) == (keyword, f"<{NS}A>")
+
+
+@pytest.mark.fuseki
+@pytest.mark.jvm
+async def test_symmetric_on_both_tabs(fuseki_url: str, settings: Settings) -> None:
+    """Check `Z DisjointWith A`, stated on Z, on A's tabs: on its Usage tab under Z, Z first; on its Overview, as Z."""
+    triples = symmetric_triples("disjointWith", "Class")
+    async with loaded(fuseki_url, settings, {None: triples}, "") as small:
+        [usage] = await read_usages(small, f"{NS}A")
+        [group] = await read_usage_page(small, f"{NS}A", [usage], 1)
+        fragment = await fetch_fragment(small.sparql, small.dataset, f"{NS}A", small.dataset_clause)
+    assert group.subject == f"{NS}Z"
+    assert [axiom.manchester for axiom in group.axioms] == [f"<{NS}Z> DisjointWith <{NS}A>"]
+    axioms = await owlapi.run_java(entity_axioms, fragment, f"{NS}A")
+    [section] = frame_groups(axioms, f"{NS}A", [], str)
+    assert section.label == "Disjoint With"
+    assert [owl.manchester_text(line.manchester_tokens()) for line in section.lines] == [f"<{NS}Z>"]
+
+
+def render_usage(tab: UsageTab, iri: str) -> str:
+    """Return a page of the Usage tab as the template renders it, for the entity with this IRI."""
+    return str(templates.env.get_template("usage.html").module.usage_panel(tab, None, iri))
+
+
+def test_highlight_and_columns_rendered() -> None:
+    """Check that the entity is highlighted in the lines, also in their annotations, but not as a subject.
+
+    A line in columns has its subject in text only screen readers read, not a link; one with no subject spans both.
+    """
+    a, z = (owl.Entity(kind=owl.EntityKind.CLASS, iri=f"{NS}{name}") for name in "AZ")
+    note = owl.Entity(kind=owl.EntityKind.ANNOTATION_PROPERTY, iri=f"{NS}note")
+    annotation = owl.Annotation(property=note, value=owl.IRIReference(iri=a.iri))
+    disjoint = owl.DisjointClasses(members=(z, a))
+    annotated = owl.SubClassOf(sub=z, super=z, annotations=(annotation,))
+    general = owl.SubClassOf(sub=owl.ObjectComplementOf(operand=a), super=z)
+    links = {
+        each: EntityLink(each, each.removeprefix(NS).lower(), f"/{each.removeprefix(NS)}") for each in (a.iri, z.iri)
+    }
+    tab = UsageTab(
+        count=3,
+        page=1,
+        pages=1,
+        groups=[
+            UsageGroup(subject=IRI(a.iri), axioms=[owl.SubClassOf(sub=a, super=z)]),  # its own axiom: no mark
+            UsageGroup(subject=IRI(z.iri), axioms=[disjoint, annotated]),
+            UsageGroup(subject=None, axioms=[general]),
+        ],
+        links=links,
+    )
+    page = render_usage(tab, a.iri)
+    mark = '<mark><a href="/A"><bdi>a</bdi></a></mark>'
+    assert columns_shown(page) == [
+        ("SubClassOf", "z"),
+        ("DisjointWith", "a"),
+        ("SubClassOf", "z"),
+        "not (a) SubClassOf z",
+    ]
+    assert lines_shown(page) == ["a SubClassOf z", "z DisjointWith a", "z SubClassOf z", "not (a) SubClassOf z"]
+    assert page.count(mark) == 3  # on Z's disjointness, its annotation, and the general class axiom
+    assert "<mark>" not in "".join(re.findall(r"<dt>.*?</dt>", page, re.DOTALL))
+    assert '<span class="visually-hidden"><bdi>a</bdi> </span>' in page
+    assert mark in page.split('<ul class="axiom-annotations">')[1]
+
+
+@pytest.mark.fuseki
+@pytest.mark.jvm
+def test_highlight(client: TestClient) -> None:
+    """Check that the entity is highlighted in its Usage tab's axioms, but not as a subject.
+
+    `tests/test_axioms.py`'s `test_page` checks the Overview's.
+    """
+    mark = '<mark><a href="/axioms#Dog"><bdi>http://example.org/axioms#Dog</bdi></a></mark>'
+    dog = panel(client, "Dog").text
+    assert dog.count(mark) == 4  # once in each line but the SWRL rule's, in functional syntax, as text
+    assert "<mark>" not in "".join(re.findall(r"<dt>.*?</dt>", dog, re.DOTALL))
+    mineral = panel(client, "Mineral").text  # in an n-ary axiom's annotations
+    assert mark.replace("Dog", "Mineral") in mineral.split('<ul class="axiom-annotations">')[1]

@@ -248,8 +248,8 @@ def _place(axiom: AnyAxiom, iri: str) -> Iterator[tuple[EntityKind | None, Secti
         # The other side; or the entity itself, if it's its own inverse (`p owl:inverseOf p`).
         other = axiom.second if entity is axiom.first else axiom.first
         yield entity.kind, Section.INVERSE_OF, FrameLine(axiom=axiom, operands=(other,))
-    else:
-        yield None, Section.OTHER, FrameLine(axiom=axiom)
+    else:  # such as an individual's `SameAs`, written with the entity first
+        yield None, Section.OTHER, FrameLine(axiom=axiom.with_first(iri))
 
 
 def _is(node: owl.Node, iri: str) -> TypeGuard[Entity]:
