@@ -16,6 +16,7 @@ import re
 import sqlite3
 import urllib.parse
 from dataclasses import dataclass
+from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, Response
@@ -210,16 +211,13 @@ def _page_number(request: Request) -> int | None:
 
 def _usage_label(request: Request, links: list[TabLink], iri: str, count: int | None) -> list[TabLink]:
     """Return tab links with the Usage tab's count: in its label if it's known, else fetched once the page renders."""
-    prefix: str = request.app.state.settings.reserved_prefix
-    found = []
-    for link in links:
-        if link.tab.slug == USAGE and count is not None:
-            link = dataclasses.replace(link, tab=Tab(USAGE, usage_label(count)))
-        elif link.tab.slug == USAGE:
-            count_url = with_query(f"/{prefix}/{USAGE_COUNT_PATH}", [("iri", iri)])
-            link = dataclasses.replace(link, label_url=href(request, count_url))
-        found.append(link)
-    return found
+    changes: dict[str, Any]  # TabLink's fields
+    if count is not None:
+        changes = {"tab": Tab(USAGE, usage_label(count))}
+    else:
+        prefix: str = request.app.state.settings.reserved_prefix
+        changes = {"label_url": href(request, with_query(f"/{prefix}/{USAGE_COUNT_PATH}", [("iri", iri)]))}
+    return [dataclasses.replace(link, **changes) if link.tab.slug == USAGE else link for link in links]
 
 
 def not_found(request: Request) -> Response:
@@ -254,7 +252,8 @@ async def _page(
         hash_path: The URL's path, when hash entities share it, so the page includes the hash-IRI script.
         noindex: Whether to ask search engines not to index the page, which is also at another URL.
         lenient: Whether to show the first tab rather than 404 a tab the page lacks (`choose_tab`); always so for a
-            page with the hash-IRI script.
+            page with the hash-IRI script, which also shows the Usage tab's first page rather than 404 a page it
+            lacks, as its fragment's entity may have it.
     """
     hash_script = None if hash_path is None else _hash_script(request, prefix, hash_path, prefix_only=False)
     common = {"hash_script": hash_script, "noindex": noindex}
@@ -278,24 +277,24 @@ async def _page(
     links = tab_links(tabs, tab, href(request, at.page), at.fragment, href(request, at.panel or at.page))
     entity = entities[0]
     types = [TYPE_LABELS[each.type] for each in entities]
-    context: dict[str, object] = {
-        "entity": entity,
-        "name": names[entity.iri],
-        "types": types,
-        "tab": tab,
-        "tabs": links,
-    }
+    context: dict[str, object] = {"entity": entity, "name": names[entity.iri], "types": types, "tab": tab}
     count = None
     if tab.slug == OVERVIEW:
         context["overview"] = await read_overview(request, state, entity.iri)
     elif tab.slug == USAGE:
         page = _page_number(request)
-        if page is None:
+        if page == 1 and PAGE_PARAM in request.query_params and not query.panel and at.panel is None:
+            # The first page's URL is without `page`, so each page has one URL; a fragment is kept by the browser.
+            location = href(request, with_query(at.page, [(TAB_PARAM, USAGE)]), at.fragment)
+            return Response(status_code=301, headers={"Location": location})
+        if page is None and hash_path is None:
             return not_found(request)
         try:
-            usage = await read_usage_tab(request, state, entity.iri, page)
+            usage = await read_usage_tab(request, state, entity.iri, page or 1)
         except PageNotFoundError:
-            return not_found(request)
+            if hash_path is None:
+                return not_found(request)
+            usage = await read_usage_tab(request, state, entity.iri, 1)
         context["usage"] = usage
         context["pager"] = _pager(request, at, usage)
         count = usage.count
