@@ -86,6 +86,9 @@ _PAGE_NUMBER = re.compile(r"[1-9][0-9]{0,8}")
 PANEL_HEADERS = {"X-Robots-Tag": "noindex"}
 """The headers of a tab panel served alone, which isn't a page."""
 
+POLL_ID = "usage-preparing"
+"""The id of the Usage tab's "Preparing…", which polls (`usage.html`), and which htmx sends as `HX-Trigger`."""
+
 
 class _EntityRoute(APIRoute):
     """The catch-all route, which matches no path under the reserved prefix, percent-decoded as the router decodes it.
@@ -317,7 +320,8 @@ async def _page(
         try:
             usage = await read_usage_tab(request, state, entity.iri, page or 1)
         except PageNotFoundError:
-            if hash_path is None:
+            # A poll's page can be past those listed once the table is ready: htmx doesn't swap a 404, so it'd poll on.
+            if hash_path is None and request.headers.get("HX-Trigger") != POLL_ID:
                 return not_found(request)
             usage = await read_usage_tab(request, state, entity.iri, 1)
         context["usage"] = usage

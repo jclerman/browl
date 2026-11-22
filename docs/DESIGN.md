@@ -1008,12 +1008,13 @@ Tabs (U-28; see [2.9](#29-page-layout)):
     - _(P-27c)_ "Preparing…" is in an element of its own (`#usage-preparing`), which polls its own page's tab panel
       (`?tab=usage&page=N&panel=1`, or the hash route's) every 5 s (`POLL_S`) into the tab panel, so the panel
       replaces it once the table is ready, and the next poll is the last; the tab stays selected and the URL
-      unchanged. Without JavaScript, reloading the page shows it. The estimate, "Ready in about 3 minutes" or "less
-      than a minute", is from the build's progress (`UsageTables.remaining_s`): the scan's rate so far gives its
-      time left, and the writing after it takes about a quarter of the whole (`WRITE_SHARE`; 0.23–0.27 measured).
-      The count is of the triples the scan reads, with the same filter (`usage-scan-count.rq`; 4 s on NCBITaxon,
-      alongside the ranking), so the rate isn't biased. A build in another worker, or none, gives no estimate. If
-      the build failed, the tab says its usages can't be shown, and doesn't poll.
+      unchanged. A poll (`HX-Trigger: usage-preparing`) for a page past those listed gets the first page, as htmx
+      doesn't swap a 404 and would poll on. Without JavaScript, reloading the page shows it. The estimate, "Ready in
+      about 3 minutes" or "less than a minute", is from the build's progress (`UsageTables.remaining_s`): the scan's
+      rate so far gives its time left, and the writing after it takes about a quarter of the whole (`WRITE_SHARE`;
+      0.23–0.27 measured). The count is of the triples the scan reads, with the same filter (`usage-scan-count.rq`; 4 s
+      on NCBITaxon, alongside the ranking), so the rate isn't biased. A build in another worker, or none, gives no
+      estimate. If the build failed, the tab says its usages can't be shown, and doesn't poll.
   - **Not built:** walking `entity` in name order to fill a hub's first pages before the table is ready, and caching
     each hub's sorted list on first view. S-7 found the walk fast for the hubs too large to stream (7–75 ms for
     page 1 of the ranks and annotation properties), but slow for clustered ones: NCBITaxon's subclasses share name
