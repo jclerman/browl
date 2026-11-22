@@ -24,10 +24,11 @@ from browl.axioms import TooManyAxiomsError, axioms_about, convert_axioms, fragm
 from browl.derived import UsageRootKind
 from browl.fuseki import CONSTRUCT_MAX_BYTES, ResultTooLargeError, SparqlError, filled_query
 from browl.jobs import JobState
-from browl.links import EntityLink, read_entity_links
+from browl.links import LOOKUP_BATCH, EntityLink, read_entity_links
 from browl.owlapi import FragmentError, check_java_thread, ntriples_ontology, run_java
 from browl.pages import link_root, read_derived
 from browl.precache.core import PREFIXES, logged_iri, sparql_file
+from browl.precache.usage_table import SubjectGroup, sort_name
 from browl.rdf import IRI, BlankNode, RDFSyntaxError, ntriples_term
 from browl.tasks import task_group
 from browl.usage_tables import TableNotReadyError
@@ -64,8 +65,6 @@ _NO_TRIPLES = "VALUES (?subject ?predicate ?object) { }"
 _NO_ROOTS = "VALUES ?root { }"
 _NO_AXIOMS = "VALUES ?axiom { }"
 _NO_IRIS = "VALUES ?iri { }"
-_BATCH = 500  # the most IRIs one SQLite query looks up, well under its limit on a statement's parameters
-_NAMED, _NO_SUBJECT, _NOT_ENTITY = range(3)  # the order of a usage's subject's group
 
 
 class PageNotFoundError(LookupError):
@@ -305,11 +304,11 @@ def sorted_usages(connection: sqlite3.Connection, usages: Iterable[Usage]) -> li
     def key(usage: Usage) -> tuple[int, str, str, str, str, int, int]:
         subject = usage.subject
         if subject is None:
-            group, name = _NO_SUBJECT, ""
+            group, name = SubjectGroup.NO_SUBJECT, ""
         elif subject in names:
-            group, name = _NAMED, names[subject].casefold()
+            group, name = SubjectGroup.NAMED, names[subject]
         else:
-            group, name = _NOT_ENTITY, ""
+            group, name = SubjectGroup.NOT_ENTITY, ""
         root = usage.root.id if usage.root is not None else 0
         return group, name, subject or "", usage.source, usage.predicate or "", usage.index, root
 
@@ -317,14 +316,15 @@ def sorted_usages(connection: sqlite3.Connection, usages: Iterable[Usage]) -> li
 
 
 def _sort_names(connection: sqlite3.Connection, iris: Iterable[str]) -> dict[str, str]:
-    """Return the name each IRI in `entity` sorts by: its first entity's display name, else its IRI."""
+    """Return the name each IRI in `entity` sorts by (`browl.precache.usage_table.sort_name`)."""
     names: dict[str, str] = {}
-    for batch in batched(sorted(iris), _BATCH):
+    for batch in batched(sorted(iris), LOOKUP_BATCH):
         rows = connection.execute(
             f"SELECT iri, display_name FROM entity WHERE iri IN ({', '.join('?' * len(batch))}) ORDER BY id", batch
         )
         for iri, display_name in rows:
-            names.setdefault(iri, display_name or iri)
+            if iri not in names:
+                names[iri] = sort_name(iri, display_name)
     return names
 
 

@@ -1,6 +1,8 @@
-# How many triples the usage table's scan reads (usage-scan.rq), for its progress (browl.precache.usage_table). The
-# dataset clause is added before WHERE when it's run.
+# How many triples the usage table's scan reads (usage-scan.rq), for its progress (browl.precache.usage_table): its
+# triples, with the same `rdf:type` objects left out, which browl.precache.usage_table fills in, as it does the scan's.
+# It adds the prologue, and the dataset clause before WHERE, when it's run.
 SELECT (COUNT(*) AS ?triples)
 WHERE {
-  ?s ?p ?o
+  ?subject ?predicate ?value
+  FILTER (?predicate != rdf:type || ?value NOT IN ())
 }

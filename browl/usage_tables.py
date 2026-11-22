@@ -4,7 +4,8 @@
 the ready generation's table isn't current, and cancels an older generation's build when a newer one goes live. A
 table is written to a temporary file and renamed into place once complete, so it's read only then; a restart during
 the build starts it again. Its key (`browl.precache.keys.usage_table_key`) covers its code and the derived database's
-keys, so a file another browl built, or built from another derived database, isn't current and is built again.
+keys, so a file another browl built, or built from another derived database, isn't current and is built again; so is
+one built from another file of the generation's derived database, e.g. one rebuilt by hand (`derived_stamp`).
 """
 
 import asyncio
@@ -68,7 +69,9 @@ def table_path(data_dir: Path, generation: int) -> Path:
 def build_file(data_dir: Path, generation: int, key: str) -> Iterator[sqlite3.Connection]:
     """Build a generation's usage table, and rename it into place once the block exits cleanly.
 
-    The connection yielded is in a transaction, with the schema created, the `meta` row written, the generation's
+    The connection yielded is in a transaction, with the schema created, the `meta` row written (with the derived
+    database's `derived_stamp`, taken before it's attached, so a file replaced meanwhile makes the table stale), the
+    generation's
     derived database attached read-only as `DERIVED`, and a scratch database for the staged rows as `scratch`, deleted
     after. If the block, or the end, fails, the temporary files are deleted and any file in place is left as it was.
     The connection may be used only on the thread that called this.
@@ -80,6 +83,7 @@ def build_file(data_dir: Path, generation: int, key: str) -> Iterator[sqlite3.Co
     temp.unlink(missing_ok=True)
     scratch.unlink(missing_ok=True)
     source = derived.derived_path(data_dir, generation)
+    stamp = derived_stamp(data_dir, generation)
     try:
         with closing(sqlite3.connect(temp.as_uri(), uri=True, isolation_level=None)) as connection:
             # Thrown away if anything fails, so neither file needs a journal or syncing until the end.
@@ -94,7 +98,9 @@ def build_file(data_dir: Path, generation: int, key: str) -> Iterator[sqlite3.Co
                 f" PRAGMA scratch.cache_size = -{SCRATCH_CACHE_KIB};"
             )
             connection.executescript(SCHEMA)
-            connection.execute("INSERT INTO meta (id, generation, key) VALUES (1, ?, ?)", (generation, key))
+            connection.execute(
+                "INSERT INTO meta (id, generation, key, derived) VALUES (1, ?, ?, ?)", (generation, key, stamp)
+            )
             connection.execute("BEGIN")
             yield connection
             if connection.in_transaction:
@@ -119,20 +125,39 @@ def _fsync(path: Path) -> None:
         os.close(descriptor)
 
 
+def derived_stamp(data_dir: Path, generation: int) -> str:
+    """Return what tells this file of a generation's derived database from another: its inode and modification time.
+
+    A derived database is written to a temporary file and renamed into place, so each build's file has its own.
+
+    Raises:
+        OSError: The file can't be read, e.g. it's missing.
+    """
+    stat = derived.derived_path(data_dir, generation).stat()
+    return f"{stat.st_ino}:{stat.st_mtime_ns}"
+
+
 def connect(data_dir: Path, generation: int, key: str) -> sqlite3.Connection:
     """Open a generation's usage table read-only and immutable, after checking that it's current.
 
     Raises:
-        TableNotReadyError: The file is missing or unreadable, or was built for another generation or key.
+        TableNotReadyError: The file is missing or unreadable, or was built for another generation or key, or from
+            another file of the derived database (`derived_stamp`), or that's missing.
     """
     path = table_path(data_dir, generation)
     if not path.is_file():
         raise TableNotReadyError(f"{path} doesn't exist")
+    try:
+        stamp = derived_stamp(data_dir, generation)
+    except OSError as error:
+        raise TableNotReadyError(f"the derived database of generation {generation} can't be read: {error}") from error
     connection = sqlite3.connect(f"{path.as_uri()}?mode=ro&immutable=1", uri=True, check_same_thread=False)
     try:
-        row = connection.execute("SELECT generation, key FROM meta").fetchone()
-        if row != (generation, key):
+        row = connection.execute("SELECT generation, key, derived FROM meta").fetchone()
+        if row is None or row[:2] != (generation, key):
             raise TableNotReadyError(f"{path} was built for another generation or with another key")
+        if row[2] != stamp:
+            raise TableNotReadyError(f"{path} was built from another file of the derived database")
     except sqlite3.Error as error:
         connection.close()
         raise TableNotReadyError(f"{path} can't be read: {error}") from error
@@ -285,7 +310,11 @@ class UsageTables:
 
     def building(self, generation: int) -> bool:
         """Return whether this process is building a generation's table."""
-        return self._build is not None and self._build.generation == generation and not self._build.task.done()
+        return self._running(generation) is not None
+
+    def _running(self, generation: int) -> _Build | None:
+        build = self._build
+        return build if build is not None and build.generation == generation and not build.task.done() else None
 
     def failed(self, generation: int) -> bool:
         """Return whether a generation's build failed in this process."""
@@ -300,9 +329,9 @@ class UsageTables:
             generation: The generation.
             now: The time (`time.monotonic`); now if not given.
         """
-        if self._build is None or not self.building(generation):
+        if (build := self._running(generation)) is None:
             return None
-        progress = self._build.progress
+        progress = build.progress
         now = time.monotonic() if now is None else now
         if progress.scanned_at is not None:
             scan_s = progress.scanned_at - progress.started

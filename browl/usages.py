@@ -21,10 +21,12 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
+from itertools import batched
 
 from browl.derived import DerivedReader, NotCurrentError, UsageRootKind
 from browl.fuseki import UNION_FROM, FusekiClient, SparqlError, dataset_clause, filled_query
 from browl.jobs import JobState
+from browl.links import LOOKUP_BATCH
 from browl.loading import dataset_name
 from browl.precache.core import PREFIXES, has_loaded_imports, logged_iri, sparql_file
 from browl.precache.usage_table import Source
@@ -249,7 +251,9 @@ async def read_values(
     rows = " ".join(f"<{IRI(subject)}>" for subject in sorted(set(subjects)))
     if not rows:
         return {}
-    query = store.query(_VALUES, iri).replace(_NO_SUBJECTS, _NO_SUBJECTS.replace("{ }", f"{{ {rows} }}"))
+    query = filled_query(
+        _VALUES, store.dataset_clause, {_ENTITY: f"<{IRI(iri)}>", _NO_SUBJECTS: f"VALUES ?subject {{ {rows} }}"}
+    )
     result = await store.sparql.select(store.dataset, query, max_chars=max_chars)
     subject, value, blank = (result.variables.index(name) for name in ("subject", "object", "blank"))
     found: dict[str, list[Value]] = {}
@@ -257,7 +261,7 @@ async def read_values(
         label, term = row[blank], row[value]
         if isinstance(label, Literal):
             term = BlankNode(label.value)
-        if not isinstance(term, IRI | Literal | BlankNode):
+        if not isinstance(term, Value):
             raise SparqlError(f"a property's values query gave no value: {row!r}")
         found.setdefault(_iri(row[subject]), []).append(term)
     for values in found.values():
@@ -308,7 +312,7 @@ async def count_usages(store: UsageStore, iri: str, cache: UsageCounts | None = 
         store: Where to count them.
         iri: The entity's IRI. One that isn't in `entity` gets its triples' count, blank subjects included.
         cache: Where an entity's counts are kept that took longer than `CACHED_COUNT_S`, and looked up first; none if
-            None. Once the generation's usage table is ready, an entity's count comes from it (`read_table_page`).
+            None. Once the generation's usage table is ready, an entity's count comes from it (`read_table_count`).
 
     Raises:
         SparqlError: The query failed.
@@ -319,14 +323,14 @@ async def count_usages(store: UsageStore, iri: str, cache: UsageCounts | None = 
         return known
     if store.tables is not None:
         try:
-            page = await read_table_page(store, iri, 0, 0)
+            counted = await read_table_count(store, iri)
         except TableNotReadyError:
-            page = None
+            counted = None
         except sqlite3.Error:
             logger.exception("Couldn't read the count of %s from the usage table; counting it", logged_iri(iri))
-            page = None
-        if page is not None:
-            return page.count
+            counted = None
+        if counted is not None:
+            return counted
     start = time.perf_counter()
     async with task_group() as group:
         triples = group.create_task(store.sparql.select(store.dataset, store.query(_COUNT, iri)))
@@ -382,6 +386,21 @@ class TablePage:
     previous: Usage | None
 
 
+async def read_table_count(store: UsageStore, iri: str) -> int | None:
+    """Return an entity's count from the usage table, as `read_table_page` gives it; None if the IRI isn't an entity's.
+
+    Raises:
+        TableNotReadyError: The generation's usage table isn't ready.
+        NotCurrentError: The generation's derived database isn't current.
+    """
+    assert store.tables is not None
+    entity = await store.derived.read(store.generation, lambda connection: _entity_id(connection, iri))
+    if entity is None:
+        return None
+    _, count = await store.tables.read(store.generation, lambda connection: _table_count(connection, entity))
+    return count
+
+
 async def read_table_page(store: UsageStore, iri: str, start: int, stop: int) -> TablePage | None:
     """Return an entity's count, and its usages at positions `start` to `stop` (not included), from the usage table.
 
@@ -417,8 +436,7 @@ type _TableRow = tuple[int, int | None, str | None, int, str | None, int]
 
 def _table_rows(connection: sqlite3.Connection, entity: int, start: int, stop: int) -> tuple[int, int, list[_TableRow]]:
     """Return an entity's listed usages and count, and its `usage` rows from `start` to `stop`, with their terms."""
-    row = connection.execute("SELECT listed, count FROM usage_count WHERE entity = ?", (entity,)).fetchone()
-    listed, count = row if row is not None else (0, 0)
+    listed, count = _table_count(connection, entity)
     rows = connection.execute(
         "SELECT u.position, u.subject, s.iri, u.source, p.iri, u.detail FROM usage AS u"
         " LEFT JOIN term AS s ON s.id = u.subject_term LEFT JOIN term AS p ON p.id = u.predicate"
@@ -426,6 +444,12 @@ def _table_rows(connection: sqlite3.Connection, entity: int, start: int, stop: i
         (entity, start, stop),
     ).fetchall()
     return listed, count, rows
+
+
+def _table_count(connection: sqlite3.Connection, entity: int) -> tuple[int, int]:
+    """Return an entity's listed usages and count."""
+    row = connection.execute("SELECT listed, count FROM usage_count WHERE entity = ?", (entity,)).fetchone()
+    return row if row is not None else (0, 0)
 
 
 def _table_usages(connection: sqlite3.Connection, rows: list[_TableRow]) -> list[Usage]:
@@ -456,8 +480,7 @@ def _table_usages(connection: sqlite3.Connection, rows: list[_TableRow]) -> list
 def _by_id(connection: sqlite3.Connection, query: str, ids: set[int]) -> dict[int, tuple]:
     """Return rows by their id, read by a query (`SELECT id, …`) of some ids."""
     found: dict[int, tuple] = {}
-    ordered = sorted(ids)
-    for batch in (ordered[at : at + 500] for at in range(0, len(ordered), 500)):
+    for batch in batched(sorted(ids), LOOKUP_BATCH):
         rows = connection.execute(f"{query} WHERE id IN ({', '.join('?' * len(batch))})", batch)
         found |= {number: rest for number, *rest in rows}
     return found

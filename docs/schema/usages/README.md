@@ -11,7 +11,7 @@ browl builds one such SQLite file per generation, `DATA_DIR/usages/{generation}.
 
 | Name                          | Columns | Comment                                                                                                                                                                       | Type  |
 | ----------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
-| [meta](meta.md)               | 3       | What the file was built for, one row. Its columns are read from a file built by any browl, so they keep their names.                                                          | table |
+| [meta](meta.md)               | 4       | What the file was built for, one row. Its columns are read from a file built by any browl, so they keep their names.                                                          | table |
 | [term](term.md)               | 2       | "The IRIs the usages name that aren't referred to by entity.id: predicates, and subjects that aren't entities."                                                               | table |
 | [usage](usage.md)             | 8       | Every usage of every entity (browl.usages.Usage), keyed by the entity and its position in the Usage tab's order (browl.usage_tab.sorted_usages), so a page is one range read. | table |
 | [usage_count](usage_count.md) | 3       | Per entity with usages, how many it has and how many can be listed; an entity with no row has none.                                                                           | table |
@@ -28,6 +28,7 @@ erDiagram
   INTEGER id
   INTEGER generation
   TEXT key
+  TEXT derived
 }
 "term" {
   INTEGER id

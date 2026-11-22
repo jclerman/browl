@@ -34,7 +34,8 @@ SCHEMA = """
 CREATE TABLE meta (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     generation INTEGER NOT NULL,
-    key TEXT NOT NULL
+    key TEXT NOT NULL,
+    derived TEXT NOT NULL
 );
 CREATE TABLE term (
     id INTEGER PRIMARY KEY,
@@ -67,6 +68,17 @@ class Source(IntEnum):
     OBJECT = 0
     PREDICATE = 1
     ROOT = 2
+
+
+class SubjectGroup(IntEnum):
+    """A usage's subject's group, in the tab's order (`browl.usage_tab.sorted_usages`)."""
+
+    NAMED = 0
+    """An entity's IRI."""
+    NO_SUBJECT = 1
+    """None: a root with no owner."""
+    NOT_ENTITY = 2
+    """An IRI that's no entity's."""
 
 
 class UsageKind(IntEnum):
@@ -148,9 +160,11 @@ VOCABULARY_TYPES = (
 """The `rdf:type` objects whose triples the scan leaves out, unless they're entities: declarations, characteristics
 and the blank nodes' types, none of them usages of an entity."""
 
-_NAMED, _NO_SUBJECT, _NOT_ENTITY = range(3)  # a subject's group, in the tab's order
+# Plain ints, for the scan's speed (`_Scan.add`).
+_NAMED, _NO_SUBJECT, _NOT_ENTITY = (int(group) for group in SubjectGroup)
 _OBJECT, _PREDICATE = int(Source.OBJECT), int(Source.PREDICATE)
 _NO_TYPES = "NOT IN ()"
+_NO_ENTITY = "<urn:x-browl:none>"  # stands for none in a `NOT IN` list, which can't be empty
 _SCAN = sparql_file("usage-scan.rq")
 _COUNT = sparql_file("usage-scan-count.rq")
 _STAGE = """
@@ -234,7 +248,7 @@ class _Scan:
             SparqlError: A row's predicate isn't an IRI, or its object is neither an IRI nor None.
         """
         rank_of, ids, blank, term, kind_of = self.ranks.get, self.ids, self.blank, self.term, KINDS.get
-        staged: list[tuple[int, ...] | tuple[int | None, ...]] = []
+        staged: list[tuple[int | None, ...]] = []
         for subject, predicate, object_ in rows:
             if type(predicate) is not IRI or (object_ is not None and type(object_) is not IRI):
                 raise SparqlError(f"the usage table's scan gave a predicate or object it can't: {predicate!r}")
@@ -282,12 +296,15 @@ async def fill_usage_table(
     Raises:
         SparqlError: A query failed or returned an incomplete result.
     """
+    skipped = await db.run(_skipped_types)
+    count = PREFIXES + filled_query(_COUNT, dataset_clause, {_NO_TYPES: _not_in(skipped)})
     async with task_group() as group:
         started = group.create_task(db.run(_start))
-        counted = group.create_task(sparql.select(dataset, filled_query(_COUNT, dataset_clause, {})))
+        counted = group.create_task(sparql.select(dataset, count))
     scan = started.result()
     progress.triples = _count(counted.result().rows)
-    async with sparql.bulk_select(dataset, _scan_query(scan), PREFIXES, dataset_clause) as stream:
+    scan_query = _SCAN.replace(_NO_TYPES, _not_in(skipped))
+    async with sparql.bulk_select(dataset, scan_query, PREFIXES, dataset_clause) as stream:
         columns = [stream.variables.index(name) for name in ("subject", "predicate", "object")]
         ordered = columns == [0, 1, 2]
         s, p, o = columns
@@ -315,25 +332,39 @@ def _start(connection: sqlite3.Connection) -> _Scan:
     return _Scan({iri: rank for rank, iri in enumerate(ordered)}, ids)
 
 
+def sort_name(iri: str, display_name: str | None) -> str:
+    """Return the name an entity IRI sorts by, given its first entity's display name: that, else the IRI, casefolded."""
+    return (display_name or iri).casefold()
+
+
 def _name_order(connection: sqlite3.Connection) -> tuple[list[str], list[int]]:
     """Return every entity IRI in name order, and each one's first `entity.id`."""
     first: dict[str, tuple[str, int]] = {}  # each IRI's sort name and first id
     for iri, number, name in connection.execute(f"SELECT iri, id, display_name FROM {DERIVED}.entity ORDER BY id"):
         if iri not in first:
-            first[iri] = ((name or iri).casefold(), number)
+            first[iri] = (sort_name(iri, name), number)
     ordered = sorted(first, key=lambda iri: (first[iri][0], iri))
     return ordered, [first[iri][1] for iri in ordered]
 
 
-def _scan_query(scan: _Scan) -> str:
-    """Return the scan's query, leaving out the declarations and other typing by OWL's vocabulary that name no entity.
+def _skipped_types(connection: sqlite3.Connection) -> list[str]:
+    """Return the `rdf:type` objects the scan leaves out: OWL's vocabulary's that aren't entities; none if it is one.
 
-    They're an eighth of NCBITaxon's triples, and the scan is the build's longest part.
+    Their triples are 15% of NCBITaxon's (3.6 M of 24.0 M), and the scan is the build's longest part.
     """
-    if f"{RDF}type" in scan.ranks:
-        return _SCAN.replace(_NO_TYPES, "NOT IN (<urn:x-browl:none>)")
-    types = ", ".join(f"<{iri}>" for iri in VOCABULARY_TYPES if iri not in scan.ranks)
-    return _SCAN.replace(_NO_TYPES, f"NOT IN ({types})")
+    named = [*VOCABULARY_TYPES, f"{RDF}type"]
+    entities = {
+        iri
+        for (iri,) in connection.execute(
+            f"SELECT iri FROM {DERIVED}.entity WHERE iri IN ({', '.join('?' * len(named))})", named
+        )
+    }
+    return [] if f"{RDF}type" in entities else [iri for iri in VOCABULARY_TYPES if iri not in entities]
+
+
+def _not_in(types: Sequence[str]) -> str:
+    """Return the scan's and its count's `NOT IN` list of the `rdf:type` objects left out."""
+    return f"NOT IN ({', '.join(f'<{iri}>' for iri in types) or _NO_ENTITY})"
 
 
 def _finish(connection: sqlite3.Connection, scan: _Scan) -> None:
@@ -343,7 +374,6 @@ def _finish(connection: sqlite3.Connection, scan: _Scan) -> None:
     ordered = sorted(scan.terms.items())
     connection.executemany("INSERT INTO term_rank VALUES (?, ?)", ((n, rank) for rank, (_, n) in enumerate(ordered)))
     connection.execute(_POSITIONS)
-    connection.execute("DELETE FROM scratch.stage")
     connection.execute(
         "INSERT INTO usage_count (entity, listed, count) SELECT entity, count(*), count(*) FROM usage GROUP BY entity"
     )

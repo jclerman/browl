@@ -48,6 +48,10 @@ comments:
       key: >-
         The file's key (browl.precache.keys.usage_table_key): a hash of the code that builds it and of the derived
         database's build keys; the file is current only if it's the one the running code computes.
+      derived: >-
+        Which file of the generation's derived database it was built from, by its inode and modification time
+        (browl.usage_tables.derived_stamp); the file is current only while that file is in place, as the ids it refers
+        to are that file's.
   - table: term
     tableComment: >-
       The IRIs the usages name that aren't referred to by entity.id: predicates, and subjects that aren't entities.

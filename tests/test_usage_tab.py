@@ -207,7 +207,7 @@ def test_order() -> None:
         ordered = sorted_usages(connection, usages)
         assert sorted_usages(connection, reversed(usages)) == ordered
         with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(browl.usage_tab, "_BATCH", 2)  # the names read in several queries
+            patch.setattr(browl.usage_tab, "LOOKUP_BATCH", 2)  # the names read in several queries
             assert sorted_usages(connection, usages) == ordered
     subjects = [usage.subject and usage.subject.removeprefix(NS) for usage in ordered]
     assert subjects == ["z", "a", "a", "a", "b", "pun", "m", None, "http://another.org/x", "http://other.org/x"]

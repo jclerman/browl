@@ -9,8 +9,9 @@ from browl.derived import Entity
 from browl.pages import cut_name, join_link
 from browl.urls import fallback_path
 
-_BATCH = 500
-"""The most IRIs one query looks up, well under SQLite's limit on a statement's parameters."""
+LOOKUP_BATCH = 500
+"""The most IRIs or ids one query looks up, here and in `browl.usages` and `browl.usage_tab`: well under SQLite's
+limit on a statement's parameters."""
 
 
 @dataclass(frozen=True)
@@ -59,7 +60,7 @@ def read_entity_links(
     """
     wanted = list(dict.fromkeys(iris))
     links: dict[str, EntityLink] = {}
-    for batch in batched(wanted, _BATCH):
+    for batch in batched(wanted, LOOKUP_BATCH):
         rows = connection.execute(
             "SELECT DISTINCT e.iri, e.path, e.fragment, e.display_name, EXISTS (SELECT 1 FROM entity AS o"
             "  WHERE o.path = e.path AND o.fragment IS e.fragment AND o.iri != e.iri)"

@@ -20,7 +20,7 @@ from browl.jobs import JobLock
 from browl.precache.core import DerivedWriter
 from browl.precache.keys import build_keys
 from browl.precache.stage import HOOKS, on_thread
-from browl.precache.usage_table import Progress, UsageKind
+from browl.precache.usage_table import Progress, Source, UsageKind, fill_usage_table
 from browl.rdf import IRI, OWL, RDF, RDFS, Literal
 from browl.settings import Settings
 from browl.usage_tab import sorted_usages
@@ -29,11 +29,12 @@ from browl.usage_tables import (
     UsageTables,
     build_file,
     connect,
+    derived_stamp,
     is_current,
     remove_others,
     table_path,
 )
-from browl.usages import UsageStore, count_usages, read_table_page, read_usages
+from browl.usages import UsageSource, UsageStore, count_usages, read_table_page, read_usages
 from tests.helpers import connect as connect_derived
 from tests.helpers import loaded, make_settings, ontology_ntriples
 
@@ -434,12 +435,61 @@ def test_scan_rows_checked() -> None:
 
 def test_scan_leaves_out_vocabulary_types() -> None:
     """Check that the scan leaves out the OWL vocabulary's types that aren't entities, and none if rdf:type is one."""
-    scan = browl.precache.usage_table._Scan({f"{OWL}Thing": 0, f"{OWL}Class": 1}, [1, 2])
-    query = browl.precache.usage_table._scan_query(scan)
-    assert f"<{OWL}ObjectProperty>" in query
-    assert f"<{OWL}Class>" not in query  # an entity: its class assertions are usages
-    scan.ranks[f"{RDF}type"] = 2
-    assert "NOT IN (<urn:x-browl:none>)" in browl.precache.usage_table._scan_query(scan)
+    module = browl.precache.usage_table
+    with closing(sqlite3.connect(":memory:")) as connection:
+        connection.execute("ATTACH ':memory:' AS derived")
+        connection.execute("CREATE TABLE derived.entity (id INTEGER PRIMARY KEY, iri TEXT, display_name TEXT)")
+        connection.executemany("INSERT INTO derived.entity (iri) VALUES (?)", [(f"{OWL}Thing",), (f"{OWL}Class",)])
+        listed = module._not_in(module._skipped_types(connection))
+        assert f"<{OWL}ObjectProperty>" in listed
+        assert f"<{OWL}Class>" not in listed  # an entity: its class assertions are usages
+        connection.execute("INSERT INTO derived.entity (iri) VALUES (?)", (f"{RDF}type",))
+        assert module._not_in(module._skipped_types(connection)) == "NOT IN (<urn:x-browl:none>)"
+
+
+@pytest.mark.fuseki
+@pytest.mark.jvm
+async def test_count_is_scanned(plain: UsageStore, settings: Settings, tmp_path: Path) -> None:
+    """Check that the build's count, for its estimate, is of the triples its scan reads, not of every triple."""
+    (tmp_path / "derived").mkdir()
+    source = browl.usage_tables.derived.derived_path(settings.data_dir, plain.generation)
+    (tmp_path / "derived" / source.name).symlink_to(source)
+    progress = Progress()
+    async with on_thread(build_file(tmp_path, plain.generation, "k"), "test") as db:
+        await fill_usage_table(plain.sparql, plain.dataset, plain.dataset_clause, db, progress)
+    assert progress.scanned > 0
+    assert progress.triples == progress.scanned
+
+
+def test_sources_in_tab_order() -> None:
+    """Check that the table's sources are the stream's, in the order the tab sorts them (`sorted_usages`)."""
+    assert [UsageSource[source.name] for source in sorted(Source)] == sorted(UsageSource)
+
+
+async def test_derived_rebuilt(tables: UsageTables, tmp_path: Path) -> None:
+    """Check that a table built from one file of a generation's derived database isn't current once it's replaced."""
+    derived_file(tmp_path, 1)
+    with build_file(tmp_path, 1, tables.key):
+        pass
+    assert is_current(tmp_path, 1, tables.key)
+    path = browl.usage_tables.derived.derived_path(tmp_path, 1)
+    copy = path.with_name("copy")
+    copy.write_bytes(path.read_bytes())
+    copy.replace(path)  # rebuilt, as a build renames its file into place
+    with pytest.raises(TableNotReadyError, match="another file of the derived database"):
+        connect(tmp_path, 1, tables.key)
+    assert not is_current(tmp_path, 1, tables.key)
+    path.unlink()
+    with pytest.raises(TableNotReadyError, match="derived database of generation 1 can't be read"):
+        connect(tmp_path, 1, tables.key)
+    derived_file(tmp_path, 1)
+    stamp = derived_stamp(tmp_path, 1)
+    GATES[1] = asyncio.Event()
+    GATES[1].set()
+    await tables.start(1, "")
+    await tables.wait()
+    with closing(connect(tmp_path, 1, tables.key)) as connection:
+        assert connection.execute("SELECT derived FROM meta").fetchone() == (stamp,)
 
 
 async def test_reads_by_generation(tables: UsageTables, tmp_path: Path) -> None:
@@ -661,6 +711,25 @@ async def test_count_table_failure(
     async def fail(*args: object) -> None:
         raise sqlite3.DatabaseError("disk gone")
 
-    monkeypatch.setattr(browl.usages, "read_table_page", fail)
+    monkeypatch.setattr(browl.usages, "read_table_count", fail)
     assert await count_usages(store, f"{NS}Animal") == len(ordered)
     assert "Couldn't read the count of http://example.org/axioms#Animal from the usage table" in caplog.text
+
+
+@pytest.mark.fuseki
+@pytest.mark.jvm
+async def test_count_reads_no_rows(store: UsageStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a count from the table reads only its count, not the usages' rows, and is the page's."""
+    page = await read_table_page(store, f"{NS}Animal", 0, 0)
+    assert page is not None
+
+    def no_rows(*args: object) -> None:
+        raise AssertionError("read the usages' rows")
+
+    async def no_fuseki(*args: object) -> None:
+        raise AssertionError("counted by Fuseki")
+
+    monkeypatch.setattr(browl.usages, "_table_rows", no_rows)
+    monkeypatch.setattr(store.sparql, "select", no_fuseki)
+    assert await count_usages(store, f"{NS}Animal") == page.count > 0
+    assert await browl.usages.read_table_count(store, "http://example.org/nothing") is None
