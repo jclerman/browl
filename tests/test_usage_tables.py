@@ -255,25 +255,52 @@ async def test_subjects_ordered(fuseki_url: str, settings: Settings) -> None:
 @pytest.mark.fuseki
 @pytest.mark.jvm
 async def test_kinds(store: UsageStore) -> None:
-    """Check that each usage stores its axiom's kind and predicate, for U-34's filters."""
-    assert store.tables is not None
+    """Check that each usage stores its axiom's kind and predicate, for U-34's filters, a root's from what it is."""
+    tables = store.tables
+    assert tables is not None
+    names = await store.derived.read(store.generation, lambda c: dict(c.execute("SELECT id, iri FROM entity")))
 
-    def kinds(connection: sqlite3.Connection) -> set[tuple[int, str | None]]:
-        return set(
-            connection.execute(
-                "SELECT u.kind, t.iri FROM usage AS u LEFT JOIN term AS t ON t.id = u.predicate"
-            ).fetchall()
+    async def rows(name: str) -> list[tuple[str | None, Source, UsageKind, str | None]]:
+        """Return an entity's usages' subjects, by local name if they're entities, sources, kinds and predicates."""
+        entity = await store.derived.read(store.generation, lambda c: browl.usages._entity_id(c, f"{NS}{name}"))
+        found = await tables.read(
+            store.generation,
+            lambda c: c.execute(
+                "SELECT u.subject, s.iri, u.source, u.kind, p.iri FROM usage AS u"
+                " LEFT JOIN term AS s ON s.id = u.subject_term LEFT JOIN term AS p ON p.id = u.predicate"
+                " WHERE u.entity = ? ORDER BY u.position",
+                (entity,),
+            ).fetchall(),
         )
+        return [
+            (term if subject is None else names[subject].removeprefix(NS), Source(source), UsageKind(kind), predicate)
+            for subject, term, source, kind, predicate in found
+        ]
 
-    found = await store.tables.read(store.generation, kinds)
-    assert (UsageKind.SUB_CLASS_OF, f"{RDFS}subClassOf") in found
-    assert (UsageKind.TYPE, f"{RDF}type") in found
-    assert (UsageKind.ASSERTION, f"{NS}remark") in found
-    assert (UsageKind.AXIOM_ANNOTATION, f"{NS}remark") in found or any(
-        kind == UsageKind.AXIOM_ANNOTATION for kind, _ in found
-    )
-    assert (UsageKind.NO_SUBJECT, None) in found
-    assert {kind for kind, _ in found} >= {UsageKind.DOMAIN, UsageKind.RANGE, UsageKind.EQUIVALENT_CLASS}
+    subclass, general = f"{RDFS}subClassOf", (None, Source.ROOT, UsageKind.NO_SUBJECT, None)
+    assert await rows("partOf") == [
+        ("Heart", Source.ROOT, UsageKind.SUB_CLASS_OF, subclass),
+        ("Fruit", Source.ROOT, UsageKind.SUB_CLASS_OF, subclass),
+        ("hasPart", Source.OBJECT, UsageKind.INVERSE_OF, f"{OWL}inverseOf"),
+        ("Liver", Source.ROOT, UsageKind.SUB_CLASS_OF, subclass),
+        ("Mineral", Source.ROOT, UsageKind.DISJOINT_CLASS, f"{OWL}disjointWith"),
+        general,
+        general,
+        general,
+    ]
+    assert await rows("note") == [
+        ("Cat", Source.ROOT, UsageKind.AXIOM_ANNOTATION, subclass),
+        ("Liver", Source.ROOT, UsageKind.AXIOM_ANNOTATION, subclass),
+        general,
+        general,
+    ]
+    animal = await rows("Animal")
+    assert ("Dog", Source.OBJECT, UsageKind.TYPE, f"{RDF}type") in animal
+    assert ("note", Source.OBJECT, UsageKind.DOMAIN, f"{RDFS}domain") in animal
+    assert animal[-1] == general
+    assert ("Cat", Source.PREDICATE, UsageKind.ASSERTION, f"{NS}remark") in await rows("remark")
+    kinds = await tables.read(store.generation, lambda c: {kind for (kind,) in c.execute("SELECT kind FROM usage")})
+    assert kinds >= {UsageKind.RANGE, UsageKind.EQUIVALENT_CLASS}
 
 
 # The files and the background builds, without Fuseki.
@@ -548,6 +575,7 @@ async def test_count_is_scanned(plain: UsageStore, settings: Settings, tmp_path:
         await fill_usage_table(plain.sparql, plain.dataset, plain.dataset_clause, db, progress)
     assert progress.scanned > 0
     assert progress.triples == progress.scanned
+    assert progress.scanned_at is not None and progress.scanned_at >= progress.started
 
 
 def test_sources_in_tab_order() -> None:
