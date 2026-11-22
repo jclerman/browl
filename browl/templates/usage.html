@@ -56,9 +56,11 @@
   </nav>
   {% endif %}
   {% if usage.too_many %}
-  <p class="note">This page's usages mention too many entities to show here.</p>
+  <p class="note">This page's usages are too large to show here.</p>
   {% elif usage.groups is none %}
   <p class="note">The usages can't be shown just now.</p>
+  {% elif not usage.groups %}
+  <p class="note">None of these usages can be listed yet: they're in anonymous individuals.</p>
   {% else %}
   <dl class="frame usage-frame">
     {% for group in usage.groups %}

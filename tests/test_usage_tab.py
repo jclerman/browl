@@ -407,6 +407,7 @@ def test_no_usages(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 MESSAGE = "The usages can't be shown just now."
+TOO_LARGE = "This page's usages are too large to show here."
 
 
 @pytest.mark.fuseki
@@ -443,8 +444,50 @@ def test_too_many_iris(client: TestClient, monkeypatch: pytest.MonkeyPatch, capl
     """Check that a page whose axioms mention too many IRIs says so, rather than fetch, parse and link them all."""
     monkeypatch.setattr(browl.usage_tab, "MAX_FRAGMENT_IRIS", 2)
     page = panel(client, "Dog").text
-    assert "This page's usages mention too many entities to show here." in page
+    assert TOO_LARGE in page
     assert "mentions" in caplog.text and "more than 2" in caplog.text
+
+
+@pytest.mark.fuseki
+@pytest.mark.jvm
+def test_too_large(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """Check that a page whose fragments are larger than a query's result may be says so, rather than parse them.
+
+    A property's literal objects are written into its fragment, not fetched, so no query's cap holds them.
+    """
+    monkeypatch.setattr(browl.usage_tab, "CONSTRUCT_MAX_BYTES", 40)
+    page = panel(client, "age").text  # `<:alice> :age 42`, and its roots' triples
+    assert TOO_LARGE in page
+    assert "bytes, more than 40" in caplog.text
+
+
+@pytest.mark.fuseki
+@pytest.mark.jvm
+def test_unlisted(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that usages counted but not listed, such as anonymous individuals', make no pages past those listed.
+
+    An entity with none listed says so.
+    """
+    monkeypatch.setattr(browl.usage_tab, "PAGE_USAGES", 1)
+    listed = browl.usage_tab.read_usages
+
+    async def fewer(*args: object) -> list[Usage]:
+        return (await listed(*args))[:-1]  # type: ignore[arg-type]
+
+    monkeypatch.setattr(browl.usage_tab, "read_usages", fewer)
+    assert 'max="4" value="4"' in panel(client, "Dog", page="4").text  # its count is 5
+    assert panel(client, "Dog", page="5").status_code == 404
+
+    async def none(*args: object) -> list[Usage]:
+        return []
+
+    monkeypatch.setattr(browl.usage_tab, "read_usages", none)
+    page = panel(client, "Dog").text
+    assert "None of these usages can be listed yet" in page
+    assert "<dl" not in page and '<nav class="pager"' not in page
+    whole = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "Dog", "tab": "usage"}).text
+    assert 'hx-sync="closest [role=tablist]:replace">Usage (5)</a>' in whole  # the count, unlisted usages included
+    assert panel(client, "Dog", page="2").status_code == 404
 
 
 def test_tab_json() -> None:

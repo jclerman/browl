@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict
 from browl import owl
 from browl.axioms import MAX_FRAGMENT_IRIS, TooManyAxiomsError, axioms_about, convert_axioms, is_declaration
 from browl.derived import UsageRootKind
-from browl.fuseki import SparqlError, filled_query
+from browl.fuseki import CONSTRUCT_MAX_BYTES, SparqlError, filled_query
 from browl.jobs import JobState
 from browl.links import EntityLink, read_entity_links
 from browl.overview import ready_store
@@ -91,13 +91,15 @@ class UsageTab(BaseModel):
     Attributes:
         count: How many usages the entity has (`browl.usages.count_usages`); None if they couldn't be counted.
         page: The page's number, from 1.
-        pages: How many pages there are, from the count; None if they couldn't be counted.
+        pages: How many pages there are: of the usages listed, once they're read, as the count can include some that
+            aren't (`browl.usages`); else from the count. None if they couldn't be counted.
         groups: The page's usages, by subject, in the order shown: by the subject's display name, case-folded, then IRI;
-            then those with no single subject; then the subjects that aren't entities. None if they couldn't be read,
-            are too many to stream (`preparing`), or mention too many IRIs (`too_many`), when the page says so.
+            then those with no single subject; then the subjects that aren't entities. Empty if none of the usages
+            counted can be listed. None if they couldn't be read, are too many to stream (`preparing`), or are too
+            large to show (`too_many`), when the page says so.
         preparing: Whether the entity has more usages than `MAX_STREAMED_USAGES`, which wait for the usage table
             (P-27c).
-        too_many: Whether the page's axioms mention more IRIs than `browl.axioms.MAX_FRAGMENT_IRIS`.
+        too_many: Whether the page's axioms are too large to show (`fetch_usage_fragments`).
         links: Each IRI the page mentions, by IRI (`browl.links.read_entity_links`).
     """
 
@@ -156,7 +158,7 @@ async def read_usage_tab(request: Request, state: JobState, iri: str, page: int)
     count = await read_count(request, state, iri)
     if count is None:
         return UsageTab(count=None, page=page, pages=None, groups=None)
-    pages = max(1, math.ceil(count / PAGE_USAGES))
+    pages = _pages(count)
     if page > pages:
         raise PageNotFoundError(f"page {page} of {pages}")
     preparing = UsageTab(count=count, page=page, pages=pages, groups=None, preparing=True)
@@ -170,6 +172,9 @@ async def read_usage_tab(request: Request, state: JobState, iri: str, page: int)
     except (SparqlError, RDFSyntaxError):
         logger.exception("Couldn't read the usages of %s", logged_iri(iri))
         return UsageTab(count=count, page=page, pages=pages, groups=None)
+    pages = _pages(len(usages))  # no blank pages for usages counted but not listed
+    if page > pages:
+        raise PageNotFoundError(f"page {page} of {pages} listed")
     ordered = await store.derived.read(store.generation, lambda connection: sorted_usages(connection, usages))
     try:
         shown = await read_usage_page(store, iri, ordered, page)
@@ -189,6 +194,11 @@ async def read_usage_tab(request: Request, state: JobState, iri: str, page: int)
     return UsageTab(count=count, page=page, pages=pages, groups=shown, links=links)
 
 
+def _pages(usages: int) -> int:
+    """Return how many pages that many usages take: at least one, which says if there are none."""
+    return max(1, math.ceil(usages / PAGE_USAGES))
+
+
 async def read_usage_page(store: UsageStore, iri: str, ordered: Sequence[Usage], page: int) -> list[UsageGroup]:
     """Return a page of an entity's usages, by subject, with their axioms.
 
@@ -201,7 +211,7 @@ async def read_usage_page(store: UsageStore, iri: str, ordered: Sequence[Usage],
     Raises:
         SparqlError: A query failed.
         RDFSyntaxError: An IRI isn't valid.
-        TooManyAxiomsError: The page's fragments mention too many IRIs (`fetch_usage_fragments`).
+        TooManyAxiomsError: The page's fragments are too large, or mention too many IRIs (`fetch_usage_fragments`).
         FragmentError: The OWLAPI couldn't parse a fragment, or convert an axiom (`usage_axioms`).
     """
     start = (page - 1) * PAGE_USAGES
@@ -288,7 +298,8 @@ async def fetch_usage_fragments(store: UsageStore, iri: str, usages: Sequence[Us
     Raises:
         SparqlError: A query failed.
         RDFSyntaxError: An IRI isn't valid.
-        TooManyAxiomsError: The fragments mention more than `browl.axioms.MAX_FRAGMENT_IRIS` IRIs.
+        TooManyAxiomsError: The fragments come to more than `browl.fuseki.CONSTRUCT_MAX_BYTES`, so the OWLAPI's heap
+            can't hold them, or mention more than `browl.axioms.MAX_FRAGMENT_IRIS` IRIs.
     """
     entity = IRI(iri)
     lines: list[str] = []
@@ -331,6 +342,9 @@ async def fetch_usage_fragments(store: UsageStore, iri: str, usages: Sequence[Us
         ]
     subject_triples = "".join(lines).encode() + b"".join(task.result() for task, own in tasks if own)
     general_triples = b"".join(task.result() for task, own in tasks if not own)
+    # Each query's result is capped, but not the literals written here, nor the results together.
+    if (size := len(subject_triples) + len(general_triples)) > CONSTRUCT_MAX_BYTES:
+        raise TooManyAxiomsError(f"the page's fragments come to {size:,} bytes, more than {CONSTRUCT_MAX_BYTES:,}")
     mentioned = ntriples_iris(subject_triples) | ntriples_iris(general_triples)
     if len(mentioned) > MAX_FRAGMENT_IRIS:
         raise TooManyAxiomsError(f"the page mentions {len(mentioned)} IRIs, more than {MAX_FRAGMENT_IRIS}")
