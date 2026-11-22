@@ -1,0 +1,251 @@
+{
+  "name": "Database schema: `usages`",
+  "desc": "The schema of the SQLite database browl calls the usage table, which holds every usage of every entity in the order the Usage tab shows them. These pages are generated from the code by [tbls](https://github.com/k1LoW/tbls) (`make schema-docs`; overview in [docs/SCHEMA.md](../../SCHEMA.md)): edit `.tbls/usages.yml`, not them.\n\nbrowl builds one such SQLite file per generation, `DATA_DIR/usages/{generation}.sqlite3`, in the background once the generation is live, from one bulk SPARQL query over every triple and the derived database's owner map; it reads it only once it's complete. Its rows refer to the derived database's `entity.id` and `usage_root.id`. It's a cache: built again when its key changes, never migrated ([DESIGN.md 2.5](../../DESIGN.md#25-derived-data-pre-caching)).\n",
+  "tables": [
+    {
+      "name": "meta",
+      "type": "table",
+      "comment": "What the file was built for, one row. Its columns are read from a file built by any browl, so they keep their names.",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "nullable": true,
+          "comment": "Always 1, so the table has one row."
+        },
+        {
+          "name": "generation",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "The generation; the file is current only for that generation."
+        },
+        {
+          "name": "key",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "The file's key (browl.precache.keys.usage_table_key): a hash of the code that builds it and of the derived database's build keys; the file is current only if it's the one the running code computes."
+        }
+      ],
+      "constraints": [
+        {
+          "name": "id",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (id)",
+          "table": "meta",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "-",
+          "type": "CHECK",
+          "def": "CHECK (id = 1)",
+          "table": "meta",
+          "columns": [
+            "id"
+          ]
+        }
+      ],
+      "def": "CREATE TABLE meta (\n    id INTEGER PRIMARY KEY CHECK (id = 1),\n    generation INTEGER NOT NULL,\n    key TEXT NOT NULL\n)"
+    },
+    {
+      "name": "term",
+      "type": "table",
+      "comment": "\"The IRIs the usages name that aren't referred to by entity.id: predicates, and subjects that aren't entities.\"",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "nullable": true,
+          "comment": "The term's number, from 1."
+        },
+        {
+          "name": "iri",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "Its IRI."
+        }
+      ],
+      "constraints": [
+        {
+          "name": "id",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (id)",
+          "table": "term",
+          "columns": [
+            "id"
+          ]
+        }
+      ],
+      "def": "CREATE TABLE term (\n    id INTEGER PRIMARY KEY,\n    iri TEXT NOT NULL\n)"
+    },
+    {
+      "name": "usage",
+      "type": "table",
+      "comment": "Every usage of every entity (browl.usages.Usage), keyed by the entity and its position in the Usage tab's order (browl.usage_tab.sorted_usages), so a page is one range read.",
+      "columns": [
+        {
+          "name": "entity",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "The entity it's a usage of, by the derived database's entity.id (its IRI's first)."
+        },
+        {
+          "name": "position",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "Its place among the entity's usages, from 0, in the tab's order."
+        },
+        {
+          "name": "subject",
+          "type": "INTEGER",
+          "nullable": true,
+          "comment": "Its subject, by the derived database's entity.id (its IRI's first); NULL if it has none or it isn't an entity."
+        },
+        {
+          "name": "subject_term",
+          "type": "INTEGER",
+          "nullable": true,
+          "comment": "Its subject, by term.id, if that isn't an entity; else NULL."
+        },
+        {
+          "name": "source",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "Where it was found (browl.precache.usage_table.Source): 0, a triple with the entity as object; 1, as predicate; 2, a root of the owner map."
+        },
+        {
+          "name": "kind",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "Its axiom's kind (browl.precache.usage_table.UsageKind), for U-34's filters: from its main predicate, an assertion for any predicate not of OWL's, RDF's or RDFS's axioms; or an axiom annotation, or no subject."
+        },
+        {
+          "name": "predicate",
+          "type": "INTEGER",
+          "nullable": true,
+          "comment": "Its axiom's main predicate, by term.id: the triple's, for an assertion its property; a root's predicate, or a reified axiom's owl:annotatedProperty; NULL for a root with no subject."
+        },
+        {
+          "name": "detail",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "For a triple with the entity as predicate, its place among its subject's values of it (browl.usages.Usage.index); for a root, the derived database's usage_root.id; else 0."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "sqlite_autoindex_usage_1",
+          "def": "PRIMARY KEY (entity, position)",
+          "table": "usage",
+          "columns": [
+            "entity",
+            "position"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "entity",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (entity)",
+          "table": "usage",
+          "columns": [
+            "entity"
+          ]
+        },
+        {
+          "name": "position",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (position)",
+          "table": "usage",
+          "columns": [
+            "position"
+          ]
+        },
+        {
+          "name": "sqlite_autoindex_usage_1",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (entity, position)",
+          "table": "usage",
+          "columns": [
+            "entity",
+            "position"
+          ]
+        }
+      ],
+      "def": "CREATE TABLE usage (\n    entity INTEGER NOT NULL,\n    position INTEGER NOT NULL,\n    subject INTEGER,\n    subject_term INTEGER,\n    source INTEGER NOT NULL,\n    kind INTEGER NOT NULL,\n    predicate INTEGER,\n    detail INTEGER NOT NULL,\n    PRIMARY KEY (entity, position)\n) WITHOUT ROWID"
+    },
+    {
+      "name": "usage_count",
+      "type": "table",
+      "comment": "Per entity with usages, how many it has and how many can be listed; an entity with no row has none.",
+      "columns": [
+        {
+          "name": "entity",
+          "type": "INTEGER",
+          "nullable": true,
+          "comment": "The entity, by the derived database's entity.id."
+        },
+        {
+          "name": "listed",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "How many usages it has in the usage table."
+        },
+        {
+          "name": "count",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "How many usages it has, as browl.usages.count_usages counts them: the listed ones, and those in triples with a blank subject the owner map lacks, such as anonymous individuals'."
+        }
+      ],
+      "constraints": [
+        {
+          "name": "entity",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (entity)",
+          "table": "usage_count",
+          "columns": [
+            "entity"
+          ]
+        }
+      ],
+      "def": "CREATE TABLE usage_count (\n    entity INTEGER PRIMARY KEY,\n    listed INTEGER NOT NULL,\n    count INTEGER NOT NULL\n)"
+    }
+  ],
+  "relations": [
+    {
+      "table": "usage",
+      "columns": [
+        "subject_term"
+      ],
+      "cardinality": "zero_or_more",
+      "parent_table": "term",
+      "parent_columns": [
+        "id"
+      ],
+      "parent_cardinality": "zero_or_one",
+      "def": "usage.subject_term references term.id",
+      "virtual": true
+    },
+    {
+      "table": "usage",
+      "columns": [
+        "predicate"
+      ],
+      "cardinality": "zero_or_more",
+      "parent_table": "term",
+      "parent_columns": [
+        "id"
+      ],
+      "parent_cardinality": "zero_or_one",
+      "def": "usage.predicate references term.id",
+      "virtual": true
+    }
+  ],
+  "driver": {
+    "name": "sqlite",
+    "database_version": "3.53.4"
+  }
+}

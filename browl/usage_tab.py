@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict
 from browl import owl
 from browl.axioms import TooManyAxiomsError, axioms_about, convert_axioms, fragment_iris, is_declaration
 from browl.derived import UsageRootKind
-from browl.fuseki import CONSTRUCT_MAX_BYTES, SparqlError, filled_query
+from browl.fuseki import CONSTRUCT_MAX_BYTES, ResultTooLargeError, SparqlError, filled_query
 from browl.jobs import JobState
 from browl.links import EntityLink, read_entity_links
 from browl.owlapi import FragmentError, check_java_thread, ntriples_ontology, run_java
@@ -30,6 +30,7 @@ from browl.pages import link_root, read_derived
 from browl.precache.core import PREFIXES, logged_iri, sparql_file
 from browl.rdf import IRI, BlankNode, RDFSyntaxError, ntriples_term
 from browl.tasks import task_group
+from browl.usage_tables import TableNotReadyError
 from browl.usages import (
     MAX_STREAMED_USAGES,
     TooManyUsagesError,
@@ -38,7 +39,9 @@ from browl.usages import (
     UsageSource,
     UsageStore,
     count_usages,
+    read_table_page,
     read_usages,
+    read_values,
     ready_store,
 )
 
@@ -49,6 +52,9 @@ PAGE_USAGES = 50
 
 USAGE_LABEL = "Usage"
 """The tab's label, before its count."""
+
+POLL_S = 5
+"""How often a page whose usages are being prepared asks for its tab again, until the usage table is ready."""
 
 _TRIPLES = PREFIXES + sparql_file("usage-triples.rq")
 _CLOSURES = PREFIXES + sparql_file("usage-closures.rq")
@@ -98,7 +104,9 @@ class UsageTab(BaseModel):
             counted can be listed. None if they couldn't be read, are too many to stream (`preparing`), or are too
             large to show (`too_many`), when the page says so.
         preparing: Whether the entity has more usages than `MAX_STREAMED_USAGES`, which wait for the usage table
-            (P-27c).
+            (`browl.usage_tables`), so the page polls until it's ready.
+        remaining_s: While preparing, about how long the usage table's build has left, in seconds
+            (`browl.usage_tables.UsageTables.remaining_s`); None if that isn't known.
         too_many: Whether the page's axioms are too large to show (`fetch_usage_fragments`).
         links: Each IRI the page mentions, by IRI (`browl.links.read_entity_links`).
     """
@@ -110,8 +118,26 @@ class UsageTab(BaseModel):
     pages: int | None
     groups: list[UsageGroup] | None
     preparing: bool = False
+    remaining_s: float | None = None
     too_many: bool = False
     links: dict[str, EntityLink] = {}
+
+
+def remaining_text(seconds: float | None) -> str | None:
+    """Return how long the usage table's build has left, as the page says it, e.g. "about 3 minutes"; None if unknown.
+
+    Examples:
+        >>> remaining_text(130)
+        'about 3 minutes'
+        >>> remaining_text(20)
+        'less than a minute'
+    """
+    if seconds is None:
+        return None
+    if seconds < 60:
+        return "less than a minute"
+    minutes = math.ceil(seconds / 60)
+    return f"about {minutes} minute{'s' if minutes > 1 else ''}"
 
 
 def usage_label(count: int | None) -> str:
@@ -121,7 +147,8 @@ def usage_label(count: int | None) -> str:
 
 def _store(request: Request, state: JobState) -> UsageStore:
     generation, clause = ready_store(state)
-    return UsageStore(request.app.state.sparql, request.app.state.derived, generation, clause)
+    app = request.app.state
+    return UsageStore(app.sparql, app.derived, generation, clause, getattr(app, "usage_tables", None))
 
 
 async def read_count(request: Request, state: JobState, iri: str) -> int | None:
@@ -159,33 +186,59 @@ async def read_usage_tab(request: Request, state: JobState, iri: str, page: int)
         NotCurrentError: No generation is ready, or its derived database isn't current.
     """
     store = _store(request, state)
-    count = await _read_count(request, store, iri)
+    start = (page - 1) * PAGE_USAGES
+    table = None
+    if store.tables is not None:
+        try:
+            table = await read_table_page(store, iri, start, start + PAGE_USAGES)
+        except TableNotReadyError:
+            pass
+        except sqlite3.Error:
+            logger.exception("Couldn't read the usage table for %s", logged_iri(iri))
+            return UsageTab(count=None, page=page, pages=None, groups=None)
+    count = table.count if table is not None else await _read_count(request, store, iri)
     if count is None:
         return UsageTab(count=None, page=page, pages=None, groups=None)
-    pages = _pages(count)
+    pages = _pages(table.listed if table is not None else count)  # with the table, no blank pages (below)
     if page > pages:
         raise PageNotFoundError(f"page {page} of {pages}")
 
     def unshown(preparing: bool = False, too_many: bool = False) -> UsageTab:
         """Return the page without its usages, which can't be shown; the page says why."""
-        return UsageTab(count=count, page=page, pages=pages, groups=None, preparing=preparing, too_many=too_many)
+        remaining = store.tables.remaining_s(store.generation) if preparing and store.tables is not None else None
+        return UsageTab(
+            count=count,
+            page=page,
+            pages=pages,
+            groups=None,
+            preparing=preparing,
+            remaining_s=remaining,
+            too_many=too_many,
+        )
 
-    if count > MAX_STREAMED_USAGES:
-        return unshown(preparing=True)
+    if table is not None:
+        chunk = table.usages
+        continued = table.previous is not None and bool(chunk) and table.previous.subject == chunk[0].subject
+    else:
+        if count > MAX_STREAMED_USAGES:
+            failed = store.tables is not None and store.tables.failed(store.generation)
+            return unshown(preparing=not failed)
+        try:
+            usages = await read_usages(store, iri, MAX_STREAMED_USAGES)
+        except TooManyUsagesError:  # more listed than counted, which the counts' rules don't allow
+            logger.warning("Preparing the usages of %s, which has more than its count of %d", logged_iri(iri), count)
+            return unshown(preparing=True)
+        except (SparqlError, RDFSyntaxError):
+            logger.exception("Couldn't read the usages of %s", logged_iri(iri))
+            return unshown()
+        pages = _pages(len(usages))  # no blank pages for usages counted but not listed
+        if page > pages:
+            raise PageNotFoundError(f"page {page} of {pages} listed")
+        ordered = await read_derived(request, lambda connection: sorted_usages(connection, usages), state)
+        chunk = ordered[start : start + PAGE_USAGES]
+        continued = bool(chunk) and start > 0 and ordered[start - 1].subject == chunk[0].subject
     try:
-        usages = await read_usages(store, iri, MAX_STREAMED_USAGES)
-    except TooManyUsagesError:  # more listed than counted, which the counts' rules don't allow
-        logger.warning("Preparing the usages of %s, which has more than its count of %d", logged_iri(iri), count)
-        return unshown(preparing=True)
-    except (SparqlError, RDFSyntaxError):
-        logger.exception("Couldn't read the usages of %s", logged_iri(iri))
-        return unshown()
-    pages = _pages(len(usages))  # no blank pages for usages counted but not listed
-    if page > pages:
-        raise PageNotFoundError(f"page {page} of {pages} listed")
-    ordered = await read_derived(request, lambda connection: sorted_usages(connection, usages), state)
-    try:
-        shown = await read_usage_page(store, iri, ordered, page)
+        shown = await read_usage_page(store, iri, chunk, continued)
     except TooManyAxiomsError as error:
         logger.warning("Not showing page %d of the usages of %s: %s", page, logged_iri(iri), error)
         return unshown(too_many=True)
@@ -207,14 +260,14 @@ def _pages(usages: int) -> int:
     return max(1, math.ceil(usages / PAGE_USAGES))
 
 
-async def read_usage_page(store: UsageStore, iri: str, ordered: Sequence[Usage], page: int) -> list[UsageGroup]:
+async def read_usage_page(store: UsageStore, iri: str, chunk: Sequence[Usage], continued: bool) -> list[UsageGroup]:
     """Return a page of an entity's usages, by subject, with their axioms.
 
     Args:
         store: Where the usages were read.
         iri: The entity's IRI.
-        ordered: All its usages, in the tab's order (`sorted_usages`).
-        page: The page's number, from 1.
+        chunk: The page's usages, in the tab's order (`sorted_usages`).
+        continued: Whether the page's first subject's usages started on an earlier page.
 
     Raises:
         SparqlError: A query failed.
@@ -222,13 +275,10 @@ async def read_usage_page(store: UsageStore, iri: str, ordered: Sequence[Usage],
         TooManyAxiomsError: The page's fragments are too large, or mention too many IRIs (`fetch_usage_fragments`).
         FragmentError: The OWLAPI couldn't parse a fragment, or convert an axiom (`usage_axioms`).
     """
-    start = (page - 1) * PAGE_USAGES
-    chunk = ordered[start : start + PAGE_USAGES]
     groups = _grouped(chunk)
     subject_triples, general_triples = await fetch_usage_fragments(store, iri, chunk)
     subjects: dict[str, int] = {subject: len(each) for subject, each in groups if subject is not None}
     by_subject, general = await run_java(usage_axioms, subject_triples, general_triples, iri, subjects)
-    continued = bool(chunk) and start > 0 and ordered[start - 1].subject == chunk[0].subject
     shown = [
         UsageGroup(
             subject=subject,
@@ -246,12 +296,13 @@ def sorted_usages(connection: sqlite3.Connection, usages: Iterable[Usage]) -> li
     """Return usages in the tab's order (`UsageTab.groups`), from the subjects' display names in the derived database.
 
     A punned IRI's name is its first entity's; one without a display name sorts by its IRI. A subject's usages keep
-    one order from request to request, by source, predicate, object and root, so a page always holds the same ones.
+    one order from request to request, by source, predicate, value (`Usage.index`) and root, so a page always holds
+    the same ones. It's the usage table's order (`browl.precache.usage_table`).
     """
     usages = list(usages)
     names = _sort_names(connection, {usage.subject for usage in usages if usage.subject is not None})
 
-    def key(usage: Usage) -> tuple[int, str, str, str, str, str, int]:
+    def key(usage: Usage) -> tuple[int, str, str, str, str, int, int]:
         subject = usage.subject
         if subject is None:
             group, name = _NO_SUBJECT, ""
@@ -260,8 +311,7 @@ def sorted_usages(connection: sqlite3.Connection, usages: Iterable[Usage]) -> li
         else:
             group, name = _NOT_ENTITY, ""
         root = usage.root.id if usage.root is not None else 0
-        object_ = "" if usage.object is None else repr(usage.object)
-        return group, name, subject or "", usage.source, usage.predicate or "", object_, root
+        return group, name, subject or "", usage.source, usage.predicate or "", usage.index, root
 
     return sorted(usages, key=key)
 
@@ -292,8 +342,9 @@ def _grouped(usages: Sequence[Usage]) -> list[tuple[IRI | None, list[Usage]]]:
 async def fetch_usage_fragments(store: UsageStore, iri: str, usages: Sequence[Usage]) -> tuple[bytes, bytes]:
     """Return, as N-Triples, the triples from which the OWLAPI can parse a page's usages' axioms (DESIGN.md §2.8).
 
-    The first fragment holds the usages with a subject: a triple whose terms the usage holds, written here; one with a
-    blank object, fetched (`sparql/usage-triples.rq`); and the blank nodes' closures, with the reified axioms and
+    The first fragment holds the usages with a subject: a triple whose terms are known, written here, a property's
+    values read first (`browl.usages.read_values`); one with a blank object, fetched (`sparql/usage-triples.rq`);
+    and the blank nodes' closures, with the reified axioms and
     axiom annotations they lead to (`sparql/usage-closures.rq`), and the reified axioms' own triples
     (`sparql/usage-reified.rq`). The second holds the closures of the roots with no subject; it's empty if there are
     none. Each has the declaration types of every IRI either mentions (`sparql/declaration-types.rq`).
@@ -306,8 +357,8 @@ async def fetch_usage_fragments(store: UsageStore, iri: str, usages: Sequence[Us
     Raises:
         SparqlError: A query failed.
         RDFSyntaxError: An IRI isn't valid.
-        TooManyAxiomsError: The fragments come to more than `browl.fuseki.CONSTRUCT_MAX_BYTES`, so the OWLAPI's heap
-            can't hold them, or mention more than `browl.axioms.MAX_FRAGMENT_IRIS` IRIs.
+        TooManyAxiomsError: The fragments, or a property's values, come to more than `browl.fuseki.CONSTRUCT_MAX_BYTES`,
+            so the OWLAPI's heap can't hold them, or mention more than `browl.axioms.MAX_FRAGMENT_IRIS` IRIs.
     """
     entity = IRI(iri)
     lines: list[str] = []
@@ -316,16 +367,30 @@ async def fetch_usage_fragments(store: UsageStore, iri: str, usages: Sequence[Us
     closures: list[str] = []
     reified: list[str] = []
     general: list[str] = []
+    try:
+        property_values = await read_values(
+            store,
+            iri,
+            {usage.subject for usage in usages if usage.source == UsageSource.PREDICATE and usage.subject is not None},
+            max_chars=CONSTRUCT_MAX_BYTES,
+        )
+    except ResultTooLargeError as error:
+        raise TooManyAxiomsError(f"the page's values are too large: {error}") from error
     for usage in usages:
         subject = usage.subject
         if usage.source == UsageSource.OBJECT:
             lines.append(f"<{subject}> <{usage.predicate}> <{entity}> .\n")
         elif usage.source == UsageSource.PREDICATE:
-            if isinstance(usage.object, BlankNode):
-                owned.append(f"(<{subject}> <{entity}> <_:{usage.object}>)")
-                closures.append(f"<_:{usage.object}>")
-            elif usage.object is not None:
-                lines.append(f"<{subject}> <{entity}> {ntriples_term(usage.object)} .\n")
+            found = property_values.get(subject or "", [])
+            if usage.index >= len(found):  # none should be: the values are those the usages were counted from
+                logger.warning("No value %d of %s for %s", usage.index, logged_iri(iri), logged_iri(subject or ""))
+                continue
+            value = found[usage.index]
+            if isinstance(value, BlankNode):
+                owned.append(f"(<{subject}> <{entity}> <_:{value}>)")
+                closures.append(f"<_:{value}>")
+            else:
+                lines.append(f"<{subject}> <{entity}> {ntriples_term(value)} .\n")
         elif usage.root is not None:
             label = f"<_:{usage.root.label}>"
             if subject is None:

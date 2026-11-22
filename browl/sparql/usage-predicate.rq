@@ -1,9 +1,9 @@
-# The usages of an entity as a triple's predicate, by other IRIs, with their objects; a blank object as its store's
-# label (Jena's afn:bnode, ?blank), which holds across queries (browl.usages.read_usages; DESIGN.md §2.8). `$entity`
-# stands for the entity's IRI, and browl.usages adds the dataset clause before WHERE.
-SELECT ?subject ?object ?blank
+# The usages of an entity as a triple's predicate, by other IRIs: one row per value, with only its subject, as a
+# usage is known by its place among its subject's values, which a page reads for itself (usage-values.rq;
+# browl.usages.read_usages; DESIGN.md §2.8). `$entity` stands for the entity's IRI, and browl.usages adds the dataset
+# clause before WHERE.
+SELECT ?subject
 WHERE {
   ?subject $entity ?object
   FILTER (isIRI(?subject) && ?subject != $entity)
-  BIND (IF(isBlank(?object), <http://jena.apache.org/ARQ/function#bnode>(?object), ?unbound) AS ?blank)
 }

@@ -1,0 +1,9 @@
+# The values of an entity as a property that some subjects have, for a Usage tab page's usages of it; a blank value as
+# its store's label (Jena's afn:bnode, ?blank), which holds across queries (browl.usages.read_values; DESIGN.md §2.8).
+# `$entity` stands for the entity's IRI, browl.usages fills in the subjects, and adds the dataset clause before WHERE.
+SELECT ?subject ?object ?blank
+WHERE {
+  VALUES ?subject { }
+  ?subject $entity ?object
+  BIND (IF(isBlank(?object), <http://jena.apache.org/ARQ/function#bnode>(?object), ?unbound) AS ?blank)
+}

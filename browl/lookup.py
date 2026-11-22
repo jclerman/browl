@@ -39,6 +39,7 @@ from browl.links import EntityLink, entity_name
 from browl.overview import read_overview
 from browl.pages import app_path, cut_name, href, is_under, link_root, read_derived, templates
 from browl.tabs import (
+    PANEL_PARAM,
     TAB_PARAM,
     Tab,
     TabLink,
@@ -50,7 +51,16 @@ from browl.tabs import (
     with_query,
 )
 from browl.urls import FALLBACK_PATH, fallback_path
-from browl.usage_tab import USAGE_LABEL, PageNotFoundError, UsageTab, read_count, read_usage_tab, usage_label
+from browl.usage_tab import (
+    POLL_S,
+    USAGE_LABEL,
+    PageNotFoundError,
+    UsageTab,
+    read_count,
+    read_usage_tab,
+    remaining_text,
+    usage_label,
+)
 
 HASH_PATH = "hash"
 """The hash-IRI script's lookup route's path under the reserved prefix."""
@@ -297,6 +307,12 @@ async def _page(
             usage = await read_usage_tab(request, state, entity.iri, 1)
         context["usage"] = usage
         context["pager"] = _pager(request, at, usage)
+        context |= {"poll": None, "poll_s": None, "remaining": None}
+        if usage.preparing:  # it polls its panel until the usage table is ready
+            params = [(TAB_PARAM, USAGE), *([(PAGE_PARAM, str(usage.page))] if usage.page > 1 else [])]
+            context["poll"] = href(request, with_query(at.panel or at.page, [*params, (PANEL_PARAM, "1")]))
+            context["poll_s"] = POLL_S
+            context["remaining"] = remaining_text(usage.remaining_s)
         count = usage.count
     context["tabs"] = _usage_label(request, links, entity.iri, count)
     if query.panel:

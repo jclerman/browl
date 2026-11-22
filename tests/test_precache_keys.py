@@ -31,11 +31,13 @@ from browl.fuseki import FusekiClient
 from browl.jobs import JobContext
 from browl.jobtypes import ImportResult, Reasoner
 from browl.loading import dataset_name
-from browl.precache import header, keys
+from browl.precache import header, keys, usage_table
 from browl.precache.core import Hook, PreCacheContext, hook
 from browl.precache.keys import Closure, build_keys, closure, code_digest
-from browl.precache.stage import HOOKS, build
+from browl.precache.stage import HOOKS, build, on_thread
+from browl.precache.usage_table import Progress, fill_usage_table
 from browl.settings import Settings
+from browl.usage_tables import build_file
 from tests.helpers import LOADED_AT, fuseki, make_settings
 
 pytestmark = pytest.mark.anyio
@@ -551,6 +553,32 @@ async def test_hook_key_covers_hook(settings: Settings, index: int) -> None:
     assert module.__file__ is not None
     assert str(Path(module.__file__).resolve()) in {str(Path(name).resolve()) for name in trace.code}  # it traced
     assert uncovered(traced.name, traced.module, traced.settings, trace, recording) == []
+
+
+async def test_usage_table_key_covers_build(settings: Settings) -> None:
+    """Check that the usage table's key covers the code its build runs and the files it opens; it reads no settings."""
+    job, recording = traced_job(settings)
+    meta = Meta(1, Reasoner.ELK, LOADED_AT, ontology_iri=f"{EX}onto")
+    async with fuseki() as http:
+        async with build(settings.data_dir, meta, build_keys(settings, HOOKS)) as db:
+            context = PreCacheContext(job, FusekiClient(http), dataset_name(1), db)
+            for hook in HOOKS:
+                await hook(context)
+        recording.clear()
+        progress, sparql, dataset = Progress(), FusekiClient(http), dataset_name(1)
+        async with on_thread(build_file(settings.data_dir, 1, "key"), "usage-table") as db:
+            with tracing() as trace:
+                await fill_usage_table(sparql, dataset, "", db, progress)
+    assert progress.triples == 3
+    assert str(Path(usage_table.__file__).resolve()) in {str(Path(name).resolve()) for name in trace.code}
+    assert uncovered("usage table", usage_table.__name__, frozenset(), trace, recording) == []
+    assert {"usage-scan.rq", "usage-scan-count.rq"} <= closure(usage_table.__name__).files.keys()
+
+
+def test_usage_table_key() -> None:
+    """Check that the usage table's key follows the derived database's keys, and is the same each time."""
+    assert keys.usage_table_key({"a": "1"}) == keys.usage_table_key({"a": "1"})
+    assert keys.usage_table_key({"a": "1"}) != keys.usage_table_key({"a": "2"})
 
 
 def test_entities_reads_its_query(settings: Settings) -> None:

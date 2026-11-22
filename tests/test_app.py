@@ -4,6 +4,7 @@ import asyncio
 import re
 import tomllib
 from collections.abc import Awaitable, Callable, Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,9 +16,9 @@ import browl
 import browl.app
 from browl import admin
 from browl.admin import SWAGGER_UI_URL
-from browl.app import create_app
+from browl.app import _start_usage_table, create_app
 from browl.fuseki import FusekiClient
-from browl.jobs import JobRunner, Site, Stage
+from browl.jobs import JobRunner, JobState, Site, Stage
 from tests.helpers import derived_stage, make_app, make_settings
 
 UNREACHABLE = "http://127.0.0.1:1"  # nothing listens on port 1, so connections are refused at once
@@ -204,3 +205,16 @@ def test_startup_opens_job_database(data_dir: Path) -> None:
     with TestClient(app):
         assert app.state.jobs.state.site == Site.NOT_AVAILABLE
     assert (data_dir / "state.sqlite3").is_file()
+
+
+def test_usage_table_waits_for_running_job(data_dir: Path) -> None:
+    """Check that startup starts no usage table build while a job or a rebuild runs, whose end starts it."""
+    started: list[int] = []
+
+    class Tables:
+        async def start(self, generation: int, clause: str) -> None:
+            started.append(generation)
+
+    running = JobState(generation=2, stage=Stage.LOADING, started_at=datetime.now(UTC), ready_generation=1)
+    asyncio.run(_start_usage_table(Tables(), running, make_settings(), {}))  # type: ignore[arg-type]
+    assert started == []

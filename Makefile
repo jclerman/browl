@@ -99,7 +99,7 @@ TBLS := .cache/tbls/$(TBLS_VERSION)/tbls
 
 # The databases tbls reads; .tbls/*.yml name them.
 SCHEMA_DBS := .cache/schema-dbs
-SCHEMA_DOCS := derived state
+SCHEMA_DOCS := derived usages state
 
 .PHONY: tbls
 tbls: $(TBLS)  ## Download the pinned tbls for the schema docs, unless already present

@@ -47,17 +47,22 @@ def make_settings(**overrides: object) -> Settings:
 
 
 def make_app(
-    fuseki_transport: httpx2.AsyncBaseTransport | None = None, real_stages: bool = False, **overrides: object
+    fuseki_transport: httpx2.AsyncBaseTransport | None = None,
+    real_stages: bool = False,
+    usage_tables: bool = False,
+    **overrides: object,
 ) -> FastAPI:
     """Return an app that doesn't start the JVM, with `make_settings(**overrides)` and the Fuseki transport given.
 
-    Its load jobs run no background stages, unless `real_stages`, when they run the app's own.
+    Its load jobs run no background stages, unless `real_stages`, when they run the app's own; it builds no usage
+    tables unless `usage_tables`.
     """
     return create_app(
         make_settings(**overrides),
         fuseki_transport=fuseki_transport,
         start_jvm=False,
         stages=None if real_stages else {},
+        usage_tables=usage_tables,
     )
 
 
@@ -249,8 +254,19 @@ OWNER_MAP_RESULT = (
 )
 
 
+SCAN_RESULT = (
+    f"?subject\t?predicate\t?object\t?{END_VARIABLE}\n<{EX}x>\t<{RDFS}subClassOf>\t<{EX}onto#A>\t\n"
+    f"<{EX}x>\t{LABEL}\t\t\n_:b\t<{EX}p>\t<{EX}onto#A>\t\n\t\t\ttrue\n"
+)
+"""The usage table's scan (`usage-scan.rq`): x SubClassOf A, x's label, and a blank subject's triple naming A."""
+
+
 def answer(query: str) -> str:
-    """Return a stubbed Fuseki's answer: the entity list's, names', edges', owner map's, else the header's."""
+    """Return a stubbed Fuseki's answer: the entities', names', edges', owner map's, usage scan's, else the header's."""
+    if "?subject ?predicate ?object" in query:
+        return SCAN_RESULT
+    if "?triples" in query:
+        return "?triples\n3\n"
     if "?entity ?type" in query:
         return ENTITY_RESULT
     if "?node ?predicate" in query:
