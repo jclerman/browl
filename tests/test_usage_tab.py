@@ -10,10 +10,12 @@ from collections.abc import AsyncIterator, Iterator
 from contextlib import closing
 
 import httpx2
+import jpype
 import pytest
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
+import browl.axioms
 import browl.fuseki
 import browl.lookup
 import browl.owlapi
@@ -34,6 +36,7 @@ from browl.settings import Settings
 from browl.usage_tab import (
     UsageGroup,
     UsageTab,
+    fetch_usage_fragments,
     read_usage_page,
     sorted_usages,
     usage_label,
@@ -184,6 +187,9 @@ def test_order() -> None:
         usages.append(Usage(UsageSource.OBJECT, None))
         ordered = sorted_usages(connection, usages)
         assert sorted_usages(connection, reversed(usages)) == ordered
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(browl.usage_tab, "_BATCH", 2)  # the names read in several queries
+            assert sorted_usages(connection, usages) == ordered
     subjects = [usage.subject and usage.subject.removeprefix(NS) for usage in ordered]
     assert subjects == ["z", "a", "a", "a", "b", "pun", "m", None, "http://another.org/x", "http://other.org/x"]
     assert [usage.source for usage in ordered[1:4]] == ["object", "predicate", "predicate"]
@@ -340,6 +346,8 @@ def test_pages(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     assert '<input type="hidden" name="tab" value="usage">' in first
     assert 'name="page" min="1" max="5" value="1"' in first
     assert subjects_shown(last) == [f"{NS}rex"]
+    general = [panel(client, "hasPart", **({"page": page} if page else {})).text for page in ("", "2")]
+    assert [subjects_shown(each) for each in general] == [["No single subject"], ["No single subject (continued)"]]
     by_iri = client.get("/_browl/iri", params={"iri": f"{NS}rex", "tab": "usage"})  # not an entity
     assert by_iri.status_code == 404
     params = {"iri": f"{NS}Pet", "tab": "usage", "page": "2"}
@@ -350,7 +358,7 @@ def test_pages(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.fuseki
 @pytest.mark.jvm
-@pytest.mark.parametrize("page", ["0", "6", "-1", "01", "1.5", "two", "", "1e1"])
+@pytest.mark.parametrize("page", ["0", "6", "-1", "01", "1.5", "two", "", "1e1", "999999999", "1000000000"])
 def test_page_not_found(client: TestClient, monkeypatch: pytest.MonkeyPatch, page: str) -> None:
     """Check that a page that isn't a positive integer without leading zeros, or is past the last, is a 404."""
     monkeypatch.setattr(browl.usage_tab, "PAGE_USAGES", 1)
@@ -404,6 +412,7 @@ def test_no_usages(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     page = panel(client, "Dog").text
     assert '<p class="note">None.</p>' in page
     assert "<dl" not in page
+    assert panel(client, "Dog", page="2").status_code == 404
 
 
 MESSAGE = "The usages can't be shown just now."
@@ -442,7 +451,7 @@ def test_failure(
 @pytest.mark.jvm
 def test_too_many_iris(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Check that a page whose axioms mention too many IRIs says so, rather than fetch, parse and link them all."""
-    monkeypatch.setattr(browl.usage_tab, "MAX_FRAGMENT_IRIS", 2)
+    monkeypatch.setattr(browl.axioms, "MAX_FRAGMENT_IRIS", 2)
     page = panel(client, "Dog").text
     assert TOO_LARGE in page
     assert "mentions" in caplog.text and "more than 2" in caplog.text
@@ -522,6 +531,55 @@ def test_pager_fallback_url() -> None:
     assert browl.lookup._pager(request, at, UsageTab(count=None, page=1, pages=None, groups=None)) is None
 
 
+def test_unclaimed_on_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a page's axioms about none of its subjects, which shouldn't happen, follow them, with no subject."""
+    subject, entity = (owl.Entity(kind=owl.EntityKind.CLASS, iri=f"{NS}{name}") for name in "AE")
+    claimed = owl.SubClassOf(sub=subject, super=entity)
+    stray = owl.SubClassOf(sub=owl.Entity(kind=owl.EntityKind.CLASS, iri=f"{NS}C"), super=entity)
+
+    async def fragments(*args: object) -> tuple[bytes, bytes]:
+        return b"", b""
+
+    async def parsed(*args: object) -> tuple[dict[str, list[owl.AnyAxiom]], list[owl.AnyAxiom]]:
+        return {subject.iri: [claimed]}, [stray]
+
+    monkeypatch.setattr(browl.usage_tab, "fetch_usage_fragments", fragments)
+    monkeypatch.setattr(browl.usage_tab, "run_java", parsed)
+    usage = Usage(UsageSource.OBJECT, subject.iri, predicate=IRI(f"{NS}p"))
+    groups = asyncio.run(read_usage_page(None, entity.iri, [usage], 1))  # type: ignore[arg-type]
+    assert groups == [UsageGroup(subject=subject.iri, axioms=[claimed]), UsageGroup(subject=None, axioms=[stray])]
+
+
+@pytest.mark.jvm
+@pytest.mark.usefixtures("jvm")
+def test_java_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a Java exception while reading a page's axioms is a `FragmentError`, which fails only the tab."""
+
+    def fail(*args: object) -> None:
+        raise jpype.JClass("java.lang.IllegalStateException")("no luck")
+
+    monkeypatch.setattr(browl.usage_tab, "convert_axioms", fail)
+    triples = f"{CLASSES}<{NS}A> {SUBCLASS} <{NS}E> .\n".encode()
+    with pytest.raises(browl.owlapi.FragmentError, match="no luck"):
+        asyncio.run(owlapi.run_java(browl.usage_tab.usage_axioms, triples, b"", f"{NS}E", {f"{NS}A": 1}))
+
+
+@pytest.mark.fuseki
+@pytest.mark.jvm
+async def test_fragment_types(store: UsageStore) -> None:
+    """Check that a page's fragment has the declaration types of the IRIs it mentions, and no others' or other types.
+
+    Another entity's class assertions or characteristics would add axioms to the page.
+    """
+    usages = await read_usages(store, f"{NS}Animal")
+    subject_triples, _ = await fetch_usage_fragments(store, f"{NS}Animal", usages)
+    lines = subject_triples.decode().splitlines()
+    part_of = f"<{NS}partOf> {RDF_TYPE}"
+    assert f"{part_of} <{OWL_NS}ObjectProperty> ." in lines  # in Heart's and Liver's superclasses
+    assert f"{part_of} <{OWL_NS}TransitiveProperty> ." not in lines
+    assert not [line for line in lines if line.startswith(f"<{NS}ssn> ")]  # on no page of Animal's
+
+
 OWL_NS = "http://www.w3.org/2002/07/owl#"
 RDF_TYPE = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"
 SUBCLASS = "<http://www.w3.org/2000/01/rdf-schema#subClassOf>"
@@ -541,7 +599,7 @@ def test_shared_and_unclaimed(caplog: pytest.LogCaptureFixture) -> None:
         f"<{NS}C> {SUBCLASS} <{NS}E> .\n"  # about C, which isn't a subject here
     ).encode()
     general = f"{CLASSES}<{NS}D> {SUBCLASS} <{NS}E> .\n".encode()
-    subjects = [(f"{NS}A", 1), (f"{NS}B", 1)]
+    subjects = {f"{NS}A": 1, f"{NS}B": 1}
     by_subject, rest = asyncio.run(owlapi.run_java(browl.usage_tab.usage_axioms, triples, general, f"{NS}E", subjects))
     texts = {subject: [axiom.manchester.replace(NS, "") for axiom in axioms] for subject, axioms in by_subject.items()}
     assert texts == {f"{NS}A": ["<A> DisjointWith <B>"], f"{NS}B": ["<B> SubClassOf <E>"]}
@@ -553,6 +611,7 @@ def test_shared_and_unclaimed(caplog: pytest.LogCaptureFixture) -> None:
 
 @pytest.mark.fuseki
 @pytest.mark.jvm
+@pytest.mark.usefixtures("jvm")
 async def test_blank_object(fuseki_url: str, settings: Settings) -> None:
     """Check a property's usage whose object is blank, an anonymous individual: its triple is fetched by its label."""
     remark = f"<{NS}remark>"
@@ -722,7 +781,7 @@ def symmetric_triples(predicate: str, type_: str) -> bytes:
 def test_symmetric_subject_first(predicate: str, type_: str, keyword: str) -> None:
     """Check that a symmetric axiom stated on Z, on A's Usage tab, is written with Z, its subject, first."""
     triples = symmetric_triples(predicate, type_)
-    found, _ = asyncio.run(owlapi.run_java(browl.usage_tab.usage_axioms, triples, b"", f"{NS}A", [(f"{NS}Z", 1)]))
+    found, _ = asyncio.run(owlapi.run_java(browl.usage_tab.usage_axioms, triples, b"", f"{NS}A", {f"{NS}Z": 1}))
     [axiom] = found[f"{NS}Z"]
     assert axiom.manchester == f"<{NS}Z> {keyword} <{NS}A>"
     split = axiom.subject_split(f"{NS}Z")
@@ -732,6 +791,7 @@ def test_symmetric_subject_first(predicate: str, type_: str, keyword: str) -> No
 
 @pytest.mark.fuseki
 @pytest.mark.jvm
+@pytest.mark.usefixtures("jvm")
 async def test_symmetric_on_both_tabs(fuseki_url: str, settings: Settings) -> None:
     """Check `Z DisjointWith A`, stated on Z, on A's tabs: on its Usage tab under Z, Z first; on its Overview, as Z."""
     triples = symmetric_triples("disjointWith", "Class")

@@ -35,7 +35,7 @@ import typing
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from typing import Annotated, Any, ClassVar, override
+from typing import Annotated, Any, ClassVar, TypeGuard, override
 
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, computed_field, model_validator
 
@@ -400,7 +400,7 @@ class _Named(Node):
         yield self.iri
 
 
-def _is_named(node: Node, iri: str) -> bool:
+def _is_named(node: object, iri: str) -> TypeGuard[_Named]:
     """Return whether a node is the IRI itself, not an expression that mentions it."""
     return isinstance(node, _Named) and node.iri == iri
 
@@ -1024,7 +1024,7 @@ class Axiom(Node):
             return None
         first, keyword, *rest = layout
         subject = self._item_value(first)
-        if not (isinstance(subject, _Named) and subject.iri == iri):
+        if not _is_named(subject, iri):
             return None
         if isinstance(keyword, Token) and keyword.kind != TokenKind.KEYWORD:
             return None

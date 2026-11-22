@@ -20,9 +20,9 @@ from browl.annotations import (
     group_annotations,
 )
 from browl.axioms import TooManyAxiomsError, entity_axioms, fetch_fragment
-from browl.derived import EntityType, NotCurrentError
+from browl.derived import EntityType
 from browl.frames import AxiomGroup, frame_groups
-from browl.fuseki import UNION_FROM, SparqlError, dataset_clause
+from browl.fuseki import SparqlError
 from browl.jobs import JobState
 from browl.links import EntityLink, read_entity_links
 from browl.loading import dataset_name
@@ -30,10 +30,11 @@ from browl.names import name_property_iris
 from browl.owl import AnyAxiom, prefixed_name
 from browl.owlapi import FragmentError, run_java
 from browl.pages import link_root, read_derived, templates
-from browl.precache.core import has_loaded_imports, logged_iri
+from browl.precache.core import logged_iri
 from browl.rdf import IRI, RDFSyntaxError
 from browl.settings import Settings
 from browl.tasks import task_group
+from browl.usages import ready_store
 
 logger = logging.getLogger(__name__)
 
@@ -106,21 +107,6 @@ def shown_name(iri: str, links: Mapping[str, EntityLink], text: str | None = Non
 
 # A global, so `named_iri` and the annotations' sort share one rule; this module is imported with the entity pages.
 templates.env.globals["shown_name"] = shown_name
-
-
-def ready_store(state: JobState) -> tuple[int, str]:
-    """Return a job state's ready generation, and the dataset clause that makes its queries see its imports.
-
-    Raises:
-        NotCurrentError: No generation is ready.
-    """
-    generation = state.ready_generation
-    if generation is None:
-        raise NotCurrentError("no generation is ready")
-    # Pages are served only once the latest job is ready, so its imports are the ready generation's; if a new job has
-    # started meanwhile, seeing the imports' graphs too is always right, if slower.
-    clause = dataset_clause(has_loaded_imports(state.imports)) if state.generation == generation else UNION_FROM
-    return generation, clause
 
 
 async def read_overview(request: Request, state: JobState, iri: str) -> Overview:

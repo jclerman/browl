@@ -11,7 +11,7 @@ label carries the count, which the page fetches after it renders (`read_count`),
 import logging
 import math
 import sqlite3
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from itertools import batched
 from typing import Any
 
@@ -20,16 +20,15 @@ from fastapi import Request
 from pydantic import BaseModel, ConfigDict
 
 from browl import owl
-from browl.axioms import MAX_FRAGMENT_IRIS, TooManyAxiomsError, axioms_about, convert_axioms, is_declaration
+from browl.axioms import TooManyAxiomsError, axioms_about, convert_axioms, fragment_iris, is_declaration
 from browl.derived import UsageRootKind
 from browl.fuseki import CONSTRUCT_MAX_BYTES, SparqlError, filled_query
 from browl.jobs import JobState
 from browl.links import EntityLink, read_entity_links
-from browl.overview import ready_store
 from browl.owlapi import FragmentError, check_java_thread, ntriples_ontology, run_java
 from browl.pages import link_root, read_derived
 from browl.precache.core import PREFIXES, logged_iri, sparql_file
-from browl.rdf import IRI, BlankNode, RDFSyntaxError, ntriples_iris, ntriples_term
+from browl.rdf import IRI, BlankNode, RDFSyntaxError, ntriples_term
 from browl.tasks import task_group
 from browl.usages import (
     MAX_STREAMED_USAGES,
@@ -40,6 +39,7 @@ from browl.usages import (
     UsageStore,
     count_usages,
     read_usages,
+    ready_store,
 )
 
 logger = logging.getLogger(__name__)
@@ -130,9 +130,13 @@ async def read_count(request: Request, state: JobState, iri: str) -> int | None:
     Raises:
         NotCurrentError: No generation is ready, or its derived database isn't current.
     """
+    return await _read_count(request, _store(request, state), iri)
+
+
+async def _read_count(request: Request, store: UsageStore, iri: str) -> int | None:
     counts: UsageCounts = request.app.state.usage_counts
     try:
-        return await count_usages(_store(request, state), iri, counts)
+        return await count_usages(store, iri, counts)
     except (SparqlError, RDFSyntaxError):
         logger.exception("Couldn't count the usages of %s", logged_iri(iri))
         return None
@@ -155,35 +159,39 @@ async def read_usage_tab(request: Request, state: JobState, iri: str, page: int)
         NotCurrentError: No generation is ready, or its derived database isn't current.
     """
     store = _store(request, state)
-    count = await read_count(request, state, iri)
+    count = await _read_count(request, store, iri)
     if count is None:
         return UsageTab(count=None, page=page, pages=None, groups=None)
     pages = _pages(count)
     if page > pages:
         raise PageNotFoundError(f"page {page} of {pages}")
-    preparing = UsageTab(count=count, page=page, pages=pages, groups=None, preparing=True)
+
+    def unshown(preparing: bool = False, too_many: bool = False) -> UsageTab:
+        """Return the page without its usages, which can't be shown; the page says why."""
+        return UsageTab(count=count, page=page, pages=pages, groups=None, preparing=preparing, too_many=too_many)
+
     if count > MAX_STREAMED_USAGES:
-        return preparing
+        return unshown(preparing=True)
     try:
         usages = await read_usages(store, iri, MAX_STREAMED_USAGES)
     except TooManyUsagesError:  # more listed than counted, which the counts' rules don't allow
         logger.warning("Preparing the usages of %s, which has more than its count of %d", logged_iri(iri), count)
-        return preparing
+        return unshown(preparing=True)
     except (SparqlError, RDFSyntaxError):
         logger.exception("Couldn't read the usages of %s", logged_iri(iri))
-        return UsageTab(count=count, page=page, pages=pages, groups=None)
+        return unshown()
     pages = _pages(len(usages))  # no blank pages for usages counted but not listed
     if page > pages:
         raise PageNotFoundError(f"page {page} of {pages} listed")
-    ordered = await store.derived.read(store.generation, lambda connection: sorted_usages(connection, usages))
+    ordered = await read_derived(request, lambda connection: sorted_usages(connection, usages), state)
     try:
         shown = await read_usage_page(store, iri, ordered, page)
     except TooManyAxiomsError as error:
         logger.warning("Not showing page %d of the usages of %s: %s", page, logged_iri(iri), error)
-        return UsageTab(count=count, page=page, pages=pages, groups=None, too_many=True)
+        return unshown(too_many=True)
     except (SparqlError, RDFSyntaxError, FragmentError):
         logger.exception("Couldn't show page %d of the usages of %s", page, logged_iri(iri))
-        return UsageTab(count=count, page=page, pages=pages, groups=None)
+        return unshown()
     mentioned: list[str] = [group.subject for group in shown if group.subject is not None]
     mentioned += (each for group in shown for axiom in group.axioms for each in axiom.iris())
     prefix: str = request.app.state.settings.reserved_prefix
@@ -218,7 +226,7 @@ async def read_usage_page(store: UsageStore, iri: str, ordered: Sequence[Usage],
     chunk = ordered[start : start + PAGE_USAGES]
     groups = _grouped(chunk)
     subject_triples, general_triples = await fetch_usage_fragments(store, iri, chunk)
-    subjects = [(subject, len(each)) for subject, each in groups if subject is not None]
+    subjects: dict[str, int] = {subject: len(each) for subject, each in groups if subject is not None}
     by_subject, general = await run_java(usage_axioms, subject_triples, general_triples, iri, subjects)
     continued = bool(chunk) and start > 0 and ordered[start - 1].subject == chunk[0].subject
     shown = [
@@ -345,9 +353,7 @@ async def fetch_usage_fragments(store: UsageStore, iri: str, usages: Sequence[Us
     # Each query's result is capped, but not the literals written here, nor the results together.
     if (size := len(subject_triples) + len(general_triples)) > CONSTRUCT_MAX_BYTES:
         raise TooManyAxiomsError(f"the page's fragments come to {size:,} bytes, more than {CONSTRUCT_MAX_BYTES:,}")
-    mentioned = ntriples_iris(subject_triples) | ntriples_iris(general_triples)
-    if len(mentioned) > MAX_FRAGMENT_IRIS:
-        raise TooManyAxiomsError(f"the page mentions {len(mentioned)} IRIs, more than {MAX_FRAGMENT_IRIS}")
+    mentioned = fragment_iris(subject_triples, general_triples, what="the page")
     if mentioned:
         values = [f"<{each}>" for each in sorted(mentioned)]
         types = await store.sparql.construct(store.dataset, _filled(store, _TYPES, _NO_IRIS, values))
@@ -362,7 +368,7 @@ def _filled(store: UsageStore, query: str, empty: str, rows: Iterable[str]) -> s
 
 
 def usage_axioms(
-    subject_triples: bytes, general_triples: bytes, iri: str, subjects: Sequence[tuple[str, int]]
+    subject_triples: bytes, general_triples: bytes, iri: str, subjects: Mapping[str, int]
 ) -> tuple[dict[str, list[owl.AnyAxiom]], list[owl.AnyAxiom]]:
     """Parse a page's fragments (`fetch_usage_fragments`) and return its axioms, by subject, and those with none.
 
@@ -377,14 +383,14 @@ def usage_axioms(
         subject_triples: The usages with a subject, as N-Triples.
         general_triples: The usages with none; empty if there are none.
         iri: The entity's IRI.
-        subjects: The page's subjects, each once, with how many usages each has on the page.
+        subjects: The page's subjects, in order, with how many usages each has on the page.
 
     Raises:
         FragmentError: The OWLAPI couldn't parse a fragment, or failed on it with any other Java exception, or an axiom
             holds an object of a kind no node type covers, or nests too deep.
     """
     check_java_thread()
-    found: dict[str, list[Any]] = {subject: [] for subject, _ in subjects}
+    found: dict[str, list[Any]] = {subject: [] for subject in subjects}
     unclaimed: list[Any] = []
     general: list[Any] = []
     try:
@@ -415,13 +421,12 @@ def _is_usage(axiom: Any) -> bool:
     return axiom.isAnnotated() or not is_declaration(axiom)
 
 
-def _assign(ontology: Any, subjects: Sequence[tuple[str, int]], found: dict[str, list[Any]]) -> list[Any]:
+def _assign(ontology: Any, subjects: Mapping[str, int], found: dict[str, list[Any]]) -> list[Any]:
     """Add each axiom that can be a usage (`_is_usage`) to its subject's in `found`; return those about none."""
     claims: dict[Any, list[str]] = {}
-    for subject, _ in subjects:
+    for subject in subjects:
         for axiom in axioms_about(ontology, subject):
             claims.setdefault(axiom, []).append(subject)
-    needed = dict(subjects)
     shared, unclaimed = [], []
     for axiom in ontology.getAxioms():
         if not _is_usage(axiom):
@@ -434,7 +439,7 @@ def _assign(ontology: Any, subjects: Sequence[tuple[str, int]], found: dict[str,
         else:
             shared.append((axiom, owners))
     for axiom, owners in shared:
-        owner = next((each for each in owners if len(found[each]) < needed[each]), owners[0])
+        owner = next((each for each in owners if len(found[each]) < subjects[each]), owners[0])
         found[owner].append(axiom)
     return unclaimed
 
@@ -445,10 +450,11 @@ def _usage_nodes(axioms: Iterable[Any], iri: str, subject: str | None = None) ->
     With a subject, a symmetric axiom between two is written with the subject first (`browl.owl.Axiom.with_first`), and
     the axioms sorted again by kind and text, as `convert_axioms` sorts them.
     """
-    nodes = [
-        node.without_annotations() if node.annotations and iri in node.without_annotations().iris() else node
-        for node in convert_axioms(axioms)
-    ]
+    nodes = []
+    for node in convert_axioms(axioms):
+        if node.annotations and iri in (bare := node.without_annotations()).iris():
+            node = bare
+        nodes.append(node)
     if subject is None:
         return nodes
     return sorted((node.with_first(subject) for node in nodes), key=lambda node: (node.kind, node.manchester))

@@ -79,13 +79,23 @@ async def fetch_fragment(sparql: FusekiClient, dataset: str, iri: str, dataset_c
         own = group.create_task(sparql.construct(dataset, filled_query(_AXIOMS, dataset_clause, entity)))
         symmetric = group.create_task(sparql.construct(dataset, filled_query(_SYMMETRIC, dataset_clause, entity)))
     triples = own.result() + symmetric.result()
-    mentioned = ntriples_iris(triples)
-    if len(mentioned) > MAX_FRAGMENT_IRIS:
-        raise TooManyAxiomsError(f"the fragment mentions {len(mentioned)} IRIs, more than {MAX_FRAGMENT_IRIS}")
+    mentioned = fragment_iris(triples)
     if not mentioned:
         return triples
     values = f"VALUES ?iri {{ {' '.join(f'<{each}>' for each in sorted(mentioned))} }}"
     return triples + await sparql.construct(dataset, filled_query(_TYPES, dataset_clause, {_NO_IRIS: values}))
+
+
+def fragment_iris(*fragments: bytes, what: str = "the fragment") -> set[str]:
+    """Return the IRIs that N-Triples fragments mention, before their types are fetched.
+
+    Raises:
+        TooManyAxiomsError: They mention more than `MAX_FRAGMENT_IRIS`; `what` names them in its message.
+    """
+    mentioned = set[str]().union(*map(ntriples_iris, fragments))
+    if len(mentioned) > MAX_FRAGMENT_IRIS:
+        raise TooManyAxiomsError(f"{what} mentions {len(mentioned)} IRIs, more than {MAX_FRAGMENT_IRIS}")
+    return mentioned
 
 
 type _Build = Callable[[_Converter, Any], owl.Node]

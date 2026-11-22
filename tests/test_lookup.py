@@ -454,9 +454,11 @@ def test_tab_links_under_root_path(app: FastAPI) -> None:
     """Check that the tabs' links include the root path the app is served under."""
     with TestClient(app, root_path="/root") as client:
         run(client, app)
-        tabs = parse_tabs(client.get("/root/other.org/y").text).tabs
+        page = client.get("/root/other.org/y").text
+    tabs = parse_tabs(page).tabs
     assert [tab["href"] for tab in tabs] == ["/root/other.org/y", "/root/other.org/y?tab=usage"]
     assert tabs[1]["hx-get"] == "/root/other.org/y?tab=usage&panel=1"
+    assert 'hx-get="/root/_browl/usage-count?iri=http%3A%2F%2Fother.org%2Fy"' in page  # the Usage label's count
 
 
 @pytest.mark.parametrize(

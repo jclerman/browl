@@ -2,11 +2,11 @@
 {% from "links.html" import named_iri, named_text %}
 {# An axiom's annotations (`browl.owl.Annotation`), each `property value` on a line of its own beneath the axiom, an
    annotation's own annotations nested beneath it; the entity, `mark`, highlighted. #}
-{% macro annotation_list(annotations, links, mark) -%}
+{% macro axiom_annotations(annotations, links, mark) -%}
 <ul class="axiom-annotations">
   {%- for annotation in annotations %}
   <li>{{ manchester(annotation.manchester_tokens(), links, mark) }}
-    {%- if annotation.annotations %}{{ annotation_list(annotation.annotations, links, mark) }}{% endif %}</li>
+    {%- if annotation.annotations %}{{ axiom_annotations(annotation.annotations, links, mark) }}{% endif %}</li>
   {%- endfor %}
 </ul>
 {%- endmacro %}
@@ -23,7 +23,7 @@
   <span class="usage-keyword">{{ manchester(split.keyword, links, mark) }}</span>
   <span class="usage-axiom">{{ manchester(split.rest, links, mark) }}</span>
 {%- endif %}
-  {%- if axiom.annotations %}{{ annotation_list(axiom.annotations, links, mark) }}{% endif %}</dd>
+  {%- if axiom.annotations %}{{ axiom_annotations(axiom.annotations, links, mark) }}{% endif %}</dd>
 {%- endmacro %}
 
 {# The Usage tab (`browl.usage_tab.UsageTab`, DESIGN.md §2.8) of the entity `iri`: the paging at the top, if there's
