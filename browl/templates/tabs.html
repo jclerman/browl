@@ -5,7 +5,7 @@
   {%- for link in links %}
   <a role="tab" id="tab-{{ link.tab.slug }}" href="{{ link.href }}" aria-controls="tab-panel"
      aria-selected="{{ 'true' if link.selected else 'false' }}" hx-get="{{ link.panel }}" hx-target="#tab-panel"
-     hx-sync="closest [role=tablist]:replace">
+     hx-sync="#tab-panel:replace">
     {%- if link.label_url is none %}{{ link.tab.label }}
     {%- else %}{# fetched once the page renders; its own target and queue, not the tab's #}<span
       hx-get="{{ link.label_url }}" hx-trigger="load" hx-target="this" hx-swap="outerHTML" hx-sync="this"

@@ -193,18 +193,26 @@ class _Poll:
 
 @dataclass(frozen=True)
 class _Pager:
-    """The Usage tab's links to other pages, and its form to go to a page.
+    """The Usage tab's links to other pages, and its form to go to a page, each with the URL its panel is fetched from.
 
     Attributes:
+        panel: This page's panel URL, root-relative, which `tabs.js` keeps in the history.
         previous: The previous page's URL, root-relative; None on the first.
+        previous_panel: The previous page's panel URL, root-relative; None on the first.
         next: The next page's URL, root-relative; None on the last.
+        next_panel: The next page's panel URL, root-relative; None on the last.
         action: The form's URL, root-relative, without its query, which the form's fields replace.
+        action_panel: The URL htmx sends the form's fields to for a page's panel, root-relative.
         fields: The form's hidden fields: the page URL's own query, and the tab.
     """
 
+    panel: str
     previous: str | None
+    previous_panel: str | None
     next: str | None
+    next_panel: str | None
     action: str
+    action_panel: str
     fields: list[tuple[str, str]]
 
 
@@ -213,16 +221,27 @@ def _pager(request: Request, at: _TabUrls, usage: UsageTab) -> _Pager | None:
     if usage.pages is None or usage.pages < 2:
         return None
 
+    def params(page: int) -> list[tuple[str, str]]:
+        return [(TAB_PARAM, USAGE), *([(PAGE_PARAM, str(page))] if page > 1 else [])]
+
     def page_href(page: int) -> str:
-        params = [(TAB_PARAM, USAGE), *([(PAGE_PARAM, str(page))] if page > 1 else [])]
-        return href(request, with_query(at.page, params), at.fragment)
+        return href(request, with_query(at.page, params(page)), at.fragment)
+
+    def panel_href(page: int) -> str:
+        return href(request, with_query(at.panel or at.page, [*params(page), (PANEL_PARAM, "1")]))
 
     path, _, query = at.page.partition("?")
     fields = [*urllib.parse.parse_qsl(query, keep_blank_values=True), (TAB_PARAM, USAGE)]
+    has_previous, has_next = usage.page > 1, usage.page < usage.pages
     return _Pager(
-        previous=page_href(usage.page - 1) if usage.page > 1 else None,
-        next=page_href(usage.page + 1) if usage.page < usage.pages else None,
+        panel=panel_href(usage.page),
+        previous=page_href(usage.page - 1) if has_previous else None,
+        previous_panel=panel_href(usage.page - 1) if has_previous else None,
+        next=page_href(usage.page + 1) if has_next else None,
+        next_panel=panel_href(usage.page + 1) if has_next else None,
         action=href(request, path, at.fragment),
+        # The page's own query is in the fields, a hash route's isn't.
+        action_panel=href(request, with_query(at.panel or path, [(PANEL_PARAM, "1")])),
         fields=fields,
     )
 

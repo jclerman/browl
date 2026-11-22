@@ -46,16 +46,20 @@
   <p class="note">None.</p>
   {% else %}
   {% if pager is not none %}
-  <nav class="pager" aria-label="Usage pages">
-    {% if pager.previous is not none %}<a href="{{ pager.previous }}" rel="prev">Previous</a>
+  {# htmx swaps the panel of another page in, and `tabs.js` adds it to the history; the `id`s keep the focus. #}
+  <nav class="pager" aria-label="Usage pages" data-panel="{{ pager.panel }}" hx-target="#tab-panel"
+       hx-sync="#tab-panel:replace">
+    {% if pager.previous is not none %}<a href="{{ pager.previous }}" hx-get="{{ pager.previous_panel }}"
+      id="usage-previous" rel="prev">Previous</a>
     {%- else %}<span class="pager-off" aria-disabled="true">Previous</span>{% endif %}
-    <form method="get" action="{{ pager.action }}">
+    <form method="get" action="{{ pager.action }}" hx-get="{{ pager.action_panel }}">
       {% for name, value in pager.fields %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
       <label>Page <input type="number" name="page" min="1" max="{{ usage.pages }}" value="{{ usage.page }}"
-        required> of {{ "{:,}".format(usage.pages) }}</label>
-      <button type="submit">Go</button>
+        id="usage-page" required> of {{ "{:,}".format(usage.pages) }}</label>
+      <button type="submit" id="usage-go">Go</button>
     </form>
-    {% if pager.next is not none %}<a href="{{ pager.next }}" rel="next">Next</a>
+    {% if pager.next is not none %}<a href="{{ pager.next }}" hx-get="{{ pager.next_panel }}" id="usage-next"
+      rel="next">Next</a>
     {%- else %}<span class="pager-off" aria-disabled="true">Next</span>{% endif %}
   </nav>
   {% endif %}

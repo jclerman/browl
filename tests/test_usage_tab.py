@@ -339,7 +339,7 @@ def test_label(client: TestClient) -> None:
     assert (response.status_code, response.text, response.headers["X-Robots-Tag"]) == (200, "Usage (5)", "noindex")
     usage = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "Dog", "tab": "usage"}).text
     assert "usage-count?" not in usage
-    assert 'hx-sync="closest [role=tablist]:replace">Usage (5)</a>' in usage
+    assert 'hx-sync="#tab-panel:replace">Usage (5)</a>' in usage
     assert client.get("/_browl/usage-count", params={"iri": f"{NS}nothing"}).status_code == 404
     assert client.get("/_browl/usage-count").status_code == 404
 
@@ -353,15 +353,19 @@ def test_pages(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     assert subjects_shown(first) == [f"{NS}Cat"]
     assert subjects_shown(second) == [f"{NS}Cat (continued)"]
     assert '<small class="continued">(continued)</small>' in second
-    assert 'value="2"\n        required> of 5</label>' in second
+    assert 'value="2"\n        id="usage-page" required> of 5</label>' in second
     assert second.index('<nav class="pager"') < second.index('<dl class="frame usage-frame">')
-    assert '<a href="/axioms?tab=usage#Dog" rel="prev">Previous</a>' in second
-    assert '<a href="/axioms?tab=usage&amp;page=3#Dog" rel="next">Next</a>' in second
+    hash_panel = "/_browl/hash?path=%2Faxioms&amp;fragment=Dog"
+    assert f'data-panel="{hash_panel}&amp;tab=usage&amp;page=2&amp;panel=1"' in second
+    assert f'<a href="/axioms?tab=usage#Dog" hx-get="{hash_panel}&amp;tab=usage&amp;panel=1"' in second
+    next_panel = f"{hash_panel}&amp;tab=usage&amp;page=3&amp;panel=1"
+    assert f'<a href="/axioms?tab=usage&amp;page=3#Dog" hx-get="{next_panel}"' in second
+    assert f'hx-get="{hash_panel}&amp;panel=1">' in first  # the form's, whose fields add `tab` and `page`
     assert 'rel="prev"' not in first and 'rel="next"' not in last
     assert '<span class="pager-off" aria-disabled="true">Previous</span>' in first
     assert '<span class="pager-off" aria-disabled="true">Next</span>' in last
     assert "pager-off" not in second
-    assert '<form method="get" action="/axioms#Dog">' in first
+    assert '<form method="get" action="/axioms#Dog" hx-get=' in first
     assert '<input type="hidden" name="tab" value="usage">' in first
     assert 'name="page" min="1" max="5" value="1"' in first
     assert subjects_shown(last) == [f"{NS}rex"]
@@ -594,7 +598,7 @@ def test_unlisted(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     assert "None of these usages can be listed yet" in page
     assert "<dl" not in page and '<nav class="pager"' not in page
     whole = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "Dog", "tab": "usage"}).text
-    assert 'hx-sync="closest [role=tablist]:replace">Usage (5)</a>' in whole  # the count, unlisted usages included
+    assert 'hx-sync="#tab-panel:replace">Usage (5)</a>' in whole  # the count, unlisted usages included
     assert panel(client, "Dog", page="2").status_code == 404
 
 
@@ -623,11 +627,34 @@ def test_pager_fallback_url() -> None:
     tab = UsageTab(count=120, page=2, pages=3, groups=[])
     pager = browl.lookup._pager(request, at, tab)
     assert pager is not None
-    assert pager.previous == "/root/_browl/iri?iri=urn%3Aexample%3Ax&tab=usage"
-    assert pager.next == "/root/_browl/iri?iri=urn%3Aexample%3Ax&tab=usage&page=3"
+    page = "/root/_browl/iri?iri=urn%3Aexample%3Ax&tab=usage"
+    assert (pager.previous, pager.next) == (page, f"{page}&page=3")
+    assert (pager.previous_panel, pager.panel, pager.next_panel) == (
+        f"{page}&panel=1",
+        f"{page}&page=2&panel=1",
+        f"{page}&page=3&panel=1",
+    )
     assert (pager.action, pager.fields) == ("/root/_browl/iri", [("iri", "urn:example:x"), ("tab", "usage")])
+    assert pager.action_panel == "/root/_browl/iri?panel=1"  # the fields give the IRI
     assert browl.lookup._pager(request, at, UsageTab(count=50, page=1, pages=1, groups=[])) is None
     assert browl.lookup._pager(request, at, UsageTab(count=None, page=1, pages=None, groups=None)) is None
+
+
+def test_pager_hash_route() -> None:
+    """Check that the paging of a hash entity's page links its page URLs, but fetches panels from the hash route."""
+    request = Request({"type": "http", "root_path": "", "headers": []})
+    at = browl.lookup._TabUrls("/onto", "Foo", "/_browl/hash?path=/onto&fragment=Foo")
+    pager = browl.lookup._pager(request, at, UsageTab(count=120, page=2, pages=3, groups=[]))
+    assert pager is not None
+    assert (pager.previous, pager.next) == ("/onto?tab=usage#Foo", "/onto?tab=usage&page=3#Foo")
+    panel = "/_browl/hash?path=/onto&fragment=Foo&tab=usage"
+    assert (pager.previous_panel, pager.panel, pager.next_panel) == (
+        f"{panel}&panel=1",
+        f"{panel}&page=2&panel=1",
+        f"{panel}&page=3&panel=1",
+    )
+    assert (pager.action, pager.fields) == ("/onto#Foo", [("tab", "usage")])
+    assert pager.action_panel == "/_browl/hash?path=/onto&fragment=Foo&panel=1"
 
 
 def test_unclaimed_on_page(monkeypatch: pytest.MonkeyPatch) -> None:

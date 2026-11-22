@@ -1522,3 +1522,253 @@ def test_usage_poll_past_listed(page: Page, server: LiveServer, monkeypatch: pyt
     page.wait_for_timeout(500)
     assert len(polls) == 1
     assert calls == [600, 600, 1]
+
+
+# The Usage tab's paging with htmx (DESIGN.md §2.8)
+
+USAGE_LABEL = f"Usage ({USAGE_PAGES * USAGE_SUBJECTS * USAGE_LINES})"
+
+
+def pager(page: Page) -> Locator:
+    """Return the Usage tab's paging."""
+    return page.get_by_role("navigation", name="Usage pages")
+
+
+def expect_usage_page(page: Page, number: int) -> None:
+    """Check that the Usage tab shows a page."""
+    expect(pager(page).get_by_role("spinbutton")).to_have_value(str(number))
+
+
+def mark(page: Page) -> None:
+    """Set a marker on the page's window, which a page load loses (`marked`)."""
+    page.evaluate("window.marker = 1")
+
+
+def marked(page: Page) -> bool:
+    """Return whether the page's window still has the marker `mark` set, so it hasn't loaded again."""
+    return page.evaluate("window.marker") == 1
+
+
+def test_usage_next_swaps_panel(page: Page, paged: LiveServer) -> None:
+    """Check that Next fetches only the next page's panel, swaps it in and pushes its URL, without a page load.
+
+    The panel scrolls to its top, and the focus stays on Next, or goes to the panel if the last page has none.
+    """
+    page.goto(f"{paged.url}/example.org/thing?tab=usage&page=3")
+    mark(page)
+    length = page.evaluate("history.length")
+    panel = page.get_by_role("tabpanel")
+    panel.evaluate("(each) => { each.scrollTop = 500; }")
+    with page.expect_request(PANEL) as request:
+        pager(page).get_by_role("link", name="Next").click()
+    assert query_of(request.value.url) == {"tab": ["usage"], "page": ["4"], "panel": ["1"]}
+    expect(page).to_have_url(f"{paged.url}/example.org/thing?tab=usage&page=4")
+    expect_usage_page(page, 4)
+    assert marked(page)
+    assert page.evaluate("history.length") == length + 1
+    expect(page.locator("main h1")).to_have_count(1)  # the panel alone, not a page inside the page
+    assert panel.evaluate("(each) => each.scrollTop") == 0
+    expect(pager(page).get_by_role("link", name="Next")).to_be_focused()
+    pager(page).get_by_role("link", name="Next").click()
+    expect_usage_page(page, 5)
+    expect(panel).to_be_focused()
+
+
+def test_usage_go_swaps_panel(page: Page, paged: LiveServer) -> None:
+    """Check that the form fetches only the page's panel and pushes its URL, the first page's without `page`."""
+    page.goto(f"{paged.url}/example.org/thing?tab=usage")
+    mark(page)
+    number = pager(page).get_by_role("spinbutton")
+    number.fill("3")
+    with page.expect_request(PANEL) as request:
+        number.press("Enter")
+    assert query_of(request.value.url) == {"tab": ["usage"], "page": ["3"], "panel": ["1"]}
+    expect(page).to_have_url(f"{paged.url}/example.org/thing?tab=usage&page=3")
+    expect_usage_page(page, 3)
+    expect(number).to_be_focused()
+    number.fill("1")
+    pager(page).get_by_role("button", name="Go").click()
+    expect(page).to_have_url(f"{paged.url}/example.org/thing?tab=usage")
+    expect_usage_page(page, 1)
+    expect(pager(page).get_by_role("button", name="Go")).to_be_focused()
+    assert marked(page)
+
+
+def test_usage_back_and_forward(page: Page, paged: LiveServer) -> None:
+    """Check that Back and Forward step through the Usage pages, fetching only their panels, back to the served one."""
+    page.goto(f"{paged.url}/example.org/thing?tab=usage")
+    mark(page)
+    for number in (2, 3):
+        pager(page).get_by_role("link", name="Next").click()
+        expect_usage_page(page, number)
+    requests = record_panels(page)
+    for step, query, number in [
+        (page.go_back, "?tab=usage&page=2", 2),
+        (page.go_back, "?tab=usage", 1),
+        (page.go_forward, "?tab=usage&page=2", 2),
+    ]:
+        step()
+        expect(page).to_have_url(f"{paged.url}/example.org/thing{query}")
+        expect_usage_page(page, number)
+    assert [query_of(url).get("page") for url in requests] == [["2"], None, ["2"]]
+    assert marked(page)
+
+
+def test_usage_back_after_tab_change(page: Page, paged: LiveServer) -> None:
+    """Check that Back to a Usage page once another tab is chosen loads that page, and the tab's entry is its own."""
+    page.goto(f"{paged.url}/example.org/thing?tab=usage")
+    mark(page)
+    pager(page).get_by_role("link", name="Next").click()
+    expect_usage_page(page, 2)
+    tab(page, "Overview").click()
+    expect(page).to_have_url(f"{paged.url}/example.org/thing")
+    assert page.evaluate("history.state?.browlPanel ?? null") is None
+    page.go_back()
+    expect(page).to_have_url(f"{paged.url}/example.org/thing?tab=usage")
+    expect_usage_page(page, 1)
+    expect_selected(page, USAGE_LABEL)
+    assert not marked(page)
+    page.go_forward()
+    expect(page).to_have_url(f"{paged.url}/example.org/thing")
+    expect_selected(page, "Overview")
+
+
+def test_usage_tab_change_records_panel(page: Page, paged: LiveServer) -> None:
+    """Check that the Usage tab, chosen again on a later page's entry, records the panel it now shows for Forward."""
+    page.goto(f"{paged.url}/example.org/thing?tab=usage")
+    mark(page)
+    pager(page).get_by_role("link", name="Next").click()
+    expect_usage_page(page, 2)
+    tab(page, "Overview").click()
+    tab(page, USAGE_LABEL).click()
+    expect_usage_page(page, 1)
+    page.go_back()
+    expect_usage_page(page, 1)
+    page.go_forward()
+    expect(page).to_have_url(f"{paged.url}/example.org/thing?tab=usage")
+    page.wait_for_timeout(100)  # time for a panel to be swapped in, if one were
+    expect_usage_page(page, 1)
+    assert marked(page)
+
+
+def test_tab_click_while_page_loads(page: Page, paged: LiveServer) -> None:
+    """Check that a tab clicked while a Usage page's panel loads cancels that load, so the tab's panel stays."""
+    held: list[Route] = []
+    page.route(re.compile(r"page=2&panel=1"), lambda route: held.append(route))
+    page.goto(f"{paged.url}/example.org/thing?tab=usage")
+    pager(page).get_by_role("link", name="Next").click()
+    wait_until(page, lambda: bool(held), "the request for the next page's panel")
+    with page.expect_request(PANEL):
+        tab(page, "Overview").click()
+    expect_selected(page, "Overview")
+    try:
+        held[0].continue_()
+    except PlaywrightError:
+        pass  # htmx aborted it, so nothing arrives
+    else:
+        if response := held[0].request.response():
+            response.finished()
+    page.wait_for_timeout(100)  # time for htmx to handle a response, if one arrived
+    expect_selected(page, "Overview")
+    expect(page).to_have_url(f"{paged.url}/example.org/thing")
+
+
+def test_usage_pager_modifier_click_left_to_browser(page: Page, paged: LiveServer) -> None:
+    """Check that Next clicked with a modifier key opens its page in a new browser tab, and leaves this one alone."""
+    page.goto(f"{paged.url}/example.org/thing?tab=usage")
+    length = page.evaluate("history.length")
+    with page.context.expect_page() as opened:
+        pager(page).get_by_role("link", name="Next").click(modifiers=["ControlOrMeta"])
+    opened.value.wait_for_load_state()
+    assert opened.value.url == f"{paged.url}/example.org/thing?tab=usage&page=2"
+    expect(page).to_have_url(f"{paged.url}/example.org/thing?tab=usage")
+    expect_usage_page(page, 1)
+    assert page.evaluate("history.length") == length
+
+
+@pytest.mark.parametrize("control", ["Next", "Go"])
+@pytest.mark.parametrize("failure", ["status", "network"])
+def test_usage_pager_failure_loads_page(page: Page, paged: LiveServer, failure: str, control: str) -> None:
+    """Check that a Usage page whose panel can't be fetched is loaded instead."""
+    if failure == "status":
+        page.route(PANEL, lambda route: route.fulfill(status=503, content_type="text/html", body="<p>Loading</p>"))
+    else:
+        page.route(PANEL, lambda route: route.abort())
+    page.goto(f"{paged.url}/example.org/thing?tab=usage")
+    mark(page)
+    if control == "Next":
+        pager(page).get_by_role("link", name="Next").click()
+    else:
+        pager(page).get_by_role("spinbutton").fill("2")
+        pager(page).get_by_role("button", name="Go").click()
+    expect(page).to_have_url(f"{paged.url}/example.org/thing?tab=usage&page=2")
+    expect_usage_page(page, 2)
+    assert not marked(page)
+
+
+def test_usage_back_failure_reloads(page: Page, paged: LiveServer) -> None:
+    """Check that a Usage page whose panel can't be fetched on Back is loaded instead."""
+    page.goto(f"{paged.url}/example.org/thing?tab=usage")
+    mark(page)
+    pager(page).get_by_role("link", name="Next").click()
+    expect_usage_page(page, 2)
+    page.route(PANEL, lambda route: route.abort())
+    page.go_back()
+    expect(page).to_have_url(f"{paged.url}/example.org/thing?tab=usage")
+    expect_usage_page(page, 1)
+    wait_until(page, lambda: not marked(page), "the page to load")
+
+
+def test_hash_entity_usage_pages(page: Page, paged: LiveServer) -> None:
+    """Check that a hash entity's Usage pages, and Back's, come from the hash route, their URLs keeping the fragment."""
+    page.goto(f"{paged.url}/example.org/vocab?tab=usage#Gamma")
+    expect(page.locator("main h1")).to_have_text(f"{EX}/vocab#Gamma")
+    mark(page)
+    with page.expect_request(PANEL) as request:
+        pager(page).get_by_role("link", name="Next").click()
+    assert "/_browl/hash?" in request.value.url
+    assert query_of(request.value.url) == {
+        "path": ["/example.org/vocab"],
+        "fragment": ["Gamma"],
+        "tab": ["usage"],
+        "page": ["2"],
+        "panel": ["1"],
+    }
+    expect(page).to_have_url(f"{paged.url}/example.org/vocab?tab=usage&page=2#Gamma")
+    expect_usage_page(page, 2)
+    with page.expect_request(PANEL) as request:
+        page.go_back()
+    assert "/_browl/hash?" in request.value.url
+    expect(page).to_have_url(f"{paged.url}/example.org/vocab?tab=usage#Gamma")
+    expect_usage_page(page, 1)
+    expect(page.locator("main h1")).to_have_text(f"{EX}/vocab#Gamma")
+    assert marked(page)
+
+
+def test_usage_back_over_fragment_change(page: Page, paged: LiveServer) -> None:
+    """Check that Back to a Usage page from another fragment's page is left to the hash-IRI script."""
+    page.goto(f"{paged.url}/example.org/onto?tab=usage#Alpha")
+    expect(page.locator("main h1")).to_have_text(f"{EX}/onto#Alpha")
+    pager(page).get_by_role("link", name="Next").click()
+    expect_usage_page(page, 2)
+    page.evaluate("location.hash = 'Beta'")
+    expect(page.locator("main h1")).to_have_text(f"{EX}/onto#Beta")
+    requests = record_panels(page)
+    page.go_back()
+    expect(page.locator("main h1")).to_have_text(f"{EX}/onto#Alpha")
+    expect(page).to_have_url(f"{paged.url}/example.org/onto?tab=usage&page=2#Alpha")
+    expect_usage_page(page, 2)
+    page.wait_for_timeout(100)  # time for a panel to be fetched, if one were
+    assert requests == []
+
+
+@NO_JS
+def test_usage_pager_without_javascript(page: Page, paged: LiveServer) -> None:
+    """Check that, without JavaScript, Next and the form load their pages, the form's without `panel`."""
+    page.goto(f"{paged.url}/example.org/thing?tab=usage")
+    pager(page).get_by_role("link", name="Next").click()
+    expect(page).to_have_url(f"{paged.url}/example.org/thing?tab=usage&page=2")
+    pager(page).get_by_role("spinbutton").fill("4")
+    pager(page).get_by_role("button", name="Go").click()
+    expect(page).to_have_url(f"{paged.url}/example.org/thing?tab=usage&page=4")
+    expect_usage_page(page, 4)

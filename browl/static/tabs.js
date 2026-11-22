@@ -1,8 +1,12 @@
-// Page tabs (DESIGN.md §2.9): the keyboard support, and the tabs' state and URL once htmx swaps a panel in. It listens
-// on the document, so it also serves tabs the hash-IRI script adds.
+// Page tabs (DESIGN.md §2.9): the keyboard support, and the tabs' state and URL once htmx swaps a panel in; and the
+// Usage tab's paging (§2.8), whose pages htmx swaps in too, each a history entry. It listens on the document, so it
+// also serves tabs the hash-IRI script adds.
 (() => {
   "use strict";
   const TAB = '[role="tablist"] > [role="tab"]';
+  const PAGER = ".pager";
+  // The history state's key for the Usage panel an entry shows, which Back and Forward fetch; htmx's own is `htmx`.
+  const PANEL = "browlPanel";
 
   const tabsOf = (tab) => Array.from(tab.parentElement.querySelectorAll(':scope > [role="tab"]'));
   const isSelected = (tab) => tab.getAttribute("aria-selected") === "true";
@@ -55,7 +59,7 @@
   document.addEventListener(
     "click",
     (event) => {
-      if (event.target.closest?.(TAB) && (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)) {
+      if (event.target.closest?.(`${TAB}, ${PAGER} a`) && (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)) {
         event.stopPropagation();
       }
     },
@@ -92,16 +96,112 @@
     }
     event.detail.target.setAttribute("aria-labelledby", tab.id);
     // Replaced, not pushed: switching tabs isn't a navigation, and htmx's own history would fight the hash-IRI script.
-    history.replaceState(history.state, "", tab.href);
+    history.replaceState(withPanel(history.state), "", tab.href);
   });
 
-  // A panel that couldn't be fetched (e.g. the site is loading, or the network failed) is left to the tab's page.
+  // A panel that couldn't be fetched (e.g. the site is loading, or the network failed) is left to the tab's page, or
+  // the Usage page's.
   for (const name of ["htmx:responseError", "htmx:sendError"]) {
     document.addEventListener(name, (event) => {
       const tab = tabOfRequest(event);
+      const control = controlOfRequest(event);
       if (tab) {
         location.assign(tab.href);
+      } else if (control?.matches(PAGER)) {
+        location.reload(); // Back's or Forward's, whose URL is already the page's
+      } else if (control) {
+        location.assign(pageUrl(control));
       }
     });
   }
+
+  // The Usage tab's paging: Previous, Next and the form (`usage.html`) fetch a page's panel with htmx, and push its
+  // page's URL; Back and Forward fetch the panel each entry records. Not htmx's own history, which would fight the
+  // hash-IRI script.
+
+  const shownPager = () => document.querySelector(`#tab-panel ${PAGER}`);
+
+  // A history state that records the Usage panel shown, if it has paging; for another tab's, the tabs drop it.
+  function withPanel(state) {
+    const next = { ...state };
+    delete next[PANEL];
+    const pager = shownPager();
+    if (pager) {
+      next[PANEL] = pager.dataset.panel;
+    }
+    return next;
+  }
+
+  // The paging's control that made a request, a link or the form; or the pager itself, as Back's or Forward's source.
+  const controlOfRequest = (event) => {
+    const elt = event.detail.requestConfig?.elt ?? event.detail.elt;
+    return elt?.closest?.(PAGER) ? elt : null;
+  };
+
+  // The URL a control loads without JS; the first page's without `page`, as the server redirects it.
+  function pageUrl(control) {
+    if (control.matches("a")) {
+      return control.href;
+    }
+    const url = new URL(control.action);
+    const query = new URLSearchParams(new FormData(control));
+    if (query.get("page") === "1") {
+      query.delete("page");
+    }
+    url.search = query;
+    return url.href;
+  }
+
+  // The entry left records its own panel, e.g. that of the page as served, so Back to it swaps that panel in.
+  document.addEventListener("htmx:beforeRequest", (event) => {
+    const control = controlOfRequest(event);
+    if (control && !control.matches(PAGER)) {
+      history.replaceState(withPanel(history.state), "");
+    }
+  });
+
+  let hadFocus = false; // whether the panel had the focus before a page was swapped in
+  document.addEventListener("htmx:beforeSwap", (event) => {
+    if (controlOfRequest(event)) {
+      hadFocus = event.detail.target.contains(document.activeElement);
+    }
+  });
+
+  document.addEventListener("htmx:afterSwap", (event) => {
+    const control = controlOfRequest(event);
+    if (!control) {
+      return;
+    }
+    if (!control.matches(PAGER)) {
+      history.pushState(withPanel(history.state), "", pageUrl(control));
+    }
+    const panel = event.detail.target;
+    panel.scrollTop = 0;
+    // htmx refocuses the control with the same `id`; the panel, if the new page lacks it (e.g. Next on the last).
+    if (hadFocus && !panel.contains(document.activeElement)) {
+      panel.focus({ preventScroll: true });
+    }
+  });
+
+  let hash = location.hash;
+  window.addEventListener("hashchange", () => {
+    hash = location.hash;
+  });
+
+  window.addEventListener("popstate", (event) => {
+    const moved = location.hash !== hash; // a fragment change, which the hash-IRI script handles
+    hash = location.hash;
+    if (moved) {
+      return;
+    }
+    // Any other entry of this page's is one the paging pushed, or one that showed a tab since: if it records no Usage
+    // panel, or the Usage tab isn't shown, its URL is another tab's. Even after a reload, as pushed entries stay.
+    const url = event.state?.[PANEL];
+    const pager = shownPager();
+    if (url && pager) {
+      htmx.ajax("GET", url, { source: pager, target: "#tab-panel" });
+    } else {
+      location.reload();
+    }
+  });
 })();
