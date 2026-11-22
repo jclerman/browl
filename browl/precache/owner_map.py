@@ -235,8 +235,11 @@ class _Walk:
             edges = children[node]
             if node in self._reified:
                 annotated = {p: o for p, o in edges if p in _ANNOTATED}
-                for each in annotated.values():  # the main triple's, counted from it
-                    if isinstance(each, str):
+                for each in annotated.values():  # the main triple's, counted from it, by its own root if it has one
+                    if (label := _blank(each)) is not None:
+                        for iri in self._inside(label):
+                            iris.pop(iri, None)
+                    elif isinstance(each, str):
                         iris.pop(each, None)
                 source, property_ = annotated.get(_SOURCE), annotated.get(_PROPERTY)
                 yield _Root(UsageRootKind.AXIOM, node, _named(source), _named(property_), iris)

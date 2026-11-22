@@ -17,6 +17,7 @@ from playwright.sync_api import FloatRect, Locator, Page, Route, expect
 from rdflib.namespace import OWL, RDF
 
 import browl.admin
+import browl.lookup
 import browl.overview
 import browl.pages
 from browl import owl
@@ -24,8 +25,10 @@ from browl.annotations import AnnotationValue, IRIValue, LiteralValue
 from browl.derived import EntityType
 from browl.jobs import JobContext, Stage, StageFunction
 from browl.jobtypes import StageError
+from browl.links import EntityLink
 from browl.rdf import IRI, RDFS, XSD
 from browl.rdf import RDF as RDF_NS
+from browl.usage_tab import UsageGroup, UsageTab
 from tests.conftest import DATA
 from tests.helpers import WAIT_S, LiveServer, derived_stage, iso, make_app, no_axioms
 
@@ -507,7 +510,7 @@ def box(locator: Locator) -> FloatRect:
 
 PANEL = re.compile(r"[?&]panel=1(&|$)")
 OVERVIEW_TEXT = "Logical axioms"
-USAGE_TEXT = "Where other entities use this one"
+USAGE_TEXT = "The usages can't be shown just now."  # the tests' app has no Fuseki
 
 
 def tab(page: Page, name: str) -> Locator:
@@ -620,6 +623,45 @@ def test_tab_click_while_loading(page: Page, server: LiveServer) -> None:
     expect(page.get_by_role("tabpanel")).to_contain_text(OVERVIEW_TEXT)
     expect(page).to_have_url(f"{server.url}/example.org/plain")
     assert page.evaluate("window.marker") == 1
+
+
+def test_usage_label_fills_in(page: Page, server: LiveServer) -> None:
+    """Check that the Usage tab's count fills in its label once the page renders, without opening the tab.
+
+    Its panel then opens as before, and keeps the label.
+    """
+    page.route(
+        re.compile(r"/_browl/usage-count\?"), lambda route: route.fulfill(body="Usage (7)", content_type="text/html")
+    )
+    page.goto(f"{server.url}/example.org/plain")
+    expect(tab(page, "Usage")).to_have_text("Usage (7)")
+    expect(tab(page, "Overview")).to_have_attribute("aria-selected", "true")
+    expect(tab(page, "Usage")).to_have_attribute("aria-selected", "false")
+    expect(page).to_have_url(f"{server.url}/example.org/plain")
+    expect(page.get_by_role("tabpanel")).to_contain_text(OVERVIEW_TEXT)
+    with page.expect_request(PANEL):
+        tab(page, "Usage").click()
+    expect(page.get_by_role("tabpanel")).to_contain_text(USAGE_TEXT)
+    expect(tab(page, "Usage")).to_have_attribute("aria-selected", "true")
+    expect(tab(page, "Usage")).to_have_text("Usage (7)")
+    expect(page).to_have_url(f"{server.url}/example.org/plain?tab=usage")
+
+
+def test_usage_label_fails(page: Page, server: LiveServer) -> None:
+    """Check that a failed fetch of the Usage tab's label leaves the label and the page as they are."""
+    failed: list[Route] = []
+
+    def fail(route: Route) -> None:
+        failed.append(route)
+        route.fulfill(status=503, body="Loading", content_type="text/html")
+
+    page.route(re.compile(r"/_browl/usage-count\?"), fail)
+    page.goto(f"{server.url}/example.org/plain")
+    wait_until(page, lambda: bool(failed), "the request for the Usage tab's label")
+    page.wait_for_timeout(100)  # time for htmx and the tabs' script to handle the response
+    expect(page).to_have_url(f"{server.url}/example.org/plain")
+    expect(tab(page, "Usage")).to_have_text("Usage")
+    expect_selected(page, "Overview")
 
 
 def test_tab_keyboard(page: Page, server: LiveServer) -> None:
@@ -1302,3 +1344,116 @@ def test_sign_in_in_view(page: Page, varied: LiveServer) -> None:
     page.goto(f"{varied.url}/example.org/{MANY}")
     expect(page.get_by_role("navigation", name="Site").get_by_role("link", name="Sign in")).to_be_in_viewport()
     expect(page.locator("footer")).to_have_count(0)
+
+
+# The Usage tab's layout (P-27b, DESIGN.md §2.8)
+
+USAGE_PAGES = 5
+USAGE_SUBJECTS = 8
+"""How many pages `paged`'s Usage tab has, and how many subjects each page, with `USAGE_LINES` lines each."""
+USAGE_LINES = 10
+
+
+@pytest.fixture
+def paged(server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> LiveServer:
+    """Return the server, each entity's Usage tab `USAGE_PAGES` pages of `USAGE_SUBJECTS` subjects (no Fuseki).
+
+    Each subject has `USAGE_LINES` lines in columns, half with a short keyword and half with a long one, and names of
+    different lengths, so the columns' widths are set by the longest.
+    """
+
+    async def read_usage_tab(request: object, state: object, iri: str, page: int) -> UsageTab:
+        entity = owl.Entity(kind=owl.EntityKind.CLASS, iri=iri)
+        note = owl.Entity(kind=owl.EntityKind.ANNOTATION_PROPERTY, iri=f"{EX}/a-long-annotation-property")
+        groups, links = [], {}
+        for index in range(USAGE_SUBJECTS):
+            subject = IRI(f"{EX}/subject{index}")
+            links[subject] = EntityLink(subject, f"subject {'x' * 4 * index}", f"/subject{index}")
+            node = owl.Entity(kind=owl.EntityKind.CLASS, iri=subject)
+            assertion = owl.AnnotationAssertion(
+                subject=owl.IRIReference(iri=subject), property=note, value=owl.IRIReference(iri=iri)
+            )
+            half = USAGE_LINES // 2
+            axioms: list[owl.AnyAxiom] = [owl.SubClassOf(sub=node, super=entity)] * half + [assertion] * half
+            groups.append(UsageGroup(subject=subject, axioms=axioms))
+        count = USAGE_PAGES * USAGE_SUBJECTS * USAGE_LINES
+        return UsageTab(count=count, page=page, pages=USAGE_PAGES, groups=groups, links=links)
+
+    monkeypatch.setattr(browl.lookup, "read_usage_tab", read_usage_tab)
+    return server
+
+
+def test_usage_tab_fills_frame(page: Page, paged: LiveServer) -> None:
+    """Check the Usage tab in the window-filling frame: the page doesn't scroll; the tab panel does, under the paging.
+
+    The paging reads "Previous Page N of M Go Next", and the count is in the tab's label only.
+    """
+    page.set_viewport_size(WIDE)
+    page.goto(f"{paged.url}/example.org/thing?tab=usage&page=2")
+    panel = page.get_by_role("tabpanel")
+    assert overflows(panel)
+    assert not page_scrolls(page)  # the subjects visually hidden in each line take no room
+    pager = page.get_by_role("navigation", name="Usage pages")
+    expect(pager).to_have_text(re.compile(rf"^\s*Previous\s+Page\s+of\s+{USAGE_PAGES}\s+Go\s+Next\s*$"))
+    expect(pager.get_by_role("spinbutton")).to_have_value("2")
+    count = USAGE_PAGES * USAGE_SUBJECTS * USAGE_LINES
+    expect(tab(page, f"Usage ({count})")).to_be_visible()
+    expect(panel).not_to_contain_text(str(count))
+    top = box(pager)["y"]
+    for scrolled in (8, 500):
+        panel.evaluate(f"(each) => {{ each.scrollTop = {scrolled}; }}")
+        assert box(pager)["y"] == top  # held at the panel's top
+    first = box(panel.locator("dt").first)
+    assert first["y"] + first["height"] < top  # scrolled out of sight, under the paging
+    assert page.evaluate("window.scrollY") == 0
+
+
+def test_usage_tab_columns(page: Page, paged: LiveServer) -> None:
+    """Check that the keywords line up down the tab, as does the rest of each line, whatever the subject's name."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{paged.url}/example.org/thing?tab=usage")
+    for part in ("usage-keyword", "usage-axiom"):
+        lefts = {round(box(each)["x"]) for each in page.locator(f".{part}").all()}
+        assert len(lefts) == 1, part
+    keyword, rest = box(page.locator(".usage-keyword").first), box(page.locator(".usage-axiom").first)
+    assert keyword["x"] + keyword["width"] <= rest["x"]
+
+
+def test_usage_tab_look(page: Page, paged: LiveServer) -> None:
+    """Check that Previous on the first page is grayed out, not a link, and the entity is highlighted, in bold."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{paged.url}/example.org/thing?tab=usage")
+    pager = page.get_by_role("navigation", name="Usage pages")
+    expect(pager.get_by_role("link")).to_have_text(["Next"])
+    color = "(each) => getComputedStyle(each).color"
+    assert pager.locator(".pager-off").evaluate(color) != pager.get_by_role("link").evaluate(color)
+    mark = page.locator(".usage-frame mark").first
+    background, weight = mark.evaluate(
+        "(each) => [getComputedStyle(each).backgroundColor, getComputedStyle(each).fontWeight]"
+    )
+    assert background != page.evaluate("getComputedStyle(document.body).backgroundColor")
+    assert background != "rgba(0, 0, 0, 0)"
+    assert int(weight) >= 600
+
+
+def test_usage_tab_narrow(page: Page, paged: LiveServer) -> None:
+    """Check that on a phone the Usage tab doesn't make the page scroll sideways."""
+    page.set_viewport_size(NARROW)
+    page.goto(f"{paged.url}/example.org/thing?tab=usage&page=2")
+    expect(page.locator(".usage-frame dt").first).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth") <= NARROW["width"]
+
+
+def test_usage_label_fills_in_on_usage_tab(page: Page, server: LiveServer) -> None:
+    """Check that the label of a Usage tab served without its count fills in, the tab staying selected.
+
+    The label's fetch is its own, not the selected tab's, which isn't fetched again.
+    """
+    page.route(
+        re.compile(r"/_browl/usage-count\?"), lambda route: route.fulfill(body="Usage (7)", content_type="text/html")
+    )
+    page.goto(f"{server.url}/example.org/plain?tab=usage")
+    expect(page.get_by_role("tabpanel")).to_contain_text(USAGE_TEXT)
+    expect(tab(page, "Usage (7)")).to_be_visible()
+    expect_selected(page, "Usage (7)")
+    expect(page).to_have_url(f"{server.url}/example.org/plain?tab=usage")

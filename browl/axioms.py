@@ -7,7 +7,8 @@ Templates make the HTML (`templates/axioms.html`).
 An entity's axioms are those the OWLAPI lists for it (`getAxioms(entity)`), and for a class its `HasKey` axioms and
 the general class axioms that mention it, for an object property the property chains that imply it, without their
 annotations. That's every logical axiom about the entity, plus an annotation property's domain, range and
-super-properties; not its annotation assertions, nor its usage in other entities' axioms (P-27).
+super-properties; not its annotation assertions, nor its usage in other entities' axioms, which the Usage tab shows
+(`browl.usage_tab`, which also converts annotation assertions, and axioms with their annotations).
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -78,13 +79,23 @@ async def fetch_fragment(sparql: FusekiClient, dataset: str, iri: str, dataset_c
         own = group.create_task(sparql.construct(dataset, filled_query(_AXIOMS, dataset_clause, entity)))
         symmetric = group.create_task(sparql.construct(dataset, filled_query(_SYMMETRIC, dataset_clause, entity)))
     triples = own.result() + symmetric.result()
-    mentioned = ntriples_iris(triples)
-    if len(mentioned) > MAX_FRAGMENT_IRIS:
-        raise TooManyAxiomsError(f"the fragment mentions {len(mentioned)} IRIs, more than {MAX_FRAGMENT_IRIS}")
+    mentioned = fragment_iris(triples)
     if not mentioned:
         return triples
     values = f"VALUES ?iri {{ {' '.join(f'<{each}>' for each in sorted(mentioned))} }}"
     return triples + await sparql.construct(dataset, filled_query(_TYPES, dataset_clause, {_NO_IRIS: values}))
+
+
+def fragment_iris(*fragments: bytes, what: str = "the fragment") -> set[str]:
+    """Return the IRIs that N-Triples fragments mention, before their types are fetched.
+
+    Raises:
+        TooManyAxiomsError: They mention more than `MAX_FRAGMENT_IRIS`; `what` names them in its message.
+    """
+    mentioned = set[str]().union(*map(ntriples_iris, fragments))
+    if len(mentioned) > MAX_FRAGMENT_IRIS:
+        raise TooManyAxiomsError(f"{what} mentions {len(mentioned)} IRIs, more than {MAX_FRAGMENT_IRIS}")
+    return mentioned
 
 
 type _Build = Callable[[_Converter, Any], owl.Node]
@@ -120,6 +131,10 @@ def _facet(converter: _Converter, restriction: Any) -> owl.Node:
     )
 
 
+def _iri(converter: _Converter, iri: Any) -> owl.Node:
+    return owl.IRIReference(iri=IRI(str(iri)))
+
+
 def _annotation_domain(converter: _Converter, axiom: Any) -> owl.Node:
     return owl.AnnotationPropertyDomain(
         property=cast(owl.Entity, converter(axiom.getProperty())),
@@ -143,7 +158,10 @@ def _anonymous(converter: _Converter, individual: Any) -> owl.Node:
 
 
 def _other(converter: _Converter, axiom: Any) -> owl.Node:
-    return owl.OtherAxiom(axiom_type=str(axiom.getAxiomType().getName()), functional=str(axiom))
+    """Make an `OtherAxiom`, without its annotations, which `_axiom_node` adds as any axiom's."""
+    return owl.OtherAxiom(
+        axiom_type=str(axiom.getAxiomType().getName()), functional=str(axiom.getAxiomWithoutAnnotations())
+    )
 
 
 _PROPERTY_FILLER = {"property": "getProperty", "filler": "getFiller"}
@@ -164,6 +182,8 @@ _BUILDS: tuple[tuple[str, _Build], ...] = (
     ("OWLAnonymousIndividual", _anonymous),
     ("OWLLiteral", _literal),
     ("OWLFacetRestriction", _facet),
+    ("IRI", _iri),  # an annotation's subject or value
+    ("OWLAnnotation", _fields(owl.Annotation, property="getProperty", value="getValue", annotations="getAnnotations")),
     ("OWLObjectInverseOf", _fields(owl.ObjectInverseOf, property="getInverse")),
     # Class expressions.
     ("OWLObjectIntersectionOf", _fields(owl.ObjectIntersectionOf, operands="getOperands")),
@@ -240,6 +260,10 @@ _BUILDS: tuple[tuple[str, _Build], ...] = (
     ("OWLSubAnnotationPropertyOfAxiom", _fields(owl.SubAnnotationPropertyOf, **_SUB_SUPER)),
     ("OWLAnnotationPropertyDomainAxiom", _annotation_domain),
     ("OWLAnnotationPropertyRangeAxiom", _annotation_range),
+    (
+        "OWLAnnotationAssertionAxiom",
+        _fields(owl.AnnotationAssertion, subject="getSubject", property="getProperty", value="getValue"),
+    ),
     ("OWLAxiom", _other),  # any other, such as a SWRL rule
 )
 
@@ -309,6 +333,42 @@ def entity_closure(ontology: Any, iri: str) -> list[Any]:
     return list(found)
 
 
+def is_declaration(axiom: Any) -> bool:
+    """Return whether an OWLAPI axiom is a declaration."""
+    return str(axiom.getAxiomType().getName()) == "Declaration"
+
+
+def axioms_about(ontology: Any, iri: str) -> list[Any]:
+    """Return the axioms in an ontology whose subject is an IRI, as OWL's RDF mapping writes them, with annotations.
+
+    That's what the OWLAPI lists for each entity with the IRI (`getAxioms(entity)`), with a class's `HasKey` axioms, the
+    property chains that imply an object property, the annotation assertions about the IRI, and its annotated
+    declarations, whose annotations can name another entity, whose usage they are. The two-member axioms, such as
+    `DisjointClasses(A, B)`, are listed for both members.
+
+    Args:
+        ontology: The `OWLOntology`.
+        iri: The IRI.
+
+    Returns:
+        The `OWLAxiom`s, each once.
+    """
+    check_java_thread()
+    java = _java()
+    subject = java.IRI.create(iri)
+    found: dict[Any, None] = dict.fromkeys(ontology.getAnnotationAssertionAxioms(subject))
+    for entity in ontology.getEntitiesInSignature(subject):
+        own = list(ontology.getAxioms(entity, java.excluded))
+        own += (axiom for axiom in ontology.getDeclarationAxioms(entity) if axiom.isAnnotated())
+        if entity.isOWLClass():
+            own += ontology.getHasKeyAxioms(entity)
+        elif entity.isOWLObjectProperty():
+            chains = ontology.getAxioms(java.AxiomType.SUB_PROPERTY_CHAIN_OF, java.excluded)
+            own += (axiom for axiom in chains if axiom.getSuperProperty().equals(entity))
+        found.update(dict.fromkeys(own))
+    return list(found)
+
+
 class _Converter:
     """Converts OWLAPI objects into nodes (`browl.owl`), choosing each build (`_BUILDS`) by the object's Java class.
 
@@ -370,7 +430,7 @@ def _converter() -> _Converter:
 
 
 def convert_axioms(axioms: Iterable[Any]) -> list[owl.AnyAxiom]:
-    """Return OWLAPI axioms as nodes (`browl.owl`), sorted by kind and text.
+    """Return OWLAPI axioms as nodes (`browl.owl`), sorted by kind and text, with their annotations if they have any.
 
     The OWLAPI labels anonymous individuals afresh whenever it parses (`_:genid…`), so if there are any, they're
     labelled again, `_:b1`, `_:b2`, …, in order of appearance in the axioms sorted without labels: a page's text and
@@ -387,7 +447,7 @@ def convert_axioms(axioms: Iterable[Any]) -> list[owl.AnyAxiom]:
     converter = _converter()
     axioms = list(axioms)
     nodes = [_axiom_node(converter, axiom) for axiom in axioms]
-    if any(token.kind == owl.TokenKind.BLANK_NODE for node in nodes for token in node.manchester_tokens()):
+    if any(token.kind == owl.TokenKind.BLANK_NODE for node in nodes for token in _tokens(node)):
         order = sorted(range(len(nodes)), key=lambda index: (nodes[index].kind, _unlabelled(nodes[index])))
         converter.labels = {}
         try:
@@ -407,14 +467,31 @@ def _axiom_node(converter: _Converter, axiom: Any) -> owl.AnyAxiom:
         raise FragmentError(f"an axiom nests too deep for browl: {error}") from error
     if not isinstance(node, owl.Axiom):
         raise FragmentError(f"not an axiom: {node.type}")
+    if axiom.isAnnotated():
+        try:
+            annotations = converter.value(axiom.getAnnotations())
+        except (ValidationError, RDFSyntaxError) as error:
+            logger.warning("Not showing an axiom's annotations, as browl can't hold them as nodes: %s", error)
+        else:
+            node = node.model_copy(update={"annotations": annotations})
     return cast(owl.AnyAxiom, node)
 
 
-def _unlabelled(node: owl.Node) -> str:
-    """Return a node's text without its anonymous individuals' labels."""
-    tokens = node.manchester_tokens()
+def _tokens(node: owl.AnyAxiom) -> Iterator[owl.Token]:
+    """Yield an axiom's Manchester tokens, then its annotations', each before its own annotations'."""
+    yield from node.manchester_tokens()
+    stack = list(reversed(node.annotations))
+    while stack:
+        annotation = stack.pop()
+        yield from annotation.manchester_tokens()
+        stack.extend(reversed(annotation.annotations))
+
+
+def _unlabelled(node: owl.AnyAxiom) -> str:
+    """Return an axiom's text, and its annotations', without its anonymous individuals' labels."""
     return owl.manchester_text(
-        dataclasses.replace(token, text="_:") if token.kind == owl.TokenKind.BLANK_NODE else token for token in tokens
+        dataclasses.replace(token, text="_:") if token.kind == owl.TokenKind.BLANK_NODE else token
+        for token in _tokens(node)
     )
 
 

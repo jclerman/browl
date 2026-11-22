@@ -28,6 +28,9 @@ Declaration(Class(:Pet))
 Declaration(Class(:Adult))
 Declaration(Class(:Tricky))
 Declaration(Class(:LivingThing))
+Declaration(Class(:Seed))
+# An annotated declaration: a usage of the entity its annotation names.
+Declaration(Annotation(rdfs:seeAlso :Seed) Class(:Fruit))
 Declaration(ObjectProperty(:partOf))
 Declaration(ObjectProperty(:hasPart))
 Declaration(ObjectProperty(:hasParent))
@@ -100,6 +103,9 @@ DisjointClasses(:Dog :Cat)
 DisjointClasses(Annotation(:note "n-ary") Annotation(:remark :Mineral) :Animal :Plant :Fungus)
 DisjointClasses(:Mineral ObjectSomeValuesFrom(:partOf :Animal))
 DisjointUnion(:LivingThing :Animal :Plant)
+# Annotations that name an entity the axiom names too, as an IRI and in a class expression: one usage each, not two.
+SubClassOf(Annotation(rdfs:seeAlso :Seed) :Fruit :Seed)
+SubClassOf(Annotation(rdfs:seeAlso :Seed) :Fruit ObjectSomeValuesFrom(:partOf :Seed))
 
 # General class axioms.
 SubClassOf(ObjectIntersectionOf(:Organ ObjectSomeValuesFrom(:partOf :Plant)) owl:Nothing)

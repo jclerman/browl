@@ -17,6 +17,7 @@ from browl.fuseki import FusekiClient, ping
 from browl.jobs import JobRunner, Stage, StageFunction
 from browl.pages import STATIC_DIR, PageFrame, SiteGate, derived_not_current
 from browl.settings import Settings, load_settings
+from browl.usages import UsageCounts
 
 FUSEKI_TIMEOUT_S = 2.0
 """Time limit for the health check's whole call to Fuseki, well under the container health check's own."""
@@ -84,6 +85,7 @@ def create_app(
         async with httpx2.AsyncClient(base_url=str(settings.fuseki_url), transport=fuseki_transport) as client:
             app.state.fuseki_http = client
             app.state.sparql = FusekiClient(client)
+            app.state.usage_counts = UsageCounts()
             if stages is None:
                 functions: Mapping[Stage, StageFunction] = {
                     Stage.IMPORTS: imports.imports_stage,

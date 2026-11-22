@@ -24,6 +24,7 @@ STANDARD = (namespace.RDF, namespace.RDFS, namespace.OWL, namespace.XSD)
 ALLOWED = {
     URIRef("http://jena.apache.org/ARQ/function#bnode"),  # a blank node's store label, which Fuseki's Jena has
     URIRef("http://www.w3.org/2003/11/swrl#Imp"),  # a SWRL rule, in OWL's RDF mapping, for the blank-node owner map
+    URIRef("http://www.w3.org/2003/11/swrl#Variable"),  # a SWRL rule's variable, declared so, for a Usage tab page
 }
 """The IRIs, outside the standard vocabularies, that browl's queries may name."""
 

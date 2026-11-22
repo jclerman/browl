@@ -669,7 +669,9 @@ by value. Fuseki can (`?s ?p <entity>`), so P-27 keeps two things instead ([S-7 
     rules), with no owner;
   - one root per reified `owl:Axiom` with IRIs in its annotations, owned by its `owl:annotatedSource` if that's an
     IRI. Only its annotations' IRIs count as references: its source, property and target repeat an axiom counted
-    already. An annotation on a blank node's axiom (a general class axiom's, or an axiom annotation's, which is an
+    already, as do the IRIs within a blank source or target, a copy of the main triple's node, so an axiom annotated
+    with an entity it also names is one usage of it, not two _(P-27b)_. An annotation on a blank node's axiom (a
+    general class axiom's, or an axiom annotation's, which is an
     `owl:Annotation`) is part of that node's root, as it's the same axiom. A blank `owl:annotatedTarget`, or a blank
     `owl:annotatedSource` that doesn't hold the main triple, is a copy of the main triple's node, and no root;
   - each root's IRIs: the objects reached through blank nodes (but OWL and RDF types, and `rdf:nil`), and the
@@ -852,6 +854,10 @@ Tabs (U-28; see [2.9](#29-page-layout)):
   ([2.9](#29-page-layout)), inspired by Protégé's description views but more compact. Details below.
 - **Usage** (U-26), labeled with its count, e.g. "Usage (128)", filled in after the page renders, so the Overview
   never waits for it. The tab isn't the default. _(P-27; [S-7 findings](../research/S-7/README.md).)_
+  - **The label** _(P-27b)_: fetched from `usage-count?iri=…` ([2.13](#213-url-space-for-the-services-own-pages))
+    once the page renders, by an element of its own within the tab, whose request `tabs.js` doesn't take as the tab's:
+    the fetch neither opens the tab nor, if it fails, loads the tab's page. A failed count leaves the label "Usage".
+    A served Usage tab knows its count already, so its label comes with it, and nothing is fetched.
   - **Usages** are axioms, from three sources: triples with the entity as object (`?s ?p <entity>`); for a property,
     triples that use it as predicate (`?s <entity> ?o`, looked for whatever the entity's type, so an IRI also used as
     an undeclared property gets them too); and references through blank nodes (class expressions,
@@ -862,7 +868,10 @@ Tabs (U-28; see [2.9](#29-page-layout)):
     annotations, which the OWLAPI holds as ontology annotations, and annotation properties' domains and ranges, which
     it holds as IRIs, not as references to the entity (P-27a's test checks every entity of `tests/data/axioms.ofn`,
     which has every kind of OWL 2 axiom). A symmetric axiom stated on another entity, such as
-    `B DisjointWith A`, is on both of A's tabs: the Overview (P-15) and, under B, the Usage tab.
+    `B DisjointWith A`, is on both of A's tabs: the Overview (P-15), as `B` under Disjoint With, and, under B, the
+    Usage tab, as `B DisjointWith A` (Layout, below). An annotated declaration whose annotations name the entity is
+    its usage too (a reified axiom's root), listed under the entity it declares, in functional syntax with its
+    annotations beneath, as an `OtherAxiom` _(P-27b)_.
   - **Axioms with no single subject** (general class axioms, n-ary axioms such as `DisjointClasses(A, B, C)`,
     negative property assertions) aren't in a class's Usage tab: the Overview tab already lists them for every class
     they mention (P-15). So each usage has exactly one subject, and nothing is counted twice. A property's Overview
@@ -874,20 +883,72 @@ Tabs (U-28; see [2.9](#29-page-layout)):
   - **The count** is of axioms, as Protégé counts "uses", not of referring entities: Fuseki's counts of the first
     two sources, without a filter on `?s`, less the entity's triples about itself and the owner map's blank-subject
     counts, plus the owner map's roots that are usages. Blank nodes the owner map misses, such as anonymous
-    individuals (U-18), are counted but not listed. That's 2 ms for most entities, and 0.21–0.26 s for NCBITaxon's
+    individuals (U-18), are counted but not listed. _(P-27b)_ So once a page's usages are read, its pages come from
+    those listed, not from the count: a page past them is a 404, not blank. An entity none of whose usages
+    can be listed says so, and its label still shows the count, which says what the ontology holds; counting only
+    the listed ones would need a filter on `?s`, which costs seconds for the largest (below). U-18 lists them.
+    That's 2 ms for most entities, and 0.21–0.26 s for NCBITaxon's
     largest (2.5–3.1 M), 0.47 s just after a restart; filtering `?s` to IRIs makes TDB2 decode every subject,
     12–19 s. An entity's counts over 100 ms (13 entities in NCBITaxon) are kept in memory per generation, at most
     1,000. Once the usage table is ready, counts come from it.
   - **Order and pages:** axioms sorted by their subject's casefolded display name, then IRI; then, for a property,
     the general class axioms that mention it; then subjects not in `entity` (individuals and undeclared IRIs, until
-    U-18 adds individuals: 261 usages in Uberon, none in HPO or NCBITaxon). Pages of 50 axioms, so the page count is
-    known from the count: next, previous and go to page. An entity split across pages is marked "(continued)". A
+    U-18 adds individuals: 261 usages in Uberon, none in HPO or NCBITaxon). Pages of 50 axioms: next, previous and go
+    to page. An entity split across pages is marked "(continued)". A
     property's usages carry their objects in the stream, so each page holds exactly 50.
+    - _(P-27b)_ The group with no single subject comes after the named subjects for any entity, not only a property:
+      a class's SWRL rules are in it. A subject's name is its first entity's display name, else its IRI; its usages
+      keep one order, so each page holds the same ones every time. A page past the first is `page=N`, and each page
+      has one URL: a `page` that isn't a positive integer without leading zeros, is repeated, or is past the last is
+      a 404, and `page=1` redirects to the URL without it. A page with the hash-IRI script shows its own entity's
+      first page rather than 404 a page it lacks, as its fragment's entity may have it; the script's lookup 404s a
+      page that entity lacks. The paging, at the top of the tab, is Previous and Next, always shown, grayed out and
+      not links at the ends, so nothing moves from page to page, and a small GET form, "Page N of M", with no script:
+      a page is a full page load, which costs little, as it's the Usage tab alone. In the window-filling frame it
+      stays in view as the tab panel scrolls, within the panel rather than in the tab bar, which holds only tabs and
+      the one-page toggle; in the one-page view it scrolls with the page. The count is in the tab's label only.
+  - **Layout** _(P-27b)_: a frame-like `<dl>`, as on the Overview: each subject once, in the label column, linked to
+    its page (`named_iri`), "No single subject" for the group with none; its axioms beneath, one per line, in
+    Manchester syntax with the Overview's tokens (`manchester`), sorted by kind and text.
+    - **Three columns:** the subject; the axiom's keyword (`SubClassOf`, `EquivalentTo`, `DisjointWith`, `Domain`,
+      `Type`, an assertion's property, such as an annotation assertion's); and the rest of the axiom. Each line is a
+      CSS subgrid of the last two, so the keywords line up down the tab. The split comes from the node, not its text
+      (`browl.owl.Axiom.subject_split`): the layout's first item is the subject, the second a keyword or an entity.
+      The subject's repeat at the start of the line isn't shown, but is in visually hidden text, as text, not a
+      link, so a screen reader reads the line as the whole axiom. A line that doesn't start with its subject and a
+      keyword spans both columns: a property chain, which the property it implies owns
+      (`p o q SubPropertyOf: r`); a characteristic (`Functional: p`); an n-ary axiom written as a list
+      (`DisjointClasses: A, B, C`); a negative assertion (`not (…)`); an `OtherAxiom`; and every line with no
+      subject. An axiom's annotations stay beneath it, indented, under both columns. On a phone the subject goes
+      above its lines, which keep the two columns.
+    - **Symmetric axioms subject first:** `EquivalentTo`, `DisjointWith`, `SameAs`, `DifferentFrom`, equivalent and
+      disjoint properties and `InverseOf`, in their two-member form, are written with their members sorted, so the
+      subject could be on the right. A line has its subject first (`browl.owl.Axiom.with_first`): on Y's tab,
+      `X DisjointWith Y`, stated on X, is under X as `X DisjointWith Y`, though Y sorts first. Only the order it's
+      written in changes, not the axiom; the page data holds it so.
+    - **The entity highlighted:** wherever the page's entity is in a line, its keyword column and the annotations
+      beneath it included, it's in a `<mark>`, with a background and bold, so not by color alone (WCAG AA in light
+      and dark: `--mark-bg`); a link stays a link. The macros compare IRIs, not names. Not in the subject column.
+  - **Annotation assertions** _(P-27b)_: most usages are annotation assertions (`S P <entity>`, or `S <entity> V` for
+    an annotation property), so they have a node of their own (`browl.owl.AnnotationAssertion`), shown
+    `subject property value`, as a property assertion is, and as the OWLAPI's renderer writes it. The Overview's
+    axioms still leave them out.
+  - **Axiom annotations** _(P-27b)_: a line shows its axiom's annotations only where the usage is found through them
+    alone: the entity is in them and not in the rest of the axiom. That's a reified axiom's root (a synonym annotated
+    with a synonym type, a definition with a `hasDbXref`), and a root with no subject whose only mention is in its
+    annotations (an annotated general class axiom, an n-ary `DisjointClasses`). Then all its annotations are shown,
+    beneath the line in small text, `property value`; an annotation's own annotations, nested on an
+    `owl:Annotation`, are a level further in, as a list within its item. Every other line has none, as on the
+    Overview. The nodes (`browl.owl.Annotation`, `Axiom.annotations`, which `convert_axioms` fills from an annotated
+    OWLAPI axiom) are general, so U-35 can show annotations on the Overview the same way.
   - **Before the usage table is ready** (2–4 minutes after a NCBITaxon load; seconds for Uberon and HPO): an entity
     with up to T = 20,000 usages streams them all, sorts and slices, per request: at most 0.21 s on NCBITaxon
     (8–11 µs per usage) and 0.1 s on Uberon and HPO (2–4 µs). That's every entity but 28 in NCBITaxon, 7 in Uberon and
     5 in HPO. Above T, the tab shows its count and "Preparing…", with an estimate, and htmx polls until the table is
     ready. **Once it is,** every page is a range read on it.
+    - _(P-27b)_ The count is read first (2 ms for most), and above T no usage is streamed. P-27b shows the count and
+      "Preparing…" only, in an element of its own (`#usage-preparing`), with no estimate and no polling; P-27c adds
+      both, by giving that element an htmx poll of the tab's panel, which replaces it once the table is ready.
   - **Not built:** walking `entity` in name order to fill a hub's first pages before the table is ready, and caching
     each hub's sorted list on first view. S-7 found the walk fast for the hubs too large to stream (7–75 ms for
     page 1 of the ranks and annotation properties), but slow for clustered ones: NCBITaxon's subclasses share name
@@ -898,6 +959,34 @@ Tabs (U-28; see [2.9](#29-page-layout)):
     `rdfs:Datatype`, `swrl:Variable`) of the IRIs it mentions, not every type as `entity-types.rq` does, or other
     entities' class assertions and property characteristics join the page. Fetching, parsing and rendering a page
     takes 7–9 ms at p50 and 78 ms at most.
+    - _(P-27b, `browl.usage_tab.fetch_usage_fragments`)_ Two fragments, each parsed by the OWLAPI once: the usages
+      with a subject, and those with none. A triple usage whose terms the stream holds (an IRI or literal object) is
+      written, not fetched; the others are fetched by their blank nodes' store labels, with their closures and the
+      annotations on them, and a reified axiom with the triple it annotates. Then the declaration types of every IRI
+      either mentions. If the fragments mention more than `MAX_FRAGMENT_IRIS` IRIs, or are larger together than one
+      query's result may be (`CONSTRUCT_MAX_BYTES`, which keeps the OWLAPI's input within its heap; the literals
+      written in pass no query's cap), the page says it's too large to show instead.
+    - **Matching axioms to subjects:** an axiom of the first fragment goes to the page subject it's about, as the
+      OWLAPI lists an entity's axioms (`browl.axioms.axioms_about`: `getAxioms(entity)` for each of the IRI's
+      entities, a class's `HasKey`, the chains that imply a property, the annotation assertions on the IRI, and its
+      annotated declarations), which follows OWL's RDF mapping, where an axiom's main triple has its subject as
+      subject. A two-member axiom about two page subjects, `DisjointClasses(A, B)`, goes to the first that has fewer
+      axioms than usages. An axiom about none
+      (none should be) is logged and goes with those of no subject. The second fragment is parsed apart, since a
+      negative property assertion or an n-ary axiom there would be about each subject it names. Every usage of every
+      entity of `tests/data/axioms.ofn` is on exactly one page, as the axiom it is alone, under its subject, with
+      pages of 1, 3 and 50; and on the pages measured below, every subject had one axiom per usage.
+    - **Timings** _(P-27b, `research/P-27b/bench.py`)_: the first page with its count, as the tab reads it (count,
+      stream, sort, fragments, parse, links and HTML), for the 30 largest entities up to T and 150 at random, 3 runs
+      each after a warm-up, on S-7's setup: HPO 9 ms at p50, 88 ms at p95, 175 ms at most (`hasRelatedSynonym`,
+      15,659 usages: 99 ms streaming, 52 ms sorting); Uberon 11 ms, 55 ms, 323 ms (`oboInOwl:source`, 19,155 usages,
+      whose other runs took 235 and 197 ms: 208 ms streaming its literals); NCBITaxon 9 ms, 162 ms, 289 ms
+      (NCBITaxon_156408, 17,119 usages: 100 ms streaming, 169 ms sorting, its names read from 3 M entities). So N-3
+      holds on all three. The count alone: 2 ms at p50 and 4–6 ms at p95. Building the derived database took 9 s,
+      12 s and 207 s.
+  - **Failures** _(P-27b)_: a count, stream, fetch or parse that fails fails only the tab's content, with "The usages
+    can't be shown just now.", the full error logged, as the Overview's panels do.
+  - **Data** _(P-27b)_: a page is a `UsageTab`, built apart from its HTML for the JSON API (P-33).
   - **Filters** (U-34, Later) can read the usage table if it stores each axiom's kind and property.
 - **Individuals** (classes only; Later, U-18): the class's named individuals, paged.
 
@@ -976,6 +1065,14 @@ Tabs (U-28; see [2.9](#29-page-layout)):
     case-insensitively. Then come the others, by their text with the names the page shows, then by IRI.
   - **Punning:** an IRI with several types has each type's sections; where two of them share a label, both add their
     type ("Equivalent To (object property)").
+  - **Symmetric axioms:** one stated on another entity shows the page's entity first. A section shows only the
+    other members (`B` under Disjoint With on A's page); an axiom shown whole, such as an individual's `SameAs` under
+    Other axioms, is written with the entity first (`browl.owl.Axiom.with_first`), as on the Usage tab. _(P-27b)_
+  - **The entity highlighted** where a line shows it, such as in a general class axiom, as on the Usage tab
+    (`<mark>`); not in the annotations panel. The frame keeps its two columns. _(P-27b)_
+  - **Line breaks and keyword styles** (P-37): long axioms, with more than one set of parentheses, will be broken
+    across lines by their structure, with leading operators, and keywords and constructors styled apart, on this
+    panel and the Usage tab.
   - **Data:** each section (`AxiomGroup`) holds its label and lines; a line (`FrameLine`) its axiom, None for an
     implied equivalent, and the operands it shows, so the JSON API (U-42) returns the frame as the page shows it.
 - **Compact layout** (U-32): label column and value column in a two-column grid; tight line spacing within a group and a
@@ -1047,8 +1144,8 @@ axioms of each.
   class for each kind of axiom, class expression and data range, plus leaves: `Entity` (kind and IRI), `Literal`
   (lexical form, datatype, language tag), `AnonymousIndividual`, and `IRIReference` (an annotation property's domain
   or range). OWLAPI's `SubPropertyChainOf` is a kind of its own, as P-16 shows chains apart. An axiom of any other
-  kind, such as a SWRL rule, is an `OtherAxiom` holding its functional syntax as plain text, without links; pages
-  don't fetch rules.
+  kind, such as a SWRL rule, is an `OtherAxiom` holding its functional syntax as plain text, without links; its
+  annotations, if a page shows them, are nodes, as any axiom's are _(P-27b)_. The Overview doesn't fetch rules.
 - **Named roles:** axioms' fields say what each operand is (`ClassAssertion.individual`, `ClassAssertion.class_`,
   a property assertion's `subject`, `property` and `object`), so no operand order needs documenting.
 - **JSON:** each node has a `type` field (`NodeType`) that discriminates the unions of nodes (`ClassExpression`,
@@ -1267,8 +1364,9 @@ JSON, scripts or unquoted attributes.
 An in-memory LRU of rendered HTML, keyed by `(generation, page, tab, panel only)`, with a configurable size
 (default 100). The page is the URL path plus the query parameters that name the entity, `iri` on the fallback route
 and `path` and `fragment` on the hash route, but no others, so junk queries can't fill the cache. The tab is the one
-the page shows, not the query's `tab`, which some pages ignore (2.9); `panel only` is whether the response is a tab
-panel alone (`panel=1`, 2.9).
+the page shows, not the query's `tab`, which some pages ignore (2.9), with the Usage tab's `page` (2.8); `panel only`
+is whether the response is a tab panel alone (`panel=1`, 2.9). A Usage tab whose count is over T, "Preparing…", isn't
+cached until the usage table is ready (P-27c).
 _(Q13)_ Including the generation number in the key means a reload invalidates entries in every worker without
 coordination. Pages differ for admins (the navigation bar's admin link, 2.9), so the key must also include whether
 the user is an admin, or the cache must hold pages without the frame's per-user part and add it after the lookup
@@ -1332,6 +1430,7 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | `tree/{hierarchy}` | Tree root page, `hierarchy` one of `classes`, `object-properties`, `data-properties` and `annotation-properties` (the navigation bar links them); `?node=` returns one node's children (htmx fragment) |
 | `iri?iri=…` | Fallback entity URLs (Q1b) |
 | `hash?path=…&fragment=…` | The page for a hash URL's path and fragment, for the hash-IRI script ([2.3](#23-iri--url-mapping), Lookup); marked `noindex`, as its pages are at their hash URLs |
+| `usage-count?iri=…` | An entity's Usage tab label with its count, "Usage (128)", which its page fetches once it renders ([2.8](#28-entity-pages)); marked `noindex`; a 404 for an IRI with no entity (P-27b) |
 | `static/…` | CSS, htmx, hash-IRI script, page-tabs script |
 | `admin/…` | Upload, status, admin list, sign-in/out |
 | `admin/upload` | The upload form (A-2, A-3) and the load job's status. The form is parsed as it streams in, the file written straight to the jobs volume, never held whole in memory or spooled to a temporary file; its reasoner field must come before its file. The job is claimed only once the file's name has been checked and its first 8 KiB found to look like the syntax the name says, so a malformed request or a mislabelled, OWL/XML or compressed file leaves the served ontology alone. A post a browser sent from another site's page (by `Sec-Fetch-Site`) is refused, against CSRF (P-6) |
@@ -1520,6 +1619,7 @@ go into this document.
 | P-31 | Show load progress: each stage's elapsed time, ROBOT's current step, triples loaded of the total, the import being handled; for pre-caching, each hook's name, elapsed time and rows written (of the expected total where known); and background builds after a load (P-27c's usage table), with their progress | A-5 | P-8 | To do | [#73](https://github.com/jclerman/browl/issues/73) |
 | P-32 | Show the reasoner's own progress (per task, as Protégé does), running ROBOT's reasoning through its Java API with a progress monitor | A-5 | P-31, P-30 | To do | [#74](https://github.com/jclerman/browl/issues/74) |
 | P-36 | Cancel from the admin status page: a running load or rebuild (the job stops, its new store and derived files are removed, and the served ontology is unchanged) or a background build after a load; and a time limit on pre-caching | A-10 | P-22, P-31 | To do | [#111](https://github.com/jclerman/browl/issues/111) |
+| P-37 | Axioms broken across lines by their structure, with leading operators indented by depth, where they have more than one set of parentheses; axiom keywords bold and class-expression constructors in an accent color; on the Overview's Logical axioms panel and the Usage tab (2.8, 2.9); amends U-32 | U-32 | P-15, P-16, P-27 | To do | [#114](https://github.com/jclerman/browl/issues/114) |
 | P-26 | Update README: remove Owlready2 and Fuseki (now the OWLAPI via JPype); replace "cached once built" with the bounded cache | | | Done | [#7](https://github.com/jclerman/browl/pull/7) |
 
 ### Later

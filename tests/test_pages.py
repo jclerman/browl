@@ -139,7 +139,9 @@ def test_loading(client: TestClient, app: FastAPI, path: str) -> None:
     assert f'<meta http-equiv="refresh" content="{RETRY_AFTER_S}">' in response.text
 
 
-@pytest.mark.parametrize("path", ["/example.org/onto", "/_browl/iri?iri=x", "/_browl/hash?path=/x&fragment=y"])
+@pytest.mark.parametrize(
+    "path", ["/example.org/onto", "/_browl/iri?iri=x", "/_browl/hash?path=/x&fragment=y", "/_browl/usage-count?iri=x"]
+)
 def test_loading_without_derived_database(client: TestClient, app: FastAPI, path: str) -> None:
     """Check that the lookup routes serve "loading" when the gate let a request through but no derived database is."""
     run_job(client, app)

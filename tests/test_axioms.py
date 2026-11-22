@@ -29,14 +29,14 @@ NS = "http://example.org/axioms#"
 
 
 def kinds() -> set[str]:
-    """Return every kind of OWL 2 axiom but declarations, annotation assertions and rules, by its OWLAPI interface.
+    """Return every kind of OWL 2 axiom but declarations and rules, by its OWLAPI interface.
 
     The OWLAPI's own names for two kinds are misspelt (`IrrefexiveObjectProperty`, `AnnotationPropertyRangeOf`).
     """
     return {
         str(each.getActualClass().getSimpleName()).removeprefix("OWL").removesuffix("Axiom")
         for each in jpype.JClass("org.semanticweb.owlapi.model.AxiomType").AXIOM_TYPES
-        if str(each.getName()) not in {*axioms._LEFT_OUT, "Rule"}
+        if str(each.getName()) not in {"Declaration", "Rule"}
     }
 
 
@@ -238,6 +238,9 @@ def synthetic() -> list[Any]:
         factory.getOWLDataOneOf(items(factory.getOWLLiteral("a"))),
         *(factory.getOWLDatatypeRestriction(integer, each) for each in restrictions),
     ]
+    note = factory.getOWLAnnotationProperty(create(f"{NS}note"))
+    nested = factory.getOWLAnnotation(note, create(f"{NS}V"), items(factory.getOWLAnnotation(note, anonymous)))
+    annotations = items(nested, factory.getOWLAnnotation(note, factory.getOWLLiteral("why")))
     variable = factory.getSWRLVariable(create("urn:swrl#x"))
     rule = factory.getSWRLRule(
         items(factory.getSWRLClassAtom(a, variable)), items(factory.getSWRLClassAtom(b, variable))
@@ -268,6 +271,9 @@ def synthetic() -> list[Any]:
         factory.getOWLDifferentIndividualsAxiom(items(i, anonymous)),
         factory.getOWLDatatypeDefinitionAxiom(custom, data_union),
         factory.getOWLSubAnnotationPropertyOfAxiom(factory.getRDFSLabel(), factory.getRDFSComment()),
+        factory.getOWLAnnotationAssertionAxiom(note, anonymous, factory.getOWLLiteral("anonymous")),
+        factory.getOWLAnnotationAssertionAxiom(note, create(f"{NS}A"), anonymous),
+        factory.getOWLSubClassOfAxiom(a, b, annotations),  # annotations nested, an anonymous individual among them
         rule,
     ]
 
@@ -294,7 +300,7 @@ def compared() -> list[Reference]:
     every = [
         axiom.getAxiomWithoutAnnotations()
         for axiom in ontology.getAxioms()
-        if str(axiom.getAxiomType().getName()) not in axioms._LEFT_OUT
+        if str(axiom.getAxiomType().getName()) != "Declaration"
     ]
     renderer = reference_renderer()
     return [
@@ -359,6 +365,7 @@ OWN_NODE_TYPES = {
     "Literal",
     "ObjectInverseOf",
     "FacetRestriction",
+    "Annotation",
     "OtherAxiom",
 }
 """Node types with no counterpart among the OWLAPI's kinds of axiom, class expression and data range."""
@@ -387,7 +394,8 @@ def test_facets() -> None:
 def test_every_kind(rendered: tuple[list[owl.Axiom], dict[str, list[owl.Axiom]]]) -> None:
     """Check that the test ontology has every kind of axiom, each on one line."""
     every, _ = rendered
-    assert {axiom.kind for axiom in every} == kinds() | {"Rule"}  # a rule's kind, though no `NodeType`'s
+    # A rule's kind, though no `NodeType`'s; `whole` leaves out annotation assertions, as an Overview does.
+    assert {axiom.kind for axiom in every} == (kinds() - {"AnnotationAssertion"}) | {"Rule"}
     for axiom in every:
         assert axiom.manchester
         assert "\n" not in axiom.manchester
@@ -683,6 +691,63 @@ def test_annotations_collapse() -> None:
     ]
 
 
+ANNOTATED = "".join(
+    [
+        f"<{NS}A> <{RDF}type> <{OWL}Class> .\n<{NS}B> <{RDF}type> <{OWL}Class> .\n",
+        f"<{NS}note> <{RDF}type> <{OWL}AnnotationProperty> .\n<{NS}A> <{RDFS}subClassOf> <{NS}B> .\n",
+        f"_:ax <{RDF}type> <{OWL}Axiom> .\n_:ax <{OWL}annotatedSource> <{NS}A> .\n",
+        f"_:ax <{OWL}annotatedProperty> <{RDFS}subClassOf> .\n_:ax <{OWL}annotatedTarget> <{NS}B> .\n",
+        f'_:ax <{NS}note> "why" .\n_:ax <{NS}note> <{NS}V> .\n_:ax <{NS}note> _:x .\n',
+        f"_:an <{RDF}type> <{OWL}Annotation> .\n_:an <{OWL}annotatedSource> _:ax .\n",
+        f"_:an <{OWL}annotatedProperty> <{NS}note> .\n_:an <{OWL}annotatedTarget> <{NS}V> .\n",
+        f'_:an <{NS}note> "nested" .\n',
+    ]
+).encode()
+"""`A SubClassOf B`, annotated with a literal, an IRI (itself annotated) and an anonymous individual."""
+
+
+def converted_annotated(ntriples: bytes) -> list[owl.AnyAxiom]:
+    """Return the axioms but declarations that N-Triples parse as, with their annotations."""
+    with owlapi.ntriples_ontology(ntriples) as ontology:
+        found = [axiom for axiom in ontology.getAxioms() if str(axiom.getAxiomType().getName()) != "Declaration"]
+    return axioms.convert_axioms(found)
+
+
+def test_axiom_annotations() -> None:
+    """Check that an axiom keeps its annotations, sorted, nested ones under theirs, anonymous individuals relabelled."""
+    for _ in range(2):
+        [axiom] = asyncio.run(owlapi.run_java(converted_annotated, ANNOTATED))
+        assert axiom.manchester == f"<{NS}A> SubClassOf <{NS}B>"
+        shown = [
+            (owl.manchester_text(each.manchester_tokens()).replace(NS, ""), len(each.annotations))
+            for each in axiom.annotations
+        ]
+        assert shown == [("<note> <V>", 1), ("<note> _:b1", 0), ('<note> "why"', 0)]  # in the OWLAPI's order
+        [inner] = axiom.annotations[0].annotations
+        assert owl.manchester_text(inner.manchester_tokens()).replace(NS, "") == '<note> "nested"'
+        assert axiom.without_annotations() == owl.SubClassOf(sub=axiom.sub, super=axiom.super)
+        assert f"{NS}V" in axiom.iris()
+
+
+def relative_annotation() -> list[owl.AnyAxiom]:
+    """Convert `A SubClassOf B` annotated with a relative IRI, which the data factory makes but a node refuses."""
+    factory = jpype.JClass("org.semanticweb.owlapi.apibinding.OWLManager").getOWLDataFactory()
+    create = jpype.JClass("org.semanticweb.owlapi.model.IRI").create
+    note = factory.getOWLAnnotation(factory.getOWLAnnotationProperty(create(f"{NS}note")), create("relative"))
+    a, b = (factory.getOWLClass(create(f"{NS}{name}")) for name in "AB")
+    return axioms.convert_axioms(
+        [factory.getOWLSubClassOfAxiom(a, b, jpype.JClass("java.util.Collections").singleton(note))]
+    )
+
+
+def test_unconvertible_annotations(caplog: pytest.LogCaptureFixture) -> None:
+    """Check that an axiom whose annotations a node refuses is shown without them, and that it's logged."""
+    with caplog.at_level(logging.WARNING, logger="browl.axioms"):
+        [axiom] = asyncio.run(owlapi.run_java(relative_annotation))
+    assert (axiom.manchester, axiom.annotations) == (f"<{NS}A> SubClassOf <{NS}B>", ())
+    assert "Not showing an axiom's annotations, as browl can't hold them as nodes" in caplog.text
+
+
 @pytest.mark.fuseki
 @pytest.mark.anyio
 async def test_empty_fragment(fuseki_url: str, dataset: str) -> None:
@@ -727,6 +792,7 @@ ENTITIES = [
     (f"{NS}Person", EntityType.CLASS),
     (f"{NS}Dog", EntityType.CLASS),
     (f"{NS}Adult", EntityType.CLASS),
+    (f"{NS}Mineral", EntityType.CLASS),
     (f"{NS}partOf", EntityType.OBJECT_PROPERTY),
     (f"{NS}hasPart", EntityType.OBJECT_PROPERTY),
     (f"{NS}hasUncle", EntityType.OBJECT_PROPERTY),
@@ -757,13 +823,14 @@ def test_page(fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) ->
         animal = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "Animal", "panel": "1"}).text
         adult = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "Adult", "panel": "1"}).text
         part_of = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "partOf", "panel": "1"}).text
+        mineral = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "Mineral", "panel": "1"}).text
     heart_link = '<a href="/axioms#Heart"><bdi>&lt;b&gt;Heart&lt;/b&gt; &amp; &#34;soul&#34;</bdi></a>'
     keyword = '<span class="keyword">{}</span>'.format
     assert re.search(r'<dt>SubClass Of</dt>\s*<dd dir="ltr"><a href="/axioms#Organ"><bdi>organ</bdi></a></dd>', page)
     assert (
         f'<dd dir="ltr"><a href="/axioms#hasPart"><bdi>http://example.org/axioms#hasPart</bdi></a> {keyword("some")} '
-        f'{heart_link} {keyword("SubClassOf")} <code dir="ltr">&lt;{NS}Vertebrate&gt;</code></dd>'
-    ) in page  # a general class axiom, shown whole
+        f'<mark>{heart_link}</mark> {keyword("SubClassOf")} <code dir="ltr">&lt;{NS}Vertebrate&gt;</code></dd>'
+    ) in page  # a general class axiom, shown whole, the entity highlighted
     assert f"{keyword('value')} <bdi>&#34;see &lt;{NS}Dog&gt; &amp; \\&#34;friends\\&#34;&#34;@en</bdi>" in person
     label = re.escape('<bdi class="value">&lt;b&gt;Heart&lt;/b&gt; &amp; &#34;soul&#34;</bdi>')
     assert re.search(rf'<dt><code dir="ltr">rdfs:label</code></dt>\s*<dd>{label}</dd>', page)  # the annotations panel
@@ -788,3 +855,9 @@ def test_page(fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) ->
     has_part = f'<a href="/axioms#hasPart"><bdi>{NS}hasPart</bdi></a>'
     assert re.search(rf'<dt>Characteristics</dt>\s*<dd dir="ltr">{keyword("Transitive")}</dd>', part_of)
     assert re.search(rf'<dt>Inverse Of</dt>\s*<dd dir="ltr">{has_part}</dd>', part_of)
+    # The entity is highlighted in its axioms, but not in its annotations: Mineral's own `rdfs:seeAlso Mineral`.
+    annotations, axioms = mineral.split('<section class="axioms panel"')
+    mineral_link = f'<a href="/axioms#Mineral"><bdi>{NS}Mineral</bdi></a>'
+    assert mineral_link in annotations and "<mark>" not in annotations
+    assert axioms.count(f"<mark>{mineral_link}</mark>") == 1  # in a general class axiom
+    assert "<mark>" not in part_of

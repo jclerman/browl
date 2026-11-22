@@ -5,16 +5,21 @@ up in the derived database. Two routes under the reserved prefix serve what a pa
 by its IRI (fallback URLs, and each of the IRIs that share a URL), and `hash?path=…&fragment=…`, which the hash-IRI
 script (`static/hash.js`) fetches for the entity named by the URL's fragment, which the server never sees.
 
-Entity pages have tabs (`browl.tabs`): the Overview tab (`browl.overview`), and the Usage tab, a placeholder until P-27,
-as the home page is until P-17.
+Entity pages have tabs (`browl.tabs`): the Overview tab (`browl.overview`), and the Usage tab (`browl.usage_tab`), paged
+by `page=…`, whose label's count a third route serves, `usage-count?iri=…`, once the page has rendered. The home page is
+a placeholder until P-17.
 """
 
+import dataclasses
+import html
+import re
 import sqlite3
 import urllib.parse
 from dataclasses import dataclass
+from typing import Any
 
 from fastapi import APIRouter, Request
-from fastapi.responses import Response
+from fastapi.responses import HTMLResponse, Response
 from fastapi.routing import APIRoute
 from starlette.routing import Match
 from starlette.types import Scope
@@ -33,17 +38,40 @@ from browl.jobs import JobState
 from browl.links import EntityLink, entity_name
 from browl.overview import read_overview
 from browl.pages import app_path, cut_name, href, is_under, link_root, read_derived, templates
-from browl.tabs import TAB_PARAM, Tab, TabNotFoundError, TabQuery, choose_tab, read_tab_query, tab_links, with_query
+from browl.tabs import (
+    TAB_PARAM,
+    Tab,
+    TabLink,
+    TabNotFoundError,
+    TabQuery,
+    choose_tab,
+    read_tab_query,
+    tab_links,
+    with_query,
+)
 from browl.urls import FALLBACK_PATH, fallback_path
+from browl.usage_tab import USAGE_LABEL, PageNotFoundError, UsageTab, read_count, read_usage_tab, usage_label
 
 HASH_PATH = "hash"
 """The hash-IRI script's lookup route's path under the reserved prefix."""
 
+USAGE_COUNT_PATH = "usage-count"
+"""The route's path under the reserved prefix that serves an entity's Usage tab label, with its count."""
+
 OVERVIEW = "overview"
 """The Overview tab's slug."""
 
-ENTITY_TABS = (Tab(OVERVIEW, "Overview"), Tab("usage", "Usage"))
+USAGE = "usage"
+"""The Usage tab's slug."""
+
+PAGE_PARAM = "page"
+"""The query parameter that names a page of the Usage tab, from 1; absent for the first."""
+
+ENTITY_TABS = (Tab(OVERVIEW, "Overview"), Tab(USAGE, USAGE_LABEL))
 """An entity page's tabs (U-28); the first is shown by default."""
+
+_PAGE_NUMBER = re.compile(r"[1-9][0-9]{0,8}")
+"""A page number `page=…` may give: a positive integer, without a sign or leading zeros, so each page has one URL."""
 
 PANEL_HEADERS = {"X-Robots-Tag": "noindex"}
 """The headers of a tab panel served alone, which isn't a page."""
@@ -135,6 +163,63 @@ class _TabUrls:
     panel: str | None = None
 
 
+@dataclass(frozen=True)
+class _Pager:
+    """The Usage tab's links to other pages, and its form to go to a page.
+
+    Attributes:
+        previous: The previous page's URL, root-relative; None on the first.
+        next: The next page's URL, root-relative; None on the last.
+        action: The form's URL, root-relative, without its query, which the form's fields replace.
+        fields: The form's hidden fields: the page URL's own query, and the tab.
+    """
+
+    previous: str | None
+    next: str | None
+    action: str
+    fields: list[tuple[str, str]]
+
+
+def _pager(request: Request, at: _TabUrls, usage: UsageTab) -> _Pager | None:
+    """Return the Usage tab's paging, if it has more than one page."""
+    if usage.pages is None or usage.pages < 2:
+        return None
+
+    def page_href(page: int) -> str:
+        params = [(TAB_PARAM, USAGE), *([(PAGE_PARAM, str(page))] if page > 1 else [])]
+        return href(request, with_query(at.page, params), at.fragment)
+
+    path, _, query = at.page.partition("?")
+    fields = [*urllib.parse.parse_qsl(query, keep_blank_values=True), (TAB_PARAM, USAGE)]
+    return _Pager(
+        previous=page_href(usage.page - 1) if usage.page > 1 else None,
+        next=page_href(usage.page + 1) if usage.page < usage.pages else None,
+        action=href(request, path, at.fragment),
+        fields=fields,
+    )
+
+
+def _page_number(request: Request) -> int | None:
+    """Return the Usage tab's page a request asks for, 1 if none; None if it repeats `page` or isn't a page number."""
+    values = request.query_params.getlist(PAGE_PARAM)
+    if not values:
+        return 1
+    if len(values) > 1 or not _PAGE_NUMBER.fullmatch(values[0]):
+        return None
+    return int(values[0])
+
+
+def _usage_label(request: Request, links: list[TabLink], iri: str, count: int | None) -> list[TabLink]:
+    """Return tab links with the Usage tab's count: in its label if it's known, else fetched once the page renders."""
+    changes: dict[str, Any]  # TabLink's fields
+    if count is not None:
+        changes = {"tab": Tab(USAGE, usage_label(count))}
+    else:
+        prefix: str = request.app.state.settings.reserved_prefix
+        changes = {"label_url": href(request, with_query(f"/{prefix}/{USAGE_COUNT_PATH}", [("iri", iri)]))}
+    return [dataclasses.replace(link, **changes) if link.tab.slug == USAGE else link for link in links]
+
+
 def not_found(request: Request) -> Response:
     """Return the "not found" page (U-14), with status 404."""
     return templates.TemplateResponse(request, "not_found.html", {}, status_code=404)
@@ -167,7 +252,8 @@ async def _page(
         hash_path: The URL's path, when hash entities share it, so the page includes the hash-IRI script.
         noindex: Whether to ask search engines not to index the page, which is also at another URL.
         lenient: Whether to show the first tab rather than 404 a tab the page lacks (`choose_tab`); always so for a
-            page with the hash-IRI script.
+            page with the hash-IRI script, which also shows the Usage tab's first page rather than 404 a page it
+            lacks, as its fragment's entity may have it.
     """
     hash_script = None if hash_path is None else _hash_script(request, prefix, hash_path, prefix_only=False)
     common = {"hash_script": hash_script, "noindex": noindex}
@@ -191,15 +277,28 @@ async def _page(
     links = tab_links(tabs, tab, href(request, at.page), at.fragment, href(request, at.panel or at.page))
     entity = entities[0]
     types = [TYPE_LABELS[each.type] for each in entities]
-    context: dict[str, object] = {
-        "entity": entity,
-        "name": names[entity.iri],
-        "types": types,
-        "tab": tab,
-        "tabs": links,
-    }
+    context: dict[str, object] = {"entity": entity, "name": names[entity.iri], "types": types, "tab": tab}
+    count = None
     if tab.slug == OVERVIEW:
         context["overview"] = await read_overview(request, state, entity.iri)
+    elif tab.slug == USAGE:
+        page = _page_number(request)
+        if page == 1 and PAGE_PARAM in request.query_params and not query.panel and at.panel is None:
+            # The first page's URL is without `page`, so each page has one URL; a fragment is kept by the browser.
+            location = href(request, with_query(at.page, [(TAB_PARAM, USAGE)]), at.fragment)
+            return Response(status_code=301, headers={"Location": location})
+        if page is None and hash_path is None:
+            return not_found(request)
+        try:
+            usage = await read_usage_tab(request, state, entity.iri, page or 1)
+        except PageNotFoundError:
+            if hash_path is None:
+                return not_found(request)
+            usage = await read_usage_tab(request, state, entity.iri, 1)
+        context["usage"] = usage
+        context["pager"] = _pager(request, at, usage)
+        count = usage.count
+    context["tabs"] = _usage_label(request, links, entity.iri, count)
     if query.panel:
         return templates.TemplateResponse(request, "entity_panel.html", context, headers=PANEL_HEADERS)
     return templates.TemplateResponse(request, "entity.html", context | common)
@@ -235,8 +334,24 @@ async def entity_by_iri(request: Request, iri: str = "") -> Response:
     # Not a RedirectResponse, which would percent-encode characters such as `|` that stored URLs keep. A known tab is
     # kept.
     known = query.tab in {tab.slug for tab in ENTITY_TABS}
-    location = with_query(entity.path, [(TAB_PARAM, query.tab)] if known and query.tab is not None else [])
+    params = [(TAB_PARAM, query.tab)] if known and query.tab is not None else []
+    if query.tab == USAGE:
+        params += [(PAGE_PARAM, page) for page in request.query_params.getlist(PAGE_PARAM)]
+    location = with_query(entity.path, params)
     return Response(status_code=302, headers={"Location": href(request, location, entity.fragment)})
+
+
+@reserved_router.api_route(f"/{USAGE_COUNT_PATH}", methods=["GET", "HEAD"], include_in_schema=False)
+async def usage_count(request: Request, iri: str = "") -> Response:
+    """Serve the Usage tab's label of the entity with IRI `iri`, with its count ("Usage (128)"), which its page fetches.
+
+    It's "Usage" if the count fails (`browl.usage_tab.read_count`).
+    """
+    state = await request.app.state.jobs.current()
+    if not await read_derived(request, lambda connection: entities_with_iri(connection, iri), state):
+        return not_found(request)
+    count = await read_count(request, state, iri)
+    return HTMLResponse(html.escape(usage_label(count)), headers=PANEL_HEADERS)
 
 
 @reserved_router.api_route(f"/{HASH_PATH}", methods=["GET", "HEAD"], include_in_schema=False)

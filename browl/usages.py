@@ -20,10 +20,11 @@ import time
 from dataclasses import dataclass
 from enum import StrEnum
 
-from browl.derived import DerivedReader, UsageRootKind
-from browl.fuseki import FusekiClient, SparqlError, filled_query
+from browl.derived import DerivedReader, NotCurrentError, UsageRootKind
+from browl.fuseki import UNION_FROM, FusekiClient, SparqlError, dataset_clause, filled_query
+from browl.jobs import JobState
 from browl.loading import dataset_name
-from browl.precache.core import PREFIXES, logged_iri, sparql_file
+from browl.precache.core import PREFIXES, has_loaded_imports, logged_iri, sparql_file
 from browl.rdf import IRI, BlankNode, Literal, Term
 from browl.tasks import task_group
 
@@ -128,6 +129,21 @@ class UsageStore:
         """
         filled = filled_query(query, self.dataset_clause, {_ENTITY: f"<{IRI(iri)}>"})
         return filled if limit is None else f"{filled}LIMIT {limit}\n"
+
+
+def ready_store(state: JobState) -> tuple[int, str]:
+    """Return a job state's ready generation, and the dataset clause that makes its queries see its imports.
+
+    Raises:
+        NotCurrentError: No generation is ready.
+    """
+    generation = state.ready_generation
+    if generation is None:
+        raise NotCurrentError("no generation is ready")
+    # Pages are served only once the latest job is ready, so its imports are the ready generation's; if a new job has
+    # started meanwhile, seeing the imports' graphs too is always right, if slower.
+    clause = dataset_clause(has_loaded_imports(state.imports)) if state.generation == generation else UNION_FROM
+    return generation, clause
 
 
 class UsageCounts:

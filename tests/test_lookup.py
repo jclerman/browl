@@ -16,6 +16,7 @@ from browl.derived import EntityType, read_meta
 from browl.jobs import Stage
 from browl.lookup import request_path
 from browl.pages import MAX_NAME_CHARS, STATIC_DIR
+from browl.usage_tab import PageNotFoundError, UsageTab
 from tests.helpers import derived_stage, iso, make_app
 
 pytestmark = pytest.mark.usefixtures("data_dir")
@@ -453,9 +454,11 @@ def test_tab_links_under_root_path(app: FastAPI) -> None:
     """Check that the tabs' links include the root path the app is served under."""
     with TestClient(app, root_path="/root") as client:
         run(client, app)
-        tabs = parse_tabs(client.get("/root/other.org/y").text).tabs
+        page = client.get("/root/other.org/y").text
+    tabs = parse_tabs(page).tabs
     assert [tab["href"] for tab in tabs] == ["/root/other.org/y", "/root/other.org/y?tab=usage"]
     assert tabs[1]["hx-get"] == "/root/other.org/y?tab=usage&panel=1"
+    assert 'hx-get="/root/_browl/usage-count?iri=http%3A%2F%2Fother.org%2Fy"' in page  # the Usage label's count
 
 
 @pytest.mark.parametrize(
@@ -468,7 +471,7 @@ def test_panel_alone(client: TestClient, path: str) -> None:
     assert response.status_code == 200
     assert response.headers["X-Robots-Tag"] == "noindex"
     assert response.headers["Content-Type"].startswith("text/html")
-    assert "Where other entities use this one" in response.text
+    assert '<section class="usage">' in response.text
     for frame in ["<html", "<main", 'role="tablist"', 'role="tabpanel"', "site-bar"]:
         assert frame not in response.text
 
@@ -532,6 +535,38 @@ def test_tab_ignored(client: TestClient, path: str, selected: str | None) -> Non
     response = client.get(path)
     assert response.status_code == 200
     assert selected_tab(response.text) == selected
+
+
+def test_usage_page_numbers(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check the Usage tab's page numbers: `page=1` redirects to the URL without it, so each page has one URL.
+
+    A page past the last is a 404, but on a page with the hash-IRI script, which its fragment's entity may have, the
+    script is served, with the URL's own entity's first page.
+    """
+
+    async def read_usage_tab(request: object, state: object, iri: str, page: int) -> UsageTab:
+        if page > 2:
+            raise PageNotFoundError(f"page {page} of 2")
+        return UsageTab(count=60, page=page, pages=2, groups=[])
+
+    monkeypatch.setattr(browl.lookup, "read_usage_tab", read_usage_tab)
+    first = client.get("/other.org/y?tab=usage&page=1", follow_redirects=False)
+    assert (first.status_code, first.headers["Location"]) == (301, "/other.org/y?tab=usage")
+    fallback = client.get(iri_link("urn:example:fallback") + "&tab=usage&page=1", follow_redirects=False)
+    assert (fallback.status_code, fallback.headers["Location"]) == (
+        301,
+        iri_link("urn:example:fallback") + "&tab=usage",
+    )
+    assert client.get("/other.org/y?tab=usage&page=1&panel=1").status_code == 200  # a panel, which htmx fetches
+    assert client.get("/other.org/y?tab=usage&page=2").status_code == 200
+    assert client.get("/other.org/y?tab=usage&page=3").status_code == 404
+    for page in ("3", "x"):
+        hashed = client.get(f"/other.org/z?tab=usage&page={page}")  # z#D's URL too
+        assert hashed.status_code == 200 and HASH_SCRIPT in hashed.text
+        assert 'value="1"' in hashed.text
+    params = {"path": "/other.org/z", "fragment": "D", "tab": "usage"}
+    assert client.get("/_browl/hash", params={**params, "page": "3"}).status_code == 404  # the script's lookup
+    assert client.get("/_browl/hash", params={**params, "page": "1"}).status_code == 200
 
 
 @pytest.mark.parametrize(("tab", "query"), [("usage", "?tab=usage"), ("nope", "")])

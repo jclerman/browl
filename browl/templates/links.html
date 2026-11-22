@@ -12,3 +12,11 @@
 {%- if link is not none and link.href is not none %}{{ entity_link(link) }}
 {%- else %}<code dir="ltr">{{ shown_name(iri, links, text) | bidi_encoded | cut_text(MAX_IRI_CHARS) }}</code>{% endif -%}
 {%- endmacro %}
+
+{# The name `named_iri` shows for an IRI, as text alone, not a link: for text screen readers read but the page doesn't
+   show (`.visually-hidden`), which shouldn't hold a link to tab to. #}
+{% macro named_text(iri, links, text=none) -%}
+{%- set link = links.get(iri) -%}
+{%- if link is not none and link.href is not none %}<bdi>{{ link.name }}</bdi>
+{%- else %}<bdi dir="ltr">{{ shown_name(iri, links, text) | bidi_encoded | cut_text(MAX_IRI_CHARS) }}</bdi>{% endif -%}
+{%- endmacro %}

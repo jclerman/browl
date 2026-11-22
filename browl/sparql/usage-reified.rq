@@ -1,0 +1,10 @@
+# The axioms that a Usage tab page's reified axioms annotate, by the reified axioms' store labels, `<_:label>`, which
+# Jena accepts (browl.usage_tab; DESIGN.md §2.8). Their blank targets come with the reified axioms' closures
+# (usage-closures.rq). browl.usage_tab fills in the labels, and adds the dataset clause before WHERE.
+CONSTRUCT { ?source ?property ?target }
+WHERE {
+  VALUES ?axiom { }
+  ?axiom owl:annotatedSource ?source ;
+    owl:annotatedProperty ?property ;
+    owl:annotatedTarget ?target
+}

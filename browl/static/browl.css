@@ -10,6 +10,7 @@
   --border: #d8d6cc;
   --accent: #3d6b8c;
   --danger: #a33a32;
+  --mark-bg: #f7eab8; /* the page's entity, in an axiom: --fg 11.7:1, --accent 4.7:1 on it */
   --font-text: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --space: 1rem;
@@ -28,6 +29,7 @@
     --border: #3a3d40;
     --accent: #7fa8c6;
     --danger: #e08a80;
+    --mark-bg: #3d3822; /* --fg 8.5:1, --accent 4.7:1 */
   }
 }
 
@@ -454,15 +456,119 @@ code {
 }
 
 .lang,
-.implied {
+.implied,
+.continued {
   color: var(--muted);
   font-size: 0.8em;
 }
 
-/* An entity's axioms (U-3): keywords lighter than the entity names. */
+/* An entity's axioms (U-3): keywords lighter than the entity names; the page's entity highlighted, and bold, so it
+   isn't marked by color alone. */
 
 .keyword {
   color: var(--muted);
+}
+
+.frame mark {
+  padding: 0 0.15em;
+  border-radius: 2px;
+  background: var(--mark-bg);
+  color: inherit;
+  font-weight: 600;
+}
+
+/* Text for screen readers alone. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The Usage tab (U-26): the paging at the top; then a frame of subjects and their axioms; an axiom's annotations, when
+   shown, beneath it in small text, nested ones indented further. */
+
+/* Three columns: the subject, the keyword (`SubClassOf`, an annotation assertion's property, …) and the rest of the
+   axiom, each line a subgrid of the last two, so the keywords line up down the tab. A line that doesn't start with its
+   subject and a keyword spans both, as do the annotations beneath a line, indented. Without subgrid, a line is the
+   keyword and the rest, as text. */
+.frame.usage-frame {
+  grid-template-columns: fit-content(20rem) fit-content(16rem) minmax(0, 1fr);
+}
+
+.frame.usage-frame dd {
+  position: relative; /* holds its visually hidden subject, which would otherwise make the page scroll */
+  grid-column: 2 / -1;
+  max-width: none; /* axioms, not prose */
+}
+
+@supports (grid-template-columns: subgrid) {
+  .frame.usage-frame dd {
+    display: grid;
+    grid-template-columns: subgrid;
+    padding-left: 0;
+    text-indent: 0;
+  }
+
+  .usage-keyword {
+    grid-column: 1;
+    min-width: 0;
+  }
+
+  .usage-axiom {
+    grid-column: 2;
+    min-width: 0;
+    padding-left: calc(var(--space) * 1.5);
+    text-indent: calc(var(--space) * -1.5);
+  }
+
+  .usage-whole .usage-axiom,
+  .usage-line .axiom-annotations {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 40rem) {
+  .frame.usage-frame {
+    grid-template-columns: fit-content(40%) minmax(0, 1fr);
+  }
+
+  .frame.usage-frame dt,
+  .frame.usage-frame dd {
+    grid-column: 1 / -1;
+  }
+}
+
+.axiom-annotations {
+  margin: 0;
+  padding-left: calc(var(--space) * 1.5);
+  list-style: none;
+  text-indent: 0;
+  font-size: 0.85em;
+}
+
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space);
+  align-items: baseline;
+  margin-bottom: var(--space);
+}
+
+.pager form {
+  display: flex;
+  gap: calc(var(--space) / 2);
+  align-items: baseline;
+}
+
+.pager-off {
+  color: var(--muted); /* Previous on the first page, Next on the last: there, so nothing moves from page to page */
+}
+
+.pager input[type="number"] {
+  width: 6em;
 }
 
 /* The window-filling frame (DESIGN.md §2.9, U-30): on screen, an entity page fills the window, and the page itself
@@ -553,6 +659,19 @@ code {
       & .panel h2 {
         position: sticky;
         top: 0;
+        background: var(--bg);
+      }
+
+      /* The Usage tab's paging stays in view as its usages scroll beneath it. It's pulled up over the tab panel's
+         top padding, and sticks that far up, so nothing scrolls into the gap above it. */
+      & .pager {
+        position: sticky;
+        top: calc(var(--space) * -1);
+        margin-top: calc(var(--space) * -1);
+        padding-top: var(--space);
+        z-index: 1;
+        padding-bottom: calc(var(--space) / 2);
+        border-bottom: 1px solid var(--border);
         background: var(--bg);
       }
     }
