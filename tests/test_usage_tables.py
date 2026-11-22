@@ -2,6 +2,7 @@
 
 import asyncio
 import sqlite3
+import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, closing
 from pathlib import Path
@@ -373,6 +374,10 @@ def test_kinds_cover_vocabulary() -> None:
     assert len(set(browl.precache.usage_table.KINDS.values())) == len(browl.precache.usage_table.KINDS)
 
 
+LONG = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n LIMIT 100000000) SELECT count(*) FROM n"
+"""A statement that runs for many seconds."""
+
+
 async def test_cancel_interrupts(tmp_path: Path) -> None:
     """Check that cancelling a build interrupts the statement it's running, so it ends at once, leaving no files."""
     derived_file(tmp_path, 1)
@@ -388,6 +393,28 @@ async def test_cancel_interrupts(tmp_path: Path) -> None:
     async with asyncio.timeout(5):
         with pytest.raises(asyncio.CancelledError):
             await task
+    assert list((tmp_path / "usages").iterdir()) == []
+
+
+async def test_cancel_stops_later_statements(tmp_path: Path) -> None:
+    """Check that a statement that starts after a build is cancelled, as its queued work goes on, stops at once."""
+    derived_file(tmp_path, 1)
+
+    def later(connection: sqlite3.Connection) -> None:
+        time.sleep(0.3)  # Python work, e.g. a sort, which the interrupt doesn't stop
+        connection.execute(LONG).fetchone()
+
+    async def build() -> None:
+        async with on_thread(build_file(tmp_path, 1, "k"), "test", interrupt=True) as db:
+            await db.run(later)
+
+    task = asyncio.create_task(build())
+    await asyncio.sleep(0.1)
+    task.cancel()
+    cancelled = time.monotonic()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert time.monotonic() - cancelled < 2
     assert list((tmp_path / "usages").iterdir()) == []
 
 

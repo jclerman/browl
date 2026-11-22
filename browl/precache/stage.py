@@ -37,6 +37,9 @@ FUSEKI_WAIT_S = 120.0
 FUSEKI_RETRY_S = (0.5, 5.0)
 """The first and the longest wait between pings while waiting for Fuseki; each wait doubles the last."""
 
+INTERRUPT_CHECK_STEPS = 10_000
+"""How many SQLite virtual machine steps an interruptible build's statements take between checks for an interrupt."""
+
 HOOKS: tuple[Hook, ...] = (entities, names, hierarchies, owner_map)
 """The hooks the app runs, in order: a hook may read tables an earlier one filled.
 
@@ -148,11 +151,11 @@ async def on_thread(
         manager: The build, e.g. `browl.derived.build`, which yields a connection.
         name: The thread's name's prefix, which names the build in the log, e.g. "derived-build".
         interrupt: Whether a cancellation interrupts the statement running on the connection
-            (`sqlite3.Connection.interrupt`), so the end needn't wait for it.
+            (`sqlite3.Connection.interrupt`), and any the work queued starts after, so the end needn't wait for them.
     """
     loop = asyncio.get_running_loop()
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=name)
-    building = _Build(manager)
+    building = _Build(manager, interrupt)
     error: BaseException | None = None
     try:
         yield DerivedWriter(executor, await loop.run_in_executor(executor, building.enter))
@@ -178,18 +181,23 @@ async def on_thread(
 class _Build:
     """`derived.build`'s context manager, entered and exited by calls on the connection's thread."""
 
-    def __init__(self, manager: AbstractContextManager[sqlite3.Connection]) -> None:
+    def __init__(self, manager: AbstractContextManager[sqlite3.Connection], interruptible: bool) -> None:
         self._manager = manager
+        self._interruptible = interruptible
+        self._interrupted = False
         self._entered = False
         self._connection: sqlite3.Connection | None = None
 
     def enter(self) -> sqlite3.Connection:
         connection = self._connection = self._manager.__enter__()
         self._entered = True
+        if self._interruptible:  # so a statement that starts after `interrupt` stops too
+            connection.set_progress_handler(lambda: self._interrupted, INTERRUPT_CHECK_STEPS)
         return connection
 
     def interrupt(self) -> None:
-        """Interrupt the statement running on the connection, if any; from any thread."""
+        """Interrupt the statement running on the connection, if any, and any that starts after; from any thread."""
+        self._interrupted = True
         if self._connection is not None:
             self._connection.interrupt()
 
@@ -198,6 +206,8 @@ class _Build:
         if not self._entered:
             return
         self._entered = False
+        if self._connection is not None:
+            self._connection.set_progress_handler(None, 0)  # the end may run statements
         if error is None:
             self._manager.__exit__(None, None, None)
         else:
