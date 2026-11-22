@@ -50,12 +50,15 @@ class TabLink:
         href: Its URL, root-relative, with the page's fragment if it has one.
         panel: The URL of its panel alone, root-relative.
         selected: Whether it's the tab the page shows.
+        label_url: Where its full label is fetched from once the page renders, root-relative, such as a count that
+            would delay the page; None if it's shown in full.
     """
 
     tab: Tab
     href: str
     panel: str
     selected: bool
+    label_url: str | None = None
 
 
 def read_tab_query(request: Request) -> TabQuery | None:

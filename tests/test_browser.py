@@ -507,7 +507,7 @@ def box(locator: Locator) -> FloatRect:
 
 PANEL = re.compile(r"[?&]panel=1(&|$)")
 OVERVIEW_TEXT = "Logical axioms"
-USAGE_TEXT = "Where other entities use this one"
+USAGE_TEXT = "The usages can't be shown just now."  # the tests' app has no Fuseki
 
 
 def tab(page: Page, name: str) -> Locator:
@@ -620,6 +620,45 @@ def test_tab_click_while_loading(page: Page, server: LiveServer) -> None:
     expect(page.get_by_role("tabpanel")).to_contain_text(OVERVIEW_TEXT)
     expect(page).to_have_url(f"{server.url}/example.org/plain")
     assert page.evaluate("window.marker") == 1
+
+
+def test_usage_label_fills_in(page: Page, server: LiveServer) -> None:
+    """Check that the Usage tab's count fills in its label once the page renders, without opening the tab.
+
+    Its panel then opens as before, and keeps the label.
+    """
+    page.route(
+        re.compile(r"/_browl/usage-count\?"), lambda route: route.fulfill(body="Usage (7)", content_type="text/html")
+    )
+    page.goto(f"{server.url}/example.org/plain")
+    expect(tab(page, "Usage")).to_have_text("Usage (7)")
+    expect(tab(page, "Overview")).to_have_attribute("aria-selected", "true")
+    expect(tab(page, "Usage")).to_have_attribute("aria-selected", "false")
+    expect(page).to_have_url(f"{server.url}/example.org/plain")
+    expect(page.get_by_role("tabpanel")).to_contain_text(OVERVIEW_TEXT)
+    with page.expect_request(PANEL):
+        tab(page, "Usage").click()
+    expect(page.get_by_role("tabpanel")).to_contain_text(USAGE_TEXT)
+    expect(tab(page, "Usage")).to_have_attribute("aria-selected", "true")
+    expect(tab(page, "Usage")).to_have_text("Usage (7)")
+    expect(page).to_have_url(f"{server.url}/example.org/plain?tab=usage")
+
+
+def test_usage_label_fails(page: Page, server: LiveServer) -> None:
+    """Check that a failed fetch of the Usage tab's label leaves the label and the page as they are."""
+    failed: list[Route] = []
+
+    def fail(route: Route) -> None:
+        failed.append(route)
+        route.fulfill(status=503, body="Loading", content_type="text/html")
+
+    page.route(re.compile(r"/_browl/usage-count\?"), fail)
+    page.goto(f"{server.url}/example.org/plain")
+    wait_until(page, lambda: bool(failed), "the request for the Usage tab's label")
+    page.wait_for_timeout(100)  # time for htmx and the tabs' script to handle the response
+    expect(page).to_have_url(f"{server.url}/example.org/plain")
+    expect(tab(page, "Usage")).to_have_text("Usage")
+    expect_selected(page, "Overview")
 
 
 def test_tab_keyboard(page: Page, server: LiveServer) -> None:

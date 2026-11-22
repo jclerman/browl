@@ -1,10 +1,15 @@
-{# Page tabs (DESIGN.md §2.9). The `id`s are for ARIA and htmx only: the page has no `#…` links. #}
+{# Page tabs (DESIGN.md §2.9). The `id`s are for ARIA and htmx only: the page has no `#…` links. A label that would
+   delay the page, such as the Usage tab's count, is fetched once it renders (`browl.tabs.TabLink.label_url`). #}
 {% macro tab_list(links, label) -%}
 <div class="tabs" role="tablist" aria-label="{{ label }}">
   {%- for link in links %}
   <a role="tab" id="tab-{{ link.tab.slug }}" href="{{ link.href }}" aria-controls="tab-panel"
      aria-selected="{{ 'true' if link.selected else 'false' }}" hx-get="{{ link.panel }}" hx-target="#tab-panel"
-     hx-sync="closest [role=tablist]:replace">{{ link.tab.label }}</a>
+     hx-sync="closest [role=tablist]:replace">
+    {%- if link.label_url is none %}{{ link.tab.label }}
+    {%- else %}{# fetched once the page renders; its own target and queue, not the tab's #}<span
+      hx-get="{{ link.label_url }}" hx-trigger="load" hx-target="this" hx-swap="outerHTML" hx-sync="this"
+      >{{ link.tab.label }}</span>{% endif %}</a>
   {%- endfor %}
 </div>
 {%- endmacro %}

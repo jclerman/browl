@@ -468,7 +468,7 @@ def test_panel_alone(client: TestClient, path: str) -> None:
     assert response.status_code == 200
     assert response.headers["X-Robots-Tag"] == "noindex"
     assert response.headers["Content-Type"].startswith("text/html")
-    assert "Where other entities use this one" in response.text
+    assert '<section class="usage">' in response.text
     for frame in ["<html", "<main", 'role="tablist"', 'role="tabpanel"', "site-bar"]:
         assert frame not in response.text
 

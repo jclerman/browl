@@ -1,0 +1,9 @@
+# The triples of a Usage tab page's usages that have a blank object: the owner map's triple roots, and a property's
+# usages with a blank object (browl.usage_tab; DESIGN.md §2.8). A blank node is named by its store's label, in the
+# angle brackets after `_:` that Jena accepts. browl.usage_tab fills in the triples, and adds the dataset clause before
+# WHERE.
+CONSTRUCT { ?subject ?predicate ?object }
+WHERE {
+  VALUES (?subject ?predicate ?object) { }
+  ?subject ?predicate ?object
+}

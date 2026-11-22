@@ -62,8 +62,12 @@
     true,
   );
 
-  // The tab that made a request; `detail.elt` is the swap's target in some events, such as htmx:afterSwap.
-  const tabOfRequest = (event) => (event.detail.requestConfig?.elt ?? event.detail.elt)?.closest?.(TAB);
+  // The tab that made a request; `detail.elt` is the swap's target in some events, such as htmx:afterSwap. Not an
+  // element within a tab, such as a label fetched once the page renders, which makes requests of its own.
+  const tabOfRequest = (event) => {
+    const elt = event.detail.requestConfig?.elt ?? event.detail.elt;
+    return elt?.matches?.(TAB) ? elt : null;
+  };
 
   // The selected tab's panel is already shown, so it isn't fetched again.
   document.addEventListener("htmx:beforeRequest", (event) => {

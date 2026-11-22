@@ -1,0 +1,13 @@
+# The declaration types of the IRIs a Usage tab page mentions, so the OWLAPI parses each as the kind of entity it is
+# (browl.usage_tab; DESIGN.md §2.8). Only declarations, unlike entity-types.rq: other types would bring other
+# entities' class assertions and property characteristics into the page (S-7). browl.usage_tab fills in the IRIs, and
+# adds the dataset clause before WHERE.
+CONSTRUCT { ?iri rdf:type ?type }
+WHERE {
+  VALUES ?iri { }
+  VALUES ?type {
+    owl:Class owl:ObjectProperty owl:DatatypeProperty owl:AnnotationProperty owl:NamedIndividual rdfs:Datatype
+    <http://www.w3.org/2003/11/swrl#Variable>
+  }
+  ?iri rdf:type ?type
+}

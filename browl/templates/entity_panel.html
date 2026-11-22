@@ -1,9 +1,10 @@
 {# An entity page's tab panel's content: within the page, or alone for htmx (`panel=1`). The Overview tab is
-   `browl.overview`'s; the Usage tab is a placeholder until P-27. #}
+   `browl.overview`'s; the Usage tab `browl.usage_tab`'s. #}
 {% from "annotations.html" import annotation_list %}
 {% from "axioms.html" import axiom_frame %}
+{% from "usage.html" import usage_panel %}
 {% if tab.slug == "usage" %}
-<p class="note">Where other entities use this one will be shown here.</p>
+{{ usage_panel(usage, pager) }}
 {% else %}
 <div class="overview">
   {{ annotation_list(overview.annotations, overview.links) }}

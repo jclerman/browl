@@ -108,6 +108,21 @@ def shown_name(iri: str, links: Mapping[str, EntityLink], text: str | None = Non
 templates.env.globals["shown_name"] = shown_name
 
 
+def ready_store(state: JobState) -> tuple[int, str]:
+    """Return a job state's ready generation, and the dataset clause that makes its queries see its imports.
+
+    Raises:
+        NotCurrentError: No generation is ready.
+    """
+    generation = state.ready_generation
+    if generation is None:
+        raise NotCurrentError("no generation is ready")
+    # Pages are served only once the latest job is ready, so its imports are the ready generation's; if a new job has
+    # started meanwhile, seeing the imports' graphs too is always right, if slower.
+    clause = dataset_clause(has_loaded_imports(state.imports)) if state.generation == generation else UNION_FROM
+    return generation, clause
+
+
 async def read_overview(request: Request, state: JobState, iri: str) -> Overview:
     """Return an entity's Overview tab, from the store of the job state's ready generation.
 
@@ -123,12 +138,7 @@ async def read_overview(request: Request, state: JobState, iri: str) -> Overview
     Raises:
         NotCurrentError: No generation is ready, or its derived database isn't current (`browl.pages.read_derived`).
     """
-    generation = state.ready_generation
-    if generation is None:
-        raise NotCurrentError("no generation is ready")
-    # Pages are served only once the latest job is ready, so its imports are the ready generation's; if a new job has
-    # started meanwhile, seeing the imports' graphs too is always right, if slower.
-    clause = dataset_clause(has_loaded_imports(state.imports)) if state.generation == generation else UNION_FROM
+    generation, clause = ready_store(state)
     dataset = dataset_name(generation)
     async with task_group() as group:
         annotations_task = group.create_task(_read_annotations(request, dataset, iri, clause))

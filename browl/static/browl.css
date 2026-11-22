@@ -465,6 +465,49 @@ code {
   color: var(--muted);
 }
 
+/* The Usage tab (U-26): a frame of subjects and their axioms; an axiom's annotations, when shown, beneath it in small
+   text, nested ones indented further; then the paging. */
+
+.usage-count {
+  margin-top: 0;
+  color: var(--muted);
+}
+
+.usage-frame dd {
+  max-width: none; /* axioms, not prose */
+}
+
+.continued {
+  color: var(--muted);
+  font-size: 0.8em;
+}
+
+.axiom-annotations {
+  margin: 0;
+  padding-left: calc(var(--space) * 1.5);
+  list-style: none;
+  text-indent: 0;
+  font-size: 0.85em;
+}
+
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space);
+  align-items: baseline;
+  margin-top: var(--space);
+}
+
+.pager form {
+  display: flex;
+  gap: calc(var(--space) / 2);
+  align-items: baseline;
+}
+
+.pager input[type="number"] {
+  width: 6em;
+}
+
 /* The window-filling frame (DESIGN.md §2.9, U-30): on screen, an entity page fills the window, and the page itself
    doesn't scroll. The navigation bar, the header and the tab bar keep their heights, and the tab panel takes the rest;
    it scrolls what doesn't fit, and the Overview's panels scroll within themselves. Medium windows stack the panels at

@@ -5,6 +5,7 @@ HTTP 200, it appends the error as plain text and ends the response normally (DES
 as RDF terms or N-Triples.
 """
 
+import json
 import re
 from dataclasses import dataclass
 from typing import Any, ClassVar, Self
@@ -273,6 +274,24 @@ def check_ntriples_triple(line: str) -> None:
     value, language, direction, datatype = match.groups()[5:]
     if value is not None:
         _literal(value, language, direction, datatype)
+
+
+def ntriples_term(term: IRI | Literal) -> str:
+    r"""Return an IRI or a literal in N-Triples syntax.
+
+    Examples:
+        >>> ntriples_term(Literal('say "hi"\n', RDF_LANG_STRING, "en"))
+        '"say \\"hi\\"\\n"@en'
+        >>> ntriples_term(Literal("1", f"{XSD}integer"))
+        '"1"^^<http://www.w3.org/2001/XMLSchema#integer>'
+    """
+    if isinstance(term, IRI):
+        return f"<{term}>"
+    # JSON escapes '"', '\\' and control characters, line breaks among them, as N-Triples may.
+    text = json.dumps(term.value, ensure_ascii=False)
+    if term.language is None:
+        return f"{text}^^<{term.datatype}>"
+    return f"{text}@{term.language}" + ("" if term.direction is None else f"--{term.direction}")
 
 
 def ntriples_iris(ntriples: bytes) -> set[IRI]:

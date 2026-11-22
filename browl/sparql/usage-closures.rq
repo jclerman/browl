@@ -1,0 +1,10 @@
+# The blank nodes of a Usage tab page's usages, by their store's labels, `<_:label>`, which Jena accepts, with their
+# blank-node closures (DESCRIBE); and, by the path's steps past its zero-length one, which is the node itself, the
+# reified axioms and axiom annotations whose `owl:annotatedSource` they are, or lead to: an annotated general class
+# axiom's annotations, and an annotation's own (browl.usage_tab; DESIGN.md §2.8). browl.usage_tab fills in the labels,
+# and adds the dataset clause before WHERE.
+DESCRIBE ?node
+WHERE {
+  VALUES ?root { }
+  ?node owl:annotatedSource* ?root
+}
