@@ -209,17 +209,17 @@ def _page_number(request: Request) -> int | None:
 
 
 def _usage_label(request: Request, links: list[TabLink], iri: str, count: int | None) -> list[TabLink]:
-    """Return tab links with the Usage tab's count: in its label, if known, else fetched once the page renders."""
+    """Return tab links with the Usage tab's count: in its label if it's known, else fetched once the page renders."""
     prefix: str = request.app.state.settings.reserved_prefix
-    count_url = href(request, with_query(f"/{prefix}/{USAGE_COUNT_PATH}", [("iri", iri)]))
-    return [
-        link
-        if link.tab.slug != USAGE
-        else dataclasses.replace(link, tab=Tab(USAGE, usage_label(count)))
-        if count is not None
-        else dataclasses.replace(link, label_url=count_url)
-        for link in links
-    ]
+    found = []
+    for link in links:
+        if link.tab.slug == USAGE and count is not None:
+            link = dataclasses.replace(link, tab=Tab(USAGE, usage_label(count)))
+        elif link.tab.slug == USAGE:
+            count_url = with_query(f"/{prefix}/{USAGE_COUNT_PATH}", [("iri", iri)])
+            link = dataclasses.replace(link, label_url=href(request, count_url))
+        found.append(link)
+    return found
 
 
 def not_found(request: Request) -> Response:
