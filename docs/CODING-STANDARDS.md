@@ -60,6 +60,9 @@ instructions specific to coding agents. Requirements and architecture are in [`D
   `live_server` fixture, which serves an app on a free local port, since a browser can't reach the `TestClient`. Hold or
   stub responses with `page.route`, so tests of ordering or failures don't depend on timing. `make test` installs the
   headless Chromium (`make browser`); these tests are skipped or fail without it, like those above.
+- **Parallel runs:** `make test` runs the tests in several processes (pytest-xdist), each in any order, so a test
+  mustn't depend on another having run, or share state outside its process: use free ports (`port=0`), temporary
+  directories and unique dataset names. Session fixtures run once per process.
 - **Doctests:** examples in the package's docstrings run as tests (`--doctest-modules`; `testpaths` is `tests` and
   `browl`, so `research/`, whose scripts run when imported, isn't collected). Keep them short and working.
 - **Coverage:** CI fails below 90% line coverage of the `browl` package.

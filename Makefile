@@ -30,9 +30,16 @@ ROBOT_JAR_CACHE := .cache/robot.jar
 # The tools are unpacked into a .part directory first, renamed once complete.
 JENA_STAMP := .cache/jena/bin/tdb2.tdbloader
 
+# The tests run in parallel, in TEST_WORKERS processes (pytest-xdist), each with its own JVM, Fuseki container and
+# Chromium. More than about 4 don't finish sooner: the JVM and Docker work they start competes for the same cores. Set
+# TEST_WORKERS=0 to run them in this one process. TEST_DIST is xdist's --dist, how it hands the workers tests: with
+# worksteal, a worker that runs out takes half of another's remaining tests, about 13% faster here than load's batches.
+TEST_WORKERS ?= 4
+TEST_DIST ?= worksteal
+
 .PHONY: test
-test: $(if $(ROBOT_JAR),,$(ROBOT_JAR_CACHE)) $(if $(JENA_HOME),,$(JENA_STAMP)) browser  ## Run tests with coverage
-	poetry run pytest --cov
+test: $(if $(ROBOT_JAR),,$(ROBOT_JAR_CACHE)) $(if $(JENA_HOME),,$(JENA_STAMP)) browser  ## Run tests with coverage, in parallel (TEST_WORKERS)
+	poetry run pytest --cov --numprocesses $(TEST_WORKERS) --dist $(TEST_DIST)
 
 # Playwright's headless Chromium for the tests marked browser, at the version the locked Playwright pins, in
 # Playwright's own cache; a no-op once it's there. Unlike the downloads below, it has no checksum here: Playwright picks
