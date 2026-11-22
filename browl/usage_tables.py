@@ -8,12 +8,13 @@ keys, so a file another browl built, or built from another derived database, isn
 """
 
 import asyncio
+import functools
 import logging
 import os
 import sqlite3
-import threading
 import time
 from collections.abc import Callable, Iterator, Mapping
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import closing, contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -180,12 +181,42 @@ class _Build:
     progress: Progress
 
 
+class _Reader:
+    """A generation's table, read on a thread of its own, which opens its connection at the first read."""
+
+    def __init__(self, data_dir: Path, generation: int, key: str) -> None:
+        self.generation = generation
+        self._open = functools.partial(connect, data_dir, generation, key)
+        self._connection: sqlite3.Connection | None = None
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="usage-read")
+
+    async def read[T](self, function: Callable[[sqlite3.Connection], T]) -> T:
+        return await asyncio.get_running_loop().run_in_executor(self._executor, self._read, function)
+
+    def _read[T](self, function: Callable[[sqlite3.Connection], T]) -> T:
+        if self._connection is None:
+            self._connection = self._open()
+        return function(self._connection)
+
+    def close(self) -> Future[None]:
+        """Close the connection once the reads queued end; no read may follow."""
+        closed = self._executor.submit(self._close)
+        self._executor.shutdown(wait=False)
+        return closed
+
+    def _close(self) -> None:
+        if self._connection is not None:
+            with suppress(sqlite3.Error):
+                self._connection.close()
+            self._connection = None
+
+
 class UsageTables:
     """Builds the usage tables in the background, and reads the ready generation's.
 
     A build runs in the server worker that starts it, holding a lock (`JobLock` on `usages/build.lock`) so another
-    worker's doesn't write the same files; it waits for one already running elsewhere. A build that fails is logged and
-    not tried again until the app restarts.
+    worker's doesn't write the same files; it waits for one already running elsewhere. A build that fails is logged,
+    and tried again at the next `start` of its generation. Once closed, it starts no build.
 
     Args:
         data_dir: The data directory.
@@ -200,35 +231,44 @@ class UsageTables:
         self._sparql = sparql
         self._build: _Build | None = None
         self._failed: set[int] = set()
-        self._lock = threading.Lock()
-        self._reading: tuple[int, sqlite3.Connection, threading.Lock] | None = None  # the newest generation read
+        self._starting = asyncio.Lock()  # so a start or cancel sees no other's half done
+        self._closing = False
+        self._reader: _Reader | None = None  # the newest generation read
 
     async def start(self, generation: int, dataset_clause: str) -> None:
         """Build a generation's table in the background, unless it's current or building; cancel an older one's build.
+
+        Nothing changes once a newer generation's build has started, unless it was cancelled, or once closed.
 
         Args:
             generation: The generation, which is ready.
             dataset_clause: The dataset clause that makes its queries see its imports.
         """
-        if self.building(generation):
-            return
-        await self.cancel()
-        self._failed.discard(generation)
-        if await asyncio.to_thread(is_current, self.data_dir, generation, self.key):
-            return
-        progress = Progress()
-        task = asyncio.create_task(self._run(generation, dataset_clause, progress), name=f"usage table {generation}")
-        self._build = _Build(generation, task, progress)
+        async with self._starting:
+            if self._closing or self.building(generation) or (self._build and self._build.generation > generation):
+                return
+            await self._cancel()
+            self._failed.discard(generation)
+            if await asyncio.to_thread(is_current, self.data_dir, generation, self.key):
+                return
+            progress = Progress()
+            task = asyncio.create_task(
+                self._run(generation, dataset_clause, progress), name=f"usage table {generation}"
+            )
+            self._build = _Build(generation, task, progress)
 
     async def cancel(self) -> None:
         """Cancel the running build, if any, and wait for it to end."""
+        async with self._starting:
+            await self._cancel()
+
+    async def _cancel(self) -> None:
         build, self._build = self._build, None
         if build is None or build.task.done():
             return
         logger.info("Cancelling the usage table build of generation %d", build.generation)
         build.task.cancel()
-        with suppress(asyncio.CancelledError):
-            await build.task
+        await asyncio.wait({build.task})  # not `await build.task`, whose CancelledError couldn't be told from ours
 
     async def wait(self) -> None:
         """Wait for the running build, if any, to end."""
@@ -236,13 +276,12 @@ class UsageTables:
             await asyncio.wait({self._build.task})
 
     async def close(self) -> None:
-        """Cancel the running build, if any, and close the connection being read, once its read ends."""
+        """Cancel the running build, if any, start no other, and close the connection being read, once its reads end."""
+        self._closing = True
         await self.cancel()
-        with self._lock:
-            reading, self._reading = self._reading, None
-        if reading is not None:
-            with reading[2], suppress(sqlite3.Error):
-                reading[1].close()
+        reader, self._reader = self._reader, None
+        if reader is not None:
+            await asyncio.wrap_future(reader.close())
 
     def building(self, generation: int) -> bool:
         """Return whether this process is building a generation's table."""
@@ -274,40 +313,37 @@ class UsageTables:
         return max(0.0, scan_s / (1 - WRITE_SHARE) - (now - progress.started))
 
     async def read[T](self, generation: int, function: Callable[[sqlite3.Connection], T]) -> T:
-        """Return a function's result on a connection to a generation's table, run in the thread pool.
+        """Return a function's result on a connection to a generation's table, run on another thread.
 
-        Reads of the newest generation read share one connection, one at a time, as each is a range read; a read of
-        an older one opens its own.
+        Reads of the newest generation read share one connection, on a thread of its own, one at a time, as each is a
+        range read, so waiting reads don't hold the thread pool's threads; a read of an older one, or once closed,
+        opens its own, in the thread pool.
 
         Raises:
             TableNotReadyError: The table isn't built, or isn't current.
         """
-        return await asyncio.to_thread(self._read, generation, function)
+        reader = self._reader
+        if not self._closing and (reader is None or generation > reader.generation):
+            if reader is not None:
+                reader.close()  # once the reads queued for it end
+            reader = self._reader = _Reader(self.data_dir, generation, self.key)
+        if reader is None or generation != reader.generation:
+            return await asyncio.to_thread(self._read_once, generation, function)
+        return await reader.read(function)
 
-    def _read[T](self, generation: int, function: Callable[[sqlite3.Connection], T]) -> T:
-        old = None
-        with self._lock:  # opening a newer generation's under it, so two reads can't both open one
-            reading = self._reading
-            if reading is None or generation > reading[0]:
-                old, reading = reading, (generation, connect(self.data_dir, generation, self.key), threading.Lock())
-                self._reading = reading
-        if old is not None:
-            with old[2], suppress(sqlite3.Error):  # once its read, if any, ends
-                old[1].close()
-        if generation != reading[0]:
-            with closing(connect(self.data_dir, generation, self.key)) as connection:
-                return function(connection)
-        with reading[2]:
-            return function(reading[1])
+    def _read_once[T](self, generation: int, function: Callable[[sqlite3.Connection], T]) -> T:
+        with closing(connect(self.data_dir, generation, self.key)) as connection:
+            return function(connection)
 
     async def _run(self, generation: int, dataset_clause: str, progress: Progress) -> None:
         """Build a generation's table, once this process holds the build lock; log a failure."""
         lock = JobLock(self.data_dir / USAGES_DIR / _LOCK)
         try:
             (self.data_dir / USAGES_DIR).mkdir(parents=True, exist_ok=True)
-            while not await asyncio.to_thread(lock.acquire):
-                await asyncio.sleep(LOCK_RETRY_S)
             try:
+                # On the event loop, as it doesn't wait, so a cancel can't land while it takes the lock.
+                while not lock.acquire():
+                    await asyncio.sleep(LOCK_RETRY_S)
                 await asyncio.to_thread(remove_others, self.data_dir, generation)
                 if await asyncio.to_thread(is_current, self.data_dir, generation, self.key):
                     return  # another worker built it meanwhile

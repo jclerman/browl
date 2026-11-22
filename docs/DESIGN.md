@@ -740,14 +740,17 @@ by value. Fuseki can (`?s ?p <entity>`), so P-27 keeps two things instead ([S-7 
   - **When it's built** (`browl.usage_tables.UsageTables`): after each job that reaches ready, before the previous
     generation's derived database is deleted, and at startup if the ready generation's derived database is current
     and its table isn't; after a rebuild, once that's ready. The job lock isn't held, so an upload can start
-    meanwhile. A newer generation going live cancels an older one's build, interrupting the SQL statement it runs, so
-    it ends at once; the build deletes every other generation's table and any temporary files when it starts. It
-    writes a temporary file, and a scratch file for the staged rows, and renames the table into place only once
-    complete, so a restart during the build leaves only temporary files, which the next start deletes as it builds
-    the table again. A build that fails is logged, and tried again only at the next start or load; meanwhile the
-    largest entities' tabs say their usages can't be shown. A shutdown cancels it.
+    meanwhile. A newer generation going live cancels an older one's build, interrupting its SQL statements, so it
+    ends at once, and an older one's isn't started after it; the build deletes every other generation's table and any
+    temporary files when it starts. It writes a temporary file, and a scratch file for the staged rows, and renames
+    the table into place only once complete, so a restart during the build leaves only temporary files, which the
+    next start deletes as it builds the table again. A build that fails is logged, and tried again only at the next
+    start or load; meanwhile the largest entities' tabs say their usages can't be shown. A shutdown cancels it, once
+    the load job is, so none starts after.
   - **Workers:** a build takes a lock (`usages/build.lock`, an `flock` like the job lock), waiting for one another
     server worker holds, so two never write the same files; there's one worker (2.1).
+  - **Reads** of the newest generation read share one connection, on a thread of its own, so queued reads don't hold
+    the thread pool's threads; an older generation's read opens its own.
   - **While it's built** the build's Python work holds the GIL, as pre-caching's does, so pages served meanwhile are
     slower; that's accepted, as loads are rare and pages are still served. The process grows by about 1.3 GB on
     NCBITaxon, mostly the ranks (an IRI → rank dict of 3 M entries) and SQLite's caches (256 MiB for the table, whose

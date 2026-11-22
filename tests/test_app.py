@@ -14,11 +14,13 @@ from fastapi.testclient import TestClient
 
 import browl
 import browl.app
+import browl.usage_tables
 from browl import admin
 from browl.admin import SWAGGER_UI_URL
 from browl.app import _start_usage_table, create_app
 from browl.fuseki import FusekiClient
 from browl.jobs import JobRunner, JobState, Site, Stage
+from browl.usage_tables import UsageTables
 from tests.helpers import derived_stage, make_app, make_settings
 
 UNREACHABLE = "http://127.0.0.1:1"  # nothing listens on port 1, so connections are refused at once
@@ -207,7 +209,7 @@ def test_startup_opens_job_database(data_dir: Path) -> None:
     assert (data_dir / "state.sqlite3").is_file()
 
 
-def test_usage_table_waits_for_running_job(data_dir: Path) -> None:
+def test_usage_table_waits_for_running_job(monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that startup starts no usage table build while a job or a rebuild runs, whose end starts it."""
     started: list[int] = []
 
@@ -215,6 +217,54 @@ def test_usage_table_waits_for_running_job(data_dir: Path) -> None:
         async def start(self, generation: int, clause: str) -> None:
             started.append(generation)
 
+    monkeypatch.setattr(browl.app.derived, "is_current", lambda *args: True)
     running = JobState(generation=2, stage=Stage.LOADING, started_at=datetime.now(UTC), ready_generation=1)
     asyncio.run(_start_usage_table(Tables(), running, make_settings(), {}))  # type: ignore[arg-type]
     assert started == []
+    now = datetime.now(UTC)
+    idle = JobState(generation=1, stage=Stage.READY, started_at=now, finished_at=now, ready_generation=1)
+    asyncio.run(_start_usage_table(Tables(), idle, make_settings(), {}))  # type: ignore[arg-type]
+    assert started == [1]
+
+
+def test_usage_table_start_failure(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Check that a usage table build that fails to start is logged, and older derived databases still deleted."""
+
+    async def fail(*args: object) -> None:
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(UsageTables, "start", fail)
+    with TestClient(make_app(usage_tables=True)) as client:
+        jobs = client.app.state.jobs  # type: ignore[attr-defined]
+        jobs.register(Stage.PRE_CACHING, derived_stage())
+        for _ in range(2):
+            client.portal.call(jobs.start)
+            client.portal.call(jobs.wait)
+    assert "Couldn't start the usage table build of generation 2" in caplog.text
+    assert sorted(path.name for path in (data_dir / "derived").glob("*.sqlite3")) == ["2.sqlite3"]
+
+
+def test_shutdown_cancels_usage_table(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that shutting down during a usage table build cancels it, leaving no temporary files."""
+
+    async def endless(*args: object) -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(browl.usage_tables, "fill_usage_table", endless)
+    app = make_app(usage_tables=True)
+    with TestClient(app) as client:
+        jobs = app.state.jobs
+        jobs.register(Stage.PRE_CACHING, derived_stage())
+        client.portal.call(jobs.start)
+        client.portal.call(jobs.wait)
+        assert app.state.usage_tables.building(1)
+        temp = data_dir / "usages" / "1.sqlite3.tmp"
+        for _ in range(100):
+            if temp.exists():
+                break
+            client.portal.call(asyncio.sleep, 0.02)
+        assert temp.exists()
+    assert not app.state.usage_tables.building(1)
+    assert sorted(path.name for path in (data_dir / "usages").iterdir()) == ["build.lock"]

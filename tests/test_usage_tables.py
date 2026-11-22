@@ -2,6 +2,7 @@
 
 import asyncio
 import sqlite3
+import threading
 import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, closing
@@ -15,6 +16,8 @@ import browl.usage_tables
 import browl.usages
 from browl import owlapi
 from browl.fuseki import UNION_FROM, FusekiClient, SparqlError
+from browl.jobs import JobLock
+from browl.precache.core import DerivedWriter
 from browl.precache.keys import build_keys
 from browl.precache.stage import HOOKS, on_thread
 from browl.precache.usage_table import Progress, UsageKind
@@ -249,7 +252,9 @@ async def test_newer_cancels_older(tables: UsageTables, tmp_path: Path) -> None:
     await asyncio.sleep(0.05)
     assert tables.building(2)
     assert not (tmp_path / "usages" / "1.sqlite3.tmp").exists()
+    build = tables._build
     await tables.start(2, "")  # already building: nothing changes
+    assert tables._build is build and build is not None and not build.task.done()
     GATES[2].set()
     await tables.wait()
     assert is_current(tmp_path, 2, tables.key)
@@ -438,23 +443,45 @@ def test_scan_leaves_out_vocabulary_types() -> None:
 
 
 async def test_reads_by_generation(tables: UsageTables, tmp_path: Path) -> None:
-    """Check that reads share the newest generation's connection, closing an older one's, which opens its own."""
+    """Check that reads share the newest generation's connection on its own thread; an older one's opens its own."""
     for generation in (1, 2):
         derived_file(tmp_path, generation)
         with build_file(tmp_path, generation, tables.key):
             pass
 
-    def generation_of(connection: sqlite3.Connection) -> int:
+    def generation_of(connection: sqlite3.Connection) -> tuple[int, str]:
+        return connection.execute("SELECT generation FROM meta").fetchone()[0], threading.current_thread().name
+
+    first, thread = await tables.read(1, generation_of)
+    assert first == 1 and thread.startswith("usage-read")
+    second, thread = await tables.read(2, generation_of)
+    assert second == 2 and thread.startswith("usage-read")
+    assert tables._reader is not None and tables._reader.generation == 2
+    older, thread = await tables.read(1, generation_of)
+    assert older == 1 and not thread.startswith("usage-read")
+    await tables.close()
+    after, thread = await tables.read(2, generation_of)  # after closing: a connection of its own
+    assert after == 2 and not thread.startswith("usage-read") and tables._reader is None
+
+
+async def test_reads_queued_before_newer(tables: UsageTables, tmp_path: Path) -> None:
+    """Check that reads queued on a generation's connection end before a newer generation's read closes it."""
+    for generation in (1, 2):
+        derived_file(tmp_path, generation)
+        with build_file(tmp_path, generation, tables.key):
+            pass
+    gate = threading.Event()
+
+    def held(connection: sqlite3.Connection) -> int:
+        gate.wait(5)
         return connection.execute("SELECT generation FROM meta").fetchone()[0]
 
-    assert await tables.read(1, generation_of) == 1
-    old = tables._reading
-    assert await tables.read(2, generation_of) == 2
-    assert old is not None
-    with pytest.raises(sqlite3.ProgrammingError):
-        old[1].execute("SELECT 1")
-    assert await tables.read(1, generation_of) == 1
-    assert tables._reading is not None and tables._reading[0] == 2
+    queued = [asyncio.create_task(tables.read(1, held)) for _ in range(20)]
+    await asyncio.sleep(0.05)
+    newer = asyncio.create_task(tables.read(2, held))
+    await asyncio.sleep(0.05)
+    gate.set()
+    assert await asyncio.gather(*queued, newer) == [1] * 20 + [2]
     await tables.close()
 
 
@@ -473,6 +500,133 @@ async def test_built_elsewhere_meanwhile(tables: UsageTables, tmp_path: Path, mo
     await tables.wait()
     assert not tables.failed(8)
     assert is_current(tmp_path, 8, tables.key)
+
+
+async def test_older_start_ignored(tables: UsageTables, tmp_path: Path) -> None:
+    """Check that starting an older generation's build changes nothing once a newer one's has started."""
+    for generation in (1, 2):
+        derived_file(tmp_path, generation)
+        GATES[generation] = asyncio.Event()
+    await tables.start(2, "")
+    build = tables._build
+    await tables.start(1, "")
+    assert tables._build is build and build is not None and not build.task.done()
+    assert not tables.building(1)
+    GATES[2].set()
+    await tables.wait()
+    await tables.start(1, "")  # the newer one's built: still nothing
+    assert tables._build is build and not tables.building(1)
+    assert is_current(tmp_path, 2, tables.key)
+
+
+async def test_stale_key_builds_again(tables: UsageTables, tmp_path: Path) -> None:
+    """Check that a table built with another key, e.g. by older code, is built again at the next start."""
+    derived_file(tmp_path, 1)
+    with build_file(tmp_path, 1, "old key"):
+        pass
+    GATES[1] = asyncio.Event()
+    GATES[1].set()
+    await tables.start(1, "")
+    assert tables.building(1)
+    await tables.wait()
+    assert is_current(tmp_path, 1, tables.key)
+
+
+async def test_lock_held_throughout(tables: UsageTables, tmp_path: Path) -> None:
+    """Check that a build holds the build lock until it ends."""
+    derived_file(tmp_path, 1)
+    GATES[1] = asyncio.Event()
+    await tables.start(1, "")
+    await asyncio.sleep(0.05)
+    other = browl.usage_tables.JobLock(tmp_path / "usages" / "build.lock")
+    assert not other.acquire()
+    GATES[1].set()
+    await tables.wait()
+    assert other.acquire()
+    other.release()
+
+
+async def test_start_after_close(tables: UsageTables, tmp_path: Path) -> None:
+    """Check that once closed, as at shutdown, a start builds nothing."""
+    derived_file(tmp_path, 1)
+    GATES[1] = asyncio.Event()
+    await tables.close()
+    await tables.start(1, "")
+    assert tables._build is None
+    assert not (tmp_path / "usages").exists()
+
+
+async def test_overlapping_starts(tables: UsageTables, tmp_path: Path) -> None:
+    """Check that two starts at once leave one build running, the newer generation's, and none orphaned."""
+    for generation in (1, 2):
+        derived_file(tmp_path, generation)
+        GATES[generation] = asyncio.Event()
+    await asyncio.gather(tables.start(1, ""), tables.start(2, ""))
+    await asyncio.sleep(0.05)
+    running = [task.get_name() for task in asyncio.all_tasks() if task.get_name().startswith("usage table")]
+    assert running == ["usage table 2"]
+    assert tables.building(2)
+    await tables.close()
+
+
+async def test_cancel_while_taking_lock(tables: UsageTables, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a build cancelled while it takes the build lock doesn't keep it."""
+    derived_file(tmp_path, 1)
+    GATES[1] = asyncio.Event()
+
+    locks: list[JobLock] = []  # kept, so only a release, not garbage collection, frees the lock
+
+    class SlowLock(JobLock):
+        def acquire(self) -> bool:
+            locks.append(self)
+            time.sleep(0.2)
+            return super().acquire()
+
+    monkeypatch.setattr(browl.usage_tables, "JobLock", SlowLock)
+    await tables.start(1, "")
+    await asyncio.sleep(0.05)
+    await tables.cancel()
+    await asyncio.sleep(0.3)
+    other = JobLock(tmp_path / "usages" / "build.lock")
+    assert other.acquire()
+    other.release()
+
+
+async def test_cancel_cancellable(tables: UsageTables, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a `cancel` that is itself cancelled, while the build ends, is cancelled, not swallowed."""
+    derived_file(tmp_path, 1)
+
+    async def slow_end(*args: object) -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await asyncio.sleep(0.3)
+            raise
+
+    monkeypatch.setattr(browl.usage_tables, "fill_usage_table", slow_end)
+    await tables.start(1, "")
+    await asyncio.sleep(0.05)
+    caller = asyncio.create_task(tables.cancel())
+    await asyncio.sleep(0.05)
+    caller.cancel()
+    await asyncio.wait({caller})
+    assert caller.cancelled()
+    await asyncio.sleep(0.5)
+
+
+async def test_cancel_interrupts_build(tables: UsageTables, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that cancelling a build interrupts its SQL statement, so the cancel returns at once."""
+    derived_file(tmp_path, 1)
+
+    async def long_sql(sparql: object, dataset: str, clause: str, db: DerivedWriter, progress: Progress) -> None:
+        await db.run(lambda connection: connection.execute(LONG).fetchone())
+
+    monkeypatch.setattr(browl.usage_tables, "fill_usage_table", long_sql)
+    await tables.start(1, "")
+    await asyncio.sleep(0.2)
+    async with asyncio.timeout(2):
+        await tables.cancel()
+    assert list((tmp_path / "usages").iterdir()) == [tmp_path / "usages" / "build.lock"]
 
 
 def test_remove_others_leaves_what_it_cant_delete(

@@ -2,6 +2,7 @@
 
 import asyncio
 import functools
+import logging
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from typing import Literal
@@ -21,6 +22,8 @@ from browl.precache.core import has_loaded_imports
 from browl.settings import Settings, load_settings
 from browl.usage_tables import UsageTables
 from browl.usages import UsageCounts, ready_store
+
+logger = logging.getLogger(__name__)
 
 FUSEKI_TIMEOUT_S = 2.0
 """Time limit for the health check's whole call to Fuseki, well under the container health check's own."""
@@ -122,7 +125,10 @@ def create_app(
 
             async def on_ready(context: JobContext) -> None:
                 if build_tables:  # first, as it cancels an older generation's build, which reads its derived file
-                    await tables.start(context.generation, dataset_clause(has_loaded_imports(context.imports)))
+                    try:
+                        await tables.start(context.generation, dataset_clause(has_loaded_imports(context.imports)))
+                    except Exception:
+                        logger.exception("Couldn't start the usage table build of generation %d", context.generation)
                 await precache.remove_previous(context)
 
             app.state.jobs = await JobRunner.open(settings, functions, on_ready=on_ready)
@@ -140,9 +146,9 @@ def create_app(
             finally:
                 try:
                     try:
-                        await tables.close()
+                        await app.state.jobs.close()  # first, as a job reaching ready starts a build
                     finally:
-                        await app.state.jobs.close()
+                        await tables.close()
                 finally:
                     app.state.derived.close()
 
