@@ -115,11 +115,9 @@
     if (!box || event.detail.target !== list) {
       return;
     }
-    setActive(box, list, null);
-    if (list.children.length && document.activeElement === box && !dismissed) {
-      open(box, list);
-    } else {
-      close(box, list);
+    close(box, list);
+    if (document.activeElement === box && !dismissed) {
+      open(box, list); // if it has options
     }
     const hits = options(list).filter((option) => !option.classList.contains("search-all")).length;
     if (!list.children.length) {
