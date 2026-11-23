@@ -68,9 +68,10 @@ instructions specific to coding agents. Requirements and architecture are in [`D
   free local port, since a browser can't reach the `TestClient`. Hold or stub responses with `page.route`, so tests of
   ordering or failures don't depend on timing. `make test` installs the headless Chromium (`make browser`); these tests
   are skipped or fail without it, like those above.
-- **Marks:** a test that uses the `jvm`, `fuseki_url` or `browser` fixture (which `page` uses), directly or through
-  another fixture, gets the `jvm`, `fuseki` or `browser` mark for you, for `-m` to select by (e.g.
-  `-m "not jvm and not fuseki"`). Don't write these marks by hand: collection fails on one without its fixture.
+- **Marks:** a test that uses the `java` (which `jvm` uses), `fuseki_url` or `browser` (which `page` uses) fixture,
+  directly or through another fixture, gets the `jvm`, `fuseki` or `browser` mark automatically via
+  `tests.conftest.pytest_collection_modifyitems`, for `-m` to select by (e.g. `-m "not jvm and not fuseki"`).
+  Don't write those marks by hand: collection fails on one without its fixture.
 - **Parallel runs:** `make test` runs the tests in several processes (pytest-xdist), each in any order, so a test
   mustn't depend on another having run, or share state outside its process: use free ports (`port=0`), temporary
   directories and unique dataset names. Session fixtures run once per process.
