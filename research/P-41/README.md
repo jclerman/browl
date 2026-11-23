@@ -93,3 +93,18 @@ values matching would do the same. So word rows stay: about 37 s more than FTS5 
 A dedicated engine (Elasticsearch, Typesense, Postgres full text) has the same choice to make: either rank by relevance
 rather than by §2.6's rules, or index every word start's suffix (or every prefix of every word) much as word rows do,
 which isn't smaller or faster to build. Its gains are elsewhere, such as typo tolerance (U-20).
+
+## After the review
+
+PR #138's review found that word rows stored text quadratic in a value's length: each carried the value's whole tail
+past 256 characters and its own key to the end. A 40,000-character label of one-letter words took 1.23 GB and 10.4 s
+to index. Now only words within a value's first 1,000 normalized characters (`MAX_QUERY_CHARS`) get rows, each keyed
+by at most 1,000 characters and holding the value's first 256; a hit reads the rest of a longer value from
+`name_value`. A value's word rows hold at most about 630,000 characters. The key also gained `word_start`, so a long,
+repetitive value's word rows, alike in their first 256 characters, no longer merge.
+
+Rerun on NCBITaxon, where no word starts past 1,000 characters: 48.4 s and 828 MiB, as before; queries as before.
+
+Dropping the value from word rows altogether, so they hold only their key, made `search_value` 577 MiB (30% smaller)
+but the build no faster (45.6 s). It also lost rule 7's alphabetical order among word matches with the same key:
+"sapiens" listed "Macrobiotus sapiens" before "Amegilla sapiens". So word rows keep the value's first 256 characters.
