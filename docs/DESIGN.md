@@ -121,7 +121,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **O-9** · Data that must survive restarts (the loaded ontology, derived data, the admin list) lives on mounted volumes. _(Q16a)_ | v1 |
 | **O-10** · The page cache size is configurable (default 100 pages). _(Q13)_ | v1 |
 | **O-11** · Extra CURIE prefix mappings are configurable and override the ontology's own and the built-in ones. _(Q18b)_ | v1 |
-| **O-13** · The name properties, the language ranking (O-4, O-5) and the properties search leaves out (U-47) set in the environment are defaults. An admin's changes (A-11) override them for the ontology they were made for, by its IRI, and survive restarts and reloads of that ontology. _(P-44)_ | v1 |
+| **O-13** · The name properties, the language ranking (O-4, O-5) and the properties search leaves out (U-47) set in the environment are defaults. An admin's changes (A-11) override them for the ontology they were made for, by its IRI, and survive restarts. Ideally they're also kept for later uploads of the same ontology IRI; P-44 may leave that for later. _(P-44)_ | v1 |
 | **O-12** · The object properties that get relation trees (U-38) are configurable. | Later |
 
 ### 1.5 Non-functional requirements
@@ -886,8 +886,11 @@ describes P-19 as built.
 
 - **Any word** (U-19, P-41). Besides its row for the whole value, each value gets a row for each later word start: its
   key is the normalized value from that word on, flagged as a word match, and it stores the word's offset in the value,
-  so a hit can mark the word, and the whole value, which it shows. A word starts after whitespace or punctuation
-  (Unicode categories Z and P), so "cell" finds "T-cell". Word rows are lanes of their own, walked after every
+  so a hit can mark the word, and the whole value, which it shows. It's always on. A word starts where a
+  non-alphanumeric character is followed by an alphanumeric one, in the normalized value; alphanumeric is Unicode's
+  letters and numbers (`str.isalnum`), so accented and non-Latin letters count, and accents, removed by normalizing,
+  never split a word. So "cell" finds "T-cell" and "dimethyl" finds "1,3-dimethylbutane", but a change between letters
+  and digits isn't a word start: "2" doesn't find "H2O". Word rows are lanes of their own, walked after every
   whole-value lane: all matches from the start of a whole value rank first (a new rule between 1 and 2), and within
   word matches the usual rules apply, with length the key's (from the word on). Nothing else in a query changes.
   - **Cost**, to measure first on NCBITaxon: the table grows by about the mean number of words per value, perhaps
@@ -910,6 +913,9 @@ describes P-19 as built.
   - **The results page** lists the properties that have indexed values, name properties first, each with its value
     count (kept in `search_lane`). Long values such as definitions are indexed like any other; their key holds their
     first `KEY_CHARS` characters.
+  - **Showing hits:** the autocomplete shows them as now (2.9, Search), without the property. The results page shows
+    them as a table: the matched value and the entity's name (with its CURIE, else IRI), then the property the value
+    is from, then the types, last as now.
 - **Sticky filters** (U-48, P-43). The results page offers to use its filters in the search box. `static/search.js`
   keeps them in the browser's storage and adds them to the box's requests and its form; the bar shows "Filtered", with
   a control that clears them. URLs stay the same for every visitor, so the page cache (2.10) is unaffected, and
@@ -917,9 +923,9 @@ describes P-19 as built.
   as hidden fields, JS or not.
 - **Admin search settings** (A-11, O-13, P-44).
   - **Stored** in the persistent database, by ontology IRI: the name properties in order, the language ranking, and
-    the properties search leaves out. Where there's no row, the environment's settings apply (2.12). The values in
-    effect are what the build keys hash, so a change makes the derived database out of date, as a changed setting does
-    now (2.5, Build keys).
+    the properties search leaves out. Keeping them for later uploads of the same IRI is wanted but optional. Where
+    there's no row, the environment's settings apply (2.12). The values in effect are what the build keys hash, so a
+    change makes the derived database out of date, as a changed setting does now (2.5, Build keys).
   - **A settings page** (`admin/search`) lists the served ontology's annotation properties and the languages of their
     values, with counts, from the derived database: the name properties to order and the properties to leave out. It
     works without JS (moves by buttons, as forms).
@@ -930,11 +936,9 @@ describes P-19 as built.
     3¼ minutes, as a load's pre-caching does, unless only the hooks whose keys changed are run again, on a copy of the
     current file.
 - **To settle when they're built:**
-  - Whether word matches are always on, or a choice on the results page; which characters start a word.
-  - How a hit from a property other than the first name property says which property it's from, e.g.
-    "_myocardium_ (exact synonym) → **heart muscle**".
-  - Whether the results page's filters are kept on request (a button) or whenever they're used.
-  - Whether A-11's settings are kept for an ontology's IRI across uploads, or start again with each upload.
+  - Whether the results page's filters become the box's on request (a button) or whenever they're used. Either way
+    they then apply to the box's suggestions, and to the results page opened from the box; a results page's own URL
+    always keeps its own filters.
 
 **Later:** an external engine such as Typesense for typo tolerance (U-20), swapped in behind the same interface.
 Building the index in the background after the generation is ready, if a framework for such
