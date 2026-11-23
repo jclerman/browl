@@ -266,7 +266,7 @@
     {
       "name": "search_value",
       "type": "table",
-      "comment": "The search index (browl.search.SqliteSearch): each non-blank name value, keyed in the order search ranks values, so a query seeks its matches of one lane and length at a time, shortest first, without sorting them. Ranks are positions in NAME_PROPERTIES and LANGUAGE_RANKING as built, which the search hook's build key covers.",
+      "comment": "The search index (browl.search.SqliteSearch): each non-blank name value, keyed in the order search ranks values. The rows that share the key's first four columns (type, property_rank, language_rank, entailed) form a lane, ordered within by length, normalized value, then value. A query seeks its matches in one lane and of one length at a time, shortest first, so it never sorts them. Ranks are positions in NAME_PROPERTIES and LANGUAGE_RANKING as built, which the search hook's build key covers.",
       "columns": [
         {
           "name": "type",
@@ -435,7 +435,7 @@
     {
       "name": "search_lane",
       "type": "table",
-      "comment": "Each lane of search_value that has values, a (type, property_rank, language_rank, entailed) group, with its longest value, so a query seeks only lanes that exist, and no lengths past their longest.",
+      "comment": "The lanes of search_value: each (type, property_rank, language_rank, entailed) group that has values, with its longest value's length. A query seeks only lanes that exist, and no lengths past a lane's longest.",
       "columns": [
         {
           "name": "type",

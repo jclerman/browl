@@ -2,7 +2,7 @@
 
 ## Description
 
-Each lane of search_value that has values, a (type, property_rank, language_rank, entailed) group, with its longest value, so a query seeks only lanes that exist, and no lengths past their longest.
+The lanes of search_value: each (type, property_rank, language_rank, entailed) group that has values, with its longest value's length. A query seeks only lanes that exist, and no lengths past a lane's longest.
 
 <details>
 <summary><strong>Table Definition</strong></summary>

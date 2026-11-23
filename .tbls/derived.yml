@@ -169,9 +169,11 @@ comments:
       direct: 1 if the entity has the value under this property itself, 0 if under one of its sub-properties.
   - table: search_value
     tableComment: >-
-      The search index (browl.search.SqliteSearch): each non-blank name value, keyed in the order search ranks values,
-      so a query seeks its matches of one lane and length at a time, shortest first, without sorting them. Ranks are
-      positions in NAME_PROPERTIES and LANGUAGE_RANKING as built, which the search hook's build key covers.
+      The search index (browl.search.SqliteSearch): each non-blank name value, keyed in the order search ranks values.
+      The rows that share the key's first four columns (type, property_rank, language_rank, entailed) form a lane,
+      ordered within by length, normalized value, then value. A query seeks its matches in one lane and of one length
+      at a time, shortest first, so it never sorts them. Ranks are positions in NAME_PROPERTIES and LANGUAGE_RANKING
+      as built, which the search hook's build key covers.
     columnComments:
       type: The entity's type (entity.type), so a type filter seeks only its own lanes.
       property_rank: The name property's position in NAME_PROPERTIES, from 0.
@@ -186,8 +188,8 @@ comments:
       language: The value's language tag, lowercased; NULL if it has none.
   - table: search_lane
     tableComment: >-
-      Each lane of search_value that has values, a (type, property_rank, language_rank, entailed) group, with its
-      longest value, so a query seeks only lanes that exist, and no lengths past their longest.
+      The lanes of search_value: each (type, property_rank, language_rank, entailed) group that has values, with its
+      longest value's length. A query seeks only lanes that exist, and no lengths past a lane's longest.
     columnComments:
       type: The entities' type (entity.type).
       property_rank: The name property's position in NAME_PROPERTIES, from 0.
