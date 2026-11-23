@@ -2146,6 +2146,35 @@ def test_tree_show_more_in_place(page: Page, trees: LiveServer) -> None:
     assert marked(page)
 
 
+def test_tree_show_more_twice_in_place(page: Page, trees: LiveServer) -> None:
+    """Check that a page of children added in place has its own "Show more", which adds the page after it in place."""
+    page.goto(f"{trees.url}/_browl/tree/classes?{TOP_AND_BIG}")
+    mark(page)
+    requests = record_fragments(page)
+    page.get_by_role("treeitem", name="Show 100 more").click()
+    more = page.get_by_role("treeitem", name="Show 50 more")
+    expect(more).to_be_visible()
+    more.click()
+    expect(tree_item(page, "Kid 249")).to_be_visible()
+    expect(tree_item(page, "Kid 200")).to_be_focused()
+    expect(page.locator(".tree-paging")).to_have_count(0)
+    assert [query_of(url)["offset"] for url in requests] == [["100"], ["200"]]
+    assert marked(page)
+
+
+@pytest.mark.parametrize("failure", ["status", "network"])
+def test_tree_show_more_failure_loads_page(page: Page, trees: LiveServer, failure: str) -> None:
+    """Check that a page of children that can't be fetched loads the tree page showing it instead."""
+    if failure == "status":
+        page.route(TREE_FRAGMENT, lambda route: route.fulfill(status=503, content_type="text/html", body="<p>No</p>"))
+    else:
+        page.route(TREE_FRAGMENT, lambda route: route.abort())
+    page.goto(f"{trees.url}/_browl/tree/classes?{TOP_AND_BIG}")
+    page.get_by_role("treeitem", name="Show 100 more").click()
+    expect(page.get_by_role("treeitem", name="Show the previous 100")).to_be_visible()
+    assert query_of(page.url) == {"open": [f"{EX}/Top", f"{EX}/Big"], "children-of": [f"{EX}/Big"], "offset": ["100"]}
+
+
 @NO_JS
 def test_tree_show_more_without_javascript(page: Page, trees: LiveServer) -> None:
     """Check that, without JavaScript, "Show more" loads the page with the next page of children, and a link back."""

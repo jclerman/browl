@@ -427,6 +427,23 @@ def test_fragment_paged(client: TestClient) -> None:
     assert found.items[0].id == "t-1-0-200"
 
 
+def test_fragment_second_page(client: TestClient) -> None:
+    """Check that a fragment from an offset links to the page after it, in place and without JS."""
+    params = [("node", ex("Big")), ("at", "t-1-0"), *opened("Top"), ("offset", "100")]
+    found = Tree(client.get(TREE, params=params).text)
+    more = found.items[-1]
+    assert more.text == "Show 50 more (201–250 of 250)"
+    assert query(more.load or "") == [("node", ex("Big")), ("at", "t-1-0"), *opened("Top"), ("offset", "200")]
+    assert query(more.href) == [*opened("Top", "Big"), ("children-of", ex("Big")), ("offset", "200")]
+
+
+def test_window_on_closed_node_ignored(client: TestClient) -> None:
+    """Check that a window on a node that isn't shown open is ignored: the page shows its first page, if any."""
+    found = tree(client, [*opened("Top"), ("children-of", ex("Big")), ("offset", "100")])
+    assert found.shown() == [(0, "Free"), (0, "Top"), (1, "Big"), (1, "Left"), (1, "Right")]
+    assert found.item("Big").expanded == "false"
+
+
 def test_roots_paged(client: TestClient) -> None:
     """Check that the roots come a page at a time too; their next page is a page, without htmx."""
     path = "/_browl/tree/annotation-properties"

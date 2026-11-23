@@ -315,6 +315,7 @@ async def test_top_and_bottom_left_out(data_dir: Path, name: str) -> None:
     async with fuseki(HEADER + END, entity_list, edge_result(*edges)) as http:
         await pre_caching_stage(job(settings, 1), http, hooks=HOOKS_USED)
     assert tables(settings, 1) == (set(), {}, {(hierarchy, iri): (0, 0) for iri in ex(*names)})
+    assert roots(settings, 1) == {(hierarchy, iri) for iri in ex(*names)}
 
 
 async def test_too_dense(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -354,6 +355,7 @@ async def test_property_cycles(data_dir: Path, caplog: pytest.LogCaptureFixture)
     groups = {iri[member]: iri[ring[0]] for ring in rings for member in ring}
     counts = {("object_property", iri[ring[0]]): (0, 0) for ring in rings}
     assert tables(settings, 1) == (set(), groups, counts)
+    assert roots(settings, 1) == set(counts)  # each cycle's group, by its representative
     listed = "; ".join(
         "{" + ", ".join(iri[member] for member in ring[:5]) + (", …" if len(ring) > 5 else "") + "}"
         for ring in rings[:3]
@@ -373,6 +375,7 @@ async def test_punned_equivalent_classes(data_dir: Path) -> None:
     counts = {("class", p): (0, 0), ("object_property", p): (1, 1), ("object_property", q): (0, 0)}
     counts[("object_property", r)] = (0, 0)
     assert tables(settings, 1) == ({("object_property", p, r)}, {p: p, q: p}, counts)
+    assert roots(settings, 1) == {("class", p), ("object_property", p), ("object_property", q)}
 
 
 # The hook, on a real Fuseki.
