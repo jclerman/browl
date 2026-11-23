@@ -1,17 +1,17 @@
-"""Shared fixtures, and the skip rules for tests that need a JVM or Fuseki.
+"""Shared fixtures, the skip rules for tests that need a JVM, Fuseki or a browser, and the marks for them.
 
-`jvm` tests need Java and `robot.jar`: `ROBOT_JAR`, else the one `make robot-jar` downloads, else the settings' default
-path. JPype finds Java through `JAVA_HOME`, so point it at Java 21; on macOS, when it's unset, the tests set it to Java
-21 if that's installed. `fuseki` tests need a Fuseki: the one at `BROWL_TEST_FUSEKI_URL`, or one the tests start from
-`docker/fuseki` with Docker, building the image unless `BROWL_TEST_FUSEKI_IMAGE` names one already built (as CI does).
-Tests that build stores for it (`fuseki_base`) also need Jena's tools (`JENA_HOME`, else the ones `make jena` downloads)
-and its base directory: for the Fuseki the tests start, a temporary directory mounted as its base; for one at
-`BROWL_TEST_FUSEKI_URL`, `BROWL_TEST_FUSEKI_BASE`. Locally, tests whose needs are missing are skipped; in CI (`CI` set)
-they fail instead, so CI runs every test. Mark such tests `jvm` or `fuseki`, and have them use the `jvm` or `fuseki_url`
-fixture.
+The `jvm` fixture starts the JVM, for tests that need Java and `robot.jar`: `ROBOT_JAR`, else the one `make robot-jar`
+downloads, else the settings' default path. JPype finds Java through `JAVA_HOME`, so point it at Java 21; on macOS, when
+it's unset, the tests set it to Java 21 if that's installed. The `fuseki_url` fixture gives a Fuseki: the one at
+`BROWL_TEST_FUSEKI_URL`, or one the tests start from `docker/fuseki` with Docker, building the image unless
+`BROWL_TEST_FUSEKI_IMAGE` names one already built (as CI does). Tests that build stores for it (`fuseki_base`) also need
+Jena's tools (`JENA_HOME`, else the ones `make jena` downloads) and its base directory: for the Fuseki the tests start,
+a temporary directory mounted as its base; for one at `BROWL_TEST_FUSEKI_URL`, `BROWL_TEST_FUSEKI_BASE`.
+pytest-playwright's `page` fixture uses `browser`, which launches Playwright's headless Chromium (`make browser`).
+Locally, tests whose needs are missing are skipped; in CI (`CI` set) they fail instead, so CI runs every test.
 
-`browser` tests need Playwright's headless Chromium (`make browser`); they use pytest-playwright's `page` fixture, and
-are skipped or fail alike when it's missing.
+A test that uses one of these fixtures, directly or through another fixture, gets the matching mark (`FIXTURE_MARKS`),
+which `-m` selects by (e.g. `-m "not jvm and not fuseki"`). Use the fixture; don't write the mark by hand.
 """
 
 import json
@@ -44,6 +44,32 @@ FUSEKI_START_TIMEOUT_S = 60
 ROBOT_JAR_CACHE = ROOT / ".cache" / "robot.jar"  # where `make robot-jar` puts it
 JENA_CACHE = ROOT / ".cache" / "jena"  # where `make jena` puts it
 MACOS_JAVA_HOME = "/usr/libexec/java_home"
+FIXTURE_MARKS = {"jvm": "jvm", "fuseki_url": "fuseki", "browser": "browser"}
+"""The mark each of these fixtures gives the tests that use it."""
+
+pytest_plugins = ["pytester"]
+
+
+@pytest.hookimpl(tryfirst=True)  # before `-m` deselects by the marks
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Mark each test that uses a fixture of `FIXTURE_MARKS`, so the mark and the fixture can't disagree.
+
+    Raises:
+        pytest.UsageError: If a test has such a mark without the fixture.
+    """
+    stray = []
+    for item in items:
+        fixtures = getattr(item, "fixturenames", ())
+        for fixture, mark in FIXTURE_MARKS.items():
+            if fixture in fixtures:
+                item.add_marker(mark)
+            elif item.get_closest_marker(mark):
+                stray.append(f"{item.nodeid} ({mark})")
+    if stray:
+        raise pytest.UsageError(
+            "These tests are marked without using the fixture that gives the mark; use the fixture instead:\n"
+            + "\n".join(stray)
+        )
 
 
 @pytest.fixture

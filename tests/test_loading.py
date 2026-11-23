@@ -24,7 +24,7 @@ from browl.settings import Settings
 from tests.conftest import find_robot_jar
 from tests.helpers import StaticServer, make_app, make_settings, turtle
 
-pytestmark = [pytest.mark.anyio, pytest.mark.fuseki]
+pytestmark = pytest.mark.anyio
 
 EX = "http://example.org/"
 COUNT = "SELECT (COUNT(*) AS ?n) {} WHERE {{ ?s ?p ?o }}"
@@ -391,7 +391,6 @@ def test_app_loads_and_restarts(
             f"Prefix(:=<{EX}>)\nPrefix(ex:=<{EX}>)\nOntology(<{EX}o>\n"
             "Declaration(Class(:A))\nDeclaration(Class(:B))\nSubClassOf(:A :B)\n)\n",
             4,
-            marks=pytest.mark.jvm,
             id="ofn",
         ),
         pytest.param(
@@ -406,7 +405,7 @@ def test_app_loads_and_restarts(
     ],
 )
 def test_app_loads_each_syntax(
-    request: pytest.FixtureRequest,
+    jvm: None,
     settings: Settings,
     fuseki_url: str,
     fuseki_base: Path,
@@ -416,10 +415,9 @@ def test_app_loads_each_syntax(
 ) -> None:
     """Check that an OFN upload (converted to Turtle) and an RDF/XML one each load without a reasoner.
 
-    Their prefixes are read, from the converted Turtle for OFN (S4), and give the entities' CURIEs.
+    Their prefixes are read, from the converted Turtle for OFN (S4), and give the entities' CURIEs. The OFN lister's JVM
+    needs Java 21 (`JAVA_HOME`), as `jvm` finds it; both cases use it, since a fixture can't be added for one.
     """
-    if request.node.get_closest_marker("jvm"):
-        request.getfixturevalue("jvm")  # the OFN lister's JVM needs Java 21 (`JAVA_HOME`), as the fixture finds it
     overrides = {
         "FUSEKI_URL": fuseki_url,
         "FUSEKI_BASE": str(fuseki_base),

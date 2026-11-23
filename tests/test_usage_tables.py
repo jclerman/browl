@@ -40,7 +40,7 @@ from browl.usages import UsageCounts, UsageSource, UsageStore, count_usages, rea
 from tests.helpers import connect as connect_derived
 from tests.helpers import loaded, make_settings, ontology_ntriples
 
-pytestmark = [pytest.mark.anyio]
+pytestmark = pytest.mark.anyio
 
 NS = "http://example.org/axioms#"
 OWL_CLASS = f"<{OWL}Class>"
@@ -137,8 +137,6 @@ async def tab_page(store: UsageStore, settings: Settings, iri: str, page: int) -
     return await read_usage_tab(request, jobs, iri, page)  # type: ignore[arg-type]
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 async def test_matches_streamed(store: UsageStore, settings: Settings) -> None:
     """Check every entity of the test ontology, which has every kind of axiom: the table holds what's streamed."""
     iris = entity_iris(settings, store)
@@ -147,8 +145,6 @@ async def test_matches_streamed(store: UsageStore, settings: Settings) -> None:
     assert await read_table_page(store, "http://example.org/nothing", 0, 1) is None
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 async def test_imports(fuseki_url: str, ntriples: bytes, settings: Settings) -> None:
     """Check that with some triples in a named graph, as an import's, the table sees them, as the stream does."""
     subjects = (f"<{NS}Dog> ", f"<{NS}Cat> ", f"<{NS}Liver> ", f"<{NS}remark> ")
@@ -161,8 +157,6 @@ async def test_imports(fuseki_url: str, ntriples: bytes, settings: Settings) -> 
         await assert_table_matches(tabled, [f"{NS}{name}" for name in ("Animal", "remark", "Dog", "note", "age")])
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 async def test_anonymous_individuals(
     jvm: None, fuseki_url: str, settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -190,8 +184,6 @@ async def test_anonymous_individuals(
             await tab_page(tabled, settings, f"{NS}A", 2)
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 async def test_several_values(jvm: None, fuseki_url: str, settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check a subject's several values of one property, IRIs, a literal and a blank node, through the table.
 
@@ -224,8 +216,6 @@ async def test_several_values(jvm: None, fuseki_url: str, settings: Settings, mo
     assert shown[3].startswith("_:")
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 async def test_subjects_ordered(fuseki_url: str, settings: Settings) -> None:
     """Check the order of an entity's subjects through the table, against the stream.
 
@@ -254,8 +244,6 @@ async def test_subjects_ordered(fuseki_url: str, settings: Settings) -> None:
     assert [usage.subject for usage in page.usages] == [f"{NS}{name}" for name in ("Y", "X", "a", "m", "z")]
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 async def test_kinds(store: UsageStore) -> None:
     """Check that each usage stores its axiom's kind and predicate, for U-34's filters, a root's from what it is."""
     tables = store.tables
@@ -565,8 +553,6 @@ def test_scan_leaves_out_vocabulary_types() -> None:
         assert module._not_in(module._skipped_types(connection)) == "NOT IN (<urn:x-browl:none>)"
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 async def test_count_is_scanned(plain: UsageStore, settings: Settings, tmp_path: Path) -> None:
     """Check that the build's count, for its estimate, is of the triples its scan reads, not of every triple."""
     (tmp_path / "derived").mkdir()
@@ -819,8 +805,6 @@ def test_remove_others_leaves_what_it_cant_delete(
     assert "Couldn't delete" in caplog.text and "not allowed" in caplog.text and "x.tmp" not in caplog.text
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 async def test_count_table_failure(
     store: UsageStore, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -835,8 +819,6 @@ async def test_count_table_failure(
     assert "Couldn't read the count of http://example.org/axioms#Animal from the usage table" in caplog.text
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 async def test_count_reads_no_rows(store: UsageStore, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that a count from the table reads only its count, not the usages' rows, and is the page's."""
     page = await read_table_page(store, f"{NS}Animal", 0, 0)

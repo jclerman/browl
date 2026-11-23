@@ -105,7 +105,6 @@ def literal(lexical: str, language: str | None = None) -> LiteralValue:
     return LiteralValue(lexical=lexical, datatype=IRI(LANG_STRING if language else f"{XSD}string"), language=language)
 
 
-@pytest.mark.fuseki
 @pytest.mark.anyio
 @pytest.mark.parametrize(("clause", "imported"), [("", True), (UNION_FROM, False)], ids=["own", "with-imports"])
 async def test_fetch(fuseki_url: str, dataset: str, clause: str, imported: bool) -> None:
@@ -133,7 +132,6 @@ async def test_fetch(fuseki_url: str, dataset: str, clause: str, imported: bool)
     assert (IRI(f"{NS}arabic"), arabic) in pairs
 
 
-@pytest.mark.fuseki
 @pytest.mark.usefixtures("data_dir")
 def test_page(fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check the panel's HTML: name properties first, the rest by name; values one per line, escaped and linked."""

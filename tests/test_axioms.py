@@ -22,7 +22,7 @@ from browl.owl import TokenKind
 from browl.rdf import OWL, RDF, RDFS, XSD, XSD_LEXICAL_FORMS
 from tests.helpers import derived_stage, fuseki_dataset, make_app
 
-pytestmark = [pytest.mark.jvm, pytest.mark.usefixtures("jvm")]
+pytestmark = pytest.mark.usefixtures("jvm")
 
 ONTOLOGY = Path(__file__).parent / "data" / "axioms.ofn"
 NS = "http://example.org/axioms#"
@@ -748,7 +748,6 @@ def test_unconvertible_annotations(caplog: pytest.LogCaptureFixture) -> None:
     assert "Not showing an axiom's annotations, as browl can't hold them as nodes" in caplog.text
 
 
-@pytest.mark.fuseki
 @pytest.mark.anyio
 async def test_empty_fragment(fuseki_url: str, dataset: str) -> None:
     """Check that an IRI the store doesn't hold has an empty fragment, and no axioms."""
@@ -758,7 +757,6 @@ async def test_empty_fragment(fuseki_url: str, dataset: str) -> None:
     assert await owlapi.run_java(axioms.entity_axioms, fragment, f"{NS}Nobody") == []
 
 
-@pytest.mark.fuseki
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     ("fixture", "clause"), [("dataset", ""), ("split_dataset", UNION_FROM)], ids=["default-graph", "union"]
@@ -806,7 +804,6 @@ NAMES = {
 }
 
 
-@pytest.mark.fuseki
 @pytest.mark.usefixtures("data_dir")
 def test_page(fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check an entity page's axioms: entity links with escaped names, keywords, other IRIs and literals as text."""

@@ -11,7 +11,7 @@ from browl.fuseki import FusekiClient, SparqlError
 from browl.rdf import IRI, RDF_DIR_LANG_STRING, RDF_LANG_STRING, XSD, BlankNode, Literal
 from tests.helpers import StaticServer
 
-pytestmark = [pytest.mark.jvm, pytest.mark.fuseki, pytest.mark.usefixtures("jvm"), pytest.mark.anyio]
+pytestmark = [pytest.mark.usefixtures("jvm"), pytest.mark.anyio]
 
 FAMILY = "http://example.org/family#"
 PREFIXES = f"""PREFIX : <{FAMILY}>

@@ -278,7 +278,6 @@ async def test_runner_shutdown(runner_process: tuple[subprocess.Popen[bytes], Pa
     assert await gone(pgid)
 
 
-@pytest.mark.jvm
 @pytest.mark.usefixtures("jvm")
 async def test_robot_in_sandbox(
     site: StaticServer, short_dir: Path, data_dir: Path, caplog: pytest.LogCaptureFixture

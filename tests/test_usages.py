@@ -30,7 +30,7 @@ from browl.usages import (
 )
 from tests.helpers import connect, loaded, make_settings, ontology_ntriples
 
-pytestmark = [pytest.mark.anyio, pytest.mark.fuseki, pytest.mark.jvm]
+pytestmark = pytest.mark.anyio
 
 NS = "http://example.org/axioms#"
 DECLARATION_TYPES = (

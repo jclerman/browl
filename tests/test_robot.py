@@ -174,7 +174,6 @@ async def test_tool_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     assert lines == ["secret= lang=C added=yes"]
 
 
-@pytest.mark.jvm
 @pytest.mark.usefixtures("jvm")
 async def test_robot_fetches_nothing(site: StaticServer, settings: Settings, data_dir: Path) -> None:
     """Check that ROBOT fails on an import missing from the catalog, naming it, and never requests it."""
@@ -413,7 +412,6 @@ def test_app_runs_stage(
     assert (data_dir / "uploads" / "1" / REASONED).exists() is (reason is None)
 
 
-@pytest.mark.jvm
 @pytest.mark.usefixtures("jvm")
 @pytest.mark.parametrize("reasoner", [Reasoner.ELK, Reasoner.HERMIT])
 async def test_success(settings: Settings, data_dir: Path, tmp_path: Path, reasoner: Reasoner) -> None:
@@ -424,7 +422,6 @@ async def test_success(settings: Settings, data_dir: Path, tmp_path: Path, reaso
     assert "SubClassOf(Dog Pet)" in await axioms(context.reasoned, "http://example.org/s2/", settings, tmp_path)
 
 
-@pytest.mark.jvm
 @pytest.mark.usefixtures("jvm")
 async def test_materialize_and_shortcuts(settings: Settings, data_dir: Path, tmp_path: Path) -> None:
     """Check reasoning's result: materialized restrictions added, shortcuts removed, all else and equivalences kept."""
@@ -474,7 +471,6 @@ async def test_materialize_and_shortcuts(settings: Settings, data_dir: Path, tmp
     }
 
 
-@pytest.mark.jvm
 @pytest.mark.usefixtures("jvm")
 @pytest.mark.parametrize(
     ("fixture", "reasoner", "expected"),
@@ -497,7 +493,6 @@ async def test_logical_failures(
     assert names == [browl.imports.CATALOG, f"ontology{Path(fixture).suffix}"]
 
 
-@pytest.mark.jvm
 @pytest.mark.usefixtures("jvm")
 async def test_reasons_over_converted(settings: Settings, data_dir: Path, tmp_path: Path) -> None:
     """Check that an OWL Functional Syntax upload is reasoned over as the Turtle the imports stage converted it to."""
@@ -510,7 +505,6 @@ async def test_reasons_over_converted(settings: Settings, data_dir: Path, tmp_pa
     assert "SubClassOf(Dog Pet)" in await axioms(context.reasoned, "http://example.org/s2/", settings, tmp_path)
 
 
-@pytest.mark.jvm
 @pytest.mark.usefixtures("jvm")
 async def test_time_limit(data_dir: Path) -> None:
     """Check that a run past REASONER_TIMEOUT_S is killed, and the job records the time limit."""
@@ -522,7 +516,6 @@ async def test_time_limit(data_dir: Path) -> None:
     assert asyncio.get_running_loop().time() - started < 5
 
 
-@pytest.mark.jvm
 @pytest.mark.usefixtures("jvm")
 async def test_memory_limit(data_dir: Path) -> None:
     """Check that a heap breach ends ROBOT, and the job records the memory limit."""

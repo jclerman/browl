@@ -13,7 +13,7 @@ from browl.settings import Settings
 from tests.conftest import find_robot_jar
 from tests.helpers import StaticServer, make_settings, turtle
 
-pytestmark = [pytest.mark.anyio, pytest.mark.jvm]
+pytestmark = pytest.mark.anyio
 
 EX = "http://example.org/"
 

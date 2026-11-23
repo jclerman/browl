@@ -182,7 +182,6 @@ def test_usage_tab_untouched(client: TestClient, caplog: pytest.LogCaptureFixtur
     assert not [record for record in caplog.records if record.name == "browl.overview"]
 
 
-@pytest.mark.jvm
 @pytest.mark.usefixtures("jvm")
 @pytest.mark.usefixtures("no_annotations")
 def test_fragment_error(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
@@ -204,7 +203,6 @@ def test_fragment_error(client: TestClient, monkeypatch: pytest.MonkeyPatch, cap
     assert "Stack trace:" in caplog.text
 
 
-@pytest.mark.jvm
 @pytest.mark.usefixtures("jvm")
 @pytest.mark.usefixtures("no_annotations")
 def test_java_error(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
