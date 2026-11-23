@@ -43,16 +43,18 @@ def kid(number: int) -> str:
     return f"Kid {number:03}"
 
 
-CLASSES = ["Top", "Left", "Right", "Bottom", "Same", "Alias", "Alias2", "Alias3", "Free", "Big"]
+CLASSES = ["Top", "Left", "Right", "Bottom", "Deep", "Same", "Alias", "Alias2", "Alias3", "Sub", "Free", "Big"]
 CLASS_EDGES = [
     ("Left", SUB_CLASS, "Top"),
     ("Right", SUB_CLASS, "Top"),
     ("Bottom", SUB_CLASS, "Left"),
-    ("Bottom", SUB_CLASS, "Right"),  # a diamond: Bottom under each parent
+    ("Bottom", SUB_CLASS, "Right"),  # a diamond: Bottom under each parent, with its subtree
+    ("Deep", SUB_CLASS, "Bottom"),
     ("Same", SUB_CLASS, "Left"),
     ("Same", EQUIVALENT, "Alias"),  # Alias, Alias2, Alias3 and Same are one node, Alias its representative
     ("Alias2", EQUIVALENT, "Same"),
     ("Alias3", EQUIVALENT, "Same"),
+    ("Sub", SUB_CLASS, "Same"),  # under the group, by a member other than its representative
     ("Big", SUB_CLASS, "Top"),
     ("Top", SUB_CLASS, "Thing"),
 ]
@@ -217,10 +219,10 @@ def test_roots(client: TestClient) -> None:
     assert found.shown() == [(0, "Free"), (0, "Top")]  # not owl:Thing, under which Top is
     free, top = found.items
     assert (free.id, free.href, free.expanded, free.toggle, free.counts) == ("t-0", "/Free", None, None, None)
-    assert (top.id, top.href, top.expanded, top.counts) == ("t-1", "/Top", "false", "3 children · 255 descendants")
+    assert (top.id, top.href, top.expanded, top.counts) == ("t-1", "/Top", "false", "3 children · 257 descendants")
     assert query(top.toggle or "") == opened("Top")
     assert top.toggle is not None and top.toggle.endswith("#t-1")  # back where it was
-    assert query(top.load or "") == [("node", ex("Top")), ("at", "t-1"), *opened("Top")]
+    assert query(top.load or "") == [("node", ex("Top")), ("at", "t-1")]  # no open nodes above it
 
 
 def test_open_nodes(client: TestClient) -> None:
@@ -237,9 +239,33 @@ def test_open_nodes(client: TestClient) -> None:
         (2, "Bottom"),
     ]
     left = found.item("Left")
-    assert (left.id, left.expanded, left.counts) == ("t-1-1", "true", "2 children · 2 descendants")
+    assert (left.id, left.expanded, left.counts) == ("t-1-1", "true", "2 children · 4 descendants")
     assert query(left.toggle or "") == opened("Top", "Right")  # closes it
     assert [item.id for item in found.items if item.text == "Bottom"] == ["t-1-1-1", "t-1-2-0"]
+
+
+def test_links_name_nodes_shown_open(client: TestClient) -> None:
+    """Check that links name the nodes shown open, each once, by its representative, in tree order (M1).
+
+    IRIs no node has, and open nodes under a closed one, are left out.
+    """
+    response = client.get(TREE, params=opened("Same", "Nope", "Alias", "Left", "Right", "Deep", "Top"))
+    for name in ("Same", "Nope", "Deep"):
+        assert urllib.parse.quote(ex(name), safe="") not in response.text
+    found = Tree(response.text)
+    assert query(found.item("Big").toggle or "") == opened("Top", "Left", "Alias", "Right", "Big")
+    assert query(found.item("Bottom").load or "") == [("node", ex("Bottom")), ("at", "t-1-1-1"), *opened("Top", "Left")]
+
+
+def test_close_drops_nodes_open_inside(client: TestClient) -> None:
+    """Check that a node's close link leaves out the nodes shown open only inside it."""
+    found = tree(client, opened("Top", "Left", "Right", "Bottom", "Alias"))
+    assert [item.id for item in found.items if item.text == "Deep"] == ["t-1-1-1-0", "t-1-2-0-0"]
+    assert query(found.item("Left").toggle or "") == opened("Top", "Bottom", "Right")  # Bottom's open under Right too
+    assert query(found.item("Right").toggle or "") == opened("Top", "Left", "Alias", "Bottom")
+    assert query(found.item("Top").toggle or "") == []
+    stale = tree(client, opened("Left"))  # Left is under a closed node
+    assert query(stale.item("Top").toggle or "") == opened("Top")
 
 
 def test_open_needs_parents_open(client: TestClient) -> None:
@@ -251,7 +277,7 @@ def test_equivalence_group_one_node(client: TestClient) -> None:
     """Check that an equivalence group is one node, linking to its representative, and counted once (U-9)."""
     found = tree(client, opened("Top", "Left"))
     group = found.item("Alias ≡ Alias2 ≡ Alias3 ≡ … (+1)")
-    assert (group.href, group.expanded) == ("/Alias", None)
+    assert (group.href, group.expanded) == ("/Alias", "false")
     with closing(connect(make_settings(), 1)) as connection:
         [node] = node_ids(connection, EntityType.CLASS, [ex("Same")]).values()
         read = read_node(connection, EntityType.CLASS, node, "_browl", "")
@@ -262,9 +288,15 @@ def test_equivalence_group_one_node(client: TestClient) -> None:
 
 def test_open_by_other_member(client: TestClient) -> None:
     """Check that naming any member of a group opens it, and a fragment for any member is the group's."""
-    by_member = client.get(TREE, params=[("node", ex("Same")), ("at", "t-9")])
-    assert by_member.status_code == 200
-    assert Tree(by_member.text).items == []  # a leaf: no children
+    found = tree(client, opened("Top", "Left", "Same"))
+    group = found.item("Alias ≡ Alias2 ≡ Alias3 ≡ … (+1)")
+    assert group.expanded == "true"
+    assert found.item("Sub").id == "t-1-1-0-0"
+    assert query(group.toggle or "") == opened("Top", "Left")
+    assert query(found.item("Big").toggle or "") == opened("Top", "Left", "Alias", "Big")  # by its representative
+    by_member = Tree(client.get(TREE, params=[("node", ex("Same")), ("at", "t-1-1-0"), *opened("Top", "Left")]).text)
+    sub = by_member.item("Sub")
+    assert (sub.id, sub.expanded) == ("t-1-1-0-0", None)
 
 
 def test_fragment(client: TestClient) -> None:
@@ -281,7 +313,7 @@ def test_fragment(client: TestClient) -> None:
     ]
     left = found.item("Left")
     assert query(left.toggle or "") == opened("Top", "Left")
-    assert query(left.load or "") == [("node", ex("Left")), ("at", "t-1-1"), *opened("Top", "Left")]
+    assert query(left.load or "") == [("node", ex("Left")), ("at", "t-1-1"), *opened("Top")]
 
 
 def test_fragment_opens_open_children(client: TestClient) -> None:
@@ -355,7 +387,7 @@ def test_children_paged(client: TestClient) -> None:
     assert more.text == f"Show {CHILD_PAGE} more (101–200 of 250)"
     assert query(more.href) == [*opened("Top", "Big"), ("children-of", ex("Big")), ("offset", "100")]
     assert more.href.endswith("#t-1-0-100")
-    assert query(more.load or "") == [("node", ex("Big")), ("at", "t-1-0"), *opened("Top", "Big"), ("offset", "100")]
+    assert query(more.load or "") == [("node", ex("Big")), ("at", "t-1-0"), *opened("Top"), ("offset", "100")]
 
 
 def test_children_page_without_js(client: TestClient) -> None:
@@ -403,13 +435,20 @@ def test_roots_paged(client: TestClient) -> None:
     assert client.get(path, params=[("offset", "120")]).status_code == 404
 
 
-def test_most_shown(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Check that once a page shows `MAX_SHOWN` nodes, the open nodes left are shown closed."""
-    monkeypatch.setattr(browl.trees, "MAX_SHOWN", 3)
+@pytest.mark.parametrize(("limit", "value"), [("MAX_SHOWN", 3), ("MAX_LINK_CHARS", 400)])
+def test_most_shown(client: TestClient, monkeypatch: pytest.MonkeyPatch, limit: str, value: int) -> None:
+    """Check that past `MAX_SHOWN` or `MAX_LINK_CHARS`, open nodes show closed, with toggles that open only them (S1).
+
+    Their toggles open only them and the nodes above them, so they fit.
+    """
+    monkeypatch.setattr(browl.trees, limit, value)
     found = tree(client, opened("Top", "Left", "Right"))
-    # The roots and Top's children make 5; Left and Right stay closed, with links that would close them.
+    # The roots and Top's children make 5, and the open nodes' IRIs take 111 characters in each link.
     assert found.shown() == [(0, "Free"), (0, "Top"), (1, "Big"), (1, "Left"), (1, "Right")]
-    assert found.item("Left").expanded == "false"
+    left = found.item("Left")
+    assert left.expanded == "false"
+    assert query(left.toggle or "") == opened("Top", "Left")
+    assert query(found.item("Top").toggle or "") == []  # closes it
 
 
 def test_most_open(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -417,6 +456,9 @@ def test_most_open(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(browl.trees, "MAX_OPEN", 2)
     found = tree(client, opened("Top", "Top", "Left", "Right"))
     assert (found.item("Left").expanded, found.item("Right").expanded) == ("true", "false")
+    # A third would pass it, so Right's toggle opens only it and the node above it.
+    assert query(found.item("Right").toggle or "") == opened("Top", "Right")
+    assert query(found.item("Big").toggle or "") == opened("Top", "Big")
 
 
 def test_read_children_order(client: TestClient) -> None:
@@ -441,5 +483,5 @@ def test_read_children_order(client: TestClient) -> None:
         roots = read_children(connection, EntityType.CLASS, None, "_browl", "")
         assert [(node.link.name, node.children, node.descendants) for node in roots.nodes] == [
             ("Free", 0, 0),
-            ("Top", 3, 255),
+            ("Top", 3, 257),
         ]

@@ -1443,15 +1443,20 @@ too (P-38), and the JSON API's (P-33).
   an offset at a time. The roots' next page is always such a page, as the roots seldom pass 100.
 - **Open nodes in the URL:** without JS, a node's toggle (▸, ▾) is a link to the tree page with that node opened or
   closed too. `open=` names each open node by IRI, repeated, so a URL keeps its tree through reloads and new
-  loads; an IRI no node has is ignored. A node opens wherever it appears, under each parent, once its parents are
-  open. The link ends in the node's element id (`#t-1-0`), so the page scrolls back to it; tree pages have no
-  hash-IRI script. A URL's first 100 open nodes are taken (`MAX_OPEN`), and a page shows about 5,000 nodes at most
-  (`MAX_SHOWN`), the open nodes left past that shown closed, since a node under several open parents opens under
-  each.
+  loads. A node opens wherever it appears, under each parent, once its parents are open. The links name only the
+  nodes shown open, each once, by its representative's IRI, in tree order, so an IRI no node has, or a node under
+  a closed one, drops out; closing a node also drops those shown open only inside it. The link ends in the node's
+  element id (`#t-1-0`), so the page scrolls back to it; tree pages have no hash-IRI script.
+- **Limits:** a URL's first 100 open nodes are taken (`MAX_OPEN`). A page shows about 5,000 nodes at most
+  (`MAX_SHOWN`), as a node under several open parents opens under each, and fewer once its links would name open
+  nodes in about 2 M characters in all (`MAX_LINK_CHARS`), as each toggle names them all. Past these, the open nodes
+  left are shown closed. The toggle of a node that can't open, or would pass `MAX_OPEN`, opens only it and the
+  nodes above it.
 - **With htmx** the toggle fetches the node's children alone (`?node=…&at=…`), once; `static/tree.js` then opens
-  and closes the node in place, without a request. The fragment request carries the open nodes too, so its links
-  work without JS. Opening in place doesn't change the URL. A fragment that can't be fetched loads the toggle's
-  page instead, and a click with a modifier key is left to the browser.
+  and closes the node in place, without a request. The fragment request names the open nodes above the node, so
+  its links work without JS, though they leave out the page's other open nodes. Opening in place doesn't change
+  the URL. A fragment that can't be fetched loads the toggle's page instead, and a click with a modifier key is
+  left to the browser.
 - **Element ids** follow each node's place: the roots `t-0`, `t-1`, …, a node's children its own id and their
   index (`t-1-0`), and its group and counts its id with `-g` and `-n`. A fragment's request names its node's id
   (`at=`), so its ids are unique on the page; P-38's column can use another prefix. `at=` is at most 256 characters
@@ -1568,7 +1573,7 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | Path | Purpose |
 | --- | --- |
 | `search` | Autocomplete endpoint (htmx fragment) and a full results page |
-| `tree/{hierarchy}` | Tree root page, `hierarchy` one of `classes`, `object-properties`, `data-properties` and `annotation-properties` (the navigation bar links them). `open=` (repeated) names each node shown open, by IRI; `children-of=…&offset=…` shows a later page of a node's children, or `offset=` alone of the roots. `?node=…&at=…` returns one node's children (htmx fragment, marked `noindex`), from `offset=`, their element ids following from its id, `at` ([2.9](#29-page-layout), Tree pages). An unknown node, a repeated parameter, or an offset past the last is a 404 (P-18) |
+| `tree/{hierarchy}` | Tree root page, `hierarchy` one of `classes`, `object-properties`, `data-properties` and `annotation-properties` (the navigation bar links them). `open=` (repeated) names each node shown open, by IRI; `children-of=…&offset=…` shows a later page of a node's children, or `offset=` alone of the roots. `?node=…&at=…` returns one node's children (htmx fragment, marked `noindex`), from `offset=`, their element ids following from its id, `at`, with `open=` naming the open nodes above it ([2.9](#29-page-layout), Tree pages). An unknown node, a repeated parameter, or an offset past the last is a 404 (P-18) |
 | `iri?iri=…` | Fallback entity URLs (Q1b) |
 | `hash?path=…&fragment=…` | The page for a hash URL's path and fragment, for the hash-IRI script ([2.3](#23-iri--url-mapping), Lookup); marked `noindex`, as its pages are at their hash URLs |
 | `usage-count?iri=…` | An entity's Usage tab label with its count, "Usage (128)", which its page fetches once it renders ([2.8](#28-entity-pages)); marked `noindex`; a 404 for an IRI with no entity (P-27b) |

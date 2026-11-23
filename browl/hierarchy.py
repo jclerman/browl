@@ -88,6 +88,15 @@ def node_ids(connection: sqlite3.Connection, hierarchy: EntityType, iris: Iterab
     return found
 
 
+def node_iris(connection: sqlite3.Connection, nodes: Iterable[int]) -> dict[int, str]:
+    """Return the IRI of each node's representative, by its `entity.id` (`node_ids`)."""
+    found: dict[int, str] = {}
+    for batch in batched(dict.fromkeys(nodes), LOOKUP_BATCH):
+        rows = connection.execute(f"SELECT id, iri FROM entity WHERE id IN ({', '.join('?' * len(batch))})", batch)
+        found.update(rows)
+    return found
+
+
 def read_node(
     connection: sqlite3.Connection, hierarchy: EntityType, node: int, prefix: str, root: str
 ) -> TreeNode | None:

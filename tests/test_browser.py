@@ -2037,7 +2037,7 @@ def test_tree_opens_in_place(page: Page, trees: LiveServer) -> None:
     tree_toggle(page, "Top").click()
     expect(tree_item(page, "Left")).to_be_visible()
     expect(top).to_have_attribute("aria-expanded", "true")
-    assert query_of(requests[0]) == {"node": [f"{EX}/Top"], "at": ["t-1"], "open": [f"{EX}/Top"]}
+    assert query_of(requests[0]) == {"node": [f"{EX}/Top"], "at": ["t-1"]}
     tree_toggle(page, "Top").click()
     expect(tree_item(page, "Left")).to_be_hidden()
     expect(top).to_have_attribute("aria-expanded", "false")
@@ -2116,7 +2116,7 @@ def test_tree_without_javascript(page: Page, trees: LiveServer) -> None:
     assert query_of(page.url) == {"open": [f"{EX}/Top", f"{EX}/Right"]}
     tree_toggle(page, "Top").click()
     expect(tree_item(page, "Left")).to_have_count(0)
-    assert query_of(page.url) == {"open": [f"{EX}/Right"]}
+    assert query_of(page.url) == {}  # Right, open only inside Top, is closed too
 
 
 def test_tree_show_more_in_place(page: Page, trees: LiveServer) -> None:

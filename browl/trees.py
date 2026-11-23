@@ -12,13 +12,15 @@ without, it shows that page of the node's children (`children-of=` and `offset=`
 
 import re
 import sqlite3
+import urllib.parse
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
 from browl.derived import EntityType
-from browl.hierarchy import CHILD_PAGE, ChildPage, TreeNode, node_ids, read_children, read_node
+from browl.hierarchy import CHILD_PAGE, ChildPage, TreeNode, node_ids, node_iris, read_children, read_node
 from browl.lookup import PANEL_HEADERS, not_found
 from browl.pages import TREES, href, link_root, read_derived, templates
 from browl.tabs import with_query
@@ -47,11 +49,17 @@ OFFSET_PARAM = "offset"
 """The query parameter that says how many children, or roots, come before those shown; absent for none."""
 
 MAX_OPEN = 100
-"""The most open nodes a URL names that a page takes; the rest are ignored."""
+"""The most open nodes a URL names that a page takes; the rest are ignored. A node's toggle that would pass it opens
+only the node and those above it."""
 
 MAX_SHOWN = 5_000
 """About the most nodes a page or fragment shows: once it shows this many, the open nodes left are shown closed. A
-node with several parents opens under each, so a few open nodes can multiply in a hierarchy with many joins."""
+node with several parents opens under each, so a few open nodes can multiply in a hierarchy with many joins. A node
+shown closed that the URL opens gets a toggle that opens only it and the nodes above it, so it fits."""
+
+MAX_LINK_CHARS = 2_000_000
+"""About the most characters naming open nodes a page's, or fragment's, links hold in all: each toggle names them
+all, so with many open nodes, or long IRIs, a page shows fewer than `MAX_SHOWN` nodes, as it does past that."""
 
 ROOT_ID = "t"
 """The element id the roots' ids follow from: `t-0`, `t-1`, …; a node's children's from its own, `t-0-0`, …."""
@@ -158,16 +166,21 @@ def _read_query(request: Request) -> _Query | None:
 class _Builder:
     """Builds a tree page's, or a fragment's, nodes, reading each page of children once.
 
+    It lays the nodes out first, and then gives them their links, which name the nodes shown open.
+
     Attributes:
         request: The request.
         connection: The derived database.
         hierarchy: The hierarchy.
         page_path: The tree page's path, from the app's root.
         query: What the URL asks for.
-        ids: The node of each IRI the URL names, by IRI (`browl.hierarchy.node_ids`).
+        open_ids: The nodes the URL opens, by id.
         window: The node whose children the page shows from the query's offset, by id; None for the roots. For a
             fragment, its node.
+        open_chars: About how many characters naming the open nodes takes in a link.
         shown: How many nodes have been shown so far.
+        opened: The open nodes the links name, by id and IRI: the nodes shown open, in tree order, after a fragment's
+            node and the nodes open above it.
     """
 
     request: Request
@@ -175,15 +188,95 @@ class _Builder:
     hierarchy: EntityType
     page_path: str
     query: _Query
-    ids: dict[str, int]
+    open_ids: set[int]
     window: int | None
+    open_chars: int
     shown: int = 0
+    opened: list[tuple[int, str]] = field(default_factory=list)
+    _open_at: dict[int, list[str]] = field(default_factory=dict)  # each node shown open: its element ids
+    _closing: dict[int, list[str]] = field(default_factory=dict)  # each node shown open: the links' IRIs once closed
     _pages: dict[tuple[int | None, int], ChildPage] = field(default_factory=dict)
 
-    @property
-    def open_ids(self) -> set[int]:
-        """Return the open nodes, by id."""
-        return {self.ids[iri] for iri in self.query.open if iri in self.ids}
+    def build(self, parent: TreeNode | None, parent_id: str, offset: int, above: list[tuple[int, str]]) -> ShownList:
+        """Return a page of a node's children, or of the roots, as shown, with the open nodes among them opened.
+
+        Args:
+            parent: The node; None for the roots.
+            parent_id: Its element id, from which its children's follow.
+            offset: How many children come before the page.
+            above: For a fragment, the open nodes above its node, and the node, by id and IRI; else empty.
+        """
+        self.opened = list(above)
+        shown = self._lay_out(parent, parent_id, offset)
+        return self._linked(shown, parent, parent_id, [iri for _, iri in above])
+
+    def children(self, parent: TreeNode | None, offset: int) -> ChildPage:
+        """Return a page of a node's children, or of the roots, read once per request."""
+        key = (None if parent is None else parent.id, offset)
+        if key not in self._pages:
+            prefix: str = self.request.app.state.settings.reserved_prefix
+            root = link_root(self.request.scope)
+            self._pages[key] = read_children(self.connection, self.hierarchy, parent, prefix, root, offset)
+        return self._pages[key]
+
+    def _lay_out(self, parent: TreeNode | None, parent_id: str, offset: int) -> ShownList:
+        """Return a page of a node's children, or of the roots, with the open nodes among them opened, without links."""
+        page = self.children(parent, offset)
+        self.shown += len(page.nodes)
+        nodes = []
+        for index, node in enumerate(page.nodes, start=page.offset):
+            element_id = f"{parent_id}-{index}"
+            children = None
+            if node.children and node.id in self.open_ids and self._has_room():
+                if node.id not in self._open_at:
+                    self.opened.append((node.id, node.link.iri))
+                self._open_at.setdefault(node.id, []).append(element_id)
+                start = self.query.offset if node.id == self.window else 0
+                children = self._lay_out(node, element_id, start)
+            nodes.append(ShownNode(node, element_id, None, None, children))
+        return ShownList(page, nodes)
+
+    def _has_room(self) -> bool:
+        """Return whether the page has room for another open node's children (`MAX_SHOWN`, `MAX_LINK_CHARS`)."""
+        return self.shown < MAX_SHOWN and self.shown * self.open_chars < MAX_LINK_CHARS
+
+    def _linked(self, shown: ShownList, parent: TreeNode | None, parent_id: str, path: list[str]) -> ShownList:
+        """Return a page of nodes laid out, with their links.
+
+        Args:
+            shown: The page.
+            parent: Its node; None for the roots.
+            parent_id: Its node's element id.
+            path: The IRIs of the open nodes above the page's nodes, its own node last.
+        """
+        nodes = []
+        for item in shown.nodes:
+            node = item.node
+            if not node.children:
+                nodes.append(item)
+                continue
+            children = None
+            if item.children is not None:
+                toggle = self.page_link(self._closed(node.id), item.id)
+                children = self._linked(item.children, node, item.id, [*path, node.link.iri])
+            elif node.id not in self.open_ids and len(self.opened) < MAX_OPEN:
+                toggle = self.page_link([*(iri for _, iri in self.opened), node.link.iri], item.id)
+            else:  # it, or the page, has no room: only it and the nodes above it open, so it fits
+                toggle = self.page_link([*path, node.link.iri], item.id)
+            load = self.fragment_link(node, item.id, path)
+            nodes.append(ShownNode(node, item.id, toggle, load, children))
+        return self._with_paging(ShownList(shown.page, nodes), parent, parent_id, path)
+
+    def _closed(self, node: int) -> list[str]:
+        """Return the IRIs of the open nodes once a node shown open closes: less it, and those shown open only in it."""
+        if node not in self._closing:
+            inside = tuple(f"{at}-" for at in self._open_at[node])
+            self._closing[node] = [
+                iri
+                for other, iri in self.opened
+                if other != node and not all(at.startswith(inside) for at in self._open_at.get(other, [""]))
+            ]
+        return self._closing[node]
 
     def page_link(self, opened: list[str], anchor: str | None, window: tuple[str, int] | None = None) -> str:
         """Return a link to the tree page with these nodes open, at an element, showing a page of a node's children.
@@ -201,55 +294,18 @@ class _Builder:
             params += [*([(CHILDREN_OF_PARAM, window[0])] if window[0] else []), (OFFSET_PARAM, str(window[1]))]
         return href(self.request, with_query(self.page_path, params), anchor)
 
-    def fragment_link(self, node: TreeNode, element_id: str, opened: list[str], offset: int = 0) -> str:
-        """Return the URL of a node's children's fragment, with these nodes open, from an offset."""
-        params = [(NODE_PARAM, node.link.iri), (AT_PARAM, element_id), *[(OPEN_PARAM, iri) for iri in opened]]
+    def fragment_link(self, node: TreeNode, element_id: str, above: list[str], offset: int = 0) -> str:
+        """Return the URL of a node's children's fragment, from an offset, given the open nodes above it."""
+        params = [(NODE_PARAM, node.link.iri), (AT_PARAM, element_id), *[(OPEN_PARAM, iri) for iri in above]]
         if offset:
             params.append((OFFSET_PARAM, str(offset)))
         return href(self.request, with_query(self.page_path, params))
 
-    def children(self, parent: TreeNode | None, offset: int) -> ChildPage:
-        """Return a page of a node's children, or of the roots, read once per request."""
-        key = (None if parent is None else parent.id, offset)
-        if key not in self._pages:
-            prefix: str = self.request.app.state.settings.reserved_prefix
-            root = link_root(self.request.scope)
-            self._pages[key] = read_children(self.connection, self.hierarchy, parent, prefix, root, offset)
-        return self._pages[key]
-
-    def shown_list(self, parent: TreeNode | None, parent_id: str, opened: list[str], offset: int) -> ShownList:
-        """Return a page of a node's children, or of the roots, as shown, with the open nodes among them opened.
-
-        Args:
-            parent: The node; None for the roots.
-            parent_id: Its element id, from which its children's follow.
-            opened: The open nodes' IRIs, for links; the node among them.
-            offset: How many children come before the page.
-        """
-        page = self.children(parent, offset)
-        self.shown += len(page.nodes)
-        open_ids = self.open_ids
-        nodes = []
-        for index, node in enumerate(page.nodes, start=page.offset):
-            element_id = f"{parent_id}-{index}"
-            if not node.children:
-                nodes.append(ShownNode(node, element_id, None, None))
-                continue
-            is_open = node.id in open_ids
-            others = [iri for iri in opened if self.ids.get(iri) != node.id]
-            toggle = self.page_link(others if is_open else [*opened, node.link.iri], element_id)
-            load = self.fragment_link(node, element_id, [*others, node.link.iri])
-            children = None
-            if is_open and self.shown < MAX_SHOWN:
-                start = self.query.offset if node.id == self.window else 0
-                children = self.shown_list(node, element_id, opened, start)
-            nodes.append(ShownNode(node, element_id, toggle, load, children))
-        return self._with_paging(ShownList(page, nodes), parent, parent_id, opened)
-
-    def _with_paging(self, shown: ShownList, parent: TreeNode | None, parent_id: str, opened: list[str]) -> ShownList:
+    def _with_paging(self, shown: ShownList, parent: TreeNode | None, parent_id: str, path: list[str]) -> ShownList:
         """Return a list with its links to the pages before and after it."""
         page = shown.page
         iri = "" if parent is None else parent.link.iri
+        opened = [iri for _, iri in self.opened]
         previous = None
         if page.offset and self.query.node is None:  # a fragment's page goes after those before it
             anchor = None if parent is None else parent_id
@@ -257,9 +313,14 @@ class _Builder:
         if page.end >= page.total:
             return ShownList(page, shown.nodes, previous)
         more = self.page_link(opened, f"{parent_id}-{page.end}", (iri, page.end))
-        more_load = None if parent is None else self.fragment_link(parent, parent_id, opened, page.end)
+        more_load = None if parent is None else self.fragment_link(parent, parent_id, path[:-1], page.end)
         count = min(CHILD_PAGE, page.total - page.end)
         return ShownList(page, shown.nodes, previous, more, more_load, count)
+
+
+def _link_chars(iris: Iterable[str]) -> int:
+    """Return about how many characters naming these open nodes takes in a link."""
+    return sum(len(OPEN_PARAM) + 2 + len(urllib.parse.quote(iri, safe="")) for iri in iris)
 
 
 @router.api_route("/tree/{slug}", methods=["GET", "HEAD"], include_in_schema=False)
@@ -268,8 +329,8 @@ async def tree_page(request: Request, slug: str) -> Response:
 
     The page shows the roots, and the children of each node `open=` names, a page of each; `children-of=` and
     `offset=` show a later page of a node's children, or with `offset=` alone, of the roots. A fragment shows a page
-    of its node's children, from `offset=`, with their element ids following from `at=`. An unknown node, or an offset
-    past the last, is a 404.
+    of its node's children, from `offset=`, with their element ids following from `at=`; `open=` names the open nodes
+    above it, for its links, and any open below it. An unknown node, or an offset past the last, is a 404.
     """
     hierarchy = HIERARCHIES.get(slug)
     query = _read_query(request)
@@ -285,16 +346,21 @@ async def tree_page(request: Request, slug: str) -> Response:
         if target is not None and target not in ids:
             return None
         window = None if target is None else ids[target]
-        builder = _Builder(request, connection, hierarchy, page_path, query, ids, window)
+        known: dict[int, str] = {}  # the open nodes the URL names, each once, an IRI of each
+        for iri in query.open:
+            if iri in ids:
+                known.setdefault(ids[iri], iri)
+        chars = _link_chars([*known.values(), *([] if query.node is None else [query.node])])
+        builder = _Builder(request, connection, hierarchy, page_path, query, set(known), window, chars)
         parent = None if window is None else read_node(connection, hierarchy, window, prefix, link_root(request.scope))
         if query.node is not None:
             assert parent is not None  # found by `node_ids`
-            ids.setdefault(parent.link.iri, parent.id)  # `node` may name another member of its group
-            opened = [*query.open, *([] if parent.link.iri in query.open else [parent.link.iri])]
-            shown = builder.shown_list(parent, query.at, opened, query.offset)
+            iris = node_iris(connection, (node for node in known if node != parent.id))
+            above = [*iris.items(), (parent.id, parent.link.iri)]
+            shown = builder.build(parent, query.at, query.offset, above)
         else:
             # A window on a node that isn't shown open is ignored, e.g. once a link has closed it or its parent.
-            shown = builder.shown_list(None, ROOT_ID, query.open, 0 if window is not None else query.offset)
+            shown = builder.build(None, ROOT_ID, 0 if window is not None else query.offset, [])
         total = shown.page.total if parent is None else parent.children
         return None if query.offset and query.offset >= total else shown
 
