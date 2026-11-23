@@ -28,6 +28,7 @@ from browl.precache.hierarchies import hierarchies
 from browl.precache.keys import build_keys
 from browl.precache.names import names
 from browl.precache.owner_map import owner_map
+from browl.precache.search import search
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ FUSEKI_RETRY_S = (0.5, 5.0)
 INTERRUPT_CHECK_STEPS = 10_000
 """How many SQLite virtual machine steps an interruptible build's statements take between checks for an interrupt."""
 
-HOOKS: tuple[Hook, ...] = (entities, names, hierarchies, owner_map)
+HOOKS: tuple[Hook, ...] = (entities, names, search, hierarchies, owner_map)
 """The hooks the app runs, in order: a hook may read tables an earlier one filled.
 
 A hook creates the indexes of each table it fills once it's done (`DerivedWriter.create_indexes`), so later hooks can
