@@ -1345,6 +1345,8 @@ Every page has the same frame (U-27, U-28, U-29):
   which P-22 sets. Sign-in itself is a small link at the bar's end, to the admin upload page, whose sign-in P-22 adds.
   Pages have no footer: an entity page, filling the window, has no room for one.
 - On narrow screens, the tree links collapse into a menu: a `<details>` element, so it opens without JS.
+- On a tree page, that tree's link is marked (`aria-current="page"`, bold and underlined), and the narrow screens'
+  menu button names it ("Browse: Classes"), so the page is clear when scrolled.
 - The ontology name is its title, else its IRI, capped in length; it's read once per generation (`PageFrame`). The bar
   has no in-page (`#…`) links, such as a skip link, since on a path hash entities share the hash-IRI script would look
   up their fragments as entities.

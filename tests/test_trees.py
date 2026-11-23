@@ -17,6 +17,7 @@ import browl.trees
 from browl.derived import EntityType
 from browl.hierarchy import CHILD_PAGE, node_ids, read_children, read_node
 from browl.jobs import Stage
+from browl.pages import TREES
 from tests.helpers import connect, derived_stage, make_app, make_settings
 
 pytestmark = pytest.mark.usefixtures("data_dir")
@@ -226,6 +227,17 @@ def test_roots(client: TestClient) -> None:
     assert query(top.toggle or "") == opened("Top")
     assert top.toggle is not None and top.toggle.endswith("#t-1")  # back where it was
     assert query(top.load or "") == [("node", ex("Top")), ("at", "t-1")]  # no open nodes above it
+
+
+@pytest.mark.parametrize("slug", ["classes", "object-properties"])
+def test_navigation_marks_tree(client: TestClient, slug: str) -> None:
+    """Check that the navigation bar marks the tree page shown, and names it on the narrow screens' menu button."""
+    html = client.get(f"/_browl/tree/{slug}").text
+    marked = re.findall(r'<a href="([^"]*)" aria-current="page">([^<]*)</a>', html)
+    label = {tree.slug: tree.label for tree in TREES}[slug]
+    assert marked == [(f"/_browl/tree/{slug}", label)]
+    assert f'<span class="current-tree">: {label}</span>' in html
+    assert 'aria-current="page"' not in client.get("/Top").text
 
 
 def test_crawlers_kept_out(client: TestClient) -> None:

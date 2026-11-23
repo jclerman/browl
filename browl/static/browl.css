@@ -116,6 +116,13 @@ code {
   padding: calc(var(--space) / 4) 0;
 }
 
+/* The tree page shown: its link in the bar, bold and underlined in the accent color. */
+.site-menu a[aria-current="page"] {
+  font-weight: 600;
+  text-decoration: underline 2px var(--accent);
+  text-underline-offset: 0.3em;
+}
+
 .site-menu summary {
   padding: calc(var(--space) / 4) calc(var(--space) / 2);
   border: 1px solid var(--border);

@@ -326,6 +326,7 @@ async def tree_page(request: Request, slug: str) -> Response:
     query = _read_query(request)
     if tree is None or query is None:
         return not_found(request)
+    request.state.current_tree = slug  # marked in the navigation bar
     hierarchy = tree.hierarchy
     prefix: str = request.app.state.settings.reserved_prefix
     page_path = f"/{prefix}/tree/{slug}"

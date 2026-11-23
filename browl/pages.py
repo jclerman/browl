@@ -178,14 +178,19 @@ def frame_context(request: Request) -> dict[str, object]:
     Page titles end with the ontology's title, isolated, else `SITE_NAME` (`site_name`).
 
     The ontology's link comes from `PageFrame`. P-22 marks requests from admins by setting `request.state.is_admin`.
+    A tree page sets `request.state.current_tree` to its slug, so the bar marks its link.
     """
     reserved = f"/{request.app.state.settings.reserved_prefix}"
     link: OntologyLink = getattr(request.state, "ontology_link", NO_LINK)
+    current = getattr(request.state, "current_tree", None)
     return {
         "frame": {
             "name": link.name,
             "home": None if link.path is None else href(request, link.path, link.fragment),
-            "trees": [(href(request, f"{reserved}/tree/{tree.slug}"), tree.label) for tree in TREES],
+            "trees": [
+                (href(request, f"{reserved}/tree/{tree.slug}"), tree.label, tree.slug == current) for tree in TREES
+            ],
+            "current_tree": next((tree.label for tree in TREES if tree.slug == current), None),
             "admin": href(request, f"{reserved}/admin/upload"),
             "is_admin": getattr(request.state, "is_admin", False) is True,
             "title_end": isolate(link.title) if link.title is not None else SITE_NAME,
