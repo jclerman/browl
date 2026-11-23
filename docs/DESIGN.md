@@ -50,7 +50,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **U-8** · Descendant counts count each distinct descendant once per ancestor. A class with two parents counts under both; in a "diamond" it counts once under the shared ancestor. _(Q19, Q19a)_ | v1 |
 | **U-9** · Equivalent classes appear as one node in the trees and are counted once. Each equivalent IRI keeps its own page, which links to the others. _(Q19, Q19b)_ | v1 |
 | **U-10** · Autocomplete search over all entities. Results can be filtered by entity type and by which name annotation properties to search, using either direct values only or also values entailed under RDFS (sub-properties). | v1 |
-| **U-11** · Autocomplete matches from the start of the whole value, ignoring case and accents. _(Q8)_ | v1 |
+| **U-11** · Autocomplete matches from the start of the whole value, ignoring case and accents; with U-19, also from the start of any word. _(Q8)_ | v1 |
 | **U-12** · Autocomplete ranks exact matches first, then values of earlier properties in the configured name list, then more-preferred languages, then shorter values. _(Q9, Q10)_ | v1 |
 | **U-13** · Hash IRIs (`…/onto#Foo`) are supported: visiting the hash IRI's URL shows that entity. _(Q2)_ | v1 |
 | **U-14** · A URL that isn't a declared entity shows "not found". That includes the bare part of a hash IRI before the `#`, unless it is the ontology IRI. _(Q2a)_ | v1 |
@@ -67,8 +67,11 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **U-44** · A one-page view of an entity page, labeled "Scroll as one page": all of its content in one page scroll, with no panel scrolling on its own. Used for printing and on small screens (phones, short windows), and on demand with a toggle. | v1 |
 | **U-45** · An entity page shows where the entity sits in its hierarchy, in a hideable column beside the Overview's panels: its ancestors as one merged tree, each drawn once, with its direct children below it. | v1 |
 | **U-46** · In the hierarchy trees and the hierarchy column, deprecated entities (`owl:deprecated true`) are struck through, with a text equivalent for screen readers. | v1 |
+| **U-19** · Autocomplete also matches from the start of any word, ranked after matches from the start of the whole value. _(Q8; proposed for v1, was Later; P-41)_ | v1 |
+| **U-47** · Search can cover every annotation property with literal values in the served ontology, not only the name properties. The full results page lists the properties the ontology has, with their value counts, to filter by. _(P-42)_ | v1 |
+| **U-48** · A visitor's search filters can be kept in their browser, and the navigation bar's search box then uses them, showing that it's filtered and offering to clear the filters. _(P-43)_ | v1 |
+| **U-49** · A visitor can choose the order in which properties rank search results, in place of the name properties' order. _(P-42 makes it possible)_ | Later |
 | **U-18** · Named individuals have pages, and each class page lists its individuals in an Individuals tab, with paging. _(Q17)_ | Later |
-| **U-19** · Autocomplete also matches from the start of any word. _(Q8)_ | Later |
 | **U-20** · Autocomplete tolerates typos. _(Q8)_ | Later |
 | **U-21** · Autocomplete can optionally match IRIs and CURIEs. Never on by default. _(Q12)_ | Later |
 | **U-22** · Imported entities can link out to their real IRI where it is hosted. _(Q3)_ | Later |
@@ -100,6 +103,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **A-7** · Admins can add and remove admin email addresses. The seed admins (O-6) can't be removed through the UI. _(Q16a)_ | v1 |
 | **A-8** · Detailed logs for each stage, inline or on a linked page. _(Q7b)_ | Later |
 | **A-10** · An admin can cancel a running load, rebuild or background build (such as P-27c's usage table), e.g. if it's taking too long. A cancelled load leaves the ontology being served as it was. | v1 |
+| **A-11** · An admin can change, for the served ontology, the name properties and their order, the language ranking, and which annotation properties search indexes, choosing from the properties and languages the ontology has. The change applies without reloading the ontology, while the site keeps serving the current pages until it's ready. _(P-44)_ | v1 |
 | **A-9** · Several ontologies loaded and ready to serve. Whether one or many are served at a time is to be decided. _(Q14)_ | Later |
 
 ### 1.4 Operator requirements
@@ -117,6 +121,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **O-9** · Data that must survive restarts (the loaded ontology, derived data, the admin list) lives on mounted volumes. _(Q16a)_ | v1 |
 | **O-10** · The page cache size is configurable (default 100 pages). _(Q13)_ | v1 |
 | **O-11** · Extra CURIE prefix mappings are configurable and override the ontology's own and the built-in ones. _(Q18b)_ | v1 |
+| **O-13** · The name properties, the language ranking (O-4, O-5) and the properties search leaves out (U-47) set in the environment are defaults. An admin's changes (A-11) override them for the ontology they were made for, by its IRI, and survive restarts and reloads of that ontology. _(P-44)_ | v1 |
 | **O-12** · The object properties that get relation trees (U-38) are configurable. | Later |
 
 ### 1.5 Non-functional requirements
@@ -876,8 +881,63 @@ says whether more results follow.
 **Normalization:** Unicode NFKD, accents removed, case folded, leading whitespace removed. The same function is used
 at index and query time.
 
-**Later:** FTS5 for any-word matching (U-19); an external engine such as Typesense for typo tolerance (U-20), swapped in
-behind the same interface. Building the index in the background after the generation is ready, if a framework for such
+**Proposed: wider search** (U-19, U-47–U-49, A-11, O-13; P-41–P-44). Not yet built; the rest of this section
+describes P-19 as built.
+
+- **Any word** (U-19, P-41). Besides its row for the whole value, each value gets a row for each later word start: its
+  key is the normalized value from that word on, flagged as a word match, and it stores the word's offset in the value,
+  so a hit can mark the word, and the whole value, which it shows. A word starts after whitespace or punctuation
+  (Unicode categories Z and P), so "cell" finds "T-cell". Word rows are lanes of their own, walked after every
+  whole-value lane: all matches from the start of a whole value rank first (a new rule between 1 and 2), and within
+  word matches the usual rules apply, with length the key's (from the word on). Nothing else in a query changes.
+  - **Cost**, to measure first on NCBITaxon: the table grows by about the mean number of words per value, perhaps
+    2–3× its 247 MiB, and its build by a similar factor of its 12 s. The worst-case query, which seeks every lane at
+    every length, doubles at most, as the lanes do.
+- **Every annotation property** (U-47, P-42). A second bulk query reads every literal value of each annotation
+  property on the ontology's entities into the index, with the property it's asserted with. Name values stay in
+  `name_value`, for display names.
+  - **Keyed by property, not by rank.** A lane's property is an id, and the order lanes are walked in is decided per
+    query, in Python: the name properties in their order first, then the others, by display name. So reordering the
+    name properties needs no new index (only new display names, A-11), and a query may give its own order (U-49).
+  - **Entailment moves to the query.** "Direct and entailed" for a chosen property means its lanes, then the lanes of
+    its sub-properties, found in the annotation-property hierarchy (`edge`), so rule 4 holds. An entailed value is
+    then stored once, as itself, not once per name property above it.
+  - **Lanes multiply**, and a query that matches few seeks each at every length: 50 lanes of 256 lengths is about
+    65 ms (above). An ontology with 100 annotation properties in 3 languages and 2 types could have 600. So P-42 first
+    measures lane counts and worst cases on Uberon, HPO and NCBITaxon. Unless that shows otherwise, a query searches
+    only the name properties by default (the autocomplete, and the results page with none checked), and other
+    properties when chosen; P-42 may also cap the lengths walked per lane.
+  - **The results page** lists the properties that have indexed values, name properties first, each with its value
+    count (kept in `search_lane`). Long values such as definitions are indexed like any other; their key holds their
+    first `KEY_CHARS` characters.
+- **Sticky filters** (U-48, P-43). The results page offers to use its filters in the search box. `static/search.js`
+  keeps them in the browser's storage and adds them to the box's requests and its form; the bar shows "Filtered", with
+  a control that clears them. URLs stay the same for every visitor, so the page cache (2.10) is unaffected, and
+  without JS the box searches with the defaults. On the results page itself, the bar's form carries the page's filters
+  as hidden fields, JS or not.
+- **Admin search settings** (A-11, O-13, P-44).
+  - **Stored** in the persistent database, by ontology IRI: the name properties in order, the language ranking, and
+    the properties search leaves out. Where there's no row, the environment's settings apply (2.12). The values in
+    effect are what the build keys hash, so a change makes the derived database out of date, as a changed setting does
+    now (2.5, Build keys).
+  - **A settings page** (`admin/search`) lists the served ontology's annotation properties and the languages of their
+    values, with counts, from the derived database: the name properties to order and the properties to leave out. It
+    works without JS (moves by buttons, as forms).
+  - **Applying** a change runs pre-caching again, from the same store, into a new file beside the current one, which
+    pages keep reading until the swap; the new settings take effect for pages only then. So, unlike the rebuild after
+    a restart (2.4), the site doesn't show "loading". It runs as a job, holding the job lock, so uploads wait, and the
+    status page shows it; if it fails, the current file stays and the admin sees why. On NCBITaxon it takes about
+    3¼ minutes, as a load's pre-caching does, unless only the hooks whose keys changed are run again, on a copy of the
+    current file.
+- **To settle when they're built:**
+  - Whether word matches are always on, or a choice on the results page; which characters start a word.
+  - How a hit from a property other than the first name property says which property it's from, e.g.
+    "_myocardium_ (exact synonym) → **heart muscle**".
+  - Whether the results page's filters are kept on request (a button) or whenever they're used.
+  - Whether A-11's settings are kept for an ontology's IRI across uploads, or start again with each upload.
+
+**Later:** an external engine such as Typesense for typo tolerance (U-20), swapped in behind the same interface.
+Building the index in the background after the generation is ready, if a framework for such
 builds is extracted from the usage table's, or P-24 finds load time matters.
 
 ### 2.7 Display names
@@ -1616,8 +1676,8 @@ validated at startup (`browl/settings.py`). Lists and mappings are given as JSON
 | --- | --- | --- |
 | `BASE_URL` | none (required) | O-2 |
 | `RESERVED_PREFIX` | `_browl` | must start with `_`; O-3 |
-| `NAME_PROPERTIES` | `[rdfs:label]` | ordered; O-4 |
-| `LANGUAGE_RANKING` | `[en]` | Untagged is the reserved entry `none`, added at the end if not listed; O-5 |
+| `NAME_PROPERTIES` | `[rdfs:label]` | ordered; O-4; proposed: a default an admin can override per ontology (O-13, P-44) |
+| `LANGUAGE_RANKING` | `[en]` | Untagged is the reserved entry `none`, added at the end if not listed; O-5; proposed: a default an admin can override per ontology (O-13, P-44) |
 | `EXTRA_PREFIXES` | `{}` | O-11 |
 | `PAGE_CACHE_SIZE` | `100` | `0` turns the cache off; O-10 |
 | `REASONER_TIMEOUT_S`, `REASONER_MAX_HEAP` | `3600`, `8g` (S-2) | O-8; ELK needs 1 GB for Uberon and 16 GB for NCBITaxon, so set `16g` for ontologies of that size |
@@ -1741,6 +1801,10 @@ flowchart LR
     end
     subgraph P5["Phase 5: Search, caching, auth"]
         P20["P-20 Autocomplete UI"]
+        P41["P-41 Any-word search"]
+        P42["P-42 All annotation properties"]
+        P43["P-43 Sticky search filters"]
+        P44["P-44 Admin search settings"]
         P21["P-21 Page cache"]
         P22["P-22 Sign-in"]
         P23["P-23 Admin list"]
@@ -1758,6 +1822,8 @@ flowchart LR
 
     P17 & P38 --> P33
     P20 & P38 & P39 --> P25
+    P20 --> P41 & P42 & P43
+    P22 & P42 --> P44
     P22 --> P23
     P22 & P31 --> P36
     P31 --> P32
@@ -1830,6 +1896,10 @@ go into this document.
 | --- | --- | --- | --- | --- | --- |
 | P-19 | `SearchBackend` interface and SQLite implementation; ranking | U-10, U-11, U-12, N-5 | P-11 | Done | [#26](https://github.com/jclerman/browl/issues/26) |
 | P-20 | Autocomplete UI (accessible combobox) with type and property filters | U-10, U-17 | P-19, P-14 | Done | [#32](https://github.com/jclerman/browl/issues/32) |
+| P-41 | Any-word matching: a row per later word start in `search_value`, in lanes walked after the whole-value ones, with the word's offset for marking; measure size and build time on NCBITaxon first (2.6, Proposed) | U-19 | P-19, P-20 | To do | |
+| P-42 | Every annotation property searchable: a bulk query of their literal values; lanes keyed by property, walked in an order chosen per query; entailment through the annotation-property hierarchy at query time; the results page lists the ontology's properties with counts; measure lane counts and worst-case queries first (2.6, Proposed) | U-47 | P-19, P-20 | To do | |
+| P-43 | Sticky search filters: kept in the browser on request, used by the navigation bar's box, with a "Filtered" indicator that clears them; the results page's bar carries its filters (2.6, Proposed) | U-48 | P-20 | To do | |
+| P-44 | Admin search settings: name properties and their order, language ranking and properties left out, stored per ontology IRI over the environment's defaults; a settings page from the ontology's properties and languages; applied by pre-caching into a new file beside the served one (2.6, Proposed) | A-11, O-13 | P-22, P-42 | To do | |
 | P-33 | JSON API over the pages' data: routes under `api/` returning the models the pages render (2.8, 2.13) | U-42 | P-16, P-17, P-18, P-19, P-27, P-38 | To do | [#76](https://github.com/jclerman/browl/issues/76) |
 | P-21 | Page cache keyed by generation | O-10, N-3 | P-16 | To do | [#40](https://github.com/jclerman/browl/issues/40) |
 | P-22 | Google sign-in, admin-route protection, dev no-auth mode (cancelling a job: P-36) | A-1, O-6, O-7 | P-6 | To do | [#17](https://github.com/jclerman/browl/issues/17) |
