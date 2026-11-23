@@ -1454,7 +1454,8 @@ too (P-38), and the JSON API's (P-33).
   page instead, and a click with a modifier key is left to the browser.
 - **Element ids** follow each node's place: the roots `t-0`, `t-1`, …, a node's children its own id and their
   index (`t-1-0`), and its group and counts its id with `-g` and `-n`. A fragment's request names its node's id
-  (`at=`), so its ids are unique on the page; P-38's column can use another prefix.
+  (`at=`), so its ids are unique on the page; P-38's column can use another prefix. `at=` is at most 256 characters
+  (`MAX_AT_CHARS`), as each child repeats it; a deeper node's fragment is a 404, so its toggle loads the page.
 - **Keyboard** (U-17), the WAI-ARIA tree pattern: the tree is `role="tree"`, each node's link a `treeitem` (with
   `aria-expanded`, its group by `aria-owns`, its counts by `aria-describedby`), its children a `group`. Only one
   item is in the Tab sequence (roving `tabindex`), and the toggles are the mouse's (`tabindex="-1"`, `aria-hidden`).

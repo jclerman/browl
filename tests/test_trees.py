@@ -297,6 +297,7 @@ def test_fragment_opens_open_children(client: TestClient) -> None:
         [("at", "t-1")],  # no `node`
         [("node", ex("Top")), ("at", "x")],
         [("node", ex("Top")), ("at", "t-1"), ("at", "t-2")],
+        [("node", ex("Top")), ("at", "t" + "-1" * 128)],  # one past `MAX_AT_CHARS`
         [("node", ex("Nope")), ("at", "t-1")],
         [("node", THING), ("at", "t-1")],  # in no hierarchy
         [("node", ex("p")), ("at", "t-1")],  # in another hierarchy
@@ -314,6 +315,14 @@ def test_fragment_opens_open_children(client: TestClient) -> None:
 def test_not_found(client: TestClient, params: list[tuple[str, str]]) -> None:
     """Check that a missing or unknown node, a repeated parameter, or an offset past the last, is a 404."""
     assert client.get(TREE, params=params).status_code == 404
+
+
+def test_long_at(client: TestClient) -> None:
+    """Check that `at=` of `MAX_AT_CHARS` is served, its children's ids following from it."""
+    at = "t" + "-1" * 127 + "0"
+    assert len(at) == browl.trees.MAX_AT_CHARS
+    found = Tree(client.get(TREE, params=[("node", ex("Top")), ("at", at)]).text)
+    assert found.items[0].id == f"{at}-0"
 
 
 def test_unknown_hierarchy(client: TestClient) -> None:

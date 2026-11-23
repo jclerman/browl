@@ -56,10 +56,14 @@ node with several parents opens under each, so a few open nodes can multiply in 
 ROOT_ID = "t"
 """The element id the roots' ids follow from: `t-0`, `t-1`, …; a node's children's from its own, `t-0-0`, …."""
 
+MAX_AT_CHARS = 256
+"""The longest element id `at=…` may give, as each child's ids and links repeat it; a deeper node's fragment is a 404,
+so its toggle loads the page instead."""
+
 _OFFSET = re.compile(r"[1-9][0-9]{0,8}")
 """An offset `offset=…` may give: a positive integer without a sign or leading zeros, so each page has one URL."""
 
-_ELEMENT_ID = re.compile(r"[a-z]+(?:-[0-9]{1,9}){1,500}")
+_ELEMENT_ID = re.compile(r"[a-z]+(?:-[0-9]{1,9})+")
 """An element id `at=…` may give, as `ShownNode.id` makes them."""
 
 router = APIRouter()
@@ -144,7 +148,7 @@ def _read_query(request: Request) -> _Query | None:
     if node is None:
         if at is not None:
             return None
-    elif single[CHILDREN_OF_PARAM] is not None or at is None or not _ELEMENT_ID.fullmatch(at):
+    elif single[CHILDREN_OF_PARAM] is not None or at is None or len(at) > MAX_AT_CHARS or not _ELEMENT_ID.fullmatch(at):
         return None
     opened = list(dict.fromkeys(params.getlist(OPEN_PARAM)))[:MAX_OPEN]
     return _Query(opened, single[CHILDREN_OF_PARAM], int(offset or 0), node, at or ROOT_ID)
