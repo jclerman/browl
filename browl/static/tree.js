@@ -13,8 +13,38 @@
   const itemOf = (li) => li.querySelector(`:scope > ${ITEM}`);
   const isOpen = (item) => item.getAttribute("aria-expanded") === "true";
 
-  // The items shown: those in no closed group.
-  const shownItems = (tree) => Array.from(tree.querySelectorAll(ITEM)).filter((item) => !item.closest("[hidden]"));
+  // The items shown, walked through the tree's structure, so a key reads only the items near it.
+  const firstItem = (tree) => tree.querySelector(ITEM);
+  const parentLi = (li) => (li.parentElement.matches(TREE) ? null : li.parentElement.parentElement);
+
+  function lastShownIn(li) {
+    let item = itemOf(li);
+    while (isOpen(item) && groupOf(item).lastElementChild) {
+      item = itemOf(groupOf(item).lastElementChild);
+    }
+    return item;
+  }
+
+  function nextShown(item) {
+    if (isOpen(item) && groupOf(item).firstElementChild) {
+      return itemOf(groupOf(item).firstElementChild);
+    }
+    for (let li = item.parentElement; li; li = parentLi(li)) {
+      if (li.nextElementSibling) {
+        return itemOf(li.nextElementSibling);
+      }
+    }
+    return null;
+  }
+
+  function previousShown(item) {
+    const li = item.parentElement;
+    if (li.previousElementSibling) {
+      return lastShownIn(li.previousElementSibling);
+    }
+    const parent = parentLi(li);
+    return parent && itemOf(parent);
+  }
 
   // The item a request's toggle opens, or whose "Show more" made it.
   const sourceOf = (event) => event.detail.requestConfig?.elt ?? event.detail.elt;
@@ -45,7 +75,7 @@
     }
     tree.dataset.roving = "true";
     tame(tree);
-    const first = shownItems(tree)[0];
+    const first = firstItem(tree);
     if (first) {
       first.tabIndex = 0;
     }
@@ -107,7 +137,7 @@
     const item = target.matches(TOGGLE) ? itemOf(target.parentElement) : target.closest(ITEM);
     if (!tree.dataset.roving) {
       setUp(tree);
-      const to = item ?? shownItems(tree)[0];
+      const to = item ?? firstItem(tree);
       if (to) {
         focusItem(to);
       }
@@ -124,22 +154,20 @@
     if (!tree || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
       return;
     }
-    const items = shownItems(tree);
-    const index = items.indexOf(item);
     const group = item.hasAttribute("aria-expanded") ? groupOf(item) : null;
     let to = null;
     switch (event.key) {
       case "ArrowDown":
-        to = items[index + 1];
+        to = nextShown(item);
         break;
       case "ArrowUp":
-        to = items[index - 1];
+        to = previousShown(item);
         break;
       case "Home":
-        to = items[0];
+        to = firstItem(tree);
         break;
       case "End":
-        to = items[items.length - 1];
+        to = lastShownIn(tree.lastElementChild);
         break;
       case "ArrowRight":
         if (group && !isOpen(item)) {
@@ -152,7 +180,8 @@
         if (group && isOpen(item)) {
           close(item);
         } else {
-          to = item.parentElement.closest('[role="group"]')?.parentElement.querySelector(`:scope > ${ITEM}`);
+          const parent = parentLi(item.parentElement);
+          to = parent && itemOf(parent);
         }
         break;
       default:
@@ -226,7 +255,7 @@
     if (focused && item) {
       focusItem(item);
     } else if (tree?.dataset.roving && !tree.querySelector(`${ITEM}[tabindex="0"]`)) {
-      const to = item ?? shownItems(tree)[0]; // "Show more" was the roving item
+      const to = item ?? firstItem(tree); // "Show more" was the roving item
       if (to) {
         rove(to);
       }
