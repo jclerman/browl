@@ -49,7 +49,7 @@ MACOS_JAVA_HOME = "/usr/libexec/java_home"
 FIXTURE_MARKS = {"java": "java", "fuseki_url": "fuseki", "browser": "browser"}
 """The mark each of these fixtures gives the tests that use it."""
 
-pytest_plugins = ["pytester"]
+pytest_plugins = ["pytester"]  # for `test_marks.py`, which runs pytest on tests of its own
 
 
 STRAY_MARKS = pytest.StashKey[str]()
@@ -249,12 +249,12 @@ def default_java_home() -> None:
 
 
 def missing_jvm() -> str | None:
-    """Return why the JVM can't start, or None if it can."""
+    """Set `JAVA_HOME` (`default_java_home`), then return why the JVM can't start, or None if it can."""
+    default_java_home()
     if jpype.isJVMStarted():
         return None
     if not find_robot_jar().is_file():
         return f"no robot.jar at {find_robot_jar()} (run `make robot-jar`, or set ROBOT_JAR)"
-    default_java_home()
     try:
         jvm_path = jpype.getDefaultJVMPath()
     except jpype.JVMNotFoundException as error:
@@ -278,7 +278,6 @@ def robot_jar() -> Path:
 @pytest.fixture(scope="session")
 def java() -> None:
     """Skip the test if Java or `robot.jar` is missing; on macOS, set `JAVA_HOME`, which child processes inherit."""
-    default_java_home()
     reason = missing_jvm()
     if reason:
         skip_or_fail(reason)
