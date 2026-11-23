@@ -2324,32 +2324,62 @@ def search_box(page: Page) -> Locator:
 
 
 def test_search_suggests_and_keys(page: Page, searchable: LiveServer) -> None:
-    """Check the combobox pattern: typing lists suggestions; down and up move the active option; Escape closes."""
+    """Check the combobox pattern's keys, pointer and focus, and the status region (U-17).
+
+    Typing lists suggestions and announces how many; Down and Up move the active option, and past either end back to
+    the box; hovering marks an option; Alt+Down opens the list with none active; Tab closes it and focus reopens it;
+    Escape closes it, then clears the box.
+    """
     page.goto(f"{searchable.url}/_browl/search")
     box = search_box(page)
+    status = page.locator("#site-search-status")
     box.fill("myo")
     listbox = page.get_by_role("listbox", name="Suggestions")
     expect(listbox).to_be_visible()
     expect(box).to_have_attribute("aria-expanded", "true")
     options = listbox.get_by_role("option")
     expect(options).to_have_count(3)  # two hits and "All results…"
-    expect(page.locator("#site-search-status")).to_have_text("2 suggestions")
+    expect(status).to_have_text("2 suggestions")
+    no_active = re.compile(".*")
     box.press("ArrowDown")
     expect(box).to_have_attribute("aria-activedescendant", "search-option-0")
     expect(options.nth(0)).to_have_attribute("aria-selected", "true")
+    box.press("ArrowUp")  # from the first, back to the box
+    expect(box).not_to_have_attribute("aria-activedescendant", no_active)
+    expect(options.nth(0)).to_have_attribute("aria-selected", "false")
+    box.press("ArrowDown")
     box.press("ArrowDown")
     box.press("ArrowDown")
     expect(box).to_have_attribute("aria-activedescendant", "search-option-all")
     box.press("ArrowDown")  # past the end, back to the box
-    expect(box).not_to_have_attribute("aria-activedescendant", re.compile(".*"))
+    expect(box).not_to_have_attribute("aria-activedescendant", no_active)
     box.press("ArrowUp")  # from none, to the last
     expect(box).to_have_attribute("aria-activedescendant", "search-option-all")
+    options.nth(1).hover()
+    expect(box).to_have_attribute("aria-activedescendant", "search-option-1")
+    expect(options.nth(1)).to_have_attribute("aria-selected", "true")
+    expect(options.nth(2)).to_have_attribute("aria-selected", "false")
+    page.mouse.move(0, 0)  # else the reopened list's option under the pointer is marked again
     expect(box).to_be_focused()
     box.press("Escape")
     expect(listbox).to_be_hidden()
     expect(box).to_have_attribute("aria-expanded", "false")
+    box.press("Alt+ArrowDown")
+    expect(listbox).to_be_visible()
+    expect(box).not_to_have_attribute("aria-activedescendant", no_active)
+    box.press("Tab")
+    expect(listbox).to_be_hidden()
+    expect(box).to_have_attribute("aria-expanded", "false")
+    box.focus()
+    expect(listbox).to_be_visible()
+    expect(box).to_have_attribute("aria-expanded", "true")
+    box.press("Escape")
     box.press("Escape")
     expect(box).to_have_value("")
+    expect(status).to_have_text("")
+    box.fill("myob")
+    expect(options).to_have_count(2)
+    expect(status).to_have_text("1 suggestion")
 
 
 def test_search_enter_follows_option(page: Page, searchable: LiveServer) -> None:
