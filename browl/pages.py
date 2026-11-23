@@ -85,6 +85,12 @@ CONTENT_SECURITY_POLICY = (
 SECURITY_HEADERS = {"X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY"}
 """Headers every response gets, including those the policy exempts."""
 
+_BIDI_CONTROLS = re.compile("[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+"""The bidirectional-text controls `bidi_encoded` encodes."""
+
+_OFFSET = re.compile(r"[1-9][0-9]{0,8}")
+"""An `offset=` a paged URL may give (`read_offset`): a positive integer without a sign or leading zeros."""
+
 
 @dataclass(frozen=True)
 class OntologyLink:
@@ -138,9 +144,6 @@ def is_web_iri(iri: str) -> bool:
     return iri.lower().startswith(("http://", "https://"))
 
 
-_BIDI_CONTROLS = re.compile("[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
-
-
 def bidi_encoded(iri: str) -> str:
     """Return an IRI with its bidirectional-text controls percent-encoded, so it's shown in the order it's read.
 
@@ -171,6 +174,29 @@ def join_link(root: str, path: str, fragment: str | None = None) -> str:
 def href(request: Request, path: str, fragment: str | None = None) -> str:
     """Return a root-relative link to a path from the app's root, with a fragment if given."""
     return join_link(link_root(request.scope), path, fragment)
+
+
+def single_params(request: Request, names: Iterable[str]) -> dict[str, str | None] | None:
+    """Return the values of parameters that may be given once, each None if it's absent; None if one is repeated."""
+    single: dict[str, str | None] = {}
+    for name in names:
+        values = request.query_params.getlist(name)
+        if len(values) > 1:
+            return None
+        single[name] = values[0] if values else None
+    return single
+
+
+def read_offset(value: str | None) -> int | None:
+    """Return a paged URL's offset: 0 if it's absent; None if it isn't valid (`_OFFSET`), so each page has one URL.
+
+    Examples:
+        >>> read_offset(None), read_offset("50"), read_offset("050"), read_offset("+5")
+        (0, 50, None, None)
+    """
+    if value is None:
+        return 0
+    return int(value) if _OFFSET.fullmatch(value) else None
 
 
 def frame_context(request: Request) -> dict[str, object]:

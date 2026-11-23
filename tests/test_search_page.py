@@ -282,6 +282,7 @@ def test_paging(client: TestClient) -> None:
         [("q", "a"), ("offset", "01")],
         [("q", "a"), ("offset", "-5")],
         [("q", "a"), ("offset", str(MAX_OFFSET + 1))],
+        [("q", "a"), ("offset", "1" * 5_000)],  # past int()'s digit limit
         [("q", "a"), ("suggest", "yes")],
         [("q", "a" * (MAX_QUERY_CHARS + 1))],
     ],

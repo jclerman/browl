@@ -17,7 +17,17 @@ from browl.derived import TYPE_LABELS, EntityType, NotCurrentError
 from browl.links import EntityLink, read_entity_links
 from browl.lookup import PANEL_HEADERS, not_found
 from browl.names import BUILTIN_PREFIXES, name_property_iris, normalize
-from browl.pages import MAX_IRI_CHARS, cut_name, cut_text, href, link_root, read_derived, templates
+from browl.pages import (
+    MAX_IRI_CHARS,
+    cut_name,
+    cut_text,
+    href,
+    link_root,
+    read_derived,
+    read_offset,
+    single_params,
+    templates,
+)
 from browl.search import MAX_OFFSET, MAX_QUERY_CHARS, SEARCH_LIMIT, SearchBackend, SearchHit, SearchQuery
 from browl.settings import Settings
 from browl.tabs import with_query
@@ -112,18 +122,6 @@ class PropertyChoice:
     checked: bool
 
 
-def _single(request: Request, name: str) -> str | None:
-    """Return a parameter's value; None if it's absent.
-
-    Raises:
-        ValueError: It's repeated.
-    """
-    values = request.query_params.getlist(name)
-    if len(values) > 1:
-        raise ValueError(name)
-    return values[0] if values else None
-
-
 def read_request(request: Request, properties: Sequence[str]) -> SearchRequest | None:
     """Return what a search URL asks for; None if a parameter is repeated where it mustn't be, or isn't valid.
 
@@ -132,19 +130,14 @@ def read_request(request: Request, properties: Sequence[str]) -> SearchRequest |
         properties: The name properties' IRIs (`name_property_iris`), which `property=` may name.
     """
     params = request.query_params
-    try:
-        text, values, offset, suggest = (
-            _single(request, name) for name in (QUERY_PARAM, VALUES_PARAM, OFFSET_PARAM, SUGGEST_PARAM)
-        )
-    except ValueError:
+    single = single_params(request, (QUERY_PARAM, VALUES_PARAM, OFFSET_PARAM, SUGGEST_PARAM))
+    if single is None:
         return None
-    text = text or ""
+    text, values, suggest = single[QUERY_PARAM] or "", single[VALUES_PARAM], single[SUGGEST_PARAM]
     if len(text) > MAX_QUERY_CHARS or (values is not None and values not in _VALUES) or suggest not in (None, "1"):
         return None
-    if offset is not None and not (offset.isascii() and offset.isdigit() and str(int(offset)) == offset):
-        return None
-    number = int(offset or 0)
-    if number > MAX_OFFSET or (offset is not None and number == 0):
+    offset = read_offset(single[OFFSET_PARAM])
+    if offset is None or offset > MAX_OFFSET:
         return None
     try:
         types = tuple(dict.fromkeys(EntityType(kind) for kind in params.getlist(TYPE_PARAM)))
@@ -153,7 +146,7 @@ def read_request(request: Request, properties: Sequence[str]) -> SearchRequest |
     chosen = tuple(dict.fromkeys(params.getlist(PROPERTY_PARAM)))
     if not set(chosen) <= set(properties):
         return None
-    return SearchRequest(text, types, chosen, values == "direct", number, suggest == "1")
+    return SearchRequest(text, types, chosen, values == "direct", offset, suggest == "1")
 
 
 def marked_length(value: str, query: str) -> int:
