@@ -53,10 +53,11 @@ def _encodable(text: str) -> str:
 
 @validated_dataclass(frozen=True)
 class SearchQuery:
-    """A search (U-10): name values that start with the text, ignoring case and accents (U-11).
+    """A search (U-10): name values that start with the text, or whose later word does (U-19), ignoring accents (U-11).
 
     Attributes:
-        text: What the values start with; leading whitespace is ignored, and a query of only whitespace finds nothing.
+        text: What the values, or their later words, start with; leading whitespace is ignored, and a query of only
+            whitespace finds nothing.
         types: The entity types to find; None for all, and an empty set for none.
         properties: The name properties (IRIs) whose values to search; None for all, and an empty set for none.
         entailed: Whether values entailed through a sub-property count too, or only direct ones.

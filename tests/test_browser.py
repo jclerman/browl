@@ -2320,7 +2320,7 @@ def stub_entity_pages(page: Page, server: LiveServer) -> None:
 
 def search_box(page: Page) -> Locator:
     """Return the navigation bar's search box."""
-    return page.get_by_role("combobox", name="Search names")
+    return page.get_by_role("combobox", name="Search the ontology")
 
 
 def typed(page: Page, server: LiveServer, text: str) -> Locator:
