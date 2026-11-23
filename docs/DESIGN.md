@@ -65,6 +65,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **U-31** · Property pages show the property's domains and ranges, if any, in the logical-axioms panel. | v1 |
 | **U-32** · The panels are compact: each annotation value or axiom takes one line, wrapping only when it doesn't fit. A property with several values (e.g. 10 synonyms) is named once, with one line per value. | v1 |
 | **U-44** · A one-page view of an entity page, labeled "Scroll as one page": all of its content in one page scroll, with no panel scrolling on its own. Used for printing and on small screens (phones, short windows), and on demand with a toggle. | v1 |
+| **U-45** · An entity page shows where the entity sits in its hierarchy, in a hideable column beside the Overview's panels: its ancestors as one merged tree, each drawn once, with its direct children below it. | v1 |
 | **U-18** · Named individuals have pages, and each class page lists its individuals in an Individuals tab, with paging. _(Q17)_ | Later |
 | **U-19** · Autocomplete also matches from the start of any word. _(Q8)_ | Later |
 | **U-20** · Autocomplete tolerates typos. _(Q8)_ | Later |
@@ -1412,9 +1413,18 @@ CSS nesting gets the one-page view, without the toggle. _(P-16d)_
 - **The panels** have light borders, and their headings stay in view while they scroll. Each panel is a `<section>`,
   named by its heading (`aria-labelledby`), with `tabindex="0"` and a visible focus ring, so the keyboard can scroll
   it.
-- **Room for a hierarchy:** a narrow, hideable column for the entity's hierarchy, on medium and wide windows, may come
-  later. The frame's grid has named areas (`header`, `tabs`, `panel`) and sets its columns in one place, so a `tree`
-  area can be added on its left, and taken away again by a button, without changing the panels' layout.
+- **Hierarchy column** (U-45, P-38): a narrow, hideable column on medium and wide windows shows the entity's place in
+  its hierarchy. The frame's grid has named areas (`header`, `tabs`, `panel`) and sets its columns in one place, so a
+  `tree` area is added on its left, and taken away again by a button, without changing the panels' layout. The
+  one-page view puts the column above the panels.
+  - **Shape:** the entity's ancestors as one merged tree, each drawn once. A node with several parents goes under its
+    first parent, by display name. Under each other parent it's a one-line reference that links to it ("↳ organ (also
+    above)"). The entity is highlighted, with its direct children collapsed below it. So the column's size grows with
+    the number of ancestors, not with the number of paths, which multiplies at every join.
+  - **Only the column merges:** the tree pages (P-18) show a node under each of its parents.
+  - **Nodes** are the tree pages': counts, links, expansion through `?node=`, and keyboard use. Equivalence groups are
+    one node (U-9). A property's column uses its own property hierarchy. An entity in no hierarchy gets no column.
+  - **Data:** walking up `edge` in SQLite via `edge_child`, with no Fuseki query.
 
 **Visual design** (U-29):
 
@@ -1604,6 +1614,7 @@ flowchart LR
     subgraph P4["Phase 4: Browsing"]
         P17["P-17 Home page"]
         P18["P-18 Hierarchy trees"]
+        P38["P-38 Hierarchy column"]
     end
     subgraph P5["Phase 5: Search, caching, auth"]
         P19["P-19 Search backend"]
@@ -1624,8 +1635,9 @@ flowchart LR
     S5b["S-5b OLS4 comparison"]
 
     P19 --> P20
-    P17 & P18 & P19 --> P33
-    P18 & P20 --> P25
+    P18 --> P38
+    P17 & P18 & P19 & P38 --> P33
+    P18 & P20 & P38 --> P25
     P22 --> P23
     P22 & P31 --> P36
     P31 --> P32
@@ -1687,6 +1699,7 @@ go into this document.
 | P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout; panel data built apart from its HTML (2.8); entity pages fill the window, the panels at fixed positions and scrolling within themselves, with a one-page view for printing, small screens and on demand (2.9) | U-3, U-9, U-30, U-31, U-32, U-44 | P-12, P-15b | Done | [#37](https://github.com/jclerman/browl/issues/37) (sub-issues [#29](https://github.com/jclerman/browl/issues/29), [#38](https://github.com/jclerman/browl/issues/38), [#39](https://github.com/jclerman/browl/issues/39), [#103](https://github.com/jclerman/browl/issues/103)) |
 | P-17 | Ontology home page, with the dropped-imports warning and the triple counts the job state keeps (P-8); link the ontology and version IRIs only if `http` or `https` (`browl.derived.Meta`) | U-1 | P-14 | To do | [#30](https://github.com/jclerman/browl/issues/30) |
 | P-18 | Hierarchy trees with lazy loading (htmx) and keyboard support | U-7, U-17 | P-12, P-14 | To do | [#31](https://github.com/jclerman/browl/issues/31) |
+| P-38 | Hierarchy column on entity pages: the entity's ancestors as one merged tree, each drawn once, and its direct children, from P-18's nodes (2.9) | U-45 | P-16, P-18 | To do | [#120](https://github.com/jclerman/browl/issues/120) |
 | P-27 | Usage tab on entity pages: the blank-node owner map, streaming up to 20 K usages per request, and the usage table built in the background after a load (2.5, 2.8) | U-26 | P-9, P-16, S-4, S-7 | Done | [#41](https://github.com/jclerman/browl/issues/41) (sub-issues [#108](https://github.com/jclerman/browl/issues/108), [#109](https://github.com/jclerman/browl/issues/109), [#110](https://github.com/jclerman/browl/issues/110)) |
 
 ### Phase 5: Search, caching, auth
@@ -1695,7 +1708,7 @@ go into this document.
 | --- | --- | --- | --- | --- | --- |
 | P-19 | `SearchBackend` interface and SQLite implementation; ranking | U-10, U-11, U-12, N-5 | P-11 | To do | [#26](https://github.com/jclerman/browl/issues/26) |
 | P-20 | Autocomplete UI (accessible combobox) with type and property filters | U-10, U-17 | P-19, P-14 | To do | [#32](https://github.com/jclerman/browl/issues/32) |
-| P-33 | JSON API over the pages' data: routes under `api/` returning the models the pages render (2.8, 2.13) | U-42 | P-16, P-17, P-18, P-19, P-27 | To do | [#76](https://github.com/jclerman/browl/issues/76) |
+| P-33 | JSON API over the pages' data: routes under `api/` returning the models the pages render (2.8, 2.13) | U-42 | P-16, P-17, P-18, P-19, P-27, P-38 | To do | [#76](https://github.com/jclerman/browl/issues/76) |
 | P-21 | Page cache keyed by generation | O-10, N-3 | P-16 | To do | [#40](https://github.com/jclerman/browl/issues/40) |
 | P-22 | Google sign-in, admin-route protection, dev no-auth mode (cancelling a job: P-36) | A-1, O-6, O-7 | P-6 | To do | [#17](https://github.com/jclerman/browl/issues/17) |
 | P-23 | Admin list management page and persistence | A-7 | P-22 | To do | [#19](https://github.com/jclerman/browl/issues/19) |
@@ -1705,7 +1718,7 @@ go into this document.
 | ID | Work item | Delivers | Depends on | Status | Tracking |
 | --- | --- | --- | --- | --- | --- |
 | P-24 | Performance check against N-1–N-3 targets at scale; whether streaming extraction alongside the TDB2 load is worth it | N-1–N-3 | all above | To do | [#42](https://github.com/jclerman/browl/issues/42) |
-| P-25 | Accessibility pass (trees, combobox, no-JS pages) | U-17 | P-18, P-20 | To do | [#35](https://github.com/jclerman/browl/issues/35) |
+| P-25 | Accessibility pass (trees, combobox, no-JS pages) | U-17 | P-18, P-20, P-38 | To do | [#35](https://github.com/jclerman/browl/issues/35) |
 | P-29 | Store the upload, fetched imports and ROBOT's output compressed at rest (gzip shrank Uberon 13–16×, P-8), and accept compressed uploads; measure the cost first | A-2 | P-8 | To do | [#71](https://github.com/jclerman/browl/issues/71) |
 | P-31 | Show load progress: each stage's elapsed time, ROBOT's current step, triples loaded of the total, the import being handled; for pre-caching, each hook's name, elapsed time and rows written (of the expected total where known); and background builds after a load (P-27c's usage table), with their progress | A-5 | P-8 | To do | [#73](https://github.com/jclerman/browl/issues/73) |
 | P-32 | Show the reasoner's own progress (per task, as Protégé does), running ROBOT's reasoning through its Java API with a progress monitor | A-5 | P-31, P-30 | To do | [#74](https://github.com/jclerman/browl/issues/74) |
