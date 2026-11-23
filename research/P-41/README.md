@@ -1,0 +1,60 @@
+# P-41: search from the start of any word — measurements
+
+Measurements behind P-41 ([#131](https://github.com/jclerman/browl/issues/131)): what word rows cost the search index
+on a large ontology, in size, build time and query time. The decisions are in
+[DESIGN.md §2.6](../../docs/DESIGN.md#26-search); this records how they were measured.
+
+## Setup
+
+- Apple M3 Pro (12 cores, 36 GB RAM), on the Mac.
+- The NCBITaxon derived database [P-19](../P-19/README.md) measured: 3.03 M name values, `rdfs:label` only, all
+  direct and untagged.
+- `bench.py` copies its `entity` and `name_value` tables, with their indexes, into a scratch file, builds the search
+  tables there with `browl.search`'s own code, in one transaction as pre-caching does, and times
+  `browl.search.search` 20 times per query, read-only.
+
+```sh
+poetry run python research/P-41/bench.py DERIVED_DB SCRATCH_DB
+```
+
+## Word starts
+
+A word starts at an alphanumeric character (`str.isalnum`) after one that isn't. The 3.03 M values have 7.46 M later
+word starts, about 2.5 each. Finding them all took 3.1 s with a Python loop (`browl.search.word_starts`) and 2.7 s with
+the equivalent regular expression, `(?<=[\W_])[^\W_]` (Python's `\w` is `str.isalnum()` and `_`); the two agreed on
+every value. The loop is kept, as it reads as the rule.
+
+## The index
+
+| | P-19 | P-41 |
+| --- | --- | --- |
+| Rows | 3.03 M | 10.48 M (3.03 M whole, 7.46 M word) |
+| `search_value` | 247 MiB | 828 MiB (3.4×) |
+| Build | 12.1 s | 46.3 s (3.8×) |
+| Lanes | 2 | 4 |
+
+The design guessed 2–3× for both. The build grows with the rows, as most of it is sorting them into the key's order
+and writing the table.
+
+A first build called Python functions from SQL for each row (the word starts through `json_each`, and the key's
+length and cuts): 55.7 s. Of that, 8.6 s was finding the word starts and another 9.3 s was cutting the keys. Cutting
+every key in one Python pass, into a temporary table that the sorted insert reads, saves about 10 s.
+
+## Queries
+
+Ten results per query; the maximum is usually the first, cold run.
+
+| Query | Median | Max | First hits |
+| --- | --- | --- | --- |
+| `a` | 0.09 ms | 23.5 ms | Aa, Age, Aha |
+| `s` | 0.11 ms | 19.8 ms | Sar, Sea, Sia |
+| `ba` | 0.10 ms | 39.4 ms | Bau, Babr, Baia |
+| `homo sapiens` | 0.94 ms | 6.2 ms | Homo sapiens, Homo sapiens neanderthalensis, … |
+| `sapiens` (word matches only) | 1.22 ms | 3.5 ms | Amegilla sapiens, Coxiella endosymbiont of Homo sapiens, … |
+| `bacterium` | 0.10 ms | 2.1 ms | bacterium, bacterium 8, bacterium 9 |
+| `zzz` (word matches only) | 1.17 ms | 2.1 ms | Fusarium sp. zzz101, … |
+| 40 × `x` (no match) | 1.39 ms | 1.6 ms | |
+| `a`, annotation properties only | 0.22 ms | 1.8 ms | acronym, anamorph, genbank acronym |
+
+The worst case seeks every lane at every length: here a query with no match, at 1.4 ms, against 0.65 ms without word
+rows. As the design expected, it at most doubles, since the lanes double. N-2 (p95 under 100 ms) holds.

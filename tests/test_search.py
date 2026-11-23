@@ -247,10 +247,13 @@ async def test_case_and_accents(data_dir: Path, value: str, query: str) -> None:
 
 
 async def test_matches_start_of_value(data_dir: Path) -> None:
-    """Check that a query matches only the start of a whole value, and that leading whitespace is ignored."""
+    """Check that a query matches the start of a whole value or of a word, and that leading whitespace is ignored."""
     settings = make_settings()
     await build(settings, [("x", LABEL, LABEL, '"red blood cell"@en'), ("y", LABEL, LABEL, '" \\nHomo sapiens"@en')])
-    assert found(settings, "blood") == []
+    assert found(settings, "lood") == []
+    assert [(hit.value, hit.exact, hit.word_start) for hit in find(settings, "blood").hits] == [
+        ("red blood cell", False, 4)
+    ]
     assert found(settings, "  red b") == ["x"]
     assert found(settings, "red blood cells") == []
     assert [(hit.value, hit.exact) for hit in find(settings, " homo sapiens").hits] == [(" \nHomo sapiens", True)]

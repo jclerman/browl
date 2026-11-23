@@ -229,7 +229,7 @@ def test_suggestions_limited(client: TestClient) -> None:
 
 def test_no_matches(client: TestClient) -> None:
     """Check that a query that matches nothing says so, in a disabled option, and still offers the full results page."""
-    response = client.get(SEARCH, params={"q": "zzz", "suggest": "1"})
+    response = client.get(SEARCH, params={"q": "qqq", "suggest": "1"})
     page = Hits(response.text)
     assert page.hits == []
     assert page.options == ["search-option-none", "search-option-all"]
@@ -372,7 +372,7 @@ def test_paging(client: TestClient) -> None:
 
 
 @pytest.mark.parametrize(
-    ("text", "offset", "note"), [("zzz", None, "No matches."), ("item", MAX_OFFSET, "No more results.")]
+    ("text", "offset", "note"), [("qqq", None, "No matches."), ("item", MAX_OFFSET, "No more results.")]
 )
 def test_no_results_note(client: TestClient, text: str, offset: int | None, note: str) -> None:
     """Check that a page with no results says there are none, or past the first page, no more."""
