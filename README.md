@@ -39,4 +39,10 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the tools you need and how to set u
 
 ## License
 
-browl is licensed under the [Apache License 2.0](LICENSE).
+browl is licensed under the [Apache License 2.0](LICENSE). Redistributions and derivative works must carry the
+attribution in [`NOTICE`](NOTICE) (section 4(d) of the license).
+
+## Citing browl
+
+If you use browl in your work, please cite it: [`CITATION.cff`](CITATION.cff) has the details, and GitHub's "Cite this
+repository" button formats them.
