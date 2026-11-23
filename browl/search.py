@@ -11,6 +11,8 @@ from collections.abc import Collection, Iterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from pydantic.dataclasses import dataclass as validated_dataclass
+
 from browl.derived import DerivedReader, EntityType
 from browl.names import BLANK, language_rank, name_property_iris, normalize
 
@@ -162,8 +164,22 @@ def _fill(connection: sqlite3.Connection, properties: Sequence[str], ranking: Se
     connection.execute("DROP TABLE search_language")
 
 
-@dataclass(frozen=True)
+@validated_dataclass(frozen=True)
 class _Lane:
+    """A lane of `search_value`: its values of one type, name property rank, language rank, and direct or entailed.
+
+    A lane's values are stored by length, then normalized value, then value, so a query reads its matches of one length
+    in rank order. Lanes are read from `search_lane`, and Pydantic checks that each attribute gets its annotated type.
+
+    Attributes:
+        type: Its entities' type.
+        property_rank: Its name property's position in `NAME_PROPERTIES`, from 0.
+        language_rank: Its languages' rank by `LANGUAGE_RANKING`, from 0; languages that rank alike share one.
+        entailed: 0 for direct values, 1 for values entailed through a sub-property.
+        max_length: Its longest normalized value's length.
+        name_property: Its name property's IRI.
+    """
+
     type: EntityType
     property_rank: int
     language_rank: int
@@ -235,7 +251,7 @@ def search(connection: sqlite3.Connection, query: SearchQuery) -> SearchResults:
 def _lanes(connection: sqlite3.Connection, query: SearchQuery) -> list[_Lane]:
     """Return the lanes the query's filters allow, in tier order."""
     lanes = [
-        _Lane(EntityType(row[0]), *row[1:])
+        _Lane(*row)
         for row in connection.execute(
             "SELECT type, property_rank, language_rank, entailed, max_length, property FROM search_lane"
             " ORDER BY property_rank, language_rank, entailed, type"
