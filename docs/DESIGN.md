@@ -1437,12 +1437,14 @@ too (P-38), and the JSON API's (P-33).
   others. A node with several parents shows under each, with its subtree.
 - **Order:** children and roots by display name, case-insensitively (ASCII), then IRI, so the order is total.
 - **Paging:** 500 children, or roots, at a time (`CHILD_PAGE`), as a node can have tens of thousands (NCBITaxon's
-  widest has 47,783: its first page reads in 80 ms, its last in 230 ms). A link after the page says what it shows,
-  "Show the next 500 (501–1,000 of 4,210)", or "Show the remaining 150 (501–650)" once the rest fits in a page, and
-  one before a later page, "Show the previous 500 (501–1,000 of 4,210)", or "Show the first 500 (1–500)".
-  With htmx it adds the next page in place; without, it loads the tree page showing that page of the node's
-  children (`children-of=…&offset=…`), with a link back to the page before. Only one node's children are shown from
-  an offset at a time. The roots page the same way: their fragment is `?at=…` without `node=`.
+  widest has 47,783: its first page reads in 80 ms, its last in 230 ms, as each read sorts all of a node's
+  children). That's inside N-3; if it ever isn't, the known upgrade is a sort rank among its siblings for each
+  child, stored at pre-caching, so a page reads a range of ranks instead of sorting them all. A link after the page
+  says what it shows, "Show the next 500 (501–1,000 of 4,210)", or "Show the remaining 150 (501–650)" once the rest
+  fits in a page, and one before a later page, "Show the previous 500 (501–1,000 of 4,210)", or "Show the first 500
+  (1–500)". With htmx it adds the next page in place; without, it loads the tree page showing that page of the
+  node's children (`children-of=…&offset=…`), with a link back to the page before. Only one node's children are
+  shown from an offset at a time. The roots page the same way: their fragment is `?at=…` without `node=`.
 - **Open nodes in the URL:** without JS, a node's toggle (▸, ▾) is a link to the tree page with that node opened or
   closed too. `open=` names each open node by IRI, repeated, so a URL keeps its tree through reloads and new
   loads. A node opens wherever it appears, under each parent, once its parents are open. The links name only the
