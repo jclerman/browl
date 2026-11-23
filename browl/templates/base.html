@@ -9,6 +9,7 @@
   {% if noindex is defined and noindex %}<meta name="robots" content="noindex">{% endif %}
   <title>{% block title %}{% endblock %}{% block title_suffix %} · {{ frame.title_end }}{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', path='browl.css').path }}">
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', path='browl-logo.svg').path }}">
   <script src="{{ url_for('static', path='htmx.min.js').path }}" defer></script>
   <script src="{{ url_for('static', path='links.js').path }}" defer></script>
   <script src="{{ url_for('static', path='tabs.js').path }}" defer></script>

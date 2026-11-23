@@ -317,6 +317,15 @@ def test_htmx_served_locally(client: TestClient) -> None:
     assert not re.search(r"<script[^>]*src=\"(https?:)?//", page)
 
 
+def test_favicon(client: TestClient) -> None:
+    """Check that pages name the logo as their icon, and that the app serves it as SVG."""
+    page = client.get("/onto").text
+    assert '<link rel="icon" type="image/svg+xml" href="/_browl/static/browl-logo.svg">' in page
+    response = client.get("/_browl/static/browl-logo.svg")
+    assert response.status_code == 200
+    assert response.headers["Content-Type"].startswith("image/svg+xml")
+
+
 def palettes() -> list[dict[str, str]]:
     """Return the stylesheet's light and dark palettes: each `:root` block's color custom properties."""
     css = (STATIC_DIR / "browl.css").read_text()
