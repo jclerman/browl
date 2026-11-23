@@ -882,7 +882,7 @@ says whether more results follow.
 at index and query time.
 
 **Proposed: wider search** (U-19, U-47–U-49, A-11, O-13; P-41–P-44). Not yet built; the rest of this section
-describes P-19 as built.
+describes search as built (P-19, P-20).
 
 - **Any word** (U-19, P-41). Besides its row for the whole value, each value gets a row for each later word start: its
   key is the normalized value from that word on, flagged as a word match, and it stores the word's offset in the value,
@@ -1803,7 +1803,6 @@ flowchart LR
         P40["P-40 Shorter tree URLs"]
     end
     subgraph P5["Phase 5: Search, caching, auth"]
-        P20["P-20 Autocomplete UI"]
         P41["P-41 Any-word search"]
         P42["P-42 All annotation properties"]
         P43["P-43 Sticky search filters"]
@@ -1824,8 +1823,7 @@ flowchart LR
     S5b["S-5b OLS4 comparison"]
 
     P17 & P38 --> P33
-    P20 & P38 & P39 --> P25
-    P20 --> P41 & P42 & P43
+    P38 & P39 --> P25
     P22 & P42 --> P44
     P22 --> P23
     P22 & P31 --> P36
