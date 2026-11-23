@@ -20,7 +20,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
 from browl.derived import EntityType
-from browl.hierarchy import CHILD_PAGE, ChildPage, TreeNode, node_ids, node_iris, read_children, read_node
+from browl.hierarchy import ChildPage, TreeNode, node_ids, node_iris, read_children, read_node
 from browl.lookup import PANEL_HEADERS, not_found
 from browl.pages import TREES, href, link_root, read_derived, templates
 from browl.tabs import with_query
@@ -72,8 +72,6 @@ _ELEMENT_ID = re.compile(r"[a-z]+(?:-[0-9]{1,9})+")
 router = APIRouter()
 """The tree routes, under the reserved prefix."""
 
-templates.env.globals["CHILD_PAGE"] = CHILD_PAGE
-
 
 @dataclass(frozen=True)
 class ShownNode:
@@ -106,7 +104,6 @@ class ShownList:
         more: The link to the page after it, without JS; None for the last.
         more_load: The URL of the next page's fragment, for htmx, which adds it in place; None for the last, or if
             the next page is the roots', which `more` shows.
-        more_count: How many nodes the next page shows.
     """
 
     page: ChildPage
@@ -114,7 +111,6 @@ class ShownList:
     previous: str | None = None
     more: str | None = None
     more_load: str | None = None
-    more_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -236,7 +232,7 @@ class _Builder:
         return self.shown < MAX_SHOWN and self.shown * self.open_chars < MAX_LINK_CHARS
 
     def _linked(self, shown: ShownList, parent: TreeNode | None, parent_id: str, path: list[str]) -> ShownList:
-        """Return a page of nodes laid out, with their links.
+        """Return a page of nodes laid out, with their links, and those to the pages before and after it.
 
         Args:
             shown: The page.
@@ -252,15 +248,25 @@ class _Builder:
                 continue
             children = None
             if item.children is not None:
-                toggle = self.page_link(self._closed(node.id), item.id)
+                toggle = self._toggle_link(self._closed(node.id), item.id)
                 children = self._linked(item.children, node, item.id, [*path, node.link.iri])
             elif node.id not in self.open_ids and len(self.opened) < MAX_OPEN:
-                toggle = self.page_link([*(iri for _, iri in self.opened), node.link.iri], item.id)
+                toggle = self._toggle_link([*(iri for _, iri in self.opened), node.link.iri], item.id)
             else:  # it, or the page, has no room: only it and the nodes above it open, so it fits
-                toggle = self.page_link([*path, node.link.iri], item.id)
+                toggle = self._toggle_link([*path, node.link.iri], item.id)
             load = self.fragment_link(node, item.id, path)
             nodes.append(ShownNode(node, item.id, toggle, load, children))
-        return self._with_paging(ShownList(shown.page, nodes), parent, parent_id, path)
+        page = shown.page
+        parent_iri = None if parent is None else parent.link.iri
+        opened = [iri for _, iri in self.opened]
+        previous = more = more_load = None
+        if page.offset and self.query.node is None:  # a fragment's page goes after those before it
+            anchor = None if parent is None else parent_id
+            previous = self.page_link(opened, anchor, parent_iri, page.offset - page.previous_count)
+        if page.next_count:
+            more = self.page_link(opened, f"{parent_id}-{page.end}", parent_iri, page.end)
+            more_load = None if parent is None else self.fragment_link(parent, parent_id, path[:-1], page.end)
+        return ShownList(page, nodes, previous, more, more_load)
 
     def _closed(self, node: int) -> list[str]:
         """Return the IRIs of the open nodes once a node shown open closes: less it, and those shown open only in it."""
@@ -273,20 +279,26 @@ class _Builder:
             ]
         return self._closing[node]
 
-    def page_link(self, opened: list[str], anchor: str | None, window: tuple[str, int] | None = None) -> str:
+    def _toggle_link(self, opened: list[str], anchor: str) -> str:
+        """Return a toggle's link: to the tree page with these nodes open, showing the page's own window, if any."""
+        if self.query.node is not None:  # a fragment's links have none
+            return self.page_link(opened, anchor, None, 0)
+        return self.page_link(opened, anchor, self.query.children_of, self.query.offset)
+
+    def page_link(self, opened: list[str], anchor: str | None, children_of: str | None, offset: int) -> str:
         """Return a link to the tree page with these nodes open, at an element, showing a page of a node's children.
 
         Args:
             opened: The open nodes' IRIs.
             anchor: The element id to scroll to; None for the top.
-            window: The IRI of the node whose children it shows from an offset, and the offset; the node's IRI is
-                empty for the roots. None for the page's own window: a fragment's links have none.
+            children_of: The IRI of the node whose children it shows from `offset`; None for the roots.
+            offset: How many of its children, or of the roots, come before those shown.
         """
-        if window is None and self.query.node is None and self.query.offset:
-            window = (self.query.children_of or "", self.query.offset)
         params = [(OPEN_PARAM, iri) for iri in opened]
-        if window is not None and window[1]:
-            params += [*([(CHILDREN_OF_PARAM, window[0])] if window[0] else []), (OFFSET_PARAM, str(window[1]))]
+        if offset and children_of is not None:
+            params.append((CHILDREN_OF_PARAM, children_of))
+        if offset:
+            params.append((OFFSET_PARAM, str(offset)))
         return href(self.request, with_query(self.page_path, params), anchor)
 
     def fragment_link(self, node: TreeNode, element_id: str, above: list[str], offset: int = 0) -> str:
@@ -295,22 +307,6 @@ class _Builder:
         if offset:
             params.append((OFFSET_PARAM, str(offset)))
         return href(self.request, with_query(self.page_path, params))
-
-    def _with_paging(self, shown: ShownList, parent: TreeNode | None, parent_id: str, path: list[str]) -> ShownList:
-        """Return a list with its links to the pages before and after it."""
-        page = shown.page
-        iri = "" if parent is None else parent.link.iri
-        opened = [iri for _, iri in self.opened]
-        previous = None
-        if page.offset and self.query.node is None:  # a fragment's page goes after those before it
-            anchor = None if parent is None else parent_id
-            previous = self.page_link(opened, anchor, (iri, max(page.offset - CHILD_PAGE, 0)))
-        if page.end >= page.total:
-            return ShownList(page, shown.nodes, previous)
-        more = self.page_link(opened, f"{parent_id}-{page.end}", (iri, page.end))
-        more_load = None if parent is None else self.fragment_link(parent, parent_id, path[:-1], page.end)
-        count = min(CHILD_PAGE, page.total - page.end)
-        return ShownList(page, shown.nodes, previous, more, more_load, count)
 
 
 def _link_chars(iris: Iterable[str]) -> int:

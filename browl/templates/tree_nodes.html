@@ -45,7 +45,7 @@
 {%- set page = list.page -%}
 {%- if list.previous is not none %}
 <li role="none" class="tree-paging"><a role="treeitem" href="{{ list.previous }}" rel="nofollow">Show the previous
-  {{ "{:,}".format([page.offset, CHILD_PAGE] | min) }}</a></li>
+  {{ "{:,}".format(page.previous_count) }}</a></li>
 {%- endif %}
 {%- for shown in list.nodes %}
 {{ tree_node(shown) }}
@@ -53,8 +53,8 @@
 {%- if list.more is not none %}
 <li role="none" class="tree-paging"><a role="treeitem" href="{{ list.more }}" rel="nofollow"
   {%- if list.more_load is not none %} hx-get="{{ list.more_load }}" hx-target="closest li" hx-swap="outerHTML"
-  hx-sync="this:drop"{% endif %}>Show {{ "{:,}".format(list.more_count) }} more
-  <small>({{ "{:,}".format(page.end + 1) }}–{{ "{:,}".format(page.end + list.more_count) }} of
+  hx-sync="this:drop"{% endif %}>Show {{ "{:,}".format(page.next_count) }} more
+  <small>({{ "{:,}".format(page.end + 1) }}–{{ "{:,}".format(page.end + page.next_count) }} of
   {{ "{:,}".format(page.total) }})</small></a></li>
 {%- endif %}
 {%- endmacro %}

@@ -68,6 +68,16 @@ class ChildPage(BaseModel):
         """Return how many come before the next page."""
         return self.offset + len(self.nodes)
 
+    @property
+    def previous_count(self) -> int:
+        """Return how many before it the page before it shows: up to `CHILD_PAGE`."""
+        return min(self.offset, CHILD_PAGE)
+
+    @property
+    def next_count(self) -> int:
+        """Return how many the page after it shows: up to `CHILD_PAGE`."""
+        return min(self.total - self.end, CHILD_PAGE)
+
 
 def node_ids(connection: sqlite3.Connection, hierarchy: EntityType, iris: Iterable[str]) -> dict[str, int]:
     """Return the node each IRI is in, by IRI: its group's representative's `entity.id`, or its own.
