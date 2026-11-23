@@ -416,7 +416,7 @@ def test_app_loads_each_syntax(
     """Check that an OFN upload (converted to Turtle) and an RDF/XML one each load without a reasoner.
 
     Their prefixes are read, from the converted Turtle for OFN (S4), and give the entities' CURIEs. The OFN lister's JVM
-    needs Java 21 (`JAVA_HOME`), as `jvm` finds it; both cases use it, since a fixture can't be added for one.
+    needs Java 21 (`JAVA_HOME`), as `java` finds it; both cases use it, since a fixture can't be added for one.
     """
     overrides = {
         "FUSEKI_URL": fuseki_url,
