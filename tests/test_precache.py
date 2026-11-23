@@ -780,7 +780,8 @@ def test_restart_rebuilds(settings: Settings, prepare: Callable[[Settings], obje
         state = app.state.jobs.state
         assert (state.generation, state.stage, state.ready_generation, state.started_at) == (2, Stage.READY, 2, STARTED)
         assert client.get("/probe").json() == 2
-    assert fuseki.requests == ["/$/ping", *[f"/{dataset_name(2)}/sparql"] * (1 + len(HOOKS))]
+    queries = len(HOOKS)  # the header's, and each hook's but the search hook's, which reads only SQLite
+    assert fuseki.requests == ["/$/ping", *[f"/{dataset_name(2)}/sparql"] * queries]
     assert derived_files(settings) == ["2.sqlite3"]
     with closing(connect(settings, 2)) as connection:
         assert read_meta(connection) == Meta(2, Reasoner.ELK, STARTED, ONTOLOGY, VERSION, "Onto", "1.0")

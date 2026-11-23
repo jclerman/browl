@@ -68,6 +68,27 @@ CREATE TABLE name_value (
     language TEXT,
     direct INTEGER NOT NULL
 );
+CREATE TABLE search_value (
+    type TEXT NOT NULL,
+    property_rank INTEGER NOT NULL,
+    language_rank INTEGER NOT NULL,
+    entailed INTEGER NOT NULL,
+    length INTEGER NOT NULL,
+    normalized TEXT NOT NULL,
+    value TEXT NOT NULL,
+    entity INTEGER NOT NULL,
+    language TEXT,
+    PRIMARY KEY (type, property_rank, language_rank, entailed, length, normalized, value, entity)
+) WITHOUT ROWID;
+CREATE TABLE search_lane (
+    type TEXT NOT NULL,
+    property_rank INTEGER NOT NULL,
+    language_rank INTEGER NOT NULL,
+    entailed INTEGER NOT NULL,
+    max_length INTEGER NOT NULL,
+    property TEXT NOT NULL,
+    PRIMARY KEY (type, property_rank, language_rank, entailed)
+) WITHOUT ROWID;
 CREATE TABLE edge (
     hierarchy TEXT NOT NULL,
     parent INTEGER NOT NULL,
@@ -125,10 +146,7 @@ INDEXES: dict[str, tuple[str, ...]] = {
         "CREATE UNIQUE INDEX entity_iri_type ON entity (iri, type)",
         "CREATE INDEX entity_path ON entity (path, fragment)",
     ),
-    "name_value": (
-        "CREATE INDEX name_value_entity ON name_value (entity)",
-        "CREATE INDEX name_value_normalized ON name_value (normalized)",
-    ),
+    "name_value": ("CREATE INDEX name_value_entity ON name_value (entity)",),
     "edge": ("CREATE INDEX edge_child ON edge (hierarchy, child)",),
     "equiv_group": ("CREATE INDEX equiv_group_representative ON equiv_group (representative)",),
 }

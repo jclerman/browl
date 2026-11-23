@@ -33,10 +33,9 @@ CREATE TABLE name_value (
 
 ## Indexes
 
-| Name                  | Definition                                                    |
-| --------------------- | ------------------------------------------------------------- |
-| name_value_normalized | CREATE INDEX name_value_normalized ON name_value (normalized) |
-| name_value_entity     | CREATE INDEX name_value_entity ON name_value (entity)         |
+| Name              | Definition                                            |
+| ----------------- | ----------------------------------------------------- |
+| name_value_entity | CREATE INDEX name_value_entity ON name_value (entity) |
 
 ## Relations
 

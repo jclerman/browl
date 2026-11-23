@@ -253,14 +253,6 @@
       ],
       "indexes": [
         {
-          "name": "name_value_normalized",
-          "def": "CREATE INDEX name_value_normalized ON name_value (normalized)",
-          "table": "name_value",
-          "columns": [
-            "normalized"
-          ]
-        },
-        {
           "name": "name_value_entity",
           "def": "CREATE INDEX name_value_entity ON name_value (entity)",
           "table": "name_value",
@@ -270,6 +262,282 @@
         }
       ],
       "def": "CREATE TABLE name_value (\n    entity INTEGER NOT NULL,\n    property TEXT NOT NULL,\n    value TEXT NOT NULL,\n    normalized TEXT NOT NULL,\n    language TEXT,\n    direct INTEGER NOT NULL\n)"
+    },
+    {
+      "name": "search_value",
+      "type": "table",
+      "comment": "The search index (browl.search.SqliteSearch): each non-blank name value, keyed in the order search ranks values, so a query seeks its matches of one lane and length at a time, shortest first, without sorting them. Ranks are positions in NAME_PROPERTIES and LANGUAGE_RANKING as built, which the search hook's build key covers.",
+      "columns": [
+        {
+          "name": "type",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "The entity's type (entity.type), so a type filter seeks only its own lanes."
+        },
+        {
+          "name": "property_rank",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "The name property's position in NAME_PROPERTIES, from 0."
+        },
+        {
+          "name": "language_rank",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "The language's rank among the values' languages by LANGUAGE_RANKING (browl.names.language_rank), from 0; languages that rank alike, such as unlisted ones, share one."
+        },
+        {
+          "name": "entailed",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "0 if the entity has the value under the name property itself, 1 if through a sub-property."
+        },
+        {
+          "name": "length",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "The normalized value's length in characters."
+        },
+        {
+          "name": "normalized",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "The value normalized for search (browl.names.normalize)."
+        },
+        {
+          "name": "value",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "The value's lexical form."
+        },
+        {
+          "name": "entity",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "The entity (entity.id)."
+        },
+        {
+          "name": "language",
+          "type": "TEXT",
+          "nullable": true,
+          "comment": "The value's language tag, lowercased; NULL if it has none."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "sqlite_autoindex_search_value_1",
+          "def": "PRIMARY KEY (type, property_rank, language_rank, entailed, length, normalized, value, entity)",
+          "table": "search_value",
+          "columns": [
+            "type",
+            "property_rank",
+            "language_rank",
+            "entailed",
+            "length",
+            "normalized",
+            "value",
+            "entity"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "type",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (type)",
+          "table": "search_value",
+          "columns": [
+            "type"
+          ]
+        },
+        {
+          "name": "property_rank",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (property_rank)",
+          "table": "search_value",
+          "columns": [
+            "property_rank"
+          ]
+        },
+        {
+          "name": "language_rank",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (language_rank)",
+          "table": "search_value",
+          "columns": [
+            "language_rank"
+          ]
+        },
+        {
+          "name": "entailed",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (entailed)",
+          "table": "search_value",
+          "columns": [
+            "entailed"
+          ]
+        },
+        {
+          "name": "length",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (length)",
+          "table": "search_value",
+          "columns": [
+            "length"
+          ]
+        },
+        {
+          "name": "normalized",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (normalized)",
+          "table": "search_value",
+          "columns": [
+            "normalized"
+          ]
+        },
+        {
+          "name": "value",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (value)",
+          "table": "search_value",
+          "columns": [
+            "value"
+          ]
+        },
+        {
+          "name": "entity",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (entity)",
+          "table": "search_value",
+          "columns": [
+            "entity"
+          ]
+        },
+        {
+          "name": "sqlite_autoindex_search_value_1",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (type, property_rank, language_rank, entailed, length, normalized, value, entity)",
+          "table": "search_value",
+          "columns": [
+            "type",
+            "property_rank",
+            "language_rank",
+            "entailed",
+            "length",
+            "normalized",
+            "value",
+            "entity"
+          ]
+        }
+      ],
+      "def": "CREATE TABLE search_value (\n    type TEXT NOT NULL,\n    property_rank INTEGER NOT NULL,\n    language_rank INTEGER NOT NULL,\n    entailed INTEGER NOT NULL,\n    length INTEGER NOT NULL,\n    normalized TEXT NOT NULL,\n    value TEXT NOT NULL,\n    entity INTEGER NOT NULL,\n    language TEXT,\n    PRIMARY KEY (type, property_rank, language_rank, entailed, length, normalized, value, entity)\n) WITHOUT ROWID"
+    },
+    {
+      "name": "search_lane",
+      "type": "table",
+      "comment": "Each lane of search_value that has values, a (type, property_rank, language_rank, entailed) group, with its longest value, so a query seeks only lanes that exist, and no lengths past their longest.",
+      "columns": [
+        {
+          "name": "type",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "The entities' type (entity.type)."
+        },
+        {
+          "name": "property_rank",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "The name property's position in NAME_PROPERTIES, from 0."
+        },
+        {
+          "name": "language_rank",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "The languages' rank (search_value.language_rank)."
+        },
+        {
+          "name": "entailed",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "0 for direct values, 1 for values entailed through a sub-property."
+        },
+        {
+          "name": "max_length",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "The lane's longest normalized value, in characters."
+        },
+        {
+          "name": "property",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "The name property's IRI."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "sqlite_autoindex_search_lane_1",
+          "def": "PRIMARY KEY (type, property_rank, language_rank, entailed)",
+          "table": "search_lane",
+          "columns": [
+            "type",
+            "property_rank",
+            "language_rank",
+            "entailed"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "type",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (type)",
+          "table": "search_lane",
+          "columns": [
+            "type"
+          ]
+        },
+        {
+          "name": "property_rank",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (property_rank)",
+          "table": "search_lane",
+          "columns": [
+            "property_rank"
+          ]
+        },
+        {
+          "name": "language_rank",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (language_rank)",
+          "table": "search_lane",
+          "columns": [
+            "language_rank"
+          ]
+        },
+        {
+          "name": "entailed",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (entailed)",
+          "table": "search_lane",
+          "columns": [
+            "entailed"
+          ]
+        },
+        {
+          "name": "sqlite_autoindex_search_lane_1",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (type, property_rank, language_rank, entailed)",
+          "table": "search_lane",
+          "columns": [
+            "type",
+            "property_rank",
+            "language_rank",
+            "entailed"
+          ]
+        }
+      ],
+      "def": "CREATE TABLE search_lane (\n    type TEXT NOT NULL,\n    property_rank INTEGER NOT NULL,\n    language_rank INTEGER NOT NULL,\n    entailed INTEGER NOT NULL,\n    max_length INTEGER NOT NULL,\n    property TEXT NOT NULL,\n    PRIMARY KEY (type, property_rank, language_rank, entailed)\n) WITHOUT ROWID"
     },
     {
       "name": "edge",
@@ -794,6 +1062,20 @@
       ],
       "parent_cardinality": "exactly_one",
       "def": "name_value.entity references entity.id",
+      "virtual": true
+    },
+    {
+      "table": "search_value",
+      "columns": [
+        "entity"
+      ],
+      "cardinality": "zero_or_more",
+      "parent_table": "entity",
+      "parent_columns": [
+        "id"
+      ],
+      "parent_cardinality": "exactly_one",
+      "def": "search_value.entity references entity.id",
       "virtual": true
     },
     {

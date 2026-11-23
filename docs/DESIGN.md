@@ -584,6 +584,7 @@ are documented in [`SCHEMA.md`](SCHEMA.md):
 | `entity` | The ontology and every declared class and property: its IRI, type, URL path and fragment (2.3), display name and CURIE | The entity-list query (every declared class and property with its type; the ontology's IRI comes from the header query): 22–29 s on NCBITaxon, 3.03 M rows. The whole hook, which computes each batch's URLs and inserts it before reading the next, takes 25–26 s, and the table and its indexes 530–650 MiB (P-10) |
 | `name_value` | Name-property values, one row per direct and per RDFS-entailed property | The name values query, through a property path (below): 41–48 s on NCBITaxon, 3.56 M rows. The whole hook, which also sets each entity's CURIE and display name, takes about 85 s ([P-11 findings](../research/P-11/README.md)) |
 | `edge` | Parent → child per hierarchy (classes; each property type), between equivalence-group representatives | The edges query (subclass, sub-property and equivalent-class triples): 20–21 s on NCBITaxon, 3.02 M rows. The whole hook, which also groups, counts and inserts `equiv_group` and `counts`, takes about 42 s and 0.9 GB, and `edge`, `counts` and their index 164 MiB; on Uberon and HPO, 0.5 s ([P-12 findings](../research/P-12/README.md)) |
+| `search_value`, `search_lane` | The search index (P-19): each non-blank name value keyed in the order search ranks values, and each lane of that order with its longest value ([2.6](#26-search)) | `name_value` and `entity`, in SQLite: 11 s on NCBITaxon, 240 MiB, replacing `name_value`'s index on `normalized` (100 MiB), which nothing else used ([P-19 findings](../research/P-19/README.md)) |
 | `equiv_group` | Entity → group representative, for groups of more than one | Union-find over `owl:equivalentClass` between named classes, and over cycles of edges (below) |
 | `counts` | Per node: immediate children, distinct descendants | `edge`, in Python (below) |
 | `root` | Each hierarchy's roots, which the tree pages start from (P-18) | `edge`, in Python: found on demand, they'd take a scan of `counts` and a lookup in `edge` per node, 1–2 s on NCBITaxon |
@@ -820,23 +821,49 @@ more minutes of loading ([S-4 findings](../research/S-4/README.md)).
 A `SearchBackend` interface with methods for indexing during pre-caching and for queries. Only its module knows the
 engine. _(Q11, N-5)_
 
-**v1 implementation:** the `name_value` table in SQLite with an index on `normalized value`. A query is a range scan
-(`value >= q AND value < q + '￿'`) filtered by entity type, property and `direct`. _(Q8)_
+**v1 implementation** (`browl.search.SqliteSearch`, P-19): a table in the derived database, `search_value`, filled
+by the search pre-caching hook from `name_value` (`browl.precache.search`). The design's first plan, a range scan
+(`normalized >= q AND normalized < q + '\U0010FFFF'`) over an index on `name_value.normalized`, then ranking and grouping
+the matches in SQL, took about 1 s on NCBITaxon for a one-letter query: "a" matches 252 K of its 3.0 M values, and
+ranking shorter values first means sorting them all, as no index is in that order. N-2's target is 100 ms. _(Q8)_
+
+- **The table's key is the ranking's order:** (type, property rank, language rank, direct or entailed, length,
+  normalized value, value, entity). Each (type, property rank, language rank, entailed) group is a _lane_, listed with
+  its longest value in `search_lane`. Ranks are positions in `NAME_PROPERTIES` and `LANGUAGE_RANKING` as built, which
+  the hook's build key covers; languages that rank alike (e.g. unlisted ones) share a rank. A blank value isn't indexed.
+- **A query** takes the exact matches first, then walks the lanes allowed by its filters in rank order and, within
+  each, the lengths upward from the query's: one index seek per lane and length, the lanes of one rank merged by value.
+  It stops once it has enough IRIs, so it never sorts the matches. Each row's IRI comes from `entity`, so results are
+  grouped per IRI as they're read. Filters choose lanes: entity type, name property, and whether entailed values count.
+  A type filter is part of the key, not a residual filter: as one, annotation properties' matches of "a" took 1.8 s
+  on NCBITaxon, scanning the classes'.
+- **Measured** on NCBITaxon ([P-19 findings](../research/P-19/README.md)): every query measured took 0.1–0.9 ms
+  median, 9 ms at most, whether it matches 252 K values, one, or none. A query that matches nothing seeks every lane at
+  every length up to its longest, so many lanes and long values cost the most: about 5 µs a seek, so even 50 lanes of
+  150 lengths is about 40 ms.
+- **Why at pre-caching:** the table adds 11 s to NCBITaxon's pre-caching of about 3¼ minutes, under 1 s on smaller
+  ontologies. Building it in the background once the generation is ready, as the usage table is (2.5), would save those
+  seconds but need its own file and that build's machinery, and the range scan as a slower path meanwhile.
 
 **Ranking** _(Q9, Q10)_, in order:
 
 1. Exact match before prefix match.
 2. Position of the property in the configured name list.
 3. Position of the language in the language ranking. Untagged values come last by default (O-5).
-4. Shorter value.
-5. Alphabetical.
+4. A direct value before one entailed through a sub-property, as for display names (2.7). _(P-19)_
+5. Shorter value, by the normalized value's length.
+6. Alphabetical: by normalized value, so case and accents don't split the order, then by value (code point).
 
-Results are grouped per entity: an entity appears once, with its best-matching value shown.
+Results are grouped per IRI: an IRI appears once, with its best-matching value shown, and a punned IRI is one result
+listing its types, as it has one page. A query matches the start of the whole value; leading whitespace in the query
+is ignored, and a blank query finds nothing. A query also takes a limit and an offset, for paging, and says whether
+more results follow.
 
 **Normalization:** Unicode NFKD, accents removed, case folded. The same function is used at index and query time.
 
 **Later:** FTS5 for any-word matching (U-19); an external engine such as Typesense for typo tolerance (U-20), swapped in
-behind the same interface.
+behind the same interface. Building the index in the background after the generation is ready, if a framework for such
+builds is extracted from the usage table's, or P-24 finds load time matters.
 
 ### 2.7 Display names
 
@@ -1639,7 +1666,7 @@ To settle when it's built:
 | Memory limit can't be reported reliably | Resolved by S-2: with `-XX:+ExitOnOutOfMemoryError`, a heap breach in any thread exits with status 3 and a fixed message; each other failure kind has its own ROBOT log line (2.4). |
 | Descendant counts too slow or memory-hungry at millions of classes | Resolved by S-3 for trees: roaring bitmaps, 4.2 s for NCBITaxon ([S-3 findings](../research/S-3/README.md)). |
 | A dense or adversarial hierarchy makes descendant counting hold too much memory | Found in P-12's review: merging a node's children only once it had them all held memory quadratic in a chain whose members all share one more parent, which a few MB of upload (or a host serving an import) can supply; the build runs in the app process, with no memory limit. P-12 merges each set into its parents as soon as it's complete, which makes that shape linear, and fails the stage once the sets hold more than `DESCENDANT_BUDGET` members (2.5, Distinct descendant counts). |
-| Loading a very large ontology takes minutes | Accepted for uploads (Q14a), shown on the status page. Restarts don't reload (2.4). NCBITaxon: about 5 minutes, estimated; Uberon: 7 s, measured ([S-4 findings](../research/S-4/README.md)). P-24 checks whether extracting the dictionary and edges by streaming the upload file, in parallel with the TDB2 load, is worth it. |
+| Loading a very large ontology takes minutes | Accepted for uploads (Q14a), shown on the status page. Restarts don't reload (2.4). NCBITaxon: about 5 minutes, estimated; Uberon: 7 s, measured ([S-4 findings](../research/S-4/README.md)). P-24 checks whether extracting the dictionary and edges by streaming the upload file, in parallel with the TDB2 load, is worth it; P-24a whether running pre-caching's bulk queries in parallel is ([#127](https://github.com/jclerman/browl/issues/127)). |
 | Fragment rendering misses axioms a full-ontology render would show | Resolved by P-15: a fragment adds the axioms rooted at blank nodes that reach the entity (n-ary disjointness and difference, negative property assertions, general class axioms), and the symmetric axioms other entities state. A test compares fragment with full-ontology rendering for every entity of a test ontology holding every kind of OWL 2 axiom; 598 of 598 Uberon entities and 305 of 305 NCBITaxon ones matched too (2.8). |
 | Heavily used classes make their pages slow | Finding a class's general class axioms walks back through every class expression it's in, and its subclasses; P-15 measured the cost, and the fallback if an ontology's hubs are much worse (2.8). |
 | Usage misses references inside class expressions | Resolved by S-7: the blank-node owner map (2.5) finds them; the Usage tab's usages matched the OWLAPI's for every entity checked in Uberon, HPO and NCBITaxon (2.8). |
@@ -1669,7 +1696,6 @@ flowchart LR
         P40["P-40 Shorter tree URLs"]
     end
     subgraph P5["Phase 5: Search, caching, auth"]
-        P19["P-19 Search backend"]
         P20["P-20 Autocomplete UI"]
         P21["P-21 Page cache"]
         P22["P-22 Sign-in"]
@@ -1686,8 +1712,7 @@ flowchart LR
     end
     S5b["S-5b OLS4 comparison"]
 
-    P19 --> P20
-    P17 & P19 & P38 --> P33
+    P17 & P38 --> P33
     P20 & P38 & P39 --> P25
     P22 --> P23
     P22 & P31 --> P36
@@ -1759,7 +1784,7 @@ go into this document.
 
 | ID | Work item | Delivers | Depends on | Status | Tracking |
 | --- | --- | --- | --- | --- | --- |
-| P-19 | `SearchBackend` interface and SQLite implementation; ranking | U-10, U-11, U-12, N-5 | P-11 | To do | [#26](https://github.com/jclerman/browl/issues/26) |
+| P-19 | `SearchBackend` interface and SQLite implementation; ranking | U-10, U-11, U-12, N-5 | P-11 | Done | [#26](https://github.com/jclerman/browl/issues/26) |
 | P-20 | Autocomplete UI (accessible combobox) with type and property filters | U-10, U-17 | P-19, P-14 | To do | [#32](https://github.com/jclerman/browl/issues/32) |
 | P-33 | JSON API over the pages' data: routes under `api/` returning the models the pages render (2.8, 2.13) | U-42 | P-16, P-17, P-18, P-19, P-27, P-38 | To do | [#76](https://github.com/jclerman/browl/issues/76) |
 | P-21 | Page cache keyed by generation | O-10, N-3 | P-16 | To do | [#40](https://github.com/jclerman/browl/issues/40) |
