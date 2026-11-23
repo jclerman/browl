@@ -86,6 +86,8 @@ COLUMNS = {
         ("normalized", "TEXT", 1, 6),
         ("value", "TEXT", 1, 7),
         ("entity", "INTEGER", 1, 8),
+        ("normalized_rest", "TEXT", 0, 0),
+        ("value_rest", "TEXT", 0, 0),
         ("language", "TEXT", 0, 0),
     ],
     "root": [("hierarchy", "TEXT", 1, 1), ("node", "INTEGER", 1, 2)],

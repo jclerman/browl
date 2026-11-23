@@ -29,7 +29,7 @@ CREATE TABLE search_lane (
 | property_rank | INTEGER |         | false    |          |         | The name property's position in NAME_PROPERTIES, from 0.           |
 | language_rank | INTEGER |         | false    |          |         | The languages' rank (search_value.language_rank).                  |
 | entailed      | INTEGER |         | false    |          |         | 0 for direct values, 1 for values entailed through a sub-property. |
-| max_length    | INTEGER |         | false    |          |         | The lane's longest normalized value, in characters.                |
+| max_length    | INTEGER |         | false    |          |         | The lane's longest search_value.length, so at most KEY_CHARS.      |
 | property      | TEXT    |         | false    |          |         | The name property's IRI.                                           |
 
 ## Constraints

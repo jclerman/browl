@@ -13,8 +13,17 @@ from browl.precache.entities import entities
 from browl.precache.keys import build_keys
 from browl.precache.names import names
 from browl.precache.search import search as search_hook
-from browl.precache.stage import pre_caching_stage
-from browl.search import SearchQuery, SearchResults, SqliteSearch, search
+from browl.precache.stage import HOOKS, pre_caching_stage
+from browl.search import (
+    KEY_CHARS,
+    MAX_LIMIT,
+    MAX_OFFSET,
+    MAX_QUERY_CHARS,
+    SearchQuery,
+    SearchResults,
+    SqliteSearch,
+    search,
+)
 from browl.settings import Settings
 from tests.helpers import LABEL, ONTOLOGY_RESULT, connect, fuseki, job, make_settings
 from tests.test_precache_names import PREF_LABEL, SKOS, entity_result, name_result
@@ -50,6 +59,26 @@ def find(settings: Settings, text: str, **filters: object) -> SearchResults:
 def found(settings: Settings, text: str, **filters: object) -> list[str]:
     """Return the local names of the IRIs a query finds, best first."""
     return [hit.iri.removeprefix(EX) for hit in find(settings, text, **filters).hits]
+
+
+def seeks(settings: Settings, text: str, **filters: object) -> int:
+    """Return how many reads of `search_value` a query makes."""
+    statements: list[str] = []
+    with closing(connect(settings, 1, HOOKS_USED)) as connection:
+        connection.set_trace_callback(statements.append)
+        search(connection, SearchQuery(text, **filters))  # type: ignore[arg-type]
+    return sum("FROM search_value" in statement for statement in statements)
+
+
+def indexed(settings: Settings) -> list[tuple[object, ...]]:
+    """Return each `search_value` row's entity's local name, length, and whole normalized value and value."""
+    with closing(connect(settings, 1, HOOKS_USED)) as connection:
+        rows = connection.execute(
+            "SELECT iri, length, normalized || coalesce(normalized_rest, ''),"
+            " value || coalesce(value_rest, ''), language"
+            " FROM search_value JOIN entity ON entity.id = search_value.entity ORDER BY iri"
+        )
+        return [(str(iri).removeprefix(EX), *rest) for iri, *rest in rows]
 
 
 async def test_exact_match_first(data_dir: Path) -> None:
@@ -96,14 +125,14 @@ async def test_direct_first(data_dir: Path) -> None:
 
 
 async def test_shorter_first(data_dir: Path) -> None:
-    """Check that a shorter value ranks first (rule 4), by the normalized value's length."""
+    """Check that a shorter value ranks first (rule 5), by the normalized value's length."""
     settings = make_settings()
     await build(settings, [("longer", LABEL, LABEL, '"abcd"@en'), ("shorter", LABEL, LABEL, '"abc"@en')])
     assert found(settings, "ab") == ["shorter", "longer"]
 
 
 async def test_alphabetical(data_dir: Path) -> None:
-    """Check that values of a length rank by normalized value, then by value (rule 5), across entity types."""
+    """Check that values of a length rank by normalized value, then by value (rule 6), across entity types."""
     settings = make_settings()
     values = [
         ("anu", LABEL, LABEL, '"anu"@en'),
@@ -115,6 +144,94 @@ async def test_alphabetical(data_dir: Path) -> None:
     declared = [(name, "Class") for name in ("anu", "lower", "upper", "accent")] + [("property", "ObjectProperty")]
     await build(settings, values, declared)
     assert found(settings, "an") == ["accent", "upper", "lower", "anu", "property"]
+
+
+async def test_alphabetical_across_lanes(data_dir: Path) -> None:
+    """Check that equal normalized values rank by value across lanes, not by their lanes' order."""
+    settings = make_settings()
+    values = [("lower", LABEL, LABEL, '"ant"@en'), ("upper", LABEL, LABEL, '"Ant"@en')]
+    await build(settings, values, [("lower", "Class"), ("upper", "ObjectProperty")])
+    assert found(settings, "an") == ["upper", "lower"]
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        ([("label", LABEL, LABEL, '"cat"@de'), ("pref", PREF_LABEL, PREF_LABEL, '"ca"@en')], ["label", "pref"]),
+        ([("direct", LABEL, LABEL, '"cat"@de'), ("entailed", LABEL, SUB, '"ca"@en')], ["entailed", "direct"]),
+        ([("pref", PREF_LABEL, PREF_LABEL, '"ca"@en'), ("entailed", LABEL, SUB, '"cat"@en')], ["entailed", "pref"]),
+    ],
+    ids=["property before language", "language before direct", "property before direct"],
+)
+async def test_rule_order(data_dir: Path, values: list[Value], expected: list[str]) -> None:
+    """Check that the rules after exact match apply in order: property, then language, then direct (rules 2-4)."""
+    settings = make_settings(NAME_PROPERTIES=["rdfs:label", "skos:prefLabel"], LANGUAGE_RANKING=["en"])
+    await build(settings, values)
+    assert found(settings, "c") == expected
+
+
+async def test_exact_matches_in_tier_order(data_dir: Path) -> None:
+    """Check that exact matches rank among themselves by the later rules, here the property's position."""
+    settings = make_settings(NAME_PROPERTIES=["skos:prefLabel", "rdfs:label"])
+    await build(settings, [("label", LABEL, LABEL, '"bone"@en'), ("pref", PREF_LABEL, PREF_LABEL, '"Bone"@en')])
+    assert found(settings, "bone") == ["pref", "label"]
+
+
+async def test_best_value_found_later(data_dir: Path) -> None:
+    """Check that an IRI's best value is its exact match, even under a later property than a prefix match."""
+    settings = make_settings(NAME_PROPERTIES=["rdfs:label", "skos:prefLabel"])
+    await build(settings, [("x", LABEL, LABEL, '"bones"@en'), ("x", PREF_LABEL, PREF_LABEL, '"bone"@en')])
+    assert [(hit.value, hit.exact) for hit in find(settings, "bone").hits] == [("bone", True)]
+
+
+@pytest.mark.parametrize(
+    ("ranking", "tags"), [(["en"], ("en-GB", "en-US")), (["en"], ("de", "fr"))], ids=["fallback", "unlisted"]
+)
+async def test_same_value_languages_alike(data_dir: Path, ranking: list[str], tags: tuple[str, str]) -> None:
+    """Check that one value in two languages that rank alike is indexed once, under the first tag."""
+    settings = make_settings(LANGUAGE_RANKING=ranking)
+    await build(settings, [("x", LABEL, LABEL, f'"Bone"@{tag}') for tag in tags])
+    assert [(hit.value, hit.language) for hit in find(settings, "bone").hits] == [("Bone", tags[0].lower())]
+
+
+async def test_long_values(data_dir: Path) -> None:
+    """Check values longer than the key: found by prefix, and by a query longer than the key, exactly or not."""
+    settings = make_settings()
+    long = "a" * KEY_CHARS
+    values = [
+        ("x", LABEL, LABEL, f'"{long}x"@en'),
+        ("xy", LABEL, LABEL, f'"{long}xy"@en'),
+        ("b", LABEL, LABEL, '"ab"@en'),
+    ]
+    await build(settings, values)
+    assert [length for _, length, *_ in indexed(settings)] == [2, KEY_CHARS, KEY_CHARS]
+    assert found(settings, "a") == ["b", "x", "xy"]
+    assert [(hit.iri.removeprefix(EX), hit.exact) for hit in find(settings, f"{long}x").hits] == [
+        ("x", True),
+        ("xy", False),
+    ]
+    assert found(settings, f"{long}xy") == ["xy"]
+    assert found(settings, f"{long}z") == []
+    assert [hit.value for hit in find(settings, f"{long}xy").hits] == [f"{long}xy"]
+
+
+async def test_long_values_bound_the_walk(data_dir: Path) -> None:
+    """Check that a value far longer than the key doesn't make a query seek more than the key's length."""
+    settings = make_settings()
+    await build(settings, [("long", LABEL, LABEL, f'"b{"x" * 10_000}"@en'), ("short", LABEL, LABEL, '"ab"@en')])
+    assert found(settings, "a") == ["short"]
+    assert seeks(settings, "a") <= KEY_CHARS
+
+
+async def test_nul_counted(data_dir: Path) -> None:
+    """Check that a value's length counts the characters after a NUL, which SQLite's length() wouldn't."""
+    settings = make_settings()
+    await build(settings, [("nul", LABEL, LABEL, '"ab\\u0000cd"@en'), ("abz", LABEL, LABEL, '"abz"@en')])
+    assert [(hit.iri.removeprefix(EX), hit.exact) for hit in find(settings, "ab").hits] == [
+        ("abz", False),
+        ("nul", False),
+    ]
+    assert found(settings, "ab\x00c") == ["nul"]
 
 
 @pytest.mark.parametrize(
@@ -132,23 +249,25 @@ async def test_case_and_accents(data_dir: Path, value: str, query: str) -> None:
 async def test_matches_start_of_value(data_dir: Path) -> None:
     """Check that a query matches only the start of a whole value, and that leading whitespace is ignored."""
     settings = make_settings()
-    await build(settings, [("x", LABEL, LABEL, '"red blood cell"@en')])
+    await build(settings, [("x", LABEL, LABEL, '"red blood cell"@en'), ("y", LABEL, LABEL, '" \\nHomo sapiens"@en')])
     assert found(settings, "blood") == []
     assert found(settings, "  red b") == ["x"]
     assert found(settings, "red blood cells") == []
+    assert [(hit.value, hit.exact) for hit in find(settings, " homo sapiens").hits] == [(" \nHomo sapiens", True)]
 
 
 async def test_nothing_to_find(data_dir: Path) -> None:
-    """Check that a blank query, or a blank value, finds nothing.
+    """Check that a blank query finds nothing, and that a value that normalizes to nothing isn't indexed.
 
-    A value that normalizes to nothing isn't indexed, so no lane's longest value has length 0.
+    Such a value (only whitespace, or combining marks) matches no query, and would give its lane a longest value of 0.
     """
     settings = make_settings()
     values = [("x", LABEL, LABEL, '"  "@en'), ("y", LABEL, LABEL, '"y"@en'), ("z", LABEL, SUB, '"\u0301"@en')]
     await build(settings, values)
-    assert find(settings, "") == SearchResults([], more=False)
-    assert find(settings, " \t") == SearchResults([], more=False)
-    assert found(settings, " ") == []
+    assert [name for name, *_ in indexed(settings)] == ["y"]
+    assert find(settings, "") == SearchResults((), more=False)
+    assert find(settings, " \t") == SearchResults((), more=False)
+    assert found(settings, "y") == ["y"]
 
 
 async def test_grouped_per_iri(data_dir: Path) -> None:
@@ -167,7 +286,7 @@ async def test_grouped_per_iri(data_dir: Path) -> None:
         (f"{EX}p", "trunk", RDFS_LABEL, (EntityType.CLASS, EntityType.ANNOTATION_PROPERTY)),
     ]
     assert results.more is False
-    assert [hit.types for hit in find(settings, "tr", types={EntityType.ANNOTATION_PROPERTY}).hits] == [
+    assert [hit.types for hit in find(settings, "tr", types=frozenset({EntityType.ANNOTATION_PROPERTY})).hits] == [
         (EntityType.ANNOTATION_PROPERTY,)
     ]
 
@@ -184,10 +303,15 @@ async def test_filters(data_dir: Path) -> None:
     declared = [("class", "Class"), ("property", "DatatypeProperty"), ("pref", "Class"), ("entailed", "Class")]
     await build(settings, values, declared)
     assert found(settings, "k") == ["class", "property", "entailed", "pref"]
-    assert found(settings, "k", types={EntityType.DATA_PROPERTY}) == ["property"]
-    assert found(settings, "k", properties={f"{SKOS}prefLabel"}) == ["pref"]
+    assert found(settings, "k", types=frozenset({EntityType.DATA_PROPERTY})) == ["property"]
+    assert found(settings, "k", properties=frozenset({f"{SKOS}prefLabel"})) == ["pref"]
     assert found(settings, "k", entailed=False) == ["class", "property", "pref"]
-    assert found(settings, "k", types=set()) == []
+    assert found(settings, "k", types=frozenset({EntityType.CLASS}), entailed=False) == ["class", "pref"]
+    assert found(settings, "k", types=frozenset({EntityType.DATA_PROPERTY}), properties=frozenset({RDFS_LABEL})) == [
+        "property"
+    ]
+    assert found(settings, "k", types=frozenset()) == []
+    assert found(settings, "k", properties=frozenset()) == []
 
 
 async def test_paging(data_dir: Path) -> None:
@@ -198,6 +322,30 @@ async def test_paging(data_dir: Path) -> None:
     pages = [find(settings, "m", limit=2, offset=offset) for offset in (0, 2, 4)]
     assert [[hit.value for hit in page.hits] for page in pages] == [["m0", "m1"], ["m2", "m3"], ["m4"]]
     assert [page.more for page in pages] == [True, True, False]
+    assert find(settings, "m", limit=1, offset=4) == find(settings, "m", limit=2, offset=4)  # ends at the last
+    assert find(settings, "m", limit=1, offset=4).more is False
+    assert find(settings, "m", offset=5) == SearchResults((), more=False)
+
+
+async def test_paging_across_exact_matches(data_dir: Path) -> None:
+    """Check paging from the exact matches into the prefix matches.
+
+    Exact matches enough for the page, and one more, end the search before the prefix matches.
+    """
+    settings = make_settings()
+    values = [("lower", LABEL, LABEL, '"m"@en'), ("upper", LABEL, LABEL, '"M"@en'), ("prefix", LABEL, LABEL, '"mm"@en')]
+    await build(settings, values)
+    first, second = (find(settings, "m", limit=2, offset=offset) for offset in (0, 2))
+    assert [(hit.value, hit.exact) for hit in first.hits] == [("M", True), ("m", True)]
+    assert first.more is True
+    assert [(hit.value, hit.exact) for hit in second.hits] == [("mm", False)]
+    assert second.more is False
+    assert seeks(settings, "m", limit=1) < seeks(settings, "m", limit=2)
+
+
+def test_search_hook_after_names() -> None:
+    """Check that the search hook runs after the names hook, whose `name_value` it reads."""
+    assert HOOKS.index(search_hook) > HOOKS.index(names)
 
 
 async def test_many_lengths(data_dir: Path) -> None:
@@ -222,13 +370,20 @@ async def test_backend(data_dir: Path) -> None:
 
 @pytest.mark.parametrize(
     "fields",
-    [{"limit": 0}, {"offset": -1}, {"types": {"individual"}}, {"properties": "not a set"}],
-    ids=["no results", "negative offset", "unknown type", "properties not a set"],
+    [
+        {"limit": 0},
+        {"limit": MAX_LIMIT + 1},
+        {"offset": -1},
+        {"offset": MAX_OFFSET + 1},
+        {"text": "x" * (MAX_QUERY_CHARS + 1)},
+        {"text": "a\ud800"},
+    ],
+    ids=["no results", "too many results", "negative offset", "offset too deep", "text too long", "lone surrogate"],
 )
 def test_query_checked(fields: dict[str, object]) -> None:
-    """Check that a query's fields are checked when it's made."""
+    """Check the bounds of a query's fields, checked when it's made."""
     with pytest.raises(ValidationError):
-        SearchQuery("x", **fields)  # type: ignore[arg-type]
+        SearchQuery(**{"text": "x"} | fields)  # type: ignore[arg-type]
 
 
 def test_query_filters_frozen() -> None:

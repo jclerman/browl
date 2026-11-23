@@ -62,3 +62,13 @@ prototype, `a` among annotation properties took 1.8 s, as it scanned the classes
 This ontology has few lanes. One with several name properties, languages and types has more, each sought at every
 length for a query with few matches: 50 lanes of 150 lengths would be about 40 ms, still inside N-2. P-24 checks the
 target on its ontologies.
+
+## After the review
+
+P-19's review (PR #128) found the walk's cost grew with the longest value: one class with a 100,000-character
+`rdfs:label`, among a few short ones, made the query "a" take 1.71 s, as a query that finds fewer IRIs than it wants
+seeks every length up to the lane's longest. The key now holds at most 256 characters of each value (`KEY_CHARS`), so
+a query seeks each lane at most 256 times: the same query takes under 1 ms.
+
+The build now computes lengths and cuts with Python functions, as SQLite's `length()` stops at a NUL. Rerun on
+NCBITaxon: 12.1 s, `search_value` 247 MiB, and query medians of 0.08–0.91 ms, as before.

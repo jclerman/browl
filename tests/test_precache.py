@@ -46,6 +46,7 @@ from browl.precache.core import Hook, PreCacheContext, batched, has_loaded_impor
 from browl.precache.entities import entities
 from browl.precache.header import OntologyHeader, ontology_header
 from browl.precache.keys import build_keys
+from browl.precache.search import search
 from browl.precache.stage import HOOKS, build, pre_cache, pre_caching_stage, rebuild, remove_previous
 from browl.settings import Settings
 from tests.conftest import DATA
@@ -780,7 +781,7 @@ def test_restart_rebuilds(settings: Settings, prepare: Callable[[Settings], obje
         state = app.state.jobs.state
         assert (state.generation, state.stage, state.ready_generation, state.started_at) == (2, Stage.READY, 2, STARTED)
         assert client.get("/probe").json() == 2
-    queries = len(HOOKS)  # the header's, and each hook's but the search hook's, which reads only SQLite
+    queries = 1 + sum(hook is not search for hook in HOOKS)  # the header's, then each hook's but search's
     assert fuseki.requests == ["/$/ping", *[f"/{dataset_name(2)}/sparql"] * queries]
     assert derived_files(settings) == ["2.sqlite3"]
     with closing(connect(settings, 2)) as connection:

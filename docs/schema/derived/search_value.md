@@ -2,7 +2,7 @@
 
 ## Description
 
-The search index (browl.search.SqliteSearch): each name value that's neither blank nor empty once normalized, keyed in the order search ranks values. The rows that share the key's first four columns (type, property_rank, language_rank, entailed) form a lane, ordered within by length, normalized value, then value. A query seeks its matches in one lane and of one length at a time, shortest first, so it never sorts them. Ranks are positions in NAME_PROPERTIES and LANGUAGE_RANKING as built, which the search hook's build key covers.
+The search index (browl.search.SqliteSearch): each name value that isn't empty once normalized, keyed in the order search ranks values. The rows that share the key's first four columns (type, property_rank, language_rank, entailed) form a lane, ordered within by length, normalized value, then value. A query seeks its matches in one lane and of one length at a time, shortest first, so it never sorts them. The key holds at most browl.search.KEY_CHARS characters of each value, so a query seeks at most that many lengths per lane however long the values are. Ranks are positions in NAME_PROPERTIES and LANGUAGE_RANKING as built, which the search hook's build key covers. Of an entity's values that differ only in language tags that rank alike, one row is kept.
 
 <details>
 <summary><strong>Table Definition</strong></summary>
@@ -17,6 +17,8 @@ CREATE TABLE search_value (
     normalized TEXT NOT NULL,
     value TEXT NOT NULL,
     entity INTEGER NOT NULL,
+    normalized_rest TEXT,
+    value_rest TEXT,
     language TEXT,
     PRIMARY KEY (type, property_rank, language_rank, entailed, length, normalized, value, entity)
 ) WITHOUT ROWID
@@ -26,17 +28,19 @@ CREATE TABLE search_value (
 
 ## Columns
 
-| Name          | Type    | Default | Nullable | Children | Parents             | Comment                                                                                                                                                               |
-| ------------- | ------- | ------- | -------- | -------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| type          | TEXT    |         | false    |          |                     | The entity's type (entity.type), so a type filter seeks only its own lanes.                                                                                           |
-| property_rank | INTEGER |         | false    |          |                     | The name property's position in NAME_PROPERTIES, from 0.                                                                                                              |
-| language_rank | INTEGER |         | false    |          |                     | The language's rank among the values' languages by LANGUAGE_RANKING (browl.names.language_rank), from 0; languages that rank alike, such as unlisted ones, share one. |
-| entailed      | INTEGER |         | false    |          |                     | 0 if the entity has the value under the name property itself, 1 if through a sub-property.                                                                            |
-| length        | INTEGER |         | false    |          |                     | The normalized value's length in characters.                                                                                                                          |
-| normalized    | TEXT    |         | false    |          |                     | The value normalized for search (browl.names.normalize).                                                                                                              |
-| value         | TEXT    |         | false    |          |                     | The value's lexical form.                                                                                                                                             |
-| entity        | INTEGER |         | false    |          | [entity](entity.md) | The entity (entity.id).                                                                                                                                               |
-| language      | TEXT    |         | true     |          |                     | The value's language tag, lowercased; NULL if it has none.                                                                                                            |
+| Name            | Type    | Default | Nullable | Children | Parents             | Comment                                                                                                                                                               |
+| --------------- | ------- | ------- | -------- | -------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| type            | TEXT    |         | false    |          |                     | The entity's type (entity.type), so a type filter seeks only its own lanes.                                                                                           |
+| property_rank   | INTEGER |         | false    |          |                     | The name property's position in NAME_PROPERTIES, from 0.                                                                                                              |
+| language_rank   | INTEGER |         | false    |          |                     | The language's rank among the values' languages by LANGUAGE_RANKING (browl.names.language_rank), from 0; languages that rank alike, such as unlisted ones, share one. |
+| entailed        | INTEGER |         | false    |          |                     | 0 if the entity has the value under the name property itself, 1 if through a sub-property.                                                                            |
+| length          | INTEGER |         | false    |          |                     | The normalized value's length in characters, counted in Python, up to KEY_CHARS.                                                                                      |
+| normalized      | TEXT    |         | false    |          |                     | The value normalized for search (browl.names.normalize), its first KEY_CHARS characters.                                                                              |
+| value           | TEXT    |         | false    |          |                     | The value's lexical form, its first KEY_CHARS characters.                                                                                                             |
+| entity          | INTEGER |         | false    |          | [entity](entity.md) | The entity (entity.id).                                                                                                                                               |
+| normalized_rest | TEXT    |         | true     |          |                     | The normalized value's characters after the first KEY_CHARS; NULL if there are none.                                                                                  |
+| value_rest      | TEXT    |         | true     |          |                     | The value's characters after the first KEY_CHARS; NULL if there are none.                                                                                             |
+| language        | TEXT    |         | true     |          |                     | The value's language tag, lowercased; NULL if it has none.                                                                                                            |
 
 ## Constraints
 
@@ -74,6 +78,8 @@ erDiagram
   TEXT normalized PK
   TEXT value PK
   INTEGER entity PK
+  TEXT normalized_rest
+  TEXT value_rest
   TEXT language
 }
 "entity" {

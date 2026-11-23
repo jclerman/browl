@@ -89,6 +89,8 @@ erDiagram
   TEXT normalized PK
   TEXT value PK
   INTEGER entity PK
+  TEXT normalized_rest
+  TEXT value_rest
   TEXT language
 }
 "edge" {

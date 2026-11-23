@@ -1,8 +1,10 @@
 """Name values (DESIGN.md §2.6, §2.7): the name properties, language ranking, normalization and CURIE expansion."""
 
 import logging
+import sqlite3
 import unicodedata
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 
 from browl.rdf import IRI, OWL, RDF, RDFS, XSD, Literal, RDFSyntaxError
 from browl.settings import UNTAGGED, Settings
@@ -23,6 +25,9 @@ BUILTIN_PREFIXES = {
 
 BLANK = " \t\n\r"
 """The characters of a blank name value or title, which is never a display name: its links would have no text."""
+
+LAST_CHAR = "\U0010ffff"
+"""Sorts after any other character, as UTF-8 bytes too: strings that start with `p` sort before `p + LAST_CHAR`."""
 
 
 def expand_curie(name: str, prefixes: Mapping[str, str]) -> str:
@@ -50,14 +55,14 @@ def name_property_iris(settings: Settings) -> list[str]:
 
 
 def normalize(text: str) -> str:
-    """Return a name value as search compares it (§2.6): Unicode NFKD, accents removed, case folded.
+    """Return a name value as search compares it (§2.6): NFKD, without accents or leading whitespace, case folded.
 
     Search's queries are normalized with it too, so a query matches a value whatever its accents and case.
     """
     # Unicode's compatibility caseless matching (D146) normalizes again after folding, as folding can leave a string
     # unnormalized (U+0345, a combining mark, folds to a letter that may need reordering against the marks around it).
     folded = unicodedata.normalize("NFKD", unicodedata.normalize("NFKD", text).casefold())
-    return "".join(char for char in folded if not unicodedata.combining(char))
+    return "".join(char for char in folded if not unicodedata.combining(char)).lstrip()
 
 
 def language_rank(language: str | None, ranking: Sequence[str]) -> float:
@@ -98,3 +103,29 @@ def best_values(values: Iterable[Literal], ranking: Sequence[str]) -> list[str]:
         return []
     best = min(ranked.values())
     return sorted(value for value, rank in ranked.items() if rank == best)
+
+
+@contextmanager
+def rank_tables(connection: sqlite3.Connection, properties: Sequence[str], ranking: Sequence[str]) -> Iterator[None]:
+    """Create temporary tables of the name values' ranks for the duration, for display names and search.
+
+    `property_rank (property, rank)` gives each name property's position, and `language_rank (language, rank)` each
+    language tag in `name_value` its rank by `language_rank`, as dense integers from 0: tags that rank alike share one.
+
+    Args:
+        connection: A connection to the derived database, with `name_value` filled.
+        properties: The name properties' IRIs, best first (`name_property_iris`).
+        ranking: The language ranking, lowercased (`Settings.language_ranking`).
+    """
+    tags = [row[0] for row in connection.execute("SELECT DISTINCT language FROM name_value")]
+    ranks = {tag: language_rank(tag, ranking) for tag in tags}
+    dense = {rank: n for n, rank in enumerate(sorted(set(ranks.values())))}
+    connection.execute("CREATE TEMP TABLE property_rank (property TEXT PRIMARY KEY, rank INTEGER NOT NULL)")
+    connection.executemany("INSERT INTO property_rank VALUES (?, ?)", [(iri, n) for n, iri in enumerate(properties)])
+    connection.execute("CREATE TEMP TABLE language_rank (language TEXT, rank INTEGER NOT NULL)")
+    connection.executemany("INSERT INTO language_rank VALUES (?, ?)", [(tag, dense[ranks[tag]]) for tag in tags])
+    try:
+        yield
+    finally:
+        connection.execute("DROP TABLE property_rank")
+        connection.execute("DROP TABLE language_rank")

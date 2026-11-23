@@ -14,10 +14,11 @@ import sqlite3
 import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import closing, contextmanager, suppress
-from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
+
+from pydantic.dataclasses import dataclass as validated_dataclass
 
 from browl.jobtypes import Reasoner
 
@@ -77,6 +78,8 @@ CREATE TABLE search_value (
     normalized TEXT NOT NULL,
     value TEXT NOT NULL,
     entity INTEGER NOT NULL,
+    normalized_rest TEXT,
+    value_rest TEXT,
     language TEXT,
     PRIMARY KEY (type, property_rank, language_rank, entailed, length, normalized, value, entity)
 ) WITHOUT ROWID;
@@ -154,7 +157,7 @@ INDEXES: dict[str, tuple[str, ...]] = {
 (`create_indexes`)."""
 
 
-@dataclass(frozen=True)
+@validated_dataclass(frozen=True)
 class Meta:
     """What the derived database was built from.
 
@@ -224,7 +227,7 @@ TYPE_LABELS = {
 """Each entity type's name, as pages show it."""
 
 
-@dataclass(frozen=True)
+@validated_dataclass(frozen=True)
 class Entity:
     """A row of the `entity` table.
 
@@ -259,7 +262,7 @@ def entities_at(connection: sqlite3.Connection, path: str, fragment: str | None 
         " ORDER BY iri, type",
         (path, fragment),
     )
-    return [Entity(number, iri, EntityType(kind), *rest) for number, iri, kind, *rest in rows]
+    return [Entity(*row) for row in rows]
 
 
 def entities_with_iri(connection: sqlite3.Connection, iri: str) -> list[Entity]:
@@ -267,7 +270,7 @@ def entities_with_iri(connection: sqlite3.Connection, iri: str) -> list[Entity]:
     rows = connection.execute(
         "SELECT id, iri, type, path, fragment, display_name, curie FROM entity WHERE iri = ? ORDER BY type", (iri,)
     )
-    return [Entity(number, iri, EntityType(kind), *rest) for number, iri, kind, *rest in rows]
+    return [Entity(*row) for row in rows]
 
 
 def is_hash_prefix(connection: sqlite3.Connection, path: str) -> bool:
@@ -456,18 +459,10 @@ def is_current(data_dir: Path, generation: int, keys: Mapping[str, str]) -> bool
 
 def read_meta(connection: sqlite3.Connection) -> Meta:
     """Return the `meta` row of a derived database."""
-    generation, reasoner, loaded_at, ontology_iri, version_iri, title, version_info = connection.execute(
+    row = connection.execute(
         "SELECT generation, reasoner, loaded_at, ontology_iri, version_iri, title, version_info FROM meta"
     ).fetchone()
-    return Meta(
-        generation=generation,
-        reasoner=Reasoner(reasoner),
-        loaded_at=datetime.fromisoformat(loaded_at),
-        ontology_iri=ontology_iri,
-        version_iri=version_iri,
-        title=title,
-        version_info=version_info,
-    )
+    return Meta(*row)
 
 
 class DerivedReader:

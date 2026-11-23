@@ -43,6 +43,12 @@ instructions specific to coding agents. Requirements and architecture are in [`D
   `x = 0`).
 - Java objects reached through JPype are `Any` to mypy. Keep them inside the bridge modules, and give the functions that
   wrap them Python types.
+- **Data classes:** Pydantic checks types where data comes in from outside the code.
+  - A record built by position from a database row or from a caller's input (e.g. `browl.derived.Entity`,
+    `browl.search.SearchQuery`) is a frozen Pydantic dataclass (`pydantic.dataclasses.dataclass`). Its annotations,
+    with bounds such as `Field(ge=0)`, then state and check what the code handles, instead of checks by hand.
+  - A page's model is a frozen `BaseModel`.
+  - A value built only from data already typed is a plain frozen `dataclass`.
 
 ## Tests
 

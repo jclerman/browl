@@ -4,7 +4,7 @@ import functools
 import sqlite3
 from collections.abc import Mapping, Sequence
 
-from browl.names import BLANK, BUILTIN_PREFIXES, language_rank, name_property_iris, normalize
+from browl.names import BLANK, BUILTIN_PREFIXES, LAST_CHAR, name_property_iris, normalize, rank_tables
 from browl.precache.core import PreCacheContext, batched, hook
 from browl.rdf import Literal, Term
 
@@ -18,8 +18,6 @@ WHERE {{
 """Every value of each name property (`{properties}`: their IRIs, in `<>`) and of its sub-properties, transitively
 (rdfs5, rdfs7), through a property path rather than an RDFS-inferring dataset (DESIGN.md §2.5). The path's zero-length
 step gives the name property itself, and it reaches each property once, however the sub-properties cycle."""
-
-_LAST_CHAR = "\U0010ffff"  # sorts after any other character, as UTF-8 bytes too
 
 
 @hook("name_properties", "language_ranking", "extra_prefixes")
@@ -70,7 +68,7 @@ def _set_curies(prefixes: Mapping[str, str], source_rank: Mapping[str, int], con
     for name, namespace in sorted(prefixes.items(), key=preference):
         connection.execute(
             "UPDATE entity SET curie = ? || substr(iri, ?) WHERE iri > ? AND iri < ? AND curie IS NULL",
-            (f"{name}:", len(namespace) + 1, namespace, namespace + _LAST_CHAR),
+            (f"{name}:", len(namespace) + 1, namespace, namespace + LAST_CHAR),
         )
 
 
@@ -112,27 +110,19 @@ def _set_display_names(properties: Sequence[str], ranking: Sequence[str], connec
     shorter, then lexical order (by code point); a blank value (`browl.names.BLANK`) is skipped, as it would leave
     links without text. The ontology's display name is its title (`meta.title`) if it has one.
     """
-    languages = [row[0] for row in connection.execute("SELECT DISTINCT language FROM name_value")]
-    connection.execute("CREATE TEMP TABLE property_rank (property TEXT PRIMARY KEY, rank INTEGER NOT NULL)")
-    connection.executemany("INSERT INTO property_rank VALUES (?, ?)", [(iri, n) for n, iri in enumerate(properties)])
-    connection.execute("CREATE TEMP TABLE language_rank (language TEXT, rank REAL NOT NULL)")
-    connection.executemany(
-        "INSERT INTO language_rank VALUES (?, ?)", [(tag, language_rank(tag, ranking)) for tag in languages]
-    )
-    connection.execute(
-        "UPDATE entity SET display_name = best.value FROM ("
-        " SELECT entity, value, row_number() OVER (PARTITION BY entity ORDER BY p.rank, l.rank, direct DESC,"
-        "  length(value), value) AS place"
-        " FROM name_value JOIN property_rank AS p USING (property)"
-        " JOIN language_rank AS l ON l.language IS name_value.language"
-        " WHERE trim(value, ?) <> ''"
-        ") AS best WHERE best.place = 1 AND entity.id = best.entity",
-        (BLANK,),
-    )
+    with rank_tables(connection, properties, ranking):
+        connection.execute(
+            "UPDATE entity SET display_name = best.value FROM ("
+            " SELECT entity, value, row_number() OVER (PARTITION BY entity ORDER BY p.rank, l.rank, direct DESC,"
+            "  length(value), value) AS place"
+            " FROM name_value JOIN property_rank AS p USING (property)"
+            " JOIN language_rank AS l ON l.language IS name_value.language"
+            " WHERE trim(value, ?) <> ''"
+            ") AS best WHERE best.place = 1 AND entity.id = best.entity",
+            (BLANK,),
+        )
     connection.execute(
         "UPDATE entity SET display_name = (SELECT title FROM meta)"
         " WHERE type = 'ontology' AND (SELECT title FROM meta) IS NOT NULL"
     )
     connection.execute("UPDATE entity SET display_name = coalesce(curie, iri) WHERE display_name IS NULL")
-    connection.execute("DROP TABLE property_rank")
-    connection.execute("DROP TABLE language_rank")

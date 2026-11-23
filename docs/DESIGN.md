@@ -584,7 +584,7 @@ are documented in [`SCHEMA.md`](SCHEMA.md):
 | `entity` | The ontology and every declared class and property: its IRI, type, URL path and fragment (2.3), display name and CURIE | The entity-list query (every declared class and property with its type; the ontology's IRI comes from the header query): 22–29 s on NCBITaxon, 3.03 M rows. The whole hook, which computes each batch's URLs and inserts it before reading the next, takes 25–26 s, and the table and its indexes 530–650 MiB (P-10) |
 | `name_value` | Name-property values, one row per direct and per RDFS-entailed property | The name values query, through a property path (below): 41–48 s on NCBITaxon, 3.56 M rows. The whole hook, which also sets each entity's CURIE and display name, takes about 85 s ([P-11 findings](../research/P-11/README.md)) |
 | `edge` | Parent → child per hierarchy (classes; each property type), between equivalence-group representatives | The edges query (subclass, sub-property and equivalent-class triples): 20–21 s on NCBITaxon, 3.02 M rows. The whole hook, which also groups, counts and inserts `equiv_group` and `counts`, takes about 42 s and 0.9 GB, and `edge`, `counts` and their index 164 MiB; on Uberon and HPO, 0.5 s ([P-12 findings](../research/P-12/README.md)) |
-| `search_value`, `search_lane` | The search index (P-19): each non-blank name value keyed in the order search ranks values, and each lane of that order with its longest value ([2.6](#26-search)) | `name_value` and `entity`, in SQLite: 11 s on NCBITaxon, 240 MiB, replacing `name_value`'s index on `normalized` (100 MiB), which nothing else used ([P-19 findings](../research/P-19/README.md)) |
+| `search_value`, `search_lane` | The search index (P-19): each name value that isn't empty once normalized, keyed in the order search ranks values, and each lane of that order with its longest value ([2.6](#26-search)) | `name_value` and `entity`, in SQLite: 12 s on NCBITaxon, 247 MiB, replacing `name_value`'s index on `normalized` (100 MiB), which nothing else used ([P-19 findings](../research/P-19/README.md)) |
 | `equiv_group` | Entity → group representative, for groups of more than one | Union-find over `owl:equivalentClass` between named classes, and over cycles of edges (below) |
 | `counts` | Per node: immediate children, distinct descendants | `edge`, in Python (below) |
 | `root` | Each hierarchy's roots, which the tree pages start from (P-18) | `edge`, in Python: found on demand, they'd take a scan of `counts` and a lookup in `edge` per node, 1–2 s on NCBITaxon |
@@ -830,19 +830,30 @@ ranking shorter values first means sorting them all, as no index is in that orde
 - **The table's key is the ranking's order:** (type, property rank, language rank, direct or entailed, length,
   normalized value, value, entity). Each (type, property rank, language rank, entailed) group is a _lane_, listed with
   its longest value in `search_lane`. Ranks are positions in `NAME_PROPERTIES` and `LANGUAGE_RANKING` as built, which
-  the hook's build key covers; languages that rank alike (e.g. unlisted ones) share a rank. A blank value isn't indexed,
-  nor one that normalizes to nothing (e.g. only combining marks), which no query matches.
+  the hook's build key covers; languages that rank alike (e.g. unlisted ones) share a rank, so of an entity's value in
+  two such languages one row is kept. A value that normalizes to nothing (only whitespace or combining marks) isn't
+  indexed, as no query matches it. Lengths and cuts are computed in Python, as SQLite's `length()` stops at a NUL.
+- **The key holds at most 256 characters** (`KEY_CHARS`) of the normalized value and of the value, with the rest
+  beside it. Otherwise a query that matches fewer IRIs than it wants, as most specific ones do, would seek every lane at
+  every length up to its longest value: one class with a 100,000-character label made every such query take 1.7 s
+  (P-19's review). Capped, a query seeks each lane at most 256 times, and huge values don't bloat the key. Values
+  longer than 256 characters share the last length, and rank among themselves by their first 256; a query longer than
+  that is matched against their whole normalized value in Python.
 - **A query** takes the exact matches first, then walks the lanes allowed by its filters in rank order and, within
   each, the lengths upward from the query's: one index seek per lane and length, the lanes of one rank merged by value.
   It stops once it has enough IRIs, so it never sorts the matches. Each row's IRI comes from `entity`, so results are
   grouped per IRI as they're read. Filters choose lanes: entity type, name property, and whether entailed values count.
   A type filter is part of the key, not a residual filter: as one, annotation properties' matches of "a" took 1.8 s
   on NCBITaxon, scanning the classes'.
+- **Bounds:** a query takes at most 100 results (`MAX_LIMIT`) and skips at most 1,000 (`MAX_OFFSET`), as deeper pages
+  read more of the index, and its text is at most 1,000 characters (`MAX_QUERY_CHARS`). `SearchQuery` checks them,
+  and that the text is valid Unicode (a JSON string can carry a lone surrogate), so every caller gets them; a page's
+  request handling still checks its own input (P-20).
 - **Measured** on NCBITaxon ([P-19 findings](../research/P-19/README.md)): every query measured took 0.1–0.9 ms
-  median, 9 ms at most, whether it matches 252 K values, one, or none. A query that matches nothing seeks every lane at
-  every length up to its longest, so many lanes and long values cost the most: about 5 µs a seek, so even 50 lanes of
-  150 lengths is about 40 ms.
-- **Why at pre-caching:** the table adds 11 s to NCBITaxon's pre-caching of about 3¼ minutes, under 1 s on smaller
+  median, 9 ms at most, whether it matches 252 K values, one, or none. A query that matches few seeks every lane at
+  every length up to its longest, at most `KEY_CHARS`, about 5 µs a seek: 50 lanes of 150 lengths is about 40 ms, and
+  the worst, 50 lanes of 256, about 65 ms.
+- **Why at pre-caching:** the table adds 12 s to NCBITaxon's pre-caching of about 3¼ minutes, under 1 s on smaller
   ontologies. Building it in the background once the generation is ready, as the usage table is (2.5), would save those
   seconds but need its own file and that build's machinery, and the range scan as a slower path meanwhile.
 
@@ -855,12 +866,15 @@ ranking shorter values first means sorting them all, as no index is in that orde
 5. Shorter value, by the normalized value's length.
 6. Alphabetical: by normalized value, so case and accents don't split the order, then by value (code point).
 
-Results are grouped per IRI: an IRI appears once, with its best-matching value shown, and a punned IRI is one result
-listing its types, as it has one page. A query matches the start of the whole value; leading whitespace in the query
-is ignored, and a blank query finds nothing. A query also takes a limit and an offset, for paging, and says whether
-more results follow.
+IRIs with the same best value keep an order that's arbitrary, but the same for every query.
 
-**Normalization:** Unicode NFKD, accents removed, case folded. The same function is used at index and query time.
+Results are grouped per IRI: an IRI appears once, with its best-matching value shown, and a punned IRI is one result
+listing its types, as it has one page. A query matches the start of the whole value; leading whitespace is ignored, in
+the query and in values, and a blank query finds nothing. A query also takes a limit and an offset, for paging, and
+says whether more results follow.
+
+**Normalization:** Unicode NFKD, accents removed, case folded, leading whitespace removed. The same function is used
+at index and query time.
 
 **Later:** FTS5 for any-word matching (U-19); an external engine such as Typesense for typo tolerance (U-20), swapped in
 behind the same interface. Building the index in the background after the generation is ready, if a framework for such
