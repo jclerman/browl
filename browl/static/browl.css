@@ -865,9 +865,11 @@ code {
   margin-bottom: calc(var(--space) / 2);
 }
 
+/* One line per hit; where it doesn't fit, the CURIE and types wrap below the names. */
 .hits .hit {
   display: flex;
-  gap: var(--space);
+  flex-wrap: wrap;
+  gap: 0 var(--space);
   align-items: baseline;
   color: inherit;
   text-decoration: none;
@@ -879,8 +881,17 @@ code {
 }
 
 .hit-id {
+  min-width: 0;
   color: var(--muted);
   font-size: 0.85em;
+}
+
+.hits .hit-text {
+  flex: 0 1 auto;
+}
+
+.hits .hit-types {
+  margin-inline-start: auto;
 }
 
 .search-paging {

@@ -40,8 +40,7 @@
     <p class="note">Showing {{ "{:,}".format(offset + 1) }}–{{ "{:,}".format(offset + hits | length) }}</p>
     <ol class="hits" start="{{ offset + 1 }}">
       {% for hit in hits %}
-      <li><a class="hit" href="{{ hit.link.href }}">{{ hit_row(hit) }}</a>
-        <code class="hit-id" dir="ltr">{{ hit.id_text | bidi_encoded }}</code></li>
+      <li><a class="hit" href="{{ hit.link.href }}">{{ hit_row(hit, with_id=true) }}</a></li>
       {% endfor %}
     </ol>
     {% else %}

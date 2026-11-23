@@ -1534,7 +1534,8 @@ too (P-38), and the JSON API's (P-33).
   bold, if that's a different string; else the name alone, still styled as a name, so the reader can tell which they're
   looking at. The query's match is marked (`<mark>`) in whichever is shown: the shortest start of the value that
   normalizes to the query (§2.6). Its types are in a column on the right; a punned IRI lists each. The results page
-  shows hits the same way, each with its CURIE, else its IRI, under it.
+  shows hits the same way, with each one's CURIE, else IRI, muted, between its name and its types, on one line
+  where the screen is wide enough. Not as a tooltip, which the keyboard and touch screens can't reach.
 - **The results page** has the box, and filters (U-10): entity types and name properties as checkboxes, none checked
   meaning all, and a choice of all values or direct ones only. Name properties are labelled by display name, else
   CURIE (built-in prefixes and `EXTRA_PREFIXES`), else IRI. It shows 50 hits a page, with Previous and Next links,

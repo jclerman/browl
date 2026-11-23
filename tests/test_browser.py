@@ -2418,3 +2418,14 @@ def test_search_without_javascript(page: Page, searchable: LiveServer) -> None:
     box.press("Enter")
     expect(page).to_have_url(f"{searchable.url}/_browl/search?q=myo")
     expect(page.locator(".hits .hit")).to_have_count(2)
+
+
+@pytest.mark.parametrize(("width", "one_line"), [(1000, True), (360, False)])
+def test_search_hit_one_line(page: Page, searchable: LiveServer, width: int, one_line: bool) -> None:
+    """Check that a results-page hit, with its CURIE, takes one line on a wide screen, and wraps on a narrow one."""
+    page.set_viewport_size({"width": width, "height": 800})
+    page.goto(f"{searchable.url}/_browl/search?q=myo")
+    hit = page.locator(".hits .hit").nth(1)  # myocardium → heart muscle, ex:heart
+    name, curie = hit.locator(".hit-name").bounding_box(), hit.locator(".hit-id").bounding_box()
+    assert name is not None and curie is not None
+    assert (abs(name["y"] - curie["y"]) < name["height"]) is one_line
