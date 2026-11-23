@@ -14,6 +14,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
+from typing import NamedTuple
 
 import jinja2
 from starlette.datastructures import MutableHeaders
@@ -26,6 +27,21 @@ from browl.derived import DerivedReader, EntityType, NotCurrentError, entities_w
 from browl.jobs import JobState, Site
 
 logger = logging.getLogger(__name__)
+
+
+class TreePage(NamedTuple):
+    """A hierarchy's tree page.
+
+    Attributes:
+        slug: Its path segment under `tree/`.
+        label: Its link text.
+        hierarchy: Its hierarchy.
+    """
+
+    slug: str
+    label: str
+    hierarchy: EntityType
+
 
 PACKAGE_DIR = Path(__file__).parent
 STATIC_DIR = PACKAGE_DIR / "static"
@@ -52,12 +68,12 @@ SITE_NAME = "browl"
 """browl's name, which page titles end with when the ontology has no title."""
 
 TREES = (
-    ("classes", "Classes"),
-    ("object-properties", "Object properties"),
-    ("data-properties", "Data properties"),
-    ("annotation-properties", "Annotation properties"),
+    TreePage("classes", "Classes", EntityType.CLASS),
+    TreePage("object-properties", "Object properties", EntityType.OBJECT_PROPERTY),
+    TreePage("data-properties", "Data properties", EntityType.DATA_PROPERTY),
+    TreePage("annotation-properties", "Annotation properties", EntityType.ANNOTATION_PROPERTY),
 )
-"""Each tree page's path segment under `tree/` (DESIGN.md §2.13) and its link text, in the navigation bar's order."""
+"""Each hierarchy's tree page (DESIGN.md §2.13), in the navigation bar's order."""
 
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none';"
@@ -169,7 +185,7 @@ def frame_context(request: Request) -> dict[str, object]:
         "frame": {
             "name": link.name,
             "home": None if link.path is None else href(request, link.path, link.fragment),
-            "trees": [(href(request, f"{reserved}/tree/{slug}"), label) for slug, label in TREES],
+            "trees": [(href(request, f"{reserved}/tree/{tree.slug}"), tree.label) for tree in TREES],
             "admin": href(request, f"{reserved}/admin/upload"),
             "is_admin": getattr(request.state, "is_admin", False) is True,
             "title_end": isolate(link.title) if link.title is not None else SITE_NAME,

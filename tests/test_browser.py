@@ -389,7 +389,7 @@ def test_upload_from_another_site_refused(
 
 # The page frame (P-14a, DESIGN.md §2.9)
 
-TREES = [label for _, label in browl.pages.TREES]
+TREES = [tree.label for tree in browl.pages.TREES]
 WIDE = {"width": 1280, "height": 800}
 NARROW = {"width": 375, "height": 700}
 """Viewports either side of the navigation bar's breakpoint (48rem)."""

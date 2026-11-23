@@ -15,8 +15,6 @@ import browl.trees
 from browl.derived import EntityType
 from browl.hierarchy import CHILD_PAGE, node_ids, read_children, read_node
 from browl.jobs import Stage
-from browl.pages import TREES
-from browl.trees import HIERARCHIES
 from tests.helpers import connect, derived_stage, make_app, make_settings
 
 pytestmark = pytest.mark.usefixtures("data_dir")
@@ -205,11 +203,6 @@ def tree(client: TestClient, params: Sequence[tuple[str, str]] = (), path: str =
     response = client.get(path, params=list(params))
     assert response.status_code == 200, response.text
     return Tree(response.text)
-
-
-def test_hierarchies_match_navigation() -> None:
-    """Check that every tree the navigation bar links to has a hierarchy."""
-    assert list(HIERARCHIES) == [slug for slug, _ in TREES]
 
 
 def test_roots(client: TestClient) -> None:

@@ -10,6 +10,7 @@
   <title>{% block title %}{% endblock %}{% block title_suffix %} · {{ frame.title_end }}{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', path='browl.css').path }}">
   <script src="{{ url_for('static', path='htmx.min.js').path }}" defer></script>
+  <script src="{{ url_for('static', path='links.js').path }}" defer></script>
   <script src="{{ url_for('static', path='tabs.js').path }}" defer></script>
   <script src="{{ url_for('static', path='tree.js').path }}" defer></script>
   {% if hash_script is defined and hash_script %}

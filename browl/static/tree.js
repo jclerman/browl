@@ -164,19 +164,6 @@
     }
   });
 
-  // A click with a modifier key (e.g. to open the page in a new browser tab) is left to the browser: stopped here,
-  // in the capture phase, before htmx's handler on the link sees it.
-  document.addEventListener(
-    "click",
-    (event) => {
-      const modified = event.ctrlKey || event.metaKey || event.shiftKey || event.altKey;
-      if (modified && event.target.closest?.(`${TREE} ${TOGGLE}, ${TREE} .tree-paging > ${ITEM}`)) {
-        event.stopPropagation();
-      }
-    },
-    true,
-  );
-
   // A toggle whose children are loaded opens or closes them in place, with no request.
   document.addEventListener("htmx:confirm", (event) => {
     const toggle = toggleOfRequest(event);

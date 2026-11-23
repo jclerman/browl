@@ -25,13 +25,8 @@ from browl.lookup import PANEL_HEADERS, not_found
 from browl.pages import TREES, href, link_root, read_derived, templates
 from browl.tabs import with_query
 
-HIERARCHIES = {
-    "classes": EntityType.CLASS,
-    "object-properties": EntityType.OBJECT_PROPERTY,
-    "data-properties": EntityType.DATA_PROPERTY,
-    "annotation-properties": EntityType.ANNOTATION_PROPERTY,
-}
-"""Each tree page's hierarchy, by its path segment under `tree/` (`browl.pages.TREES`)."""
+TREE_PAGES = {tree.slug: tree for tree in TREES}
+"""Each tree page, by its path segment under `tree/`."""
 
 OPEN_PARAM = "open"
 """The query parameter, repeated, that names each node a tree page shows open, by IRI."""
@@ -332,10 +327,11 @@ async def tree_page(request: Request, slug: str) -> Response:
     of its node's children, from `offset=`, with their element ids following from `at=`; `open=` names the open nodes
     above it, for its links, and any open below it. An unknown node, or an offset past the last, is a 404.
     """
-    hierarchy = HIERARCHIES.get(slug)
+    tree = TREE_PAGES.get(slug)
     query = _read_query(request)
-    if hierarchy is None or query is None:
+    if tree is None or query is None:
         return not_found(request)
+    hierarchy = tree.hierarchy
     prefix: str = request.app.state.settings.reserved_prefix
     page_path = f"/{prefix}/tree/{slug}"
 
@@ -370,4 +366,4 @@ async def tree_page(request: Request, slug: str) -> Response:
     if query.node is not None:
         return templates.TemplateResponse(request, "tree_fragment.html", {"list": shown}, headers=PANEL_HEADERS)
     headers = PANEL_HEADERS if request.url.query else None  # the tree as it opens is at the plain URL
-    return templates.TemplateResponse(request, "tree.html", {"name": dict(TREES)[slug], "tree": shown}, headers=headers)
+    return templates.TemplateResponse(request, "tree.html", {"name": tree.label, "tree": shown}, headers=headers)

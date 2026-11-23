@@ -101,19 +101,6 @@
     }
   });
 
-  // A click with a modifier key (e.g. to open a tab or page in a new browser tab) is left to the browser: stopped
-  // here, in the capture phase, before htmx's handler on the link sees it.
-  document.addEventListener(
-    "click",
-    (event) => {
-      const modified = event.ctrlKey || event.metaKey || event.shiftKey || event.altKey;
-      if (modified && event.target.closest?.(`${TAB}, ${PAGER} a`)) {
-        event.stopPropagation();
-      }
-    },
-    true,
-  );
-
   let pageLoading = null; // the request for a Usage page's panel, while it's pending
   document.addEventListener("htmx:beforeRequest", (event) => {
     if (controlOfRequest(event)) {
