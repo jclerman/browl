@@ -91,7 +91,7 @@ COLUMNS = {
         ("normalized_rest", "TEXT", 0, 0),
         ("value_rest", "TEXT", 0, 0),
         ("language", "TEXT", 0, 0),
-        ("word_start", "INTEGER", 1, 0),
+        ("word_start", "INTEGER", 1, 10),
     ],
     "root": [("hierarchy", "TEXT", 1, 1), ("node", "INTEGER", 1, 2)],
     "usage_blank": [("entity", "INTEGER", 0, 1), ("object", "INTEGER", 1, 0), ("predicate", "INTEGER", 1, 0)],

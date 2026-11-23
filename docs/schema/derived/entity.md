@@ -93,7 +93,7 @@ erDiagram
   TEXT normalized_rest
   TEXT value_rest
   TEXT language
-  INTEGER word_start
+  INTEGER word_start PK
 }
 "edge" {
   TEXT hierarchy PK

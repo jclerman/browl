@@ -87,7 +87,7 @@ CREATE TABLE search_value (
     value_rest TEXT,
     language TEXT,
     word_start INTEGER NOT NULL,
-    PRIMARY KEY (type, property_rank, language_rank, entailed, word, length, normalized, value, entity)
+    PRIMARY KEY (type, property_rank, language_rank, entailed, word, length, normalized, value, entity, word_start)
 ) WITHOUT ROWID;
 CREATE TABLE search_lane (
     type TEXT NOT NULL,

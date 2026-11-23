@@ -266,7 +266,7 @@
     {
       "name": "search_value",
       "type": "table",
-      "comment": "The search index (browl.search.SqliteSearch): each name value that isn't empty once normalized, keyed in the order search ranks values, with a word row for each later word start (browl.search.word_starts), keyed by the normalized value from that word on, so a query matches the start of any word. The rows that share the key's first five columns (type, property_rank, language_rank, entailed, word) form a lane, ordered within by length, normalized value, then value. A query seeks its matches in one lane and of one length at a time, shortest first, so it never sorts them. The key holds at most browl.search.KEY_CHARS characters of each value, so a query seeks at most that many lengths per lane however long the values are. Ranks are positions in NAME_PROPERTIES and LANGUAGE_RANKING as built, which the search hook's build key covers. Of an entity's values that differ only in language tags that rank alike, one row is kept.",
+      "comment": "The search index (browl.search.SqliteSearch): each name value that isn't empty once normalized, keyed in the order search ranks values, with a word row for each later word start (browl.search.word_starts), keyed by the normalized value from that word on, so a query matches the start of any word: for words within the first browl.search.MAX_QUERY_CHARS normalized characters, keyed by at most that many, so a value's rows are bounded however long it is. The rows that share the key's first five columns (type, property_rank, language_rank, entailed, word) form a lane, ordered within by length, normalized value, value, entity, then word_start. A query seeks its matches in one lane and of one length at a time, shortest first, so it never sorts them. The key holds at most browl.search.KEY_CHARS characters of each value, so a query seeks at most that many lengths per lane however long the values are. Ranks are positions in NAME_PROPERTIES and LANGUAGE_RANKING as built, which the search hook's build key covers. Of an entity's values that differ only in language tags that rank alike, one row is kept.",
       "columns": [
         {
           "name": "type",
@@ -314,7 +314,7 @@
           "name": "value",
           "type": "TEXT",
           "nullable": false,
-          "comment": "The value's lexical form, its first KEY_CHARS characters."
+          "comment": "The value's lexical form, its first KEY_CHARS characters; a word row holds no more, and a hit reads the rest from name_value."
         },
         {
           "name": "entity",
@@ -326,13 +326,13 @@
           "name": "normalized_rest",
           "type": "TEXT",
           "nullable": true,
-          "comment": "The key's characters after the first KEY_CHARS; NULL if there are none."
+          "comment": "The key's characters after the first KEY_CHARS, up to MAX_QUERY_CHARS in all for a word row; NULL if there are none."
         },
         {
           "name": "value_rest",
           "type": "TEXT",
           "nullable": true,
-          "comment": "The value's characters after the first KEY_CHARS; NULL if there are none."
+          "comment": "The value's characters after the first KEY_CHARS; NULL if there are none, and for word rows."
         },
         {
           "name": "language",
@@ -344,13 +344,13 @@
           "name": "word_start",
           "type": "INTEGER",
           "nullable": false,
-          "comment": "Where the key starts in the normalized value: 0 for the whole value's row, else the word's offset, so a hit can mark the word in the value it shows."
+          "comment": "Where the key starts in the normalized value: 0 for the whole value's row, else the word's offset, so a hit can mark the word in the value it shows. It's in the key, so a value's word rows never merge."
         }
       ],
       "indexes": [
         {
           "name": "sqlite_autoindex_search_value_1",
-          "def": "PRIMARY KEY (type, property_rank, language_rank, entailed, word, length, normalized, value, entity)",
+          "def": "PRIMARY KEY (type, property_rank, language_rank, entailed, word, length, normalized, value, entity, word_start)",
           "table": "search_value",
           "columns": [
             "type",
@@ -361,7 +361,8 @@
             "length",
             "normalized",
             "value",
-            "entity"
+            "entity",
+            "word_start"
           ]
         }
       ],
@@ -448,9 +449,18 @@
           ]
         },
         {
+          "name": "word_start",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (word_start)",
+          "table": "search_value",
+          "columns": [
+            "word_start"
+          ]
+        },
+        {
           "name": "sqlite_autoindex_search_value_1",
           "type": "PRIMARY KEY",
-          "def": "PRIMARY KEY (type, property_rank, language_rank, entailed, word, length, normalized, value, entity)",
+          "def": "PRIMARY KEY (type, property_rank, language_rank, entailed, word, length, normalized, value, entity, word_start)",
           "table": "search_value",
           "columns": [
             "type",
@@ -461,11 +471,12 @@
             "length",
             "normalized",
             "value",
-            "entity"
+            "entity",
+            "word_start"
           ]
         }
       ],
-      "def": "CREATE TABLE search_value (\n    type TEXT NOT NULL,\n    property_rank INTEGER NOT NULL,\n    language_rank INTEGER NOT NULL,\n    entailed INTEGER NOT NULL,\n    word INTEGER NOT NULL,\n    length INTEGER NOT NULL,\n    normalized TEXT NOT NULL,\n    value TEXT NOT NULL,\n    entity INTEGER NOT NULL,\n    normalized_rest TEXT,\n    value_rest TEXT,\n    language TEXT,\n    word_start INTEGER NOT NULL,\n    PRIMARY KEY (type, property_rank, language_rank, entailed, word, length, normalized, value, entity)\n) WITHOUT ROWID"
+      "def": "CREATE TABLE search_value (\n    type TEXT NOT NULL,\n    property_rank INTEGER NOT NULL,\n    language_rank INTEGER NOT NULL,\n    entailed INTEGER NOT NULL,\n    word INTEGER NOT NULL,\n    length INTEGER NOT NULL,\n    normalized TEXT NOT NULL,\n    value TEXT NOT NULL,\n    entity INTEGER NOT NULL,\n    normalized_rest TEXT,\n    value_rest TEXT,\n    language TEXT,\n    word_start INTEGER NOT NULL,\n    PRIMARY KEY (type, property_rank, language_rank, entailed, word, length, normalized, value, entity, word_start)\n) WITHOUT ROWID"
     },
     {
       "name": "search_lane",

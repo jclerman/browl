@@ -182,6 +182,79 @@ async def test_word_rows(data_dir: Path) -> None:
     assert lanes == [(0, 15), (1, 10)]
 
 
+async def test_word_rows_bounded(data_dir: Path) -> None:
+    """Check that a long value of many words stores a bounded amount in its word rows.
+
+    Only words within its first `MAX_QUERY_CHARS` normalized characters get rows, each keyed by at most that many, with
+    at most `KEY_CHARS` characters of the value.
+    """
+    settings = make_settings()
+    value = " ".join(f"w{n:04}" for n in range(2_000))  # 11,999 characters; a word every 6
+    await build(settings, [("x", LABEL, LABEL, f'"{value}"@en')])
+    with closing(connect(settings, 1, HOOKS_USED)) as connection:
+        rows, stored = connection.execute(
+            "SELECT count(*), sum(length(normalized) + length(coalesce(normalized_rest, ''))"
+            " + length(value) + length(coalesce(value_rest, ''))) FROM search_value WHERE word = 1"
+        ).fetchone()
+    assert rows == len(range(6, MAX_QUERY_CHARS, 6))
+    assert stored <= rows * (MAX_QUERY_CHARS + KEY_CHARS)  # unbounded, about 18 M characters
+    assert [hit.word_start for hit in find(settings, "w0100 w0101").hits] == [600]
+    assert find(settings, "w0500").hits == ()  # at 3,000, past the bound
+
+
+async def test_long_word_match(data_dir: Path) -> None:
+    """Check that queries longer than `KEY_CHARS` match word rows, and that a hit has the whole value.
+
+    The value's word rows share their first `KEY_CHARS` characters of key from many word starts on, and each is kept.
+    """
+    settings = make_settings()
+    repeated = "x-" * 300 + "end"
+    await build(settings, [("rep", LABEL, LABEL, f'"{repeated}"@en'), ("pre", LABEL, LABEL, f'"pre {"y" * 300}"@en')])
+    assert [(hit.value, hit.word_start) for hit in find(settings, "x-" * 140 + "end").hits] == [(repeated, 320)]
+    assert [(hit.value, hit.word_start) for hit in find(settings, "y" * 290).hits] == [(f"pre {'y' * 300}", 4)]
+
+
+async def test_word_paging(data_dir: Path) -> None:
+    """Check that paging runs on from whole-value matches into word matches, and `more` says when it ends."""
+    settings = make_settings()
+    whole = [(f"w{n}", LABEL, LABEL, f'"cel{n}"@en') for n in range(3)]
+    words = [(f"x{n}", LABEL, LABEL, f'"a cel{n}"@en') for n in range(3)]
+    await build(settings, whole + words)
+    pages = [find(settings, "cel", limit=2, offset=offset) for offset in (0, 2, 4)]
+    assert [[hit.value for hit in page.hits] for page in pages] == [
+        ["cel0", "cel1"],
+        ["cel2", "a cel0"],
+        ["a cel1", "a cel2"],
+    ]
+    assert [page.more for page in pages] == [True, True, False]
+
+
+async def test_word_filters(data_dir: Path) -> None:
+    """Check that the property, type and entailment filters choose word lanes as they do whole-value ones."""
+    settings = make_settings(NAME_PROPERTIES=["rdfs:label", "skos:prefLabel"])
+    values = [
+        ("label", LABEL, LABEL, '"a cell"@en'),
+        ("pref", PREF_LABEL, PREF_LABEL, '"b cell"@en'),
+        ("entailed", LABEL, SUB, '"c cell"@en'),
+        ("prop", LABEL, LABEL, '"d cell"@en'),
+    ]
+    kinds = [("label", "Class"), ("pref", "Class"), ("entailed", "Class"), ("prop", "AnnotationProperty")]
+    await build(settings, values, kinds)
+    assert found(settings, "cell") == ["label", "prop", "entailed", "pref"]
+    assert found(settings, "cell", properties=frozenset({f"{SKOS}prefLabel"})) == ["pref"]
+    assert found(settings, "cell", entailed=False) == ["label", "prop", "pref"]
+    assert found(settings, "cell", types=frozenset({EntityType.ANNOTATION_PROPERTY})) == ["prop"]
+
+
+async def test_word_rows_one_per_language_rank(data_dir: Path) -> None:
+    """Check that a value in two languages that rank alike gets one word row, as it gets one whole-value row."""
+    settings = make_settings(LANGUAGE_RANKING=["en"])
+    await build(settings, [("x", LABEL, LABEL, '"T-cell"@de'), ("x", LABEL, LABEL, '"T-cell"@fr')])
+    with closing(connect(settings, 1, HOOKS_USED)) as connection:
+        rows = connection.execute("SELECT word, language FROM search_value ORDER BY word").fetchall()
+    assert rows == [(0, "de"), (1, "de")]
+
+
 async def test_exact_match_first(data_dir: Path) -> None:
     """Check that an exact match ranks first, even under a later name property and a worse language (rule 1)."""
     settings = make_settings(NAME_PROPERTIES=["rdfs:label", "skos:prefLabel"])
@@ -322,6 +395,14 @@ async def test_long_values_bound_the_walk(data_dir: Path) -> None:
     await build(settings, [("long", LABEL, LABEL, f'"b{"x" * 10_000}"@en'), ("short", LABEL, LABEL, '"ab"@en')])
     assert found(settings, "a") == ["short"]
     assert seeks(settings, "a") <= KEY_CHARS
+
+
+async def test_long_word_values_bound_the_walk(data_dir: Path) -> None:
+    """Check that a long value with word starts makes a query seek at most `KEY_CHARS` lengths a lane, word ones too."""
+    settings = make_settings()
+    await build(settings, [("long", LABEL, LABEL, f'"b x{"x" * 10_000}"@en'), ("short", LABEL, LABEL, '"ab"@en')])
+    assert found(settings, "a") == ["short"]
+    assert seeks(settings, "a") <= 2 * KEY_CHARS  # a whole-value lane and a word lane
 
 
 async def test_nul_counted(data_dir: Path) -> None:
