@@ -11,6 +11,7 @@ from collections.abc import Collection, Iterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from pydantic import NonNegativeInt, PositiveInt
 from pydantic.dataclasses import dataclass as validated_dataclass
 
 from browl.derived import DerivedReader, EntityType
@@ -118,7 +119,8 @@ class SqliteSearch(SearchBackend):
     async def index(context: "PreCacheContext") -> None:
         """Fill `search_value` and `search_lane` from `name_value`, with each value's ranks by the current settings.
 
-        A blank value (`browl.names.BLANK`) is left out, as its hit would have no text.
+        A blank value (`browl.names.BLANK`) is left out, as its hit would have no text, and so is one that normalizes
+        to nothing (e.g. only combining marks), as no query matches it.
         """
         settings = context.job.settings
         await context.db.run(
@@ -150,7 +152,7 @@ def _fill(connection: sqlite3.Connection, properties: Sequence[str], ranking: Se
         "  nv.entity, nv.language"
         " FROM name_value AS nv JOIN entity ON entity.id = nv.entity"
         " JOIN search_property AS p USING (property) JOIN search_language AS l ON l.language IS nv.language"
-        " WHERE trim(nv.value, ?) <> ''"
+        " WHERE trim(nv.value, ?) <> '' AND nv.normalized <> ''"
         " ORDER BY 1, 2, 3, 4, 5, 6, 7, 8",
         (BLANK,),
     )
@@ -181,10 +183,10 @@ class _Lane:
     """
 
     type: EntityType
-    property_rank: int
-    language_rank: int
+    property_rank: NonNegativeInt
+    language_rank: NonNegativeInt
     entailed: bool
-    max_length: int
+    max_length: PositiveInt
     name_property: str
 
     @property

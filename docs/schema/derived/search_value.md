@@ -2,7 +2,7 @@
 
 ## Description
 
-The search index (browl.search.SqliteSearch): each non-blank name value, keyed in the order search ranks values. The rows that share the key's first four columns (type, property_rank, language_rank, entailed) form a lane, ordered within by length, normalized value, then value. A query seeks its matches in one lane and of one length at a time, shortest first, so it never sorts them. Ranks are positions in NAME_PROPERTIES and LANGUAGE_RANKING as built, which the search hook's build key covers.
+The search index (browl.search.SqliteSearch): each name value that's neither blank nor empty once normalized, keyed in the order search ranks values. The rows that share the key's first four columns (type, property_rank, language_rank, entailed) form a lane, ordered within by length, normalized value, then value. A query seeks its matches in one lane and of one length at a time, shortest first, so it never sorts them. Ranks are positions in NAME_PROPERTIES and LANGUAGE_RANKING as built, which the search hook's build key covers.
 
 <details>
 <summary><strong>Table Definition</strong></summary>

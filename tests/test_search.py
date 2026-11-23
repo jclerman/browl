@@ -138,9 +138,13 @@ async def test_matches_start_of_value(data_dir: Path) -> None:
 
 
 async def test_nothing_to_find(data_dir: Path) -> None:
-    """Check that a blank query, or a blank value, finds nothing."""
+    """Check that a blank query, or a blank value, finds nothing.
+
+    A value that normalizes to nothing isn't indexed, so no lane's longest value has length 0.
+    """
     settings = make_settings()
-    await build(settings, [("x", LABEL, LABEL, '"  "@en'), ("y", LABEL, LABEL, '"y"@en')])
+    values = [("x", LABEL, LABEL, '"  "@en'), ("y", LABEL, LABEL, '"y"@en'), ("z", LABEL, SUB, '"\u0301"@en')]
+    await build(settings, values)
     assert find(settings, "") == SearchResults([], more=False)
     assert find(settings, " \t") == SearchResults([], more=False)
     assert found(settings, " ") == []

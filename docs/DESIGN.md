@@ -830,7 +830,8 @@ ranking shorter values first means sorting them all, as no index is in that orde
 - **The table's key is the ranking's order:** (type, property rank, language rank, direct or entailed, length,
   normalized value, value, entity). Each (type, property rank, language rank, entailed) group is a _lane_, listed with
   its longest value in `search_lane`. Ranks are positions in `NAME_PROPERTIES` and `LANGUAGE_RANKING` as built, which
-  the hook's build key covers; languages that rank alike (e.g. unlisted ones) share a rank. A blank value isn't indexed.
+  the hook's build key covers; languages that rank alike (e.g. unlisted ones) share a rank. A blank value isn't indexed,
+  nor one that normalizes to nothing (e.g. only combining marks), which no query matches.
 - **A query** takes the exact matches first, then walks the lanes allowed by its filters in rank order and, within
   each, the lengths upward from the query's: one index seek per lane and length, the lanes of one rank merged by value.
   It stops once it has enough IRIs, so it never sorts the matches. Each row's IRI comes from `entity`, so results are
