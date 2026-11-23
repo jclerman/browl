@@ -29,6 +29,7 @@ from browl.imports import OWL_IMPORTS
 from browl.jobs import JobContext, StageFunction
 from browl.jobtypes import ImportResult, Reasoner
 from browl.loading import dataset_name
+from browl.precache import hierarchies
 from browl.precache.core import Hook
 from browl.precache.entities import Reserved, fill_hash_prefix, insert_entities
 from browl.precache.keys import build_keys
@@ -328,12 +329,15 @@ def derived_stage(
     title: str | None = None,
     names: Mapping[str, tuple[str | None, str | None]] | None = None,
     equivalence_groups: Sequence[Sequence[str]] = (),
+    edges: Sequence[tuple[str, str, str]] | None = None,
 ) -> StageFunction:
     """Return a load job stage that builds the job's derived database with these entities, and the ontology if given.
 
     Their URLs come from the job's settings (`URLMapper`), and the rows and `hash_prefix` are written as the entities
     hook writes them (`browl.precache.entities`). `names` gives IRIs' display names and CURIEs; `equivalence_groups`
-    classes' equivalence groups (the `equiv_group` table), each with its representative first.
+    classes' equivalence groups (the `equiv_group` table), each with its representative first. `edges`, if given,
+    are the edges query's rows, (child, relation IRI, parent), from which the hierarchies hook fills `equiv_group`,
+    `edge`, `counts` and `root`.
     """
 
     def build(context: JobContext) -> None:
@@ -351,6 +355,13 @@ def derived_stage(
                     " WHERE e.iri = ? AND r.iri = ? AND e.type = 'class' AND r.type = 'class'",
                     [(member, group[0]) for member in group],
                 )
+            if edges is not None:
+                hierarchies.create_staging(connection)
+                connection.executemany(
+                    "INSERT INTO edge_staging VALUES (?, ?, ?)",
+                    [(child, hierarchies.RELATION_CODES[relation], parent) for child, relation, parent in edges],
+                )
+                hierarchies.fill_staged(connection)
 
     async def stage(context: JobContext) -> None:
         await asyncio.to_thread(build, context)

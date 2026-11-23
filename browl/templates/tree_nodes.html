@@ -1,0 +1,59 @@
+{# Hierarchy trees (DESIGN.md §2.9, U-7–U-9, U-17): a page of nodes (`browl.trees.ShownList`), each a `ShownNode`, as
+   the WAI-ARIA tree pattern's items. For the tree pages, and the hierarchy column (P-38). Each node with children has
+   a toggle: without JS a link to the page with it opened or closed; with htmx it fetches the children into the
+   node's group, which `static/tree.js` then opens and closes in place, giving the tree its keyboard use. The ids are
+   for ARIA, htmx and the no-JS links' scroll position. #}
+
+{% macro counts(node) -%}
+{{ "{:,}".format(node.children) }} {{ "child" if node.children == 1 else "children" }} ·
+{{ "{:,}".format(node.descendants) }} {{ "descendant" if node.descendants == 1 else "descendants" }}
+{%- endmacro %}
+
+{# A node's name, and an equivalence group's other members' (U-9). The link is to the representative's page, which
+   links to the others. #}
+{% macro node_label(node) -%}
+<bdi>{{ node.link.name }}</bdi>
+{%- for other in node.equivalents %} ≡ <bdi>{{ other.name }}</bdi>{% endfor %}
+{%- if node.more_equivalents %} ≡ … <small>(+{{ "{:,}".format(node.more_equivalents) }})</small>{% endif %}
+{%- endmacro %}
+
+{% macro tree_node(shown) -%}
+{%- set node = shown.node -%}
+{%- set is_open = shown.children is not none -%}
+<li role="none">
+  {%- if shown.toggle is not none -%}
+  <a class="tree-toggle" href="{{ shown.toggle }}" hx-get="{{ shown.load }}" hx-target="next ul" hx-swap="innerHTML"
+     hx-sync="this:drop"><span class="visually-hidden">{{ "Close" if is_open else "Open" }}
+     <bdi>{{ node.link.name }}</bdi></span></a>
+  {%- else %}<span class="tree-leaf"></span>{% endif -%}
+  <a role="treeitem" id="{{ shown.id }}" href="{{ node.link.href }}"
+     {%- if node.children %} aria-expanded="{{ 'true' if is_open else 'false' }}" aria-owns="{{ shown.id }}-g"
+     aria-describedby="{{ shown.id }}-n"{% endif %}>{{ node_label(node) }}</a>
+  {%- if node.children %}
+  <span class="tree-counts" id="{{ shown.id }}-n">{{ counts(node) }}</span>
+  <ul role="group" id="{{ shown.id }}-g"{% if is_open %} data-loaded{% else %} hidden{% endif %}>
+    {%- if is_open %}{{ tree_items(shown.children) }}{% endif -%}
+  </ul>
+  {%- endif -%}
+</li>
+{%- endmacro %}
+
+{# A page of nodes, with links to the pages before and after it, also tree items, so the keyboard reaches them. With
+   htmx, the link to the next page adds it in place, unless it's the roots'. #}
+{% macro tree_items(list) -%}
+{%- set page = list.page -%}
+{%- if list.previous is not none %}
+<li role="none" class="tree-paging"><a role="treeitem" href="{{ list.previous }}">Show the previous
+  {{ "{:,}".format([page.offset, CHILD_PAGE] | min) }}</a></li>
+{%- endif %}
+{%- for shown in list.nodes %}
+{{ tree_node(shown) }}
+{%- endfor %}
+{%- if list.more is not none %}
+<li role="none" class="tree-paging"><a role="treeitem" href="{{ list.more }}"
+  {%- if list.more_load is not none %} hx-get="{{ list.more_load }}" hx-target="closest li" hx-swap="outerHTML"
+  hx-sync="this:drop"{% endif %}>Show {{ "{:,}".format(list.more_count) }} more
+  <small>({{ "{:,}".format(page.end + 1) }}–{{ "{:,}".format(page.end + list.more_count) }} of
+  {{ "{:,}".format(page.total) }})</small></a></li>
+{%- endif %}
+{%- endmacro %}

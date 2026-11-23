@@ -32,6 +32,7 @@ from browl.rdf import RDF as RDF_NS
 from browl.usage_tab import PageNotFoundError, UsageGroup, UsageTab
 from tests.conftest import DATA
 from tests.helpers import WAIT_S, LiveServer, derived_stage, iso, make_app, no_axioms
+from tests.test_trees import tree_stage
 
 pytestmark = [pytest.mark.browser, pytest.mark.usefixtures("data_dir")]
 
@@ -1987,3 +1988,182 @@ def test_usage_pager_without_javascript(page: Page, paged: LiveServer) -> None:
     pager_link(page, "Previous").click()
     expect(page).to_have_url(f"{paged.url}{THING}?tab=usage&page=3")
     expect_usage_page(page, 3)
+
+
+# The tree pages (P-18, U-7, U-17, DESIGN.md §2.13)
+
+TREE_FRAGMENT = re.compile(r"/_browl/tree/classes\?node=")
+
+TOP_AND_BIG = urllib.parse.urlencode([("open", f"{EX}/Top"), ("open", f"{EX}/Big")])
+"""The query that opens `Top` and its child `Big`, which has two and a half pages of children."""
+
+
+@pytest.fixture
+def trees(live_server: Callable[[FastAPI], LiveServer]) -> LiveServer:
+    """Return a live server with `tests.test_trees`' hierarchies loaded."""
+    server = live_server(make_app())
+    server.app.state.jobs.register(Stage.PRE_CACHING, tree_stage())
+    server.call(server.app.state.jobs.start())
+    server.call(server.app.state.jobs.wait())
+    return server
+
+
+def tree_item(page: Page, name: str) -> Locator:
+    """Return the tree item with this name."""
+    return page.get_by_role("treeitem", name=name, exact=True)
+
+
+def tree_toggle(page: Page, name: str) -> Locator:
+    """Return the toggle of the tree item with this name."""
+    return page.locator("li", has=tree_item(page, name)).last.locator(":scope > .tree-toggle")
+
+
+def record_fragments(page: Page) -> list[str]:
+    """Return a list that collects the URLs of the page's requests for nodes' children, in order."""
+    requests: list[str] = []
+    page.on("request", lambda request: requests.append(request.url) if TREE_FRAGMENT.search(request.url) else None)
+    return requests
+
+
+def test_tree_opens_in_place(page: Page, trees: LiveServer) -> None:
+    """Check that a toggle fetches its node's children once, and then opens and closes them in place."""
+    watch_policy(page)
+    page.goto(f"{trees.url}/_browl/tree/classes")
+    mark(page)
+    requests = record_fragments(page)
+    top = tree_item(page, "Top")
+    expect(top).to_have_attribute("aria-expanded", "false")
+    expect(tree_item(page, "Left")).to_have_count(0)
+    tree_toggle(page, "Top").click()
+    expect(tree_item(page, "Left")).to_be_visible()
+    expect(top).to_have_attribute("aria-expanded", "true")
+    assert query_of(requests[0]) == {"node": [f"{EX}/Top"], "at": ["t-1"], "open": [f"{EX}/Top"]}
+    tree_toggle(page, "Top").click()
+    expect(tree_item(page, "Left")).to_be_hidden()
+    expect(top).to_have_attribute("aria-expanded", "false")
+    tree_toggle(page, "Top").click()
+    expect(tree_item(page, "Left")).to_be_visible()
+    assert len(requests) == 1
+    assert marked(page)
+    expect(page).to_have_url(f"{trees.url}/_browl/tree/classes")
+    assert violations(page) == []
+
+
+def test_tree_keyboard(page: Page, trees: LiveServer) -> None:
+    """Check the WAI-ARIA tree pattern's keys: up, down, Home and End move; right opens, then enters; left leaves.
+
+    Only one item is in the Tab sequence, and the toggles are in none.
+    """
+    page.goto(f"{trees.url}/_browl/tree/classes")
+    page.locator(".sign-in").focus()  # the last stop before the tree
+    page.keyboard.press("Tab")
+    expect(tree_item(page, "Free")).to_be_focused()
+    requests = record_fragments(page)
+    steps = [
+        ("ArrowDown", "Top"),
+        ("ArrowRight", "Top"),  # opens it, fetching its children
+        ("ArrowRight", "Big"),
+        ("ArrowDown", "Left"),
+        ("End", "Right"),
+        ("ArrowLeft", "Top"),
+        ("Home", "Free"),
+        ("ArrowUp", "Free"),
+        ("ArrowLeft", "Free"),  # a root: nowhere to go
+        ("ArrowDown", "Top"),
+        ("ArrowLeft", "Top"),  # closes it
+        ("End", "Top"),
+    ]
+    for key, name in steps:
+        page.keyboard.press(key)
+        expect(tree_item(page, name)).to_be_focused()
+        if (key, name) == ("ArrowRight", "Top"):
+            expect(tree_item(page, "Top")).to_have_attribute("aria-expanded", "true")
+    assert len(requests) == 1
+    expect(tree_item(page, "Top")).to_have_attribute("aria-expanded", "false")
+    expect(page.locator('[role="tree"] [tabindex="0"]')).to_have_count(1)
+    expect(tree_item(page, "Top")).to_have_attribute("tabindex", "0")
+    expect(page.locator(".tree-toggle").first).to_have_attribute("tabindex", "-1")
+    page.keyboard.press("Shift+Tab")
+    page.keyboard.press("Tab")
+    expect(tree_item(page, "Top")).to_be_focused()  # back on the roving item
+    page.keyboard.press("Enter")
+    expect(page).to_have_url(f"{trees.url}/Top")
+
+
+def test_tree_close_moves_roving_item(page: Page, trees: LiveServer) -> None:
+    """Check that closing a node that holds the item in the Tab sequence moves that to the node."""
+    page.goto(f"{trees.url}/_browl/tree/classes?open={urllib.parse.quote(EX + '/Top')}")
+    tree_item(page, "Left").focus()
+    tree_toggle(page, "Top").click()
+    expect(tree_item(page, "Left")).to_be_hidden()
+    expect(tree_item(page, "Top")).to_have_attribute("tabindex", "0")
+    expect(page.locator('[role="tree"] [tabindex="0"]')).to_have_count(1)
+    page.locator(".sign-in").focus()
+    page.keyboard.press("Tab")
+    expect(tree_item(page, "Top")).to_be_focused()
+
+
+@NO_JS
+def test_tree_without_javascript(page: Page, trees: LiveServer) -> None:
+    """Check that, without JavaScript, a toggle loads the page with its node open or closed (U-17)."""
+    page.goto(f"{trees.url}/_browl/tree/classes")
+    tree_toggle(page, "Top").click()
+    expect(tree_item(page, "Left")).to_be_visible()
+    assert query_of(page.url) == {"open": [f"{EX}/Top"]}
+    assert urllib.parse.urlsplit(page.url).fragment == "t-1"
+    tree_toggle(page, "Right").click()
+    expect(tree_item(page, "Bottom")).to_be_visible()
+    assert query_of(page.url) == {"open": [f"{EX}/Top", f"{EX}/Right"]}
+    tree_toggle(page, "Top").click()
+    expect(tree_item(page, "Left")).to_have_count(0)
+    assert query_of(page.url) == {"open": [f"{EX}/Right"]}
+
+
+def test_tree_show_more_in_place(page: Page, trees: LiveServer) -> None:
+    """Check that "Show more" adds the next page of children in place, the focus moving to its first."""
+    page.goto(f"{trees.url}/_browl/tree/classes?{TOP_AND_BIG}")
+    mark(page)
+    more = page.get_by_role("treeitem", name="Show 100 more")
+    with page.expect_request(TREE_FRAGMENT):
+        more.click()
+    expect(tree_item(page, "Kid 100")).to_be_focused()
+    expect(tree_item(page, "Kid 100")).to_have_attribute("tabindex", "0")
+    expect(page.get_by_role("treeitem", name="Show 50 more")).to_be_visible()
+    expect(page.locator('[role="tree"] [tabindex="0"]')).to_have_count(1)
+    page.keyboard.press("ArrowUp")
+    expect(tree_item(page, "Kid 099")).to_be_focused()
+    assert marked(page)
+
+
+@NO_JS
+def test_tree_show_more_without_javascript(page: Page, trees: LiveServer) -> None:
+    """Check that, without JavaScript, "Show more" loads the page with the next page of children, and a link back."""
+    page.goto(f"{trees.url}/_browl/tree/classes?{TOP_AND_BIG}")
+    page.get_by_role("treeitem", name="Show 100 more").click()
+    expect(tree_item(page, "Kid 100")).to_be_visible()
+    expect(tree_item(page, "Kid 099")).to_have_count(0)
+    page.get_by_role("treeitem", name="Show the previous 100").click()
+    expect(tree_item(page, "Kid 099")).to_be_visible()
+
+
+@pytest.mark.parametrize("failure", ["status", "network"])
+def test_tree_fragment_failure_loads_page(page: Page, trees: LiveServer, failure: str) -> None:
+    """Check that a node whose children can't be fetched loads the page with it open instead."""
+    if failure == "status":
+        page.route(TREE_FRAGMENT, lambda route: route.fulfill(status=503, content_type="text/html", body="<p>No</p>"))
+    else:
+        page.route(TREE_FRAGMENT, lambda route: route.abort())
+    page.goto(f"{trees.url}/_browl/tree/classes")
+    tree_toggle(page, "Top").click()
+    expect(tree_item(page, "Left")).to_be_visible()
+    assert query_of(page.url) == {"open": [f"{EX}/Top"]}
+
+
+def test_tree_modifier_click_left_to_browser(page: Page, trees: LiveServer) -> None:
+    """Check that a toggle clicked with a modifier key opens its page in a new browser tab, and leaves this one."""
+    page.goto(f"{trees.url}/_browl/tree/classes")
+    with page.context.expect_page() as opened:
+        tree_toggle(page, "Top").click(modifiers=["ControlOrMeta"])
+    opened.value.wait_for_load_state()
+    assert query_of(opened.value.url) == {"open": [f"{EX}/Top"]}
+    expect(tree_item(page, "Top")).to_have_attribute("aria-expanded", "false")
