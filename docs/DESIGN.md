@@ -1436,48 +1436,42 @@ too (P-38), and the JSON API's (P-33).
   name, and how many more: "Heart ≡ cor ≡ … (+3)". The link goes to the representative's page, which links to the
   others. A node with several parents shows under each, with its subtree.
 - **Order:** children and roots by display name, case-insensitively (ASCII), then IRI, so the order is total.
-- **Paging:** 500 children, or roots, at a time (`CHILD_PAGE`), as a node can have tens of thousands (NCBITaxon's
-  widest has 47,783: its first page reads in 80 ms, its last in 230 ms, as each read sorts all of a node's
-  children). That's inside N-3; if it ever isn't, the known upgrade is a sort rank among its siblings for each
-  child, stored at pre-caching, so a page reads a range of ranks instead of sorting them all. A link after the page
-  says what it shows, "Show the next 500 (501–1,000 of 4,210)", or "Show the remaining 150 (501–650)" once the rest
-  fits in a page, and one before a later page, "Show the previous 500 (501–1,000 of 4,210)", or "Show the first 500
-  (1–500)". With htmx it adds the next page in place; without, it loads the tree page showing that page of the
-  node's children (`children-of=…&offset=…`), with a link back to the page before. Only one node's children are
-  shown from an offset at a time. The roots page the same way: their fragment is `?at=…` without `node=`.
+- **Paging:** 500 children, or roots, at a time (`CHILD_PAGE`), as a node can have tens of thousands. Each read sorts
+  all of a node's children (NCBITaxon's widest, 47,783: 80 ms for its first page, 230 ms for its last), inside N-3; if
+  that changes, the known upgrade is a sort rank among its siblings for each child, stored at pre-caching, so a page
+  reads a range of ranks. The link after a page says what it shows, "Show the next 500 (501–1,000 of 4,210)", or
+  "Show the remaining 150 (501–650)"; the one before a later page, "Show the previous 500 (501–1,000 of 4,210)", or
+  "Show the first 500 (1–500)". With htmx it adds the next page in place (the roots' too); without, it loads the
+  tree page showing that page (`children-of=…&offset=…`, or `offset=` alone for the roots), with a link back. Only
+  one node's children are shown from an offset at a time.
 - **Open nodes in the URL:** without JS, a node's toggle (▸, ▾) is a link to the tree page with that node opened or
-  closed too. `open=` names each open node by IRI, repeated, so a URL keeps its tree through reloads and new
-  loads. A node opens wherever it appears, under each parent, once its parents are open. The links name only the
-  nodes shown open, each once, by its representative's IRI, in tree order, so an IRI no node has, or a node under
-  a closed one, drops out; closing a node also drops those shown open only inside it. The link ends in the node's
-  element id (`#t-1-0`), so the page scrolls back to it; tree pages have no hash-IRI script. As the combinations are
-  endless, toggles and paging links are `rel="nofollow"`, and a tree page with a query is marked `noindex`.
-- **Limits:** a URL's first 100 open nodes are taken (`MAX_OPEN`). A page shows about 5,000 nodes at most
-  (`MAX_SHOWN`), as a node under several open parents opens under each, and fewer once its links would name open
-  nodes in about 2 M characters in all (`MAX_LINK_CHARS`), as each toggle names them all, or once its reads have
-  sorted 100,000 children in all (`MAX_CHILDREN_READ`), as each read sorts all of its node's children. Past these,
-  the open nodes left are shown closed. An offset past the last is a 404 before any children are read. The toggle
-  of a node that can't open, or would pass `MAX_OPEN`, opens only it and the nodes above it. A page renders in the
-  thread pool, as one of 5,000 nodes takes about 100 ms.
-- **With htmx** the toggle fetches the node's children alone (`?node=…&at=…`), once; `static/tree.js` then opens
-  and closes the node in place, without a request. The fragment request names the open nodes above the node, so
-  its links work without JS, though they leave out the page's other open nodes. Opening in place doesn't change
-  the URL, but the toggle's link follows: it then leaves the node out of `open=`, and adds it back once closed. A
-  fragment that can't be fetched loads the toggle's page instead, and a click with a modifier key is left to the
-  browser.
-- **Element ids** follow each node's place: the roots `t-0`, `t-1`, …, a node's children its own id and their
-  index (`t-1-0`), and its group and counts its id with `-g` and `-n`. A fragment's request names its node's id
-  (`at=`), so its ids are unique on the page; P-38's column can use another prefix. `at=` is at most 256 characters
-  (`MAX_AT_CHARS`), as each child repeats it; a deeper node's fragment is a 404, so its toggle loads the page.
-- **Keyboard** (U-17), the WAI-ARIA tree pattern: the tree is `role="tree"`, each node's link a `treeitem` (with
-  `aria-expanded`, its group by `aria-owns`, its counts by `aria-describedby`), its children a `group`. Only one
-  item is in the Tab sequence (roving `tabindex`), and the toggles are the mouse's (`tabindex="-1"`, `aria-hidden`;
-  a click on one leaves the focus on its item).
-  Up and Down move through the items shown, Home and End to the first and last; Right opens a closed node, or moves
-  into an open one; Left closes an open node, or moves to the parent; Enter follows the link. The "Show more" and
-  "previous" links are items too, so the keyboard reaches them; after "Show more" the focus goes to the first node
-  added. Left to P-25: type-ahead, `*` (open all siblings), and the pattern without JS, where the roles are there but
-  the arrow keys aren't, and Tab reaches each toggle and link.
+  closed too, so a URL keeps its tree through reloads and new loads. `open=` names the nodes shown open, each once,
+  by its representative's IRI, in tree order: an IRI no node has, or a node under a closed one, drops out, and
+  closing a node drops those shown open only inside it. A node opens wherever it appears, under each parent. The
+  link ends in the node's element id, so the page scrolls back to it. As the combinations are endless, toggles and
+  paging links are `rel="nofollow"`, and a tree page with a query is marked `noindex`.
+- **Limits**, so one request stays cheap: a URL's first 100 open nodes (`MAX_OPEN`); about 5,000 nodes shown
+  (`MAX_SHOWN`), as a node under several open parents opens under each; links naming open nodes in about 2 M
+  characters in all (`MAX_LINK_CHARS`), as each toggle names them all; and reads sorting about 100,000 children in
+  all (`MAX_CHILDREN_READ`). Past these, the open nodes left are shown closed, and the toggle of a node that can't
+  open opens only it and the nodes above it, so it fits. A page renders in the thread pool: one of 5,000 nodes takes
+  about 100 ms.
+- **Errors:** an unknown node, a repeated parameter, `children-of` without `offset`, or an offset past the last
+  (checked before anything is read) is a 404, so each page has one URL.
+- **With htmx** the toggle fetches the node's children once (`?node=…&at=…`), and `static/tree.js` then opens and
+  closes it in place. The fragment's URL names only the open nodes above it, enough for its links to work without
+  JS. Opening in place doesn't change the URL, but the toggle's link follows the node's state. A fragment that
+  can't be fetched loads the toggle's page instead, and a click with a modifier key is left to the browser.
+- **Element ids** follow each node's place: the roots `t-0`, `t-1`, …, a node's children its id and their index
+  (`t-1-0`). A fragment's request names its node's id, or for the roots their prefix (`at=`), so its ids are unique
+  on the page; P-38's column can use another prefix. `at=` is at most 256 characters (`MAX_AT_CHARS`), as each child
+  repeats it; a deeper node's fragment is a 404, so its toggle loads the page.
+- **Keyboard** (U-17): the WAI-ARIA tree pattern, with roving `tabindex`; a node's link is the `treeitem`, its
+  children's list its `group` (by `aria-owns`), and its counts its description. Departures from it: the toggles are
+  the mouse's alone (`tabindex="-1"`, `aria-hidden`; a click on one leaves the focus on its item), and the "previous"
+  and "Show more" links are tree items, so the keys reach them; after "Show more" the focus goes to the first node
+  added. Enter follows an item's link. Left to P-25: type-ahead, `*`, and the pattern
+  without JS, where the roles are there but the arrow keys aren't, and Tab reaches each toggle and link.
 
 **Visual design** (U-29):
 
@@ -1582,7 +1576,7 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | Path | Purpose |
 | --- | --- |
 | `search` | Autocomplete endpoint (htmx fragment) and a full results page |
-| `tree/{hierarchy}` | Tree root page, `hierarchy` one of `classes`, `object-properties`, `data-properties` and `annotation-properties` (the navigation bar links them). `open=` (repeated) names each node shown open, by IRI; `children-of=…&offset=…` shows a later page of a node's children, or `offset=` alone of the roots. `?node=…&at=…` returns one node's children (htmx fragment, marked `noindex`), or `?at=…` alone the roots, from `offset=`, their element ids following from its id, `at`, with `open=` naming the open nodes above it ([2.9](#29-page-layout), Tree pages). A page with a query is marked `noindex`. An unknown node, a repeated parameter, `children-of` without `offset`, or an offset past the last is a 404 (P-18) |
+| `tree/{hierarchy}` | Tree page, `hierarchy` one of `classes`, `object-properties`, `data-properties` and `annotation-properties` (the navigation bar links them). `open=` (repeated), `children-of=`, `offset=`; a fragment: `node=`, `at=` (marked `noindex`). See [2.9](#29-page-layout), Tree pages (P-18) |
 | `iri?iri=…` | Fallback entity URLs (Q1b) |
 | `hash?path=…&fragment=…` | The page for a hash URL's path and fragment, for the hash-IRI script ([2.3](#23-iri--url-mapping), Lookup); marked `noindex`, as its pages are at their hash URLs |
 | `usage-count?iri=…` | An entity's Usage tab label with its count, "Usage (128)", which its page fetches once it renders ([2.8](#28-entity-pages)); marked `noindex`; a 404 for an IRI with no entity (P-27b) |

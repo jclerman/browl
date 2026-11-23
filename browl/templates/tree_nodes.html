@@ -1,9 +1,5 @@
-{# Hierarchy trees (DESIGN.md §2.9, U-7–U-9, U-17): a page of nodes (`browl.trees.ShownList`), each a `ShownNode`, as
-   the WAI-ARIA tree pattern's items. For the tree pages, and the hierarchy column (P-38). Each node with children has
-   a toggle: without JS a link to the page with it opened or closed; with htmx it fetches the children into the
-   node's group, which `static/tree.js` then opens and closes in place, giving the tree its keyboard use. The ids are
-   for ARIA, htmx and the no-JS links' scroll position. The toggles and paging links are `nofollow`, as their
-   combinations are endless. #}
+{# Hierarchy trees' nodes (`browl.trees.ShownList`), as WAI-ARIA tree items, for the tree pages and the hierarchy
+   column (DESIGN.md §2.9 "Tree pages"). #}
 
 {% macro counts(node) -%}
 {{ "{:,}".format(node.children) }} {{ "child" if node.children == 1 else "children" }} ·

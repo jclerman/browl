@@ -1,7 +1,5 @@
-// Hierarchy trees (DESIGN.md §2.9, §2.13, U-17): opening and closing nodes in place, and the WAI-ARIA tree pattern's
-// keyboard use. A node's toggle fetches its children with htmx the first time it opens (`tree_nodes.html`); after
-// that, it's opened and closed here, without a request. It listens on the document, so it also serves trees that
-// htmx or the hash-IRI script add.
+// Hierarchy trees: opening and closing nodes in place, and the WAI-ARIA tree pattern's keys (DESIGN.md §2.9 "Tree
+// pages"). It listens on the document, so it also serves trees added later.
 (() => {
   "use strict";
   const TREE = '[role="tree"]';

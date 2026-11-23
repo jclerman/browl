@@ -1,14 +1,4 @@
-"""The tree pages (U-7, U-17, DESIGN.md §2.9, §2.13): `tree/{hierarchy}`, and its nodes' children as htmx fragments.
-
-A tree page shows the hierarchy's roots, and the children of each node its URL opens. Without JS, a node's toggle is a
-link to the page with that node opened or closed too: `open=` names each open node by IRI, so a URL keeps its tree
-through reloads and new data. A node opens wherever it appears, under each of its parents; the most nodes a page shows
-is `MAX_SHOWN`. With htmx, the toggle fetches the node's children alone (`node=`), and `static/tree.js` opens and
-closes nodes in place, and gives the tree the WAI-ARIA tree pattern's keyboard use.
-
-Children come a page at a time (`browl.hierarchy.CHILD_PAGE`). With htmx, "Show more" adds the next page in place;
-without, it shows that page of the node's children (`children-of=` and `offset=`), with a link back.
-"""
+"""The tree pages, `tree/{hierarchy}`, and their htmx fragments (U-7–U-9, U-17; DESIGN.md §2.9 "Tree pages")."""
 
 import asyncio
 import re
@@ -45,28 +35,22 @@ OFFSET_PARAM = "offset"
 """The query parameter that says how many children, or roots, come before those shown; absent for none."""
 
 MAX_OPEN = 100
-"""The most open nodes a URL names that a page takes; the rest are ignored. A node's toggle that would pass it opens
-only the node and those above it."""
+"""The most open nodes a page takes from its URL; the rest are ignored."""
 
 MAX_SHOWN = 5_000
-"""About the most nodes a page or fragment shows: once it shows this many, the open nodes left are shown closed. A
-node with several parents opens under each, so a few open nodes can multiply in a hierarchy with many joins. A node
-shown closed that the URL opens gets a toggle that opens only it and the nodes above it, so it fits."""
+"""About the most nodes a page or fragment shows; past it, the open nodes left are shown closed (§2.9, Limits)."""
 
 MAX_LINK_CHARS = 2_000_000
-"""About the most characters naming open nodes a page's, or fragment's, links hold in all: each toggle names them
-all, so with many open nodes, or long IRIs, a page shows fewer than `MAX_SHOWN` nodes, as it does past that."""
+"""About the most characters naming open nodes a page's, or fragment's, links hold in all, as each toggle names them."""
 
 MAX_CHILDREN_READ = 100_000
-"""About the most children, or roots, a page's or fragment's reads sort in all, as each sorts all of its node's
-children (80 ms for NCBITaxon's widest, 47,783); past it, the open nodes left are shown closed, as past `MAX_SHOWN`."""
+"""About the most children, or roots, a page's or fragment's reads sort in all, as each sorts all of its node's."""
 
 ROOT_ID = "t"
 """The element id the roots' ids follow from: `t-0`, `t-1`, …; a node's children's from its own, `t-0-0`, …."""
 
 MAX_AT_CHARS = 256
-"""The longest element id `at=…` may give, as each child's ids and links repeat it; a deeper node's fragment is a 404,
-so its toggle loads the page instead."""
+"""The longest element id `at=…` may give, as each child's ids and links repeat it."""
 
 _OFFSET = re.compile(r"[1-9][0-9]{0,8}")
 """An offset `offset=…` may give: a positive integer without a sign or leading zeros, so each page has one URL."""
@@ -337,13 +321,7 @@ def _link_chars(iris: Iterable[str]) -> int:
 
 @router.api_route("/tree/{slug}", methods=["GET", "HEAD"], include_in_schema=False)
 async def tree_page(request: Request, slug: str) -> Response:
-    """Serve a hierarchy's tree page, or with `node=`, a node's children alone, as an htmx fragment.
-
-    The page shows the roots, and the children of each node `open=` names, a page of each; `children-of=` and
-    `offset=` show a later page of a node's children, or with `offset=` alone, of the roots. A fragment shows a page
-    of its node's children, from `offset=`, with their element ids following from `at=`; `open=` names the open nodes
-    above it, for its links, and any open below it. An unknown node, or an offset past the last, is a 404.
-    """
+    """Serve a hierarchy's tree page, or with `at=`, a page of a node's children, or of the roots, as a fragment."""
     tree = TREE_PAGES.get(slug)
     query = _read_query(request)
     if tree is None or query is None:
