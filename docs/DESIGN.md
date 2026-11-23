@@ -1617,7 +1617,9 @@ too (P-38), and the JSON API's (P-33).
 - **The results page** has the box, and filters (U-10): entity types and name properties as checkboxes, none checked
   meaning all, and a choice of all values or direct ones only. Name properties are labelled by display name, else as
   `NAME_PROPERTIES` names them. It shows 50 hits a page, with Previous and Next links, as deep as search's
-  `MAX_OFFSET` allows.
+  `MAX_OFFSET` allows. P-45 will page it as the Usage tab is paged, through one pager element both share: at the top,
+  with "Page n of N" and a form to go to any page, and the number of results, counted up to the deepest page
+  (1,051 IRIs), as an exact total would read every match.
 - **Input**: invalid parameters, and repeats of those 2.13 doesn't list as repeated, get the "not found" page, as tree
   pages do. A blank query finds nothing: an empty fragment, which closes the list, or the form alone.
 - **No server-side deadline** (from P-19's review): each query's cost is already bounded (§2.6, Bounds), and the
@@ -1821,6 +1823,7 @@ flowchart LR
         P42["P-42 All annotation properties"]
         P43["P-43 Sticky search filters"]
         P44["P-44 Admin search settings"]
+        P45["P-45 Shared results pager"]
         P21["P-21 Page cache"]
         P22["P-22 Sign-in"]
         P23["P-23 Admin list"]
@@ -1915,6 +1918,7 @@ go into this document.
 | P-42 | Every annotation property searchable: a bulk query of their literal values; lanes keyed by property, walked in an order chosen per query; entailment through the annotation-property hierarchy at query time; the results page lists the ontology's properties with counts; measure lane counts and worst-case queries first (2.6, Proposed) | U-47 | P-19, P-20 | To do | [#132](https://github.com/jclerman/browl/issues/132) |
 | P-43 | Sticky search filters: kept in the browser on request, used by the navigation bar's box, with a "Filtered" indicator that clears them; the results page's bar carries its filters (2.6, Proposed) | U-48 | P-20 | To do | [#133](https://github.com/jclerman/browl/issues/133) |
 | P-44 | Admin search settings: name properties and their order, language ranking and properties left out, stored per ontology IRI over the environment's defaults; a settings page from the ontology's properties and languages; applied by pre-caching into a new file beside the served one (2.6, Proposed) | A-11, O-13 | P-22, P-42 | To do | [#134](https://github.com/jclerman/browl/issues/134) |
+| P-45 | Shared results pager: one pager model and macro for the Usage tab and the search results page, htmx optional; on the results page at the top, with "Page n of N", a form to go to any page, and the number of results counted up to `MAX_OFFSET + PAGE_SIZE + 1` IRIs, not by the autocomplete; measure the count's cost on NCBITaxon (2.6, 2.9) | U-10, U-17, U-26 | P-20, P-27, P-41 | To do | [#139](https://github.com/jclerman/browl/issues/139) |
 | P-33 | JSON API over the pages' data: routes under `api/` returning the models the pages render (2.8, 2.13) | U-42 | P-16, P-17, P-18, P-19, P-27, P-38 | To do | [#76](https://github.com/jclerman/browl/issues/76) |
 | P-21 | Page cache keyed by generation | O-10, N-3 | P-16 | To do | [#40](https://github.com/jclerman/browl/issues/40) |
 | P-22 | Google sign-in, admin-route protection, dev no-auth mode (cancelling a job: P-36) | A-1, O-6, O-7 | P-6 | To do | [#17](https://github.com/jclerman/browl/issues/17) |
