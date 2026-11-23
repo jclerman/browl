@@ -333,7 +333,10 @@ def test_fragment_opens_open_children(client: TestClient) -> None:
     "params",
     [
         [("node", ex("Top"))],  # no `at`
-        [("at", "t-1")],  # no `node`
+        [("at", "t-1")],  # the roots' ids' prefix, without `node`, is a bare prefix
+        [("at", "T")],
+        [("at", "t"), ("children-of", ex("Top")), ("offset", "1")],
+        [("at", "t"), ("offset", "2")],  # past the two roots
         [("node", ex("Top")), ("at", "x")],
         [("node", ex("Top")), ("at", "t-1"), ("at", "t-2")],
         [("node", ex("Top")), ("at", "t" + "-1" * 128)],  # one past `MAX_AT_CHARS`
@@ -447,18 +450,32 @@ def test_window_on_closed_node_ignored(client: TestClient) -> None:
 
 
 def test_roots_paged(client: TestClient) -> None:
-    """Check that the roots come a page at a time too; their next page is a page, without htmx."""
+    """Check that the roots come a page at a time too: in place with htmx, a page without."""
     path = "/_browl/tree/annotation-properties"
     first = tree(client, path=path).items
     assert len(first) == CHILD_PAGE + 1
     more = first[-1]
-    assert (more.text, more.load) == ("Show the remaining 20 (501–520)", None)
+    assert more.text == "Show the remaining 20 (501–520)"
+    assert query(more.load or "") == [("at", "t"), ("offset", "500")]
     assert query(more.href) == [("offset", "500")]
     assert more.href.endswith("#t-500")
     second = tree(client, [("offset", "500")], path).items
     assert query(second[0].href) == []
     assert [item.text for item in second[1:]] == [f"note {n:03}" for n in range(500, NOTES)]
     assert client.get(path, params=[("offset", "520")]).status_code == 404
+
+
+def test_roots_fragment(client: TestClient) -> None:
+    """Check that a fragment without `node=` serves a page of the roots, their ids following from `at=`."""
+    path = "/_browl/tree/annotation-properties"
+    response = client.get(path, params=[("at", "t"), ("offset", "500")])
+    assert response.headers["X-Robots-Tag"] == "noindex"
+    assert "<html" not in response.text
+    found = Tree(response.text)
+    assert [(item.id, item.text) for item in found.items] == [(f"t-{n}", f"note {n:03}") for n in range(500, NOTES)]
+    first = Tree(client.get(path, params=[("at", "t")]).text).items
+    assert [item.text for item in first[:2]] == ["note 000", "note 001"]
+    assert query(first[-1].load or "") == [("at", "t"), ("offset", "500")]
 
 
 @pytest.mark.parametrize(("limit", "value"), [("MAX_SHOWN", 3), ("MAX_LINK_CHARS", 400)])

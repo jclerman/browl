@@ -1442,7 +1442,7 @@ too (P-38), and the JSON API's (P-33).
   one before a later page, "Show the previous 500 (501–1,000 of 4,210)", or "Show the first 500 (1–500)".
   With htmx it adds the next page in place; without, it loads the tree page showing that page of the node's
   children (`children-of=…&offset=…`), with a link back to the page before. Only one node's children are shown from
-  an offset at a time. The roots' next page is always such a page, as the roots seldom pass 100.
+  an offset at a time. The roots page the same way: their fragment is `?at=…` without `node=`.
 - **Open nodes in the URL:** without JS, a node's toggle (▸, ▾) is a link to the tree page with that node opened or
   closed too. `open=` names each open node by IRI, repeated, so a URL keeps its tree through reloads and new
   loads. A node opens wherever it appears, under each parent, once its parents are open. The links name only the
@@ -1577,7 +1577,7 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | Path | Purpose |
 | --- | --- |
 | `search` | Autocomplete endpoint (htmx fragment) and a full results page |
-| `tree/{hierarchy}` | Tree root page, `hierarchy` one of `classes`, `object-properties`, `data-properties` and `annotation-properties` (the navigation bar links them). `open=` (repeated) names each node shown open, by IRI; `children-of=…&offset=…` shows a later page of a node's children, or `offset=` alone of the roots. `?node=…&at=…` returns one node's children (htmx fragment, marked `noindex`), from `offset=`, their element ids following from its id, `at`, with `open=` naming the open nodes above it ([2.9](#29-page-layout), Tree pages). A page with a query is marked `noindex`. An unknown node, a repeated parameter, `children-of` without `offset`, or an offset past the last is a 404 (P-18) |
+| `tree/{hierarchy}` | Tree root page, `hierarchy` one of `classes`, `object-properties`, `data-properties` and `annotation-properties` (the navigation bar links them). `open=` (repeated) names each node shown open, by IRI; `children-of=…&offset=…` shows a later page of a node's children, or `offset=` alone of the roots. `?node=…&at=…` returns one node's children (htmx fragment, marked `noindex`), or `?at=…` alone the roots, from `offset=`, their element ids following from its id, `at`, with `open=` naming the open nodes above it ([2.9](#29-page-layout), Tree pages). A page with a query is marked `noindex`. An unknown node, a repeated parameter, `children-of` without `offset`, or an offset past the last is a 404 (P-18) |
 | `iri?iri=…` | Fallback entity URLs (Q1b) |
 | `hash?path=…&fragment=…` | The page for a hash URL's path and fragment, for the hash-IRI script ([2.3](#23-iri--url-mapping), Lookup); marked `noindex`, as its pages are at their hash URLs |
 | `usage-count?iri=…` | An entity's Usage tab label with its count, "Usage (128)", which its page fetches once it renders ([2.8](#28-entity-pages)); marked `noindex`; a 404 for an IRI with no entity (P-27b) |

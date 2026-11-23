@@ -2162,6 +2162,22 @@ def test_tree_show_more_twice_in_place(page: Page, trees: LiveServer) -> None:
     assert marked(page)
 
 
+def test_tree_roots_show_more_in_place(page: Page, trees: LiveServer) -> None:
+    """Check that the roots' "Show more" adds their next page in place too, the focus moving to its first."""
+    path = f"{trees.url}/_browl/tree/annotation-properties"
+    page.goto(path)
+    mark(page)
+    with page.expect_request(re.compile(r"/annotation-properties\?at=t&offset=500$")):
+        page.get_by_role("treeitem", name="Show the remaining 20").click()
+    expect(tree_item(page, "note 500")).to_be_focused()
+    expect(tree_item(page, "note 519")).to_be_visible()
+    expect(page.locator(".tree-paging")).to_have_count(0)
+    page.keyboard.press("ArrowUp")
+    expect(tree_item(page, "note 499")).to_be_focused()
+    expect(page).to_have_url(path)
+    assert marked(page)
+
+
 @pytest.mark.parametrize("failure", ["status", "network"])
 def test_tree_show_more_failure_loads_page(page: Page, trees: LiveServer, failure: str) -> None:
     """Check that a page of children that can't be fetched loads the tree page showing it instead."""

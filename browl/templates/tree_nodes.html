@@ -48,7 +48,7 @@ Show the {{ end_word if at_end else word }} {{ "{:,}".format(count) }}
 {%- endmacro %}
 
 {# A page of nodes, with links to the pages before and after it, also tree items, so the keyboard reaches them. With
-   htmx, the link to the next page adds it in place, unless it's the roots'. #}
+   htmx, the link to the next page adds it in place. #}
 {% macro tree_items(list) -%}
 {%- set page = list.page -%}
 {%- if list.previous is not none %}
