@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use browl in your work, please cite it as below."
+type: software
+title: "browl: an OWL ontology browser"
+abstract: >-
+  browl hosts an OWL ontology as a browsable website, with a page for every
+  entity at a URL implied by its IRI.
+authors:
+  - given-names: "Jeffrey C."
+    family-names: Lerman
+    orcid: "https://orcid.org/0000-0001-7942-7573"
+repository-code: "https://github.com/jclerman/browl"
+license: Apache-2.0
+keywords:
+  - OWL
+  - ontology
+  - ontology browser
+  - semantic web
+  - RDF
