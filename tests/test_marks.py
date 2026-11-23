@@ -1,5 +1,6 @@
 """Tests for the marks `tests/conftest.py` gives the tests that use the `java`, `fuseki_url` or `browser` fixture."""
 
+import jpype
 import pytest
 
 # The conftest of the inner runs: the hook under test, and stand-ins for the fixtures, which need nothing.
@@ -72,6 +73,15 @@ def inner(pytester: pytest.Pytester) -> pytest.Pytester:
     return pytester
 
 
+@pytest.fixture
+def real(pytester: pytest.Pytester) -> pytest.Pytester:
+    """Return a `pytester` whose inner runs use the real `java` and `jvm` fixtures."""
+    pytester.makeconftest("from tests.conftest import java, jvm, pytest_collection_modifyitems\n")
+    pytester.makeini(INI)
+    pytester.makepyfile("def test_x(jvm):\n    pass\n")
+    return pytester
+
+
 def test_marks_derived(inner: pytest.Pytester) -> None:
     """Check that each test gets the marks of the fixtures it uses, directly or through another fixture."""
     inner.makepyfile(TESTS)
@@ -130,3 +140,32 @@ def test_stray_mark_fails(inner: pytest.Pytester, options: list[str]) -> None:
             "ERROR test_stray_mark_fails.py::test_stray*",
         ]
     )
+
+
+def test_jvm_gives_java_mark(real: pytest.Pytester) -> None:
+    """Check that the real `jvm` fixture gives the `java` mark, through `java`; collecting doesn't start the JVM."""
+    items, _ = real.inline_genitems()
+    assert [mark.name for mark in items[0].iter_markers()] == ["java"]
+
+
+@pytest.mark.parametrize(
+    ("ci", "line"),
+    [
+        (None, "SKIPPED * no robot.jar at /nonexistent/robot.jar*"),
+        ("1", "*Failed: CI must run every test: no robot.jar at /nonexistent/robot.jar*"),
+    ],
+    ids=["local", "ci"],
+)
+def test_java_missing(real: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, ci: str | None, line: str) -> None:
+    """Check that `java` skips a test when `robot.jar` is missing, but fails it in CI."""
+    # The inner run shares this process, whose JVM may be running; the patches are undone after the test.
+    monkeypatch.setattr(jpype, "isJVMStarted", lambda: False)
+    monkeypatch.setenv("ROBOT_JAR", "/nonexistent/robot.jar")
+    monkeypatch.setenv("JAVA_HOME", "/nonexistent")
+    if ci:
+        monkeypatch.setenv("CI", ci)
+    else:
+        monkeypatch.delenv("CI", raising=False)
+    result = real.runpytest("-rs")
+    result.assert_outcomes(**({"errors": 1} if ci else {"skipped": 1}))
+    result.stdout.fnmatch_lines([line])
