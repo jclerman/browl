@@ -754,8 +754,7 @@ code {
   }
 }
 
-/* Search (U-10, DESIGN.md §2.9): a hit is its matched value in italics, then "→" and the entity's name in the accent
-   color, or the name alone; the query's match is marked. Its types are in a column on the right. */
+/* Search (U-10): the box's suggestions and the results page's hits, laid out as DESIGN.md §2.9, Search, describes. */
 
 .search-list {
   position: absolute;

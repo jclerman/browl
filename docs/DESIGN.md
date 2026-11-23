@@ -1523,27 +1523,25 @@ too (P-38), and the JSON API's (P-33).
 **Search** (U-10, U-17, P-20): the navigation bar's search box and the full results page, `search` (2.13).
 
 - **The box** is a form that opens the full results page, so it works without JS. With it, it's a WAI-ARIA combobox
-  (`static/search.js`): typing fetches up to 10 suggestions as an htmx fragment (`search?q=…&suggest=1`), after a
-  150 ms pause, each request replacing any still pending (`hx-sync="this:replace"`), so a superseded one is aborted and
-  its answer never shown. Down and Up move the active option (`aria-activedescendant`; past either end, back to the
-  box), Enter opens it, or with none active submits the form, and Escape closes the list, then clears the box. The last
-  option is "All results…", the full results page for the text. A status region announces how many suggestions there
-  are. The fragment is asked for by a parameter, not by `HX-Request`, so each URL has one response, for the page cache
-  (2.10).
+  (`static/search.js`): typing fetches up to 10 suggestions as an htmx fragment, after a 150 ms pause, each request
+  replacing any still pending (`hx-sync="this:replace"`), so a superseded one is aborted and its answer never shown.
+  Down and Up move the active option (`aria-activedescendant`; past either end, back to the box), Enter opens it, or
+  with none active submits the form, and Escape closes the list until the text changes, then clears the box. "No
+  matches" is a disabled option; the last option is "All results…", the full results page for the text. A status
+  region announces how many suggestions there are. The fragment is asked for by a parameter, not by `HX-Request`, so
+  each URL has one response, for the page cache (2.10).
 - **A hit** shows the value that matched in italics, then "→" and the entity's display name, in the accent color and
   bold, if that's a different string; else the name alone, still styled as a name, so the reader can tell which they're
   looking at. The query's match is marked (`<mark>`) in whichever is shown: the shortest start of the value that
   normalizes to the query (§2.6). Its types are in a column on the right; a punned IRI lists each. The results page
-  shows hits the same way, with each one's CURIE, else IRI, muted, between its name and its types, on one line
-  where the screen is wide enough. Not as a tooltip, which the keyboard and touch screens can't reach.
+  shows hits the same way, with each one's CURIE, else IRI, muted, between its name and its types, on one line where
+  the screen is wide enough, rather than in a tooltip, which the keyboard and touch screens can't reach.
 - **The results page** has the box, and filters (U-10): entity types and name properties as checkboxes, none checked
-  meaning all, and a choice of all values or direct ones only. Name properties are labelled by display name, else
-  as `NAME_PROPERTIES` names them. It shows 50 hits a page, with Previous and Next links,
-  as deep as search's `MAX_OFFSET` allows. Both are `noindex`.
-- **Input**: a repeated `q`, `values`, `offset` or `suggest`, an unknown type or name property, an offset that isn't a
-  positive integer without leading zeros, is past `MAX_OFFSET`, or comes with `suggest`, or text over
-  `MAX_QUERY_CHARS` gets the "not found" page, as tree pages do. A blank query finds nothing: an empty fragment,
-  which closes the list, or the form alone.
+  meaning all, and a choice of all values or direct ones only. Name properties are labelled by display name, else as
+  `NAME_PROPERTIES` names them. It shows 50 hits a page, with Previous and Next links, as deep as search's
+  `MAX_OFFSET` allows.
+- **Input**: invalid parameters, and repeats of those 2.13 doesn't list as repeated, get the "not found" page, as tree
+  pages do. A blank query finds nothing: an empty fragment, which closes the list, or the form alone.
 - **No server-side deadline** (from P-19's review): each query's cost is already bounded (§2.6, Bounds), and the
   box's pause and replacing of requests keep typing from piling them up.
 
@@ -1652,7 +1650,7 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 
 | Path | Purpose |
 | --- | --- |
-| `search` | The full results page, `q=`, `type=` and `property=` (repeated), `values=direct`, `offset=`; with `suggest=1`, the autocomplete's fragment (marked `noindex`). See [2.9](#29-page-layout), Search (P-20) |
+| `search` | The full results page, `q=`, `type=` and `property=` (repeated), `values=direct`, `offset=`; with `suggest=1` (no `offset=`), the autocomplete's fragment; both `noindex`. See [2.9](#29-page-layout), Search (P-20) |
 | `tree/{hierarchy}` | Tree page, `hierarchy` one of `classes`, `object-properties`, `data-properties` and `annotation-properties` (the navigation bar links them). `open=` (repeated), `children-of=`, `offset=`; a fragment: `node=`, `at=` (marked `noindex`). See [2.9](#29-page-layout), Tree pages (P-18) |
 | `iri?iri=…` | Fallback entity URLs (Q1b) |
 | `hash?path=…&fragment=…` | The page for a hash URL's path and fragment, for the hash-IRI script ([2.3](#23-iri--url-mapping), Lookup); marked `noindex`, as its pages are at their hash URLs |

@@ -29,8 +29,7 @@
         {%- if frame.name is not none %} · <bdi>{{ frame.name }}</bdi>{% endif -%}
         {%- if frame.home is not none %}</a>{% endif -%}
       </span>
-      {# The search box: a WAI-ARIA combobox with htmx's suggestions (`static/search.js`); without JS, a plain form
-         that opens the full results page (U-10, U-17). #}
+      {# The search box (U-10, U-17; DESIGN.md §2.9, Search; `static/search.js`). #}
       <form class="site-search" action="{{ frame.search }}" method="get" role="search">
         <label for="site-search-box" class="visually-hidden">Search names</label>
         <input id="site-search-box" type="search" name="q" placeholder="Search" maxlength="{{ frame.max_query_chars }}"

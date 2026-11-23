@@ -1,5 +1,4 @@
-// The navigation bar's search box: the WAI-ARIA combobox pattern's keys over the suggestions htmx fetches (U-10,
-// U-17; DESIGN.md §2.9, Search). Without it, the box is a plain form that opens the full results page.
+// The navigation bar's search box: a WAI-ARIA combobox over htmx's suggestions (U-10, U-17; DESIGN.md §2.9, Search).
 (() => {
   "use strict";
   const BOX = "site-search-box";

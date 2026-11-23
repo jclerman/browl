@@ -1,7 +1,4 @@
-{# A search hit (`browl.search_page.ShownHit`), as the autocomplete and the results page show it (DESIGN.md §2.9,
-   Search): the matched value, in italics with the query's match marked, then "→" and the entity's name; or the name
-   alone, if it's the value that matched. The name is always styled as one, so it reads as the entity either way.
-   Its types sit in a column of their own; the results page puts its CURIE, else IRI, muted, before them. #}
+{# A search hit (`browl.search_page.ShownHit`), laid out as DESIGN.md §2.9, Search, describes. #}
 {% macro hit_row(hit) -%}
 <span class="hit-text">
   {%- if hit.term is not none -%}

@@ -1,8 +1,4 @@
-"""The search route, `search`: the navigation bar's autocomplete fragment, and the full results page (U-10, U-17).
-
-Both show each hit the same way (DESIGN.md §2.9, Search): the value that matched, its query's prefix marked, then
-"→" and the entity's name if that's different, and its types in a column of their own.
-"""
+"""The search route, `search`: the autocomplete fragment and the full results page (U-10, U-17; DESIGN.md §2.9)."""
 
 import sqlite3
 import unicodedata
