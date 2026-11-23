@@ -369,4 +369,5 @@ async def tree_page(request: Request, slug: str) -> Response:
         return not_found(request)
     if query.node is not None:
         return templates.TemplateResponse(request, "tree_fragment.html", {"list": shown}, headers=PANEL_HEADERS)
-    return templates.TemplateResponse(request, "tree.html", {"name": dict(TREES)[slug], "tree": shown})
+    headers = PANEL_HEADERS if request.url.query else None  # the tree as it opens is at the plain URL
+    return templates.TemplateResponse(request, "tree.html", {"name": dict(TREES)[slug], "tree": shown}, headers=headers)

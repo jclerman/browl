@@ -1,6 +1,7 @@
 """Tests for the tree pages (P-18, U-7–U-9, U-17, DESIGN.md §2.13) and the hierarchy reads under them."""
 
 import html.parser
+import re
 import urllib.parse
 from collections.abc import Iterator, Sequence
 from contextlib import closing
@@ -223,6 +224,19 @@ def test_roots(client: TestClient) -> None:
     assert query(top.toggle or "") == opened("Top")
     assert top.toggle is not None and top.toggle.endswith("#t-1")  # back where it was
     assert query(top.load or "") == [("node", ex("Top")), ("at", "t-1")]  # no open nodes above it
+
+
+def test_crawlers_kept_out(client: TestClient) -> None:
+    """Check that toggles and paging links are `nofollow`, and a tree page with a query is marked noindex (S3)."""
+    plain = client.get(TREE)
+    assert "X-Robots-Tag" not in plain.headers
+    response = client.get(TREE, params=[*opened("Top", "Big"), ("children-of", ex("Big")), ("offset", "100")])
+    assert response.headers["X-Robots-Tag"] == "noindex"
+    links = re.findall(
+        r'<a (?:class="tree-toggle"|role="treeitem") href="[^"]*/tree/classes[^"]*"[^>]*>', response.text
+    )
+    assert len(links) > 4  # the toggles, "previous" and "more"
+    assert all('rel="nofollow"' in link for link in links), links
 
 
 def test_open_nodes(client: TestClient) -> None:

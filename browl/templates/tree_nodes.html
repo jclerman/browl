@@ -2,7 +2,8 @@
    the WAI-ARIA tree pattern's items. For the tree pages, and the hierarchy column (P-38). Each node with children has
    a toggle: without JS a link to the page with it opened or closed; with htmx it fetches the children into the
    node's group, which `static/tree.js` then opens and closes in place, giving the tree its keyboard use. The ids are
-   for ARIA, htmx and the no-JS links' scroll position. #}
+   for ARIA, htmx and the no-JS links' scroll position. The toggles and paging links are `nofollow`, as their
+   combinations are endless. #}
 
 {% macro counts(node) -%}
 {{ "{:,}".format(node.children) }} {{ "child" if node.children == 1 else "children" }} ·
@@ -22,7 +23,7 @@
 {%- set is_open = shown.children is not none -%}
 <li role="none">
   {%- if shown.toggle is not none -%}
-  <a class="tree-toggle" href="{{ shown.toggle }}" hx-get="{{ shown.load }}" hx-target="next ul" hx-swap="innerHTML"
+  <a class="tree-toggle" href="{{ shown.toggle }}" rel="nofollow" hx-get="{{ shown.load }}" hx-target="next ul" hx-swap="innerHTML"
      hx-sync="this:drop"><span class="visually-hidden">{{ "Close" if is_open else "Open" }}
      <bdi>{{ node.link.name }}</bdi></span></a>
   {%- else %}<span class="tree-leaf"></span>{% endif -%}
@@ -43,14 +44,14 @@
 {% macro tree_items(list) -%}
 {%- set page = list.page -%}
 {%- if list.previous is not none %}
-<li role="none" class="tree-paging"><a role="treeitem" href="{{ list.previous }}">Show the previous
+<li role="none" class="tree-paging"><a role="treeitem" href="{{ list.previous }}" rel="nofollow">Show the previous
   {{ "{:,}".format([page.offset, CHILD_PAGE] | min) }}</a></li>
 {%- endif %}
 {%- for shown in list.nodes %}
 {{ tree_node(shown) }}
 {%- endfor %}
 {%- if list.more is not none %}
-<li role="none" class="tree-paging"><a role="treeitem" href="{{ list.more }}"
+<li role="none" class="tree-paging"><a role="treeitem" href="{{ list.more }}" rel="nofollow"
   {%- if list.more_load is not none %} hx-get="{{ list.more_load }}" hx-target="closest li" hx-swap="outerHTML"
   hx-sync="this:drop"{% endif %}>Show {{ "{:,}".format(list.more_count) }} more
   <small>({{ "{:,}".format(page.end + 1) }}–{{ "{:,}".format(page.end + list.more_count) }} of
