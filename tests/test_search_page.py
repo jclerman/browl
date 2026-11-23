@@ -382,6 +382,20 @@ def test_no_results_note(client: TestClient, text: str, offset: int | None, note
     assert f'<p class="note">{note}</p>' in response.text
 
 
+def test_filters_in_fixed_order(client: TestClient) -> None:
+    """Check that the paging links give the filters in a fixed order, whatever the URL's, so a query has one URL."""
+    params = [("q", "item"), ("property", SYNONYM), ("property", LABEL), ("type", "object_property"), ("type", "class")]
+    links = dict(results(client, params).links)
+    assert urllib.parse.parse_qsl(urllib.parse.urlsplit(links["Next"]).query) == [
+        ("q", "item"),
+        ("type", "class"),
+        ("type", "object_property"),
+        ("property", LABEL),
+        ("property", SYNONYM),
+        ("offset", str(PAGE_SIZE)),
+    ]
+
+
 def test_previous_from_between_pages(client: TestClient) -> None:
     """Check that Previous from an offset under a page goes to the first page, which has no offset."""
     links = dict(results(client, [("q", "item"), ("offset", "10")]).links)

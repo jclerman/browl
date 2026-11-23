@@ -1593,7 +1593,10 @@ before the usage table is ready, P-27c) isn't cached, as it changes once the tab
 _(Q13)_ Including the generation number in the key means a reload invalidates entries in every worker without
 coordination. Pages differ for admins (the navigation bar's admin link, 2.9), so the key must also include whether
 the user is an admin, or the cache must hold pages without the frame's per-user part and add it after the lookup
-(from P-14a's review). The cache wraps a plain function that stores rendered strings. `functools.lru_cache` is not
+(from P-14a's review). If search pages and fragments (2.9, Search) are cached, key them on the query as
+`search_page._params` gives it, plus `suggest`, not on the raw URL: their `type` and `property` filters are repeated
+parameters, which it gives each once, in a fixed order, so reordered URLs share an entry (from P-20's review). The
+cache wraps a plain function that stores rendered strings. `functools.lru_cache` is not
 applied to `async` handlers, because it would store unrun coroutine objects rather than pages.
 
 ### 2.11 Authentication and admins

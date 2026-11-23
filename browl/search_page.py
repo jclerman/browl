@@ -74,8 +74,8 @@ class SearchRequest:
 
     Attributes:
         text: The query's text, as given.
-        types: The entity types to find; empty for all.
-        properties: The name properties to search, by IRI; empty for all.
+        types: The entity types to find, in `EntityType`'s order; empty for all.
+        properties: The name properties to search, by IRI, in `NAME_PROPERTIES`' order; empty for all.
         direct: Whether only direct values count.
         offset: How many results come before those shown.
         suggest: Whether it asks for the autocomplete fragment.
@@ -153,12 +153,16 @@ def read_request(request: Request, properties: Collection[str]) -> SearchRequest
     if offset is None or offset > MAX_OFFSET or (offset and suggest):  # the fragment isn't paged
         return None
     try:
-        types = tuple(dict.fromkeys(EntityType(kind) for kind in params.getlist(TYPE_PARAM)))
+        kinds = {EntityType(kind) for kind in params.getlist(TYPE_PARAM)}
     except ValueError:
         return None
-    chosen = tuple(dict.fromkeys(params.getlist(PROPERTY_PARAM)))
-    if not set(chosen) <= set(properties):
+    named = set(params.getlist(PROPERTY_PARAM))
+    if not named <= set(properties):
         return None
+    # In a fixed order, each once, so a query's links, and the page cache's key (DESIGN.md §2.10), don't depend on
+    # the URL's.
+    types = tuple(kind for kind in EntityType if kind in kinds)
+    chosen = tuple(iri for iri in properties if iri in named)
     return SearchRequest(text, types, chosen, values == "direct", offset, suggest == "1")
 
 
