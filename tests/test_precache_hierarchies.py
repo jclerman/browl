@@ -64,6 +64,13 @@ def tables(settings: Settings, generation: int, hooks: Sequence[Hook] = HOOKS_US
     return edges, groups, counts
 
 
+def roots(settings: Settings, generation: int, hooks: Sequence[Hook] = HOOKS_USED) -> set[tuple[str, str]]:
+    """Return the `root` table, by IRI, as a set of (hierarchy, node)."""
+    with closing(connect(settings, generation, hooks)) as connection:
+        rows = connection.execute("SELECT r.hierarchy, e.iri FROM root AS r JOIN entity AS e ON e.id = r.node")
+        return set(rows)
+
+
 def entity_result(*entities: tuple[str, str]) -> str:
     """Return the entity list's result for these (name, OWL class name) pairs; names without `<` are in `EX`."""
     return ENTITY_HEADER + "".join(f"{term(name)}\t<{OWL}{kind}>\t\n" for name, kind in entities) + ENTITY_END
@@ -267,6 +274,13 @@ async def test_hierarchies(data_dir: Path) -> None:
         ("annotation_property", a): (1, 1),
         ("annotation_property", b): (0, 0),
     }
+    assert roots(settings, 1) == {
+        ("class", top),
+        ("class", free),
+        ("object_property", p),
+        ("data_property", d),
+        ("annotation_property", a),
+    }
 
 
 TOP_AND_BOTTOM = {
@@ -323,6 +337,7 @@ async def test_cycle(data_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
         await pre_caching_stage(job(settings, 1), http, hooks=HOOKS_USED)
     a, b, c = ex("A", "B", "C")
     assert tables(settings, 1) == ({("class", a, c)}, {a: a, b: a}, {("class", a): (1, 1), ("class", c): (0, 0)})
+    assert roots(settings, 1) == {("class", a)}  # the cycle's group, by its representative
     assert f"The class hierarchy has 1 cycle of edges: {{{a}, {b}}}. A cycle's members are equivalent" in caplog.text
 
 

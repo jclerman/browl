@@ -1,4 +1,4 @@
-"""The hierarchies pre-caching hook (P-12): the `equiv_group`, `edge` and `counts` tables (DESIGN.md §2.5)."""
+"""The hierarchies pre-caching hook (P-12): the `equiv_group`, `edge`, `counts` and `root` tables (DESIGN.md §2.5)."""
 
 import functools
 import itertools
@@ -73,7 +73,7 @@ Edges = npt.NDArray[np.int64]
 
 @hook()
 async def hierarchies(context: PreCacheContext) -> None:
-    """Fill `equiv_group`, `edge` and `counts` for the class hierarchy and each property hierarchy.
+    """Fill `equiv_group`, `edge`, `counts` and `root` for the class hierarchy and each property hierarchy.
 
     The edges come from one bulk query (`EDGES`), over the imports too; an edge whose ends aren't declared entities of
     a hierarchy's type, or are `OUTSIDE` it, is left out. Classes linked by `owl:equivalentClass`, and the members of a
@@ -82,22 +82,39 @@ async def hierarchies(context: PreCacheContext) -> None:
     Raises:
         StageError: A hierarchy is too dense to count its descendants within `DESCENDANT_BUDGET`.
     """
-    await context.db.run(_create_staging)
+    await context.db.run(create_staging)
     async with context.bulk_select(EDGES) as stream:
         columns = tuple(stream.variables.index(name) for name in ("child", "relation", "parent"))
         async for batch in batched(stream):
             await context.db.run(functools.partial(_stage, batch, columns))
     for hierarchy in HIERARCHIES:
         await context.db.run(functools.partial(_fill, hierarchy))
-    await context.db.run(lambda connection: connection.execute("DROP TABLE edge_staging"))
-    for table in ("equiv_group", "edge", "counts"):
+    await context.db.run(drop_staging)
+    for table in ("equiv_group", "edge", "counts", "root"):
         await context.db.create_indexes(table)
 
 
-def _create_staging(connection: sqlite3.Connection) -> None:
+def create_staging(connection: sqlite3.Connection) -> None:
+    """Create `edge_staging`, which holds the edges query's rows (by `RELATION_CODES`) until they're filled in."""
     connection.execute(
         "CREATE TEMP TABLE edge_staging (child TEXT NOT NULL, relation INTEGER NOT NULL, parent TEXT NOT NULL)"
     )
+
+
+def drop_staging(connection: sqlite3.Connection) -> None:
+    """Drop `edge_staging`, once every hierarchy is filled."""
+    connection.execute("DROP TABLE edge_staging")
+
+
+def fill_staged(connection: sqlite3.Connection) -> None:
+    """Fill every hierarchy from `edge_staging`, then drop it, as the hook does; for tests that stage their own edges.
+
+    Raises:
+        StageError: A hierarchy is too dense to count its descendants within `DESCENDANT_BUDGET`.
+    """
+    for hierarchy in HIERARCHIES:
+        _fill(hierarchy, connection)
+    drop_staging(connection)
 
 
 def _stage(batch: list[tuple[Term | None, ...]], columns: tuple[int, ...], connection: sqlite3.Connection) -> None:
@@ -110,7 +127,7 @@ def _stage(batch: list[tuple[Term | None, ...]], columns: tuple[int, ...], conne
 
 
 def _fill(hierarchy: EntityType, connection: sqlite3.Connection) -> None:
-    """Fill a hierarchy's rows of `equiv_group`, `edge` and `counts`.
+    """Fill a hierarchy's rows of `equiv_group`, `edge`, `counts` and `root`.
 
     Raises:
         StageError: The hierarchy is too dense to count its descendants within `DESCENDANT_BUDGET`.
@@ -173,6 +190,10 @@ def _fill(hierarchy: EntityType, connection: sqlite3.Connection) -> None:
         child_counts[is_node],
         descendant_counts[is_node],
     )
+    # Stored, as finding them means a scan of `counts` and a lookup in `edge` per node: 1-2 s on NCBITaxon.
+    has_parent = np.zeros(count, bool)
+    has_parent[nodes.edges[:, 0]] = True
+    _insert(connection, "root (hierarchy, node)", hierarchy.value, ids[is_node & ~has_parent])
 
 
 def _describe_cycles(

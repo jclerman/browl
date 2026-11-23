@@ -85,6 +85,11 @@ CREATE TABLE counts (
     descendants INTEGER NOT NULL,
     PRIMARY KEY (hierarchy, node)
 ) WITHOUT ROWID;
+CREATE TABLE root (
+    hierarchy TEXT NOT NULL,
+    node INTEGER NOT NULL,
+    PRIMARY KEY (hierarchy, node)
+) WITHOUT ROWID;
 CREATE TABLE usage_root (
     id INTEGER PRIMARY KEY,
     kind TEXT NOT NULL,
