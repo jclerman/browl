@@ -7,6 +7,7 @@ import logging
 import re
 import urllib.parse
 from collections.abc import Iterator
+from pathlib import Path
 
 import httpx2
 import pytest
@@ -132,8 +133,7 @@ async def test_fetch(fuseki_url: str, dataset: str, clause: str, imported: bool)
     assert (IRI(f"{NS}arabic"), arabic) in pairs
 
 
-@pytest.mark.usefixtures("data_dir")
-def test_page(fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_page(data_dir: Path, fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check the panel's HTML: name properties first, the rest by name; values one per line, escaped and linked."""
     monkeypatch.setattr(browl.overview, "dataset_name", lambda generation: dataset)
     monkeypatch.setattr(browl.overview, "_read_axioms", no_axioms)
@@ -290,8 +290,7 @@ async def test_unexpected_term(row: str, error: str) -> None:
         await fetch_annotations(answer(f"?property\t?value\n{row}\n"), "ds", A)
 
 
-@pytest.mark.usefixtures("data_dir")
-def test_too_many_page(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+def test_too_many_page(data_dir: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Check that the panel says when there are too many annotations, and the log why, and the axioms still show."""
 
     async def too_many(*args: object) -> list[object]:

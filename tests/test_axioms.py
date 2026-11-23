@@ -804,8 +804,7 @@ NAMES = {
 }
 
 
-@pytest.mark.usefixtures("data_dir")
-def test_page(fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_page(data_dir: Path, fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check an entity page's axioms: entity links with escaped names, keywords, other IRIs and literals as text."""
     monkeypatch.setattr(browl.overview, "dataset_name", lambda generation: dataset)
     app = make_app(FUSEKI_URL=fuseki_url)

@@ -642,8 +642,7 @@ def test_unclaimed_on_page(monkeypatch: pytest.MonkeyPatch) -> None:
     assert groups == [UsageGroup(subject=subject.iri, axioms=[claimed]), UsageGroup(subject=None, axioms=[stray])]
 
 
-@pytest.mark.usefixtures("jvm")
-def test_java_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_java_failure(jvm: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that a Java exception while reading a page's axioms is a `FragmentError`, which fails only the tab."""
 
     def fail(*args: object) -> None:
@@ -676,8 +675,7 @@ CLASSES = "".join(f"<{NS}{name}> {RDF_TYPE} <{OWL_NS}Class> .\n" for name in "AB
 """Declarations of classes A to E."""
 
 
-@pytest.mark.usefixtures("jvm")
-def test_shared_and_unclaimed(caplog: pytest.LogCaptureFixture) -> None:
+def test_shared_and_unclaimed(jvm: None, caplog: pytest.LogCaptureFixture) -> None:
     """Check that an axiom about two subjects goes to the first that lacks one, and one about none goes with no subject.
 
     That one is logged, and a fragment the OWLAPI can't parse fails.
@@ -697,8 +695,7 @@ def test_shared_and_unclaimed(caplog: pytest.LogCaptureFixture) -> None:
         asyncio.run(owlapi.run_java(browl.usage_tab.usage_axioms, b"not N-Triples", b"", f"{NS}E", subjects))
 
 
-@pytest.mark.usefixtures("jvm")
-async def test_blank_object(fuseki_url: str, settings: Settings) -> None:
+async def test_blank_object(jvm: None, fuseki_url: str, settings: Settings) -> None:
     """Check a property's usage whose object is blank, an anonymous individual: its triple is fetched by its label."""
     remark = f"<{NS}remark>"
     triples = f"{CLASSES}{remark} {RDF_TYPE} <{OWL_NS}AnnotationProperty> .\n<{NS}A> {remark} _:x .\n"
@@ -802,8 +799,7 @@ def column_kinds(ntriples: bytes) -> tuple[set[tuple[str, bool]], list[tuple[str
     return kinds, texts
 
 
-@pytest.mark.usefixtures("jvm")
-def test_columns_by_kind(ntriples: bytes) -> None:
+def test_columns_by_kind(jvm: None, ntriples: bytes) -> None:
     """Check which kinds of axiom are shown in columns under their subject, and that their parts make the whole."""
     kinds, texts = asyncio.run(owlapi.run_java(column_kinds, ntriples))
     assert kinds == {(kind, True) for kind in SPLIT_KINDS} | {(kind, False) for kind in WHOLE_KINDS}
@@ -856,9 +852,8 @@ def symmetric_triples(predicate: str, type_: str) -> bytes:
     return f"{declared}<{NS}Z> <{OWL_NS}{predicate}> <{NS}A> .\n".encode()
 
 
-@pytest.mark.usefixtures("jvm")
 @pytest.mark.parametrize(("predicate", "type_", "keyword"), SYMMETRIC)
-def test_symmetric_subject_first(predicate: str, type_: str, keyword: str) -> None:
+def test_symmetric_subject_first(jvm: None, predicate: str, type_: str, keyword: str) -> None:
     """Check that a symmetric axiom stated on Z, on A's Usage tab, is written with Z, its subject, first."""
     triples = symmetric_triples(predicate, type_)
     found, _ = asyncio.run(owlapi.run_java(browl.usage_tab.usage_axioms, triples, b"", f"{NS}A", {f"{NS}Z": 1}))
@@ -869,8 +864,7 @@ def test_symmetric_subject_first(predicate: str, type_: str, keyword: str) -> No
     assert (owl.manchester_text(split.keyword), owl.manchester_text(split.rest)) == (keyword, f"<{NS}A>")
 
 
-@pytest.mark.usefixtures("jvm")
-async def test_symmetric_on_both_tabs(fuseki_url: str, settings: Settings) -> None:
+async def test_symmetric_on_both_tabs(jvm: None, fuseki_url: str, settings: Settings) -> None:
     """Check `Z DisjointWith A`, stated on Z, on A's tabs: on its Usage tab under Z, Z first; on its Overview, as Z."""
     triples = symmetric_triples("disjointWith", "Class")
     async with loaded(fuseki_url, settings, {None: triples}, "") as small:
