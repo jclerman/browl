@@ -2429,3 +2429,59 @@ def test_search_hit_one_line(page: Page, searchable: LiveServer, width: int, one
     name, curie = hit.locator(".hit-name").bounding_box(), hit.locator(".hit-id").bounding_box()
     assert name is not None and curie is not None
     assert (abs(name["y"] - curie["y"]) < name["height"]) is one_line
+
+
+def test_search_escape_outlasts_pending_answer(page: Page, searchable: LiveServer) -> None:
+    """Check that the answer to a request pending when Escape closed the list doesn't reopen it."""
+    held: list[Route] = []
+    page.route(SUGGEST, lambda route: held.append(route) if "q=myo&" in route.request.url + "&" else route.continue_())
+    page.goto(f"{searchable.url}/_browl/search")
+    box = search_box(page)
+    box.fill("he")
+    listbox = page.get_by_role("listbox", name="Suggestions")
+    expect(listbox.get_by_role("option")).to_have_count(2)
+    box.fill("myo")
+    wait_until(page, lambda: bool(held), "the request for myo")
+    box.press("Escape")
+    expect(listbox).to_be_hidden()
+    held[0].continue_()
+    expect(page.locator("#site-search-list [role=option]")).to_have_count(3)  # the answer, swapped in
+    expect(listbox).to_be_hidden()
+    expect(box).to_have_attribute("aria-expanded", "false")
+
+
+def test_search_cleared_box_ignores_pending_answer(page: Page, searchable: LiveServer) -> None:
+    """Check that once Escape has cleared the box, the answer to the old text's pending request is never shown."""
+    held: list[Route] = []
+    failed: list[str] = []
+    page.on("requestfailed", lambda request: failed.append(request.url))
+    page.route(SUGGEST, lambda route: held.append(route) if "q=myo&" in route.request.url + "&" else route.continue_())
+    page.goto(f"{searchable.url}/_browl/search")
+    box = search_box(page)
+    box.fill("myo")
+    wait_until(page, lambda: bool(held), "the request for myo")
+    with page.expect_response(lambda response: "q=&" in response.url + "&"):
+        box.press("Escape")  # the list isn't open, so this clears the box
+    expect(box).to_have_value("")
+    wait_until(page, lambda: held[0].request.url in failed, "htmx to abort the request for myo")
+    with contextlib.suppress(PlaywrightError):
+        held[0].continue_()
+    expect(page.locator("#site-search-list [role=option]")).to_have_count(0)
+    expect(box).to_have_attribute("aria-expanded", "false")
+
+
+def test_search_retyped_after_clearing(page: Page, searchable: LiveServer) -> None:
+    """Check that after Escape clears the box, typing the same text again asks for its suggestions again."""
+    page.goto(f"{searchable.url}/_browl/search")
+    box = search_box(page)
+    status = page.locator("#site-search-status")
+    box.fill("myo")
+    options = page.get_by_role("option")
+    expect(options).to_have_count(3)
+    box.press("Escape")
+    box.press("Escape")
+    expect(box).to_have_value("")
+    expect(status).to_have_text("")
+    box.fill("myo")
+    expect(options).to_have_count(3)
+    expect(status).to_have_text("2 suggestions")

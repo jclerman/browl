@@ -5,6 +5,9 @@
   const BOX = "site-search-box";
   const LIST = "site-search-list";
   const STATUS = "site-search-status";
+  // Whether Escape closed the list since the box's text last changed: an answer to a request already pending, or
+  // still waiting out its pause, mustn't reopen it.
+  let dismissed = false;
 
   const parts = () => ({
     box: document.getElementById(BOX),
@@ -91,10 +94,14 @@
         if (!list.hidden) {
           event.preventDefault();
           close(box, list);
+          dismissed = true;
         } else if (box.value) {
           event.preventDefault();
           box.value = "";
           list.replaceChildren(); // its options were the old text's
+          // As typing would: htmx then asks for the blank text, which replaces any pending request, empties the
+          // status, and makes typing the old text again ask for it.
+          box.dispatchEvent(new Event("input", { bubbles: true }));
         }
         break;
       default:
@@ -108,7 +115,7 @@
       return;
     }
     setActive(box, list, null);
-    if (list.children.length && document.activeElement === box) {
+    if (list.children.length && document.activeElement === box && !dismissed) {
       open(box, list);
     } else {
       close(box, list);
@@ -122,6 +129,13 @@
     const { list } = parts();
     if (list && list.contains(event.target)) {
       event.preventDefault();
+    }
+  });
+
+  document.addEventListener("input", (event) => {
+    const { box } = parts();
+    if (box && event.target === box) {
+      dismissed = false;
     }
   });
 
