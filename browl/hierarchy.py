@@ -128,6 +128,12 @@ def read_node(
     return nodes[0] if nodes else None
 
 
+def count_roots(connection: sqlite3.Connection, hierarchy: EntityType) -> int:
+    """Return how many roots a hierarchy has."""
+    count: int = connection.execute("SELECT count(*) FROM root WHERE hierarchy = ?", (hierarchy,)).fetchone()[0]
+    return count
+
+
 def read_children(
     connection: sqlite3.Connection,
     hierarchy: EntityType,
@@ -152,7 +158,7 @@ def read_children(
     columns = "c.node, e.iri, c.children, c.descendants"
     counts = "JOIN counts AS c ON c.hierarchy = r.hierarchy AND c.node = e.id"
     if parent is None:
-        total = connection.execute("SELECT count(*) FROM root WHERE hierarchy = ?", (hierarchy,)).fetchone()[0]
+        total = count_roots(connection, hierarchy)
         source, params = "root AS r JOIN entity AS e ON e.id = r.node", [hierarchy]
         where = "r.hierarchy = ?"
     else:

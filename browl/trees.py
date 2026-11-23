@@ -20,7 +20,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
 from browl.derived import EntityType
-from browl.hierarchy import ChildPage, TreeNode, node_ids, node_iris, read_children, read_node
+from browl.hierarchy import ChildPage, TreeNode, count_roots, node_ids, node_iris, read_children, read_node
 from browl.lookup import PANEL_HEADERS, not_found
 from browl.pages import TREES, href, link_root, read_derived, templates
 from browl.tabs import with_query
@@ -55,6 +55,10 @@ shown closed that the URL opens gets a toggle that opens only it and the nodes a
 MAX_LINK_CHARS = 2_000_000
 """About the most characters naming open nodes a page's, or fragment's, links hold in all: each toggle names them
 all, so with many open nodes, or long IRIs, a page shows fewer than `MAX_SHOWN` nodes, as it does past that."""
+
+MAX_CHILDREN_READ = 100_000
+"""About the most children, or roots, a page's or fragment's reads sort in all, as each sorts all of its node's
+children (80 ms for NCBITaxon's widest, 47,783); past it, the open nodes left are shown closed, as past `MAX_SHOWN`."""
 
 ROOT_ID = "t"
 """The element id the roots' ids follow from: `t-0`, `t-1`, …; a node's children's from its own, `t-0-0`, …."""
@@ -177,6 +181,7 @@ class _Builder:
             fragment, its node.
         open_chars: About how many characters naming the open nodes takes in a link.
         shown: How many nodes have been shown so far.
+        read: How many children, or roots, the reads so far have sorted (`MAX_CHILDREN_READ`).
         opened: The open nodes the links name, by id and IRI: the nodes shown open, in tree order, after a fragment's
             node and the nodes open above it.
     """
@@ -190,6 +195,7 @@ class _Builder:
     window: int | None
     open_chars: int
     shown: int = 0
+    read: int = 0
     opened: list[tuple[int, str]] = field(default_factory=list)
     _open_at: dict[int, list[str]] = field(default_factory=dict)  # each node shown open: its element ids
     _closing: dict[int, list[str]] = field(default_factory=dict)  # each node shown open: the links' IRIs once closed
@@ -215,6 +221,7 @@ class _Builder:
             prefix: str = self.request.app.state.settings.reserved_prefix
             root = link_root(self.request.scope)
             self._pages[key] = read_children(self.connection, self.hierarchy, parent, prefix, root, offset)
+            self.read += self._pages[key].total
         return self._pages[key]
 
     def _lay_out(self, parent: TreeNode | None, parent_id: str, offset: int) -> ShownList:
@@ -235,8 +242,13 @@ class _Builder:
         return ShownList(page, nodes)
 
     def _has_room(self) -> bool:
-        """Return whether the page has room for another open node's children (`MAX_SHOWN`, `MAX_LINK_CHARS`)."""
-        return self.shown < MAX_SHOWN and self.shown * self.open_chars < MAX_LINK_CHARS
+        """Return whether the page has room for another open node's children.
+
+        See `MAX_SHOWN`, `MAX_LINK_CHARS` and `MAX_CHILDREN_READ`.
+        """
+        return (
+            self.shown < MAX_SHOWN and self.shown * self.open_chars < MAX_LINK_CHARS and self.read < MAX_CHILDREN_READ
+        )
 
     def _linked(self, shown: ShownList, parent: TreeNode | None, parent_id: str, path: list[str]) -> ShownList:
         """Return a page of nodes laid out, with their links, and those to the pages before and after it.
@@ -352,6 +364,8 @@ async def tree_page(request: Request, slug: str) -> Response:
         chars = _link_chars([*known.values(), *([] if query.node is None else [query.node])])
         builder = _Builder(request, connection, hierarchy, page_path, query, set(known), window, chars)
         parent = None if window is None else read_node(connection, hierarchy, window, prefix, link_root(request.scope))
+        if query.offset and query.offset >= (count_roots(connection, hierarchy) if parent is None else parent.children):
+            return None  # checked before any page is read
         if query.at is not None:
             iris = node_iris(connection, (node for node in known if parent is None or node != parent.id))
             above = [*iris.items(), *([] if parent is None else [(parent.id, parent.link.iri)])]
@@ -359,8 +373,7 @@ async def tree_page(request: Request, slug: str) -> Response:
         else:
             # A window on a node that isn't shown open is ignored, e.g. once a link has closed it or its parent.
             shown = builder.build(None, ROOT_ID, 0 if window is not None else query.offset, [])
-        total = shown.page.total if parent is None else parent.children
-        return None if query.offset and query.offset >= total else shown
+        return shown
 
     shown = await read_derived(request, build)
     if shown is None:

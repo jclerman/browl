@@ -1452,9 +1452,10 @@ too (P-38), and the JSON API's (P-33).
   endless, toggles and paging links are `rel="nofollow"`, and a tree page with a query is marked `noindex`.
 - **Limits:** a URL's first 100 open nodes are taken (`MAX_OPEN`). A page shows about 5,000 nodes at most
   (`MAX_SHOWN`), as a node under several open parents opens under each, and fewer once its links would name open
-  nodes in about 2 M characters in all (`MAX_LINK_CHARS`), as each toggle names them all. Past these, the open nodes
-  left are shown closed. The toggle of a node that can't open, or would pass `MAX_OPEN`, opens only it and the
-  nodes above it.
+  nodes in about 2 M characters in all (`MAX_LINK_CHARS`), as each toggle names them all, or once its reads have
+  sorted 100,000 children in all (`MAX_CHILDREN_READ`), as each read sorts all of its node's children. Past these,
+  the open nodes left are shown closed. An offset past the last is a 404 before any children are read. The toggle
+  of a node that can't open, or would pass `MAX_OPEN`, opens only it and the nodes above it.
 - **With htmx** the toggle fetches the node's children alone (`?node=…&at=…`), once; `static/tree.js` then opens
   and closes the node in place, without a request. The fragment request names the open nodes above the node, so
   its links work without JS, though they leave out the page's other open nodes. Opening in place doesn't change

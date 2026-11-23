@@ -478,20 +478,41 @@ def test_roots_fragment(client: TestClient) -> None:
     assert query(first[-1].load or "") == [("at", "t"), ("offset", "500")]
 
 
-@pytest.mark.parametrize(("limit", "value"), [("MAX_SHOWN", 3), ("MAX_LINK_CHARS", 400)])
+@pytest.mark.parametrize(("limit", "value"), [("MAX_SHOWN", 3), ("MAX_LINK_CHARS", 400), ("MAX_CHILDREN_READ", 5)])
 def test_most_shown(client: TestClient, monkeypatch: pytest.MonkeyPatch, limit: str, value: int) -> None:
-    """Check that past `MAX_SHOWN` or `MAX_LINK_CHARS`, open nodes show closed, with toggles that open only them (S1).
+    """Check that past `MAX_SHOWN`, `MAX_LINK_CHARS` or `MAX_CHILDREN_READ`, open nodes show closed (S1, C3).
 
     Their toggles open only them and the nodes above them, so they fit.
     """
     monkeypatch.setattr(browl.trees, limit, value)
     found = tree(client, opened("Top", "Left", "Right"))
-    # The roots and Top's children make 5, and the open nodes' IRIs take 111 characters in each link.
+    # The roots and Top's children make 5, read from 5, and the open nodes' IRIs take 111 characters in each link.
     assert found.shown() == [(0, "Free"), (0, "Top"), (1, "Big"), (1, "Left"), (1, "Right")]
     left = found.item("Left")
     assert left.expanded == "false"
     assert query(left.toggle or "") == opened("Top", "Left")
     assert query(found.item("Top").toggle or "") == []  # closes it
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        [*opened("Top", "Big"), ("children-of", ex("Big")), ("offset", "1250")],
+        [("node", ex("Big")), ("at", "t-1-0"), ("offset", "1250")],
+        [("offset", "2")],
+        [("at", "t"), ("offset", "2")],
+    ],
+)
+def test_offset_past_last_not_read(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, params: list[tuple[str, str]]
+) -> None:
+    """Check that an offset past the last child, or root, is a 404 before any page of them is read (C3)."""
+
+    def read_children(*args: object, **kwargs: object) -> None:
+        raise AssertionError("read")
+
+    monkeypatch.setattr(browl.trees, "read_children", read_children)
+    assert client.get(TREE, params=params).status_code == 404
 
 
 def test_most_open(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
