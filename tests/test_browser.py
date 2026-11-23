@@ -2090,6 +2090,17 @@ def test_tree_keyboard(page: Page, trees: LiveServer) -> None:
     expect(page).to_have_url(f"{trees.url}/Top")
 
 
+def test_tree_keys_after_toggle_click(page: Page, trees: LiveServer) -> None:
+    """Check that the keys work after a click on a toggle: the focus goes to its item, not the toggle (S5)."""
+    page.goto(f"{trees.url}/_browl/tree/classes")
+    tree_toggle(page, "Top").click()
+    expect(tree_item(page, "Left")).to_be_visible()
+    expect(tree_item(page, "Top")).to_be_focused()
+    page.keyboard.press("ArrowDown")
+    expect(tree_item(page, "Big")).to_be_focused()
+    expect(page.locator('[role="tree"] [tabindex="0"]')).to_have_count(1)
+
+
 def test_tree_close_moves_roving_item(page: Page, trees: LiveServer) -> None:
     """Check that closing a node that holds the item in the Tab sequence moves that to the node."""
     page.goto(f"{trees.url}/_browl/tree/classes?open={urllib.parse.quote(EX + '/Top')}")

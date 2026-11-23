@@ -95,22 +95,26 @@
     setUp(tree);
   }
 
-  // The item focused, e.g. by a click, is the roving one. A tree the page gained later, e.g. through the hash-IRI
-  // script, is set up once focus first enters it, which may be on a toggle, before the first item.
+  // The item focused, e.g. by a click, is the roving one. A toggle a click focuses passes the focus to its item, so
+  // the keys work. A tree the page gained later, e.g. through the hash-IRI script, is set up once focus first enters
+  // it, which may be on a toggle, before the first item.
   document.addEventListener("focusin", (event) => {
-    const tree = event.target.closest?.(TREE);
+    const target = event.target;
+    const tree = target.closest?.(TREE);
     if (!tree) {
       return;
     }
-    const item = event.target.closest(ITEM);
+    const item = target.matches(TOGGLE) ? itemOf(target.parentElement) : target.closest(ITEM);
     if (!tree.dataset.roving) {
       setUp(tree);
       const to = item ?? shownItems(tree)[0];
       if (to) {
         focusItem(to);
       }
-    } else if (item) {
+    } else if (item === target) {
       rove(item);
+    } else if (item) {
+      focusItem(item);
     }
   });
 

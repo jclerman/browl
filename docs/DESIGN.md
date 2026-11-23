@@ -1464,7 +1464,8 @@ too (P-38), and the JSON API's (P-33).
   (`MAX_AT_CHARS`), as each child repeats it; a deeper node's fragment is a 404, so its toggle loads the page.
 - **Keyboard** (U-17), the WAI-ARIA tree pattern: the tree is `role="tree"`, each node's link a `treeitem` (with
   `aria-expanded`, its group by `aria-owns`, its counts by `aria-describedby`), its children a `group`. Only one
-  item is in the Tab sequence (roving `tabindex`), and the toggles are the mouse's (`tabindex="-1"`, `aria-hidden`).
+  item is in the Tab sequence (roving `tabindex`), and the toggles are the mouse's (`tabindex="-1"`, `aria-hidden`;
+  a click on one leaves the focus on its item).
   Up and Down move through the items shown, Home and End to the first and last; Right opens a closed node, or moves
   into an open one; Left closes an open node, or moves to the parent; Enter follows the link. The "Show more" and
   "previous" links are items too, so the keyboard reaches them; after "Show more" the focus goes to the first node
