@@ -355,12 +355,10 @@ def test_pages(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     assert '<small class="continued">(continued)</small>' in second
     assert 'value="2"\n        id="usage-page" required> of 5</label>' in second
     assert second.index('<nav class="pager"') < second.index('<dl class="frame usage-frame">')
-    hash_panel = "/_browl/hash?path=%2Faxioms&amp;fragment=Dog"
-    assert f'data-panel="{hash_panel}&amp;tab=usage&amp;page=2&amp;panel=1"' in second
-    assert f'<a href="/axioms?tab=usage#Dog" hx-get="{hash_panel}&amp;tab=usage&amp;panel=1"' in second
-    next_panel = f"{hash_panel}&amp;tab=usage&amp;page=3&amp;panel=1"
-    assert f'<a href="/axioms?tab=usage&amp;page=3#Dog" hx-get="{next_panel}"' in second
-    assert f'hx-get="{hash_panel}&amp;panel=1">' in first  # the form's, whose fields add `tab` and `page`
+    # Previous, the form and Next fetch panels from the hash route; its URLs are `test_pager_hash_route`'s.
+    nav = second[second.index('<nav class="pager"') : second.index("</nav>")]
+    assert 'data-panel="/_browl/hash?' in nav
+    assert nav.count('hx-get="/_browl/hash?path=%2Faxioms&amp;fragment=Dog&amp;') == 3
     assert 'rel="prev"' not in first and 'rel="next"' not in last
     assert '<span class="pager-off" aria-disabled="true">Previous</span>' in first
     assert '<span class="pager-off" aria-disabled="true">Next</span>' in last
@@ -628,11 +626,10 @@ def test_pager_fallback_url() -> None:
     pager = browl.lookup._pager(request, at, tab)
     assert pager is not None
     page = "/root/_browl/iri?iri=urn%3Aexample%3Ax&tab=usage"
-    assert (pager.previous, pager.next) == (page, f"{page}&page=3")
-    assert (pager.previous_panel, pager.panel, pager.next_panel) == (
-        f"{page}&panel=1",
+    assert (pager.previous, pager.panel, pager.next) == (
+        browl.lookup._PageLink(page, f"{page}&panel=1"),
         f"{page}&page=2&panel=1",
-        f"{page}&page=3&panel=1",
+        browl.lookup._PageLink(f"{page}&page=3", f"{page}&page=3&panel=1"),
     )
     assert (pager.action, pager.fields) == ("/root/_browl/iri", [("iri", "urn:example:x"), ("tab", "usage")])
     assert pager.action_panel == "/root/_browl/iri?panel=1"  # the fields give the IRI
@@ -646,12 +643,11 @@ def test_pager_hash_route() -> None:
     at = browl.lookup._TabUrls("/onto", "Foo", "/_browl/hash?path=/onto&fragment=Foo")
     pager = browl.lookup._pager(request, at, UsageTab(count=120, page=2, pages=3, groups=[]))
     assert pager is not None
-    assert (pager.previous, pager.next) == ("/onto?tab=usage#Foo", "/onto?tab=usage&page=3#Foo")
     panel = "/_browl/hash?path=/onto&fragment=Foo&tab=usage"
-    assert (pager.previous_panel, pager.panel, pager.next_panel) == (
-        f"{panel}&panel=1",
+    assert (pager.previous, pager.panel, pager.next) == (
+        browl.lookup._PageLink("/onto?tab=usage#Foo", f"{panel}&panel=1"),
         f"{panel}&page=2&panel=1",
-        f"{panel}&page=3&panel=1",
+        browl.lookup._PageLink("/onto?tab=usage&page=3#Foo", f"{panel}&page=3&panel=1"),
     )
     assert (pager.action, pager.fields) == ("/onto#Foo", [("tab", "usage")])
     assert pager.action_panel == "/_browl/hash?path=/onto&fragment=Foo&panel=1"
