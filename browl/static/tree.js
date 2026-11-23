@@ -96,6 +96,20 @@
   function setOpen(item, open) {
     groupOf(item).hidden = !open;
     item.setAttribute("aria-expanded", open ? "true" : "false");
+    relink(toggleOf(item), open);
+  }
+
+  // A toggle's link (for a modifier-click, or a failed fetch) follows its node's state: once open, it leaves the
+  // node's IRI out of `open=`, and once closed, adds it back after the others.
+  function relink(toggle, open) {
+    const iri = new URL(toggle.getAttribute("hx-get"), location.href).searchParams.get("node");
+    const url = new URL(toggle.href);
+    const params = [...url.searchParams].filter(([name, value]) => name !== "open" || value !== iri);
+    if (!open) {
+      params.splice(params.findLastIndex(([name]) => name === "open") + 1, 0, ["open", iri]);
+    }
+    url.search = new URLSearchParams(params).toString();
+    toggle.setAttribute("href", url.pathname + url.search + url.hash);
   }
 
   // Open a node: in place if its children are loaded, else through its toggle, which htmx fetches them for.

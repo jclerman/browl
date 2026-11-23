@@ -1459,8 +1459,9 @@ too (P-38), and the JSON API's (P-33).
 - **With htmx** the toggle fetches the node's children alone (`?node=…&at=…`), once; `static/tree.js` then opens
   and closes the node in place, without a request. The fragment request names the open nodes above the node, so
   its links work without JS, though they leave out the page's other open nodes. Opening in place doesn't change
-  the URL. A fragment that can't be fetched loads the toggle's page instead, and a click with a modifier key is
-  left to the browser.
+  the URL, but the toggle's link follows: it then leaves the node out of `open=`, and adds it back once closed. A
+  fragment that can't be fetched loads the toggle's page instead, and a click with a modifier key is left to the
+  browser.
 - **Element ids** follow each node's place: the roots `t-0`, `t-1`, …, a node's children its own id and their
   index (`t-1-0`), and its group and counts its id with `-g` and `-n`. A fragment's request names its node's id
   (`at=`), so its ids are unique on the page; P-38's column can use another prefix. `at=` is at most 256 characters

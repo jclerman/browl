@@ -2215,6 +2215,26 @@ def test_tree_fragment_failure_loads_page(page: Page, trees: LiveServer, failure
     assert query_of(page.url) == {"open": [f"{EX}/Top"]}
 
 
+def test_tree_toggle_link_follows_state(page: Page, trees: LiveServer) -> None:
+    """Check that a toggle's link follows its node opened and closed in place, so a modifier-click matches it (C6)."""
+    page.goto(f"{trees.url}/_browl/tree/classes?{TOP_AND_BIG}")
+    toggle = tree_toggle(page, "Left")
+    tree_toggle(page, "Left").click()
+    expect(tree_item(page, "Left")).to_have_attribute("aria-expanded", "true")
+    assert query_of(toggle.get_attribute("href") or "") == {"open": [f"{EX}/Top", f"{EX}/Big"]}
+    assert (toggle.get_attribute("href") or "").endswith("#t-1-1")
+    with page.context.expect_page() as opened:
+        toggle.click(modifiers=["ControlOrMeta"])
+    opened.value.wait_for_load_state()
+    expect(opened.value.get_by_role("treeitem", name="Left", exact=True)).to_have_attribute("aria-expanded", "false")
+    tree_toggle(page, "Left").click()
+    expect(tree_item(page, "Left")).to_have_attribute("aria-expanded", "false")
+    assert query_of(toggle.get_attribute("href") or "") == {"open": [f"{EX}/Top", f"{EX}/Big", f"{EX}/Left"]}
+    tree_toggle(page, "Big").click()  # opened by the URL: its link opens it again once closed
+    expect(tree_item(page, "Big")).to_have_attribute("aria-expanded", "false")
+    assert query_of(tree_toggle(page, "Big").get_attribute("href") or "") == {"open": [f"{EX}/Top", f"{EX}/Big"]}
+
+
 def test_tree_modifier_click_left_to_browser(page: Page, trees: LiveServer) -> None:
     """Check that a toggle clicked with a modifier key opens its page in a new browser tab, and leaves this one."""
     page.goto(f"{trees.url}/_browl/tree/classes")
