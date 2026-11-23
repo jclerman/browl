@@ -175,7 +175,7 @@ class _Lane:
         type: Its entities' type.
         property_rank: Its name property's position in `NAME_PROPERTIES`, from 0.
         language_rank: Its languages' rank by `LANGUAGE_RANKING`, from 0; languages that rank alike share one.
-        entailed: 0 for direct values, 1 for values entailed through a sub-property.
+        entailed: Whether its values are entailed through a sub-property, rather than direct.
         max_length: Its longest normalized value's length.
         name_property: Its name property's IRI.
     """
@@ -183,12 +183,12 @@ class _Lane:
     type: EntityType
     property_rank: int
     language_rank: int
-    entailed: int
+    entailed: bool
     max_length: int
     name_property: str
 
     @property
-    def tier(self) -> tuple[int, int, int]:
+    def tier(self) -> tuple[int, int, bool]:
         """Return its rank among lanes (§2.6, rules 2-4): lanes of one tier rank alike."""
         return self.property_rank, self.language_rank, self.entailed
 
