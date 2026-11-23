@@ -24,8 +24,7 @@ def settings(data_dir: Path) -> Settings:
     return make_settings(ROBOT_JAR=str(find_robot_jar()), REASONER_MAX_HEAP="512m")
 
 
-@pytest.mark.usefixtures("jvm")
-async def test_lists_what_the_owlapi_reads(site: StaticServer, settings: Settings, tmp_path: Path) -> None:
+async def test_lists_what_the_owlapi_reads(jvm: None, site: StaticServer, settings: Settings, tmp_path: Path) -> None:
     """Check that the imports a regex scan missed (PR #70's review, M1) are listed, and nothing is fetched or read.
 
     Each import is one the OWLAPI reads in a way a scan didn't: a prefix redefined in a comment, a non-ASCII prefix
@@ -64,8 +63,7 @@ async def test_lists_what_the_owlapi_reads(site: StaticServer, settings: Setting
     assert sorted(path.name for path in tmp_path.iterdir()) == ["o.ofn", "o.ttl", "secret.ttl"]
 
 
-@pytest.mark.usefixtures("jvm")
-async def test_relative_import_left_out(settings: Settings, tmp_path: Path) -> None:
+async def test_relative_import_left_out(jvm: None, settings: Settings, tmp_path: Path) -> None:
     """Check that a relative import is listed but left out of the Turtle, whose base would resolve it differently."""
     source = tmp_path / "o.ofn"
     source.write_text(f"Ontology(<{EX}o> <{EX}o/1>\nImport(<rel.owl>)\nImport(<{EX}b>)\n)\n")
@@ -78,8 +76,7 @@ async def test_relative_import_left_out(settings: Settings, tmp_path: Path) -> N
     assert f"{EX}b" in text
 
 
-@pytest.mark.usefixtures("jvm")
-async def test_parse_error(settings: Settings, tmp_path: Path) -> None:
+async def test_parse_error(jvm: None, settings: Settings, tmp_path: Path) -> None:
     """Check that a file the OWLAPI can't read as OFN fails with a parse error, leaving no output."""
     source = tmp_path / "o.ofn"
     source.write_text(f"Ontology(<{EX}o>\nSubClassOf(\n")
@@ -89,8 +86,7 @@ async def test_parse_error(settings: Settings, tmp_path: Path) -> None:
     assert sorted(path.name for path in tmp_path.iterdir()) == ["o.ofn"]
 
 
-@pytest.mark.usefixtures("jvm")
-async def test_time_limit(tmp_path: Path, data_dir: Path) -> None:
+async def test_time_limit(jvm: None, tmp_path: Path, data_dir: Path) -> None:
     """Check that the conversion is held to the reasoner time limit: its source is a pipe nothing is written to."""
     settings = make_settings(ROBOT_JAR=str(find_robot_jar()), REASONER_TIMEOUT_S="1")
     source = tmp_path / "o.ofn"

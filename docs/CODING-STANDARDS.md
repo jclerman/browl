@@ -60,6 +60,8 @@ instructions specific to coding agents. Requirements and architecture are in [`D
   (built by the tests, unless `BROWL_TEST_FUSEKI_IMAGE` names an image already built, as CI does). `make test` downloads
   the pinned `robot.jar` once (`make robot-jar`), and on macOS the tests find Java 21 when `JAVA_HOME` is unset.
   Locally, these tests are skipped when their needs are missing; in CI they fail instead, so CI runs every test.
+- Request a fixture as a parameter (`jvm: None`), even one used only for its side effect, so it's a reference that
+  rename and navigation follow. Use `pytest.mark.usefixtures("…")` only for a whole module (`pytestmark`).
 - Test what only a browser shows (scripts such as `static/hash.js`, htmx, `<noscript>` fallbacks) with Playwright
   (pytest-playwright): have such tests use the `page` fixture and the `live_server` fixture, which serves an app on a
   free local port, since a browser can't reach the `TestClient`. Hold or stub responses with `page.route`, so tests of
