@@ -2090,6 +2090,27 @@ def test_tree_keyboard(page: Page, trees: LiveServer) -> None:
     expect(page).to_have_url(f"{trees.url}/Top")
 
 
+def test_tree_keyboard_edges(page: Page, trees: LiveServer) -> None:
+    """Check the keys at the tree's edges and across open nodes; with a modifier key they're left to the browser."""
+    query = urllib.parse.urlencode([("open", f"{EX}/Top"), ("open", f"{EX}/Left")])
+    page.goto(f"{trees.url}/_browl/tree/classes?{query}")  # Free, Top, Big, Left, Alias, Bottom, Right
+    tree_item(page, "Free").focus()
+    steps = [
+        ("ArrowRight", "Free"),  # a leaf: nothing to open
+        ("End", "Right"),
+        ("ArrowDown", "Right"),  # the last item
+        ("ArrowUp", "Bottom"),  # the last item shown in the open node before it
+        ("ArrowDown", "Right"),
+        ("Shift+ArrowUp", "Right"),
+        ("Control+Home", "Right"),
+        ("Alt+ArrowUp", "Right"),
+    ]
+    for key, name in steps:
+        page.keyboard.press(key)
+        expect(tree_item(page, name)).to_be_focused()
+    expect(tree_item(page, "Right")).to_have_attribute("aria-expanded", "false")
+
+
 def test_tree_keys_after_toggle_click(page: Page, trees: LiveServer) -> None:
     """Check that the keys work after a click on a toggle: the focus goes to its item, not the toggle (S5)."""
     page.goto(f"{trees.url}/_browl/tree/classes")
@@ -2160,6 +2181,34 @@ def test_tree_show_more_twice_in_place(page: Page, trees: LiveServer) -> None:
     expect(page.locator(".tree-paging")).to_have_count(0)
     assert [query_of(url)["offset"] for url in requests] == [["500"], ["1000"]]
     assert marked(page)
+
+
+def test_tree_show_more_by_keyboard(page: Page, trees: LiveServer) -> None:
+    """Check that the keys reach "Show more", and Enter on it adds the next page in place."""
+    url = f"{trees.url}/_browl/tree/classes?{TOP_AND_BIG}"
+    page.goto(url)
+    tree_item(page, "Kid 0499").focus()
+    page.keyboard.press("ArrowDown")
+    more = page.get_by_role("treeitem", name="Show the next 500")
+    expect(more).to_be_focused()
+    with page.expect_request(TREE_FRAGMENT):
+        page.keyboard.press("Enter")
+    expect(tree_item(page, "Kid 0500")).to_be_focused()
+    expect(page).to_have_url(url)
+
+
+def test_tree_show_more_modifier_click(page: Page, trees: LiveServer) -> None:
+    """Check that "Show more" clicked with a modifier key opens its page in a new tab, and leaves this one."""
+    page.goto(f"{trees.url}/_browl/tree/classes?{TOP_AND_BIG}")
+    with page.context.expect_page() as opened:
+        page.get_by_role("treeitem", name="Show the next 500").click(modifiers=["ControlOrMeta"])
+    opened.value.wait_for_load_state()
+    assert query_of(opened.value.url) == {
+        "open": [f"{EX}/Top", f"{EX}/Big"],
+        "children-of": [f"{EX}/Big"],
+        "offset": ["500"],
+    }
+    expect(tree_item(page, "Kid 0500")).to_have_count(0)
 
 
 def test_tree_roots_show_more_in_place(page: Page, trees: LiveServer) -> None:

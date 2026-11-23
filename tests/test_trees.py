@@ -5,7 +5,7 @@ import html.parser
 import re
 import urllib.parse
 from collections.abc import Iterator, Sequence
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -190,13 +190,20 @@ def app() -> FastAPI:
     return make_app()
 
 
+@contextmanager
+def loaded(app: FastAPI, stage: object, root_path: str = "") -> Iterator[TestClient]:
+    """Yield a test client for the app, under a root path, with a stage's hierarchies loaded."""
+    with TestClient(app, root_path=root_path) as test_client:
+        app.state.jobs.register(Stage.PRE_CACHING, stage)
+        test_client.portal.call(app.state.jobs.start)
+        test_client.portal.call(app.state.jobs.wait)
+        yield test_client
+
+
 @pytest.fixture
 def client(app: FastAPI) -> Iterator[TestClient]:
     """Yield a test client for the app, with the hierarchies loaded."""
-    with TestClient(app) as test_client:
-        app.state.jobs.register(Stage.PRE_CACHING, tree_stage())
-        test_client.portal.call(app.state.jobs.start)
-        test_client.portal.call(app.state.jobs.wait)
+    with loaded(app, tree_stage()) as test_client:
         yield test_client
 
 
@@ -299,7 +306,7 @@ def test_open_by_other_member(client: TestClient) -> None:
     """Check that naming any member of a group opens it, and a fragment for any member is the group's."""
     found = tree(client, opened("Top", "Left", "Same"))
     group = found.item("Alias ≡ Alias2 ≡ Alias3 ≡ … (+1)")
-    assert group.expanded == "true"
+    assert (group.expanded, group.counts) == ("true", "1 child · 1 descendant")
     assert found.item("Sub").id == "t-1-1-0-0"
     assert query(group.toggle or "") == opened("Top", "Left")
     assert query(found.item("Big").toggle or "") == opened("Top", "Left", "Alias", "Big")  # by its representative
@@ -351,6 +358,8 @@ def test_fragment_opens_open_children(client: TestClient) -> None:
         [("offset", "-1")],
         [("offset", "2")],  # past the two roots
         [("offset", "1"), ("offset", "1")],
+        [("offset", "1000000000")],  # over 9 digits
+        [("node", ex("Top")), ("at", "t-1000000000")],  # a segment over 9 digits
         [("children-of", ex("Big")), *opened("Top", "Big")],  # no `offset`: the plain URL's page
         [("children-of", ex("Nope")), ("offset", "500")],
         [("children-of", ex("Big")), ("offset", "1250"), *opened("Top", "Big")],
@@ -408,6 +417,28 @@ def test_property_and_empty_trees(client: TestClient) -> None:
     assert response.status_code == 200
     assert Tree(response.text).items == []
     assert '<p class="note">None.</p>' in response.text
+
+
+def test_data_property_tree(app: FastAPI) -> None:
+    """Check a data property hierarchy's tree, and that `HEAD` is served."""
+    entities = [(ex(name), EntityType.DATA_PROPERTY) for name in ("d", "e")]
+    with loaded(app, derived_stage(entities, edges=[(ex("e"), SUB_PROPERTY, ex("d"))])) as client:
+        path = "/_browl/tree/data-properties"
+        assert tree(client, [("open", ex("d"))], path).shown() == [(0, ex("d")), (1, ex("e"))]
+        head = client.head(path)
+        assert (head.status_code, head.content) == (200, b"")
+        assert head.headers["content-type"].startswith("text/html")
+
+
+def test_under_root_path(app: FastAPI) -> None:
+    """Check that a tree's links, and its fragments', are within the app's root path."""
+    with loaded(app, tree_stage(), "/site") as client:
+        found = tree(client, opened("Top"), f"/site{TREE}")
+        top, big = found.item("Top"), found.item("Big")
+        assert top.href == "/site/Top"
+        for link in (top.toggle, top.load, big.toggle, big.load):
+            assert (link or "").startswith(f"/site{TREE}"), link
+        assert tree(client, [("node", ex("Big")), ("at", "t-1-0")], f"/site{TREE}").items[0].href == "/site/kid0"
 
 
 def test_children_paged(client: TestClient) -> None:
@@ -535,6 +566,31 @@ def test_offset_past_last_not_read(
 
     monkeypatch.setattr(browl.trees, "read_children", read_children)
     assert client.get(TREE, params=params).status_code == 404
+
+
+@pytest.mark.parametrize(("most", "left", "right"), [(5, "false", "false"), (6, "true", "false"), (8, "true", "true")])
+def test_most_shown_boundary(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, most: int, left: str, right: str
+) -> None:
+    """Check that a node opens while fewer than `MAX_SHOWN` nodes are shown before it, and not once as many are."""
+    monkeypatch.setattr(browl.trees, "MAX_SHOWN", most)
+    found = tree(client, opened("Top", "Left", "Right"))  # 2 roots and 3 under Top, then 2 under Left, 1 under Right
+    assert (found.item("Left").expanded, found.item("Right").expanded) == (left, right)
+
+
+def test_most_shown_in_fragment(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that `MAX_SHOWN` bounds a fragment too, its nodes counted from its own."""
+    monkeypatch.setattr(browl.trees, "MAX_SHOWN", 4)
+    params = [("node", ex("Top")), ("at", "t-1"), *opened("Top", "Left", "Right")]
+    found = Tree(client.get(TREE, params=params).text)
+    assert found.shown() == [
+        (0, "Big"),
+        (0, "Left"),
+        (1, "Alias ≡ Alias2 ≡ Alias3 ≡ … (+1)"),
+        (1, "Bottom"),
+        (0, "Right"),
+    ]
+    assert found.item("Right").expanded == "false"
 
 
 def test_most_open(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
