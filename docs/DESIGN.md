@@ -1455,7 +1455,8 @@ too (P-38), and the JSON API's (P-33).
   nodes in about 2 M characters in all (`MAX_LINK_CHARS`), as each toggle names them all, or once its reads have
   sorted 100,000 children in all (`MAX_CHILDREN_READ`), as each read sorts all of its node's children. Past these,
   the open nodes left are shown closed. An offset past the last is a 404 before any children are read. The toggle
-  of a node that can't open, or would pass `MAX_OPEN`, opens only it and the nodes above it.
+  of a node that can't open, or would pass `MAX_OPEN`, opens only it and the nodes above it. A page renders in the
+  thread pool, as one of 5,000 nodes takes about 100 ms.
 - **With htmx** the toggle fetches the node's children alone (`?node=…&at=…`), once; `static/tree.js` then opens
   and closes the node in place, without a request. The fragment request names the open nodes above the node, so
   its links work without JS, though they leave out the page's other open nodes. Opening in place doesn't change

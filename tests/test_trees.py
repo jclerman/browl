@@ -1,11 +1,13 @@
 """Tests for the tree pages (P-18, U-7–U-9, U-17, DESIGN.md §2.13) and the hierarchy reads under them."""
 
+import asyncio
 import html.parser
 import re
 import urllib.parse
 from collections.abc import Iterator, Sequence
 from contextlib import closing
 from dataclasses import dataclass
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -366,6 +368,26 @@ def test_long_at(client: TestClient) -> None:
     assert len(at) == browl.trees.MAX_AT_CHARS
     found = Tree(client.get(TREE, params=[("node", ex("Top")), ("at", at)]).text)
     assert found.items[0].id == f"{at}-0"
+
+
+def test_rendered_in_thread_pool(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a tree page, and a fragment, render off the event loop, as one of `MAX_SHOWN` nodes is slow (C5)."""
+    render = browl.trees.templates.TemplateResponse
+    on_loop: list[bool] = []
+
+    def recorded(*args: Any, **kwargs: Any) -> Any:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            on_loop.append(False)
+        else:
+            on_loop.append(True)
+        return render(*args, **kwargs)
+
+    monkeypatch.setattr(browl.trees.templates, "TemplateResponse", recorded)
+    tree(client)
+    tree(client, [("at", "t")])
+    assert on_loop == [False, False]
 
 
 def test_unknown_hierarchy(client: TestClient) -> None:

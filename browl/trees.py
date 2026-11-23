@@ -10,6 +10,7 @@ Children come a page at a time (`browl.hierarchy.CHILD_PAGE`). With htmx, "Show 
 without, it shows that page of the node's children (`children-of=` and `offset=`), with a link back.
 """
 
+import asyncio
 import re
 import sqlite3
 import urllib.parse
@@ -378,7 +379,11 @@ async def tree_page(request: Request, slug: str) -> Response:
     shown = await read_derived(request, build)
     if shown is None:
         return not_found(request)
+    # Rendered in the thread pool, as a page of `MAX_SHOWN` nodes takes about 100 ms.
     if query.at is not None:
-        return templates.TemplateResponse(request, "tree_fragment.html", {"list": shown}, headers=PANEL_HEADERS)
+        return await asyncio.to_thread(
+            templates.TemplateResponse, request, "tree_fragment.html", {"list": shown}, headers=PANEL_HEADERS
+        )
     headers = PANEL_HEADERS if request.url.query else None  # the tree as it opens is at the plain URL
-    return templates.TemplateResponse(request, "tree.html", {"name": tree.label, "tree": shown}, headers=headers)
+    context = {"name": tree.label, "tree": shown}
+    return await asyncio.to_thread(templates.TemplateResponse, request, "tree.html", context, headers=headers)
