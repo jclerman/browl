@@ -50,9 +50,9 @@ testpaths = ["tests", "browl"]
 # When run with --cov, record which test covered each line; no effect otherwise. --doctest-modules runs the examples.
 addopts = ["--cov-context=test", "--strict-markers", "--durations=15", "--doctest-modules"]
 markers = [
-    "jvm: set by the java fixture, which jvm uses (tests/conftest.py); needs Java and robot.jar; skipped when Java is not available (fails in CI)",
-    "fuseki: set by the fuseki_url fixture; needs Fuseki, from BROWL_TEST_FUSEKI_URL or started with Docker; skipped when neither is available (fails in CI)",
-    "browser: set by the browser fixture, which page uses; needs Playwright's headless Chromium (make browser); skipped when it's not installed (fails in CI)",
+    "java: needs Java and robot.jar; given by the java fixture (tests/conftest.py)",
+    "fuseki: needs Fuseki; given by the fuseki_url fixture",
+    "browser: needs Playwright's headless Chromium; given by the browser fixture",
 ]
 # Show full assertion diffs (as with -vv) without making other output verbose.
 verbosity_assertions = 2

@@ -13,7 +13,7 @@ Playwright's headless Chromium (`make browser`). Locally, tests whose needs are 
 they fail instead, so CI runs every test.
 
 A test that uses one of these fixtures, directly or through another fixture, gets the matching mark (`FIXTURE_MARKS`),
-which `-m` selects by (e.g. `-m "not jvm and not fuseki"`). Use the fixture; don't write the mark by hand.
+which `-m` selects by (e.g. `-m "not java and not fuseki"`). Use the fixture; don't write the mark by hand.
 """
 
 import json
@@ -46,7 +46,7 @@ FUSEKI_START_TIMEOUT_S = 60
 ROBOT_JAR_CACHE = ROOT / ".cache" / "robot.jar"  # where `make robot-jar` puts it
 JENA_CACHE = ROOT / ".cache" / "jena"  # where `make jena` puts it
 MACOS_JAVA_HOME = "/usr/libexec/java_home"
-FIXTURE_MARKS = {"java": "jvm", "fuseki_url": "fuseki", "browser": "browser"}
+FIXTURE_MARKS = {"java": "java", "fuseki_url": "fuseki", "browser": "browser"}
 """The mark each of these fixtures gives the tests that use it."""
 
 pytest_plugins = ["pytester"]

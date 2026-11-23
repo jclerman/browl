@@ -18,7 +18,7 @@ doctor:  ## Check the tools development needs, and say what's missing (CONTRIBUT
 lint:  ## Run all pre-commit hooks on all files
 	poetry run pre-commit run --all-files
 
-# robot.jar for the tests marked jvm, which tests/conftest.py uses unless ROBOT_JAR is set (`make test` then doesn't
+# robot.jar for the tests marked java, which tests/conftest.py uses unless ROBOT_JAR is set (`make test` then doesn't
 # download it): the release and checksum the app image pins, read from the Dockerfile. A file target that depends on
 # the Dockerfile, so it's downloaded when it's missing or older than the Dockerfile: bumping ROBOT_VERSION gets the new
 # release. Any other Dockerfile edit downloads it again too, which is rare enough not to need a recorded version. The

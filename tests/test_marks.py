@@ -55,7 +55,7 @@ def test_plain():
     pass
 """
 
-MARKS = ("jvm", "fuseki", "browser")
+MARKS = ("java", "fuseki", "browser")
 
 # The inner runs' options: the marks registered, for `--strict-markers`, and without pytest-playwright, whose own
 # fixtures would clash with the outer run's.
@@ -78,8 +78,8 @@ def test_marks_derived(inner: pytest.Pytester) -> None:
     items, _ = inner.inline_genitems()
     marks = {item.name: sorted(mark.name for mark in item.iter_markers() if mark.name in MARKS) for item in items}
     assert marks == {
-        "test_direct": ["jvm"],
-        "test_indirect": ["jvm"],
+        "test_direct": ["java"],
+        "test_indirect": ["java"],
         "test_others": ["browser", "fuseki"],
         "test_plain": [],
     }
@@ -88,9 +88,9 @@ def test_marks_derived(inner: pytest.Pytester) -> None:
 @pytest.mark.parametrize(
     ("expression", "selected"),
     [
-        ("jvm", ["test_direct", "test_indirect"]),
-        ("not jvm", ["test_others", "test_plain"]),
-        ("not jvm and not fuseki", ["test_plain"]),
+        ("java", ["test_direct", "test_indirect"]),
+        ("not java", ["test_others", "test_plain"]),
+        ("not java and not fuseki", ["test_plain"]),
     ],
 )
 def test_select_by_derived_marks(inner: pytest.Pytester, expression: str, selected: list[str]) -> None:
@@ -112,7 +112,7 @@ def test_stray_mark_fails(inner: pytest.Pytester, options: list[str]) -> None:
         pytestmark = pytest.mark.fuseki
 
 
-        @pytest.mark.jvm
+        @pytest.mark.java
         def test_stray():
             pass
 
@@ -126,7 +126,7 @@ def test_stray_mark_fails(inner: pytest.Pytester, options: list[str]) -> None:
     result.stdout.fnmatch_lines(
         [
             "*ERROR at setup of test_stray*",
-            "marked `jvm` without the `java` fixture, `fuseki` without the `fuseki_url` fixture; use the fixture*",
+            "marked `java` without the `java` fixture, `fuseki` without the `fuseki_url` fixture; use the fixture*",
             "ERROR test_stray_mark_fails.py::test_stray*",
         ]
     )

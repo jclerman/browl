@@ -69,8 +69,8 @@ instructions specific to coding agents. Requirements and architecture are in [`D
   ordering or failures don't depend on timing. `make test` installs the headless Chromium (`make browser`); these tests
   are skipped or fail without it, like those above.
 - **Marks:** a test that uses the `java` (which `jvm` uses), `fuseki_url` or `browser` (which `page` uses) fixture,
-  directly or through another fixture, gets the `jvm`, `fuseki` or `browser` mark automatically via
-  `tests.conftest.pytest_collection_modifyitems`, for `-m` to select by (e.g. `-m "not jvm and not fuseki"`).
+  directly or through another fixture, gets the `java`, `fuseki` or `browser` mark automatically via
+  `tests.conftest.pytest_collection_modifyitems`, for `-m` to select by (e.g. `-m "not java and not fuseki"`).
   Don't write those marks by hand: a test with one but not its fixture fails.
 - **Parallel runs:** `make test` runs the tests in several processes (pytest-xdist), each in any order, so a test
   mustn't depend on another having run, or share state outside its process: use free ports (`port=0`), temporary
