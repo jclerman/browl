@@ -14,7 +14,8 @@
     list: document.getElementById(LIST),
     status: document.getElementById(STATUS),
   });
-  const options = (list) => [...list.querySelectorAll('[role="option"]')];
+  // The options the keys and the pointer reach: not "No matches".
+  const options = (list) => [...list.querySelectorAll('[role="option"]:not([aria-disabled="true"])')];
   const active = (box) => {
     const id = box.getAttribute("aria-activedescendant");
     return id ? document.getElementById(id) : null;
@@ -120,8 +121,12 @@
     } else {
       close(box, list);
     }
-    const hits = list.querySelectorAll('[role="option"]:not(.search-all)').length;
-    status.textContent = list.children.length ? `${hits} ${hits === 1 ? "suggestion" : "suggestions"}` : "";
+    const hits = options(list).filter((option) => !option.classList.contains("search-all")).length;
+    if (!list.children.length) {
+      status.textContent = "";
+    } else {
+      status.textContent = hits ? `${hits} ${hits === 1 ? "suggestion" : "suggestions"}` : "No matches";
+    }
   });
 
   // A click on an option shouldn't take the focus from the box first, which would close the list under it.
@@ -157,7 +162,7 @@
   document.addEventListener("mouseover", (event) => {
     const { box, list } = parts();
     const option = list && event.target.closest?.('[role="option"]');
-    if (option && list.contains(option)) {
+    if (option && options(list).includes(option)) {
       setActive(box, list, option);
     }
   });

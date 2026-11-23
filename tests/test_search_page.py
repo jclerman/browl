@@ -194,10 +194,12 @@ def test_suggestions_limited(client: TestClient) -> None:
 
 
 def test_no_matches(client: TestClient) -> None:
-    """Check that a query that matches nothing says so, and still offers the full results page."""
-    page = suggest(client, "zzz")
+    """Check that a query that matches nothing says so, in a disabled option, and still offers the full results page."""
+    response = client.get(SEARCH, params={"q": "zzz", "suggest": "1"})
+    page = Hits(response.text)
     assert page.hits == []
-    assert page.options == ["search-option-all"]
+    assert page.options == ["search-option-none", "search-option-all"]
+    assert 'id="search-option-none" class="search-none" aria-disabled="true"' in response.text
 
 
 @pytest.mark.parametrize("text", ["", "   "])

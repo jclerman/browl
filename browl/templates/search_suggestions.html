@@ -7,7 +7,7 @@
   <a class="hit" href="{{ hit.link.href }}" tabindex="-1">{{ hit_row(hit) }}</a>
 </li>
 {% else %}
-<li class="search-none" aria-disabled="true">No matches</li>
+<li role="option" id="search-option-none" class="search-none" aria-disabled="true" aria-selected="false">No matches</li>
 {% endfor %}
 <li role="option" id="search-option-all" class="search-all" aria-selected="false">
   <a href="{{ all_results }}" tabindex="-1">All results…</a>

@@ -2485,3 +2485,15 @@ def test_search_retyped_after_clearing(page: Page, searchable: LiveServer) -> No
     box.fill("myo")
     expect(options).to_have_count(3)
     expect(status).to_have_text("2 suggestions")
+
+
+def test_search_no_matches(page: Page, searchable: LiveServer) -> None:
+    """Check that "No matches" is announced, and that the keys skip it, as a disabled option."""
+    page.goto(f"{searchable.url}/_browl/search")
+    box = search_box(page)
+    box.fill("zzz")
+    expect(page.locator("#site-search-status")).to_have_text("No matches")
+    box.press("ArrowDown")
+    expect(box).to_have_attribute("aria-activedescendant", "search-option-all")
+    page.get_by_role("option", name="No matches").hover()
+    expect(box).to_have_attribute("aria-activedescendant", "search-option-all")
