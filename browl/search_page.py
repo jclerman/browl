@@ -8,6 +8,7 @@ import sqlite3
 import unicodedata
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
@@ -88,26 +89,33 @@ class SearchRequest:
     suggest: bool
 
 
+class Marked(NamedTuple):
+    """Text cut short (`cut_name`), split where its match of the query ends.
+
+    Attributes:
+        marked: The start that matches the query; empty if none is marked.
+        rest: The rest.
+    """
+
+    marked: str
+    rest: str
+
+
 @dataclass(frozen=True)
 class ShownHit:
     """A search hit as the autocomplete and the results page show it.
 
     Attributes:
         link: The entity's link, with its name.
-        marked: The start of the matched value that matches the query, cut short; None if the value isn't shown.
-        rest: The rest of the matched value, cut short; None if the value isn't shown.
-        name_marked: The start of the entity's name that matches the query, when the name is the matched value;
-            else empty.
-        name_rest: The rest of the entity's name.
+        term: The matched value; None if it's the name, which then shows the match.
+        name: The entity's name, with the match marked if it's the matched value.
         types: Its types' labels, joined.
         id_text: Its CURIE, else its IRI cut short, which the results page shows; None in the autocomplete.
     """
 
     link: EntityLink
-    marked: str | None
-    rest: str | None
-    name_marked: str
-    name_rest: str
+    term: Marked | None
+    name: Marked
     types: str
     id_text: str | None
 
@@ -177,12 +185,12 @@ def marked_length(value: str, query: str) -> int:
     return len(value)
 
 
-def _split(text: str, query: str) -> tuple[str, str]:
+def _split(text: str, query: str) -> Marked:
     """Return a text cut short (`cut_name`), split where its match of the query ends, before any "…" the cut added."""
     shown = cut_name(text)
     kept = len(shown) if shown == text else len(shown) - 1
     end = marked_length(text[:kept], query)  # only what's shown: the query may be far longer
-    return shown[:end], shown[end:]
+    return Marked(shown[:end], shown[end:])
 
 
 def _id_texts(connection: sqlite3.Connection, iris: Sequence[str]) -> dict[str, str]:
@@ -223,13 +231,11 @@ def shown_hits(
     for hit in hits:
         link = links[hit.iri]
         if cut_name(hit.value) == link.name:  # the name is the value that matched
-            marked = rest = None
-            name_marked, name_rest = _split(hit.value, query)
+            term, name = None, _split(hit.value, query)
         else:
-            marked, rest = _split(hit.value, query)
-            name_marked, name_rest = "", link.name
+            term, name = _split(hit.value, query), Marked("", link.name)
         types = ", ".join(TYPE_LABELS[kind] for kind in hit.types)
-        shown.append(ShownHit(link, marked, rest, name_marked, name_rest, types, ids.get(hit.iri)))
+        shown.append(ShownHit(link, term, name, types, ids.get(hit.iri)))
     return shown
 
 

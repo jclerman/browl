@@ -4,9 +4,9 @@
    Its types sit in a column of their own; the results page puts its CURIE, else IRI, muted, before them. #}
 {% macro hit_row(hit) -%}
 <span class="hit-text">
-  {%- if hit.marked is not none -%}
-  <bdi class="hit-term"><mark>{{ hit.marked }}</mark>{{ hit.rest }}</bdi> <span class="hit-arrow" aria-hidden="true">→</span><span class="visually-hidden">, for</span> {% endif -%}
-  <bdi class="hit-name">{% if hit.name_marked %}<mark>{{ hit.name_marked }}</mark>{% endif %}{{ hit.name_rest }}</bdi>
+  {%- if hit.term is not none -%}
+  <bdi class="hit-term"><mark>{{ hit.term.marked }}</mark>{{ hit.term.rest }}</bdi> <span class="hit-arrow" aria-hidden="true">→</span><span class="visually-hidden">, for</span> {% endif -%}
+  <bdi class="hit-name">{% if hit.name.marked %}<mark>{{ hit.name.marked }}</mark>{% endif %}{{ hit.name.rest }}</bdi>
 </span>
 {%- if hit.id_text is not none %}
 <code class="hit-id" dir="ltr">{{ hit.id_text | bidi_encoded }}</code>
