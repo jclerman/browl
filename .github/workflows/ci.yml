@@ -151,6 +151,18 @@ jobs:
 
       - name: Lint and test
         run: make ci
+        env:
+          # A Playwright trace of each browser test that fails, for `playwright show-trace`.
+          PYTEST_ADDOPTS: --tracing retain-on-failure
+
+      - name: Upload the failed browser tests' traces
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-traces-python-${{ matrix.python-version }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 14
 
   images:
     name: Build and start the Docker images

@@ -20,6 +20,8 @@ __pycache__/
 .coverage
 .coverage.*
 htmlcov/
+# Playwright traces of failed browser tests (--tracing)
+/test-results/
 
 # IDE settings
 # PyCharm and other JetBrains IDEs
