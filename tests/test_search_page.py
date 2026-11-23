@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from browl import search_page
 from browl.derived import EntityType
 from browl.search import MAX_OFFSET, MAX_QUERY_CHARS
 from browl.search_page import PAGE_SIZE, marked_length
@@ -272,17 +273,31 @@ def test_property_labelled_as_set() -> None:
 
 def test_paging(client: TestClient) -> None:
     """Check that the results page pages through the hits, keeping the query and filters in its links."""
-    first = results(client, [("q", "item"), ("type", "class")])
+    first = results(client, [("q", "item"), ("type", "class"), ("values", "direct")])
     assert len(first.hits) == PAGE_SIZE
     links = dict(first.links)
     assert "Previous" not in links
     params = urllib.parse.parse_qsl(urllib.parse.urlsplit(links["Next"]).query)
-    assert params == [("q", "item"), ("type", "class"), ("offset", str(PAGE_SIZE))]
+    assert params == [("q", "item"), ("type", "class"), ("values", "direct"), ("offset", str(PAGE_SIZE))]
     second = results(client, params)
     assert [hit[1] for hit in second.hits] == [f"item {n:03}" for n in range(PAGE_SIZE, MANY)]
     assert "Next" not in dict(second.links)
     previous = urllib.parse.parse_qsl(urllib.parse.urlsplit(dict(second.links)["Previous"]).query)
-    assert previous == [("q", "item"), ("type", "class")]
+    assert previous == [("q", "item"), ("type", "class"), ("values", "direct")]
+
+
+def test_previous_from_between_pages(client: TestClient) -> None:
+    """Check that Previous from an offset under a page goes to the first page, which has no offset."""
+    links = dict(results(client, [("q", "item"), ("offset", "10")]).links)
+    assert urllib.parse.parse_qsl(urllib.parse.urlsplit(links["Previous"]).query) == [("q", "item")]
+
+
+def test_paging_stops_at_max_offset(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that `MAX_OFFSET` is a valid offset, and that no Next link goes past it, though there are more results."""
+    monkeypatch.setattr(search_page, "MAX_OFFSET", PAGE_SIZE - 1)
+    assert "Next" not in dict(results(client, [("q", "item")]).links)
+    assert len(results(client, [("q", "item"), ("offset", str(PAGE_SIZE - 1))]).hits) == MANY - PAGE_SIZE + 1
+    assert client.get(SEARCH, params=[("q", "item"), ("offset", str(PAGE_SIZE))]).status_code == 404
 
 
 @pytest.mark.parametrize(
