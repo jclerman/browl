@@ -24,10 +24,10 @@ SUB_CLASS = "http://www.w3.org/2000/01/rdf-schema#subClassOf"
 SUB_PROPERTY = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf"
 EQUIVALENT = "http://www.w3.org/2002/07/owl#equivalentClass"
 THING = "http://www.w3.org/2002/07/owl#Thing"
-KIDS = 250
-"""How many children `Big` has: two and a half pages."""
-NOTES = 120
-"""How many annotation properties there are, all roots: more than a page."""
+KIDS = CHILD_PAGE * 5 // 2
+"""How many children `Big` has: two and a half pages, 1,250."""
+NOTES = CHILD_PAGE + 20
+"""How many annotation properties there are, all roots: more than a page, 520."""
 
 TREE = "/_browl/tree/classes"
 
@@ -39,7 +39,7 @@ def ex(name: str) -> str:
 
 def kid(number: int) -> str:
     """Return the name of one of `Big`'s children; they sort by number."""
-    return f"Kid {number:03}"
+    return f"Kid {number:04}"
 
 
 CLASSES = ["Top", "Left", "Right", "Bottom", "Deep", "Same", "Alias", "Alias2", "Alias3", "Sub", "Free", "Big"]
@@ -213,7 +213,7 @@ def test_roots(client: TestClient) -> None:
     assert found.shown() == [(0, "Free"), (0, "Top")]  # not owl:Thing, under which Top is
     free, top = found.items
     assert (free.id, free.href, free.expanded, free.toggle, free.counts) == ("t-0", "/Free", None, None, None)
-    assert (top.id, top.href, top.expanded, top.counts) == ("t-1", "/Top", "false", "3 children · 257 descendants")
+    assert (top.id, top.href, top.expanded, top.counts) == ("t-1", "/Top", "false", "3 children · 1,257 descendants")
     assert query(top.toggle or "") == opened("Top")
     assert top.toggle is not None and top.toggle.endswith("#t-1")  # back where it was
     assert query(top.load or "") == [("node", ex("Top")), ("at", "t-1")]  # no open nodes above it
@@ -223,7 +223,7 @@ def test_crawlers_kept_out(client: TestClient) -> None:
     """Check that toggles and paging links are `nofollow`, and a tree page with a query is marked noindex (S3)."""
     plain = client.get(TREE)
     assert "X-Robots-Tag" not in plain.headers
-    response = client.get(TREE, params=[*opened("Top", "Big"), ("children-of", ex("Big")), ("offset", "100")])
+    response = client.get(TREE, params=[*opened("Top", "Big"), ("children-of", ex("Big")), ("offset", "500")])
     assert response.headers["X-Robots-Tag"] == "noindex"
     links = re.findall(
         r'<a (?:class="tree-toggle"|role="treeitem") href="[^"]*/tree/classes[^"]*"[^>]*>', response.text
@@ -347,9 +347,9 @@ def test_fragment_opens_open_children(client: TestClient) -> None:
         [("offset", "2")],  # past the two roots
         [("offset", "1"), ("offset", "1")],
         [("children-of", ex("Big")), *opened("Top", "Big")],  # no `offset`: the plain URL's page
-        [("children-of", ex("Nope")), ("offset", "100")],
-        [("children-of", ex("Big")), ("offset", "250"), *opened("Top", "Big")],
-        [("node", ex("Big")), ("at", "t-1-0"), ("offset", "300")],
+        [("children-of", ex("Nope")), ("offset", "500")],
+        [("children-of", ex("Big")), ("offset", "1250"), *opened("Top", "Big")],
+        [("node", ex("Big")), ("at", "t-1-0"), ("offset", "1500")],
     ],
 )
 def test_not_found(client: TestClient, params: list[tuple[str, str]]) -> None:
@@ -392,55 +392,56 @@ def test_children_paged(client: TestClient) -> None:
     assert [item.text for item in kids[:-1]] == [kid(n) for n in range(CHILD_PAGE)]
     more = kids[-1]
     assert more.id is None
-    assert more.text == f"Show {CHILD_PAGE} more (101–200 of 250)"
-    assert query(more.href) == [*opened("Top", "Big"), ("children-of", ex("Big")), ("offset", "100")]
-    assert more.href.endswith("#t-1-0-100")
-    assert query(more.load or "") == [("node", ex("Big")), ("at", "t-1-0"), *opened("Top"), ("offset", "100")]
+    assert more.text == "Show the next 500 (501–1,000 of 1,250)"
+    assert query(more.href) == [*opened("Top", "Big"), ("children-of", ex("Big")), ("offset", "500")]
+    assert more.href.endswith("#t-1-0-500")
+    assert query(more.load or "") == [("node", ex("Big")), ("at", "t-1-0"), *opened("Top"), ("offset", "500")]
 
 
 def test_children_page_without_js(client: TestClient) -> None:
     """Check that `children-of=` and `offset=` show a later page of a node's children, with links either side."""
-    params = [*opened("Top", "Big"), ("children-of", ex("Big")), ("offset", "200")]
+    params = [*opened("Top", "Big"), ("children-of", ex("Big")), ("offset", "1000")]
     found = tree(client, params)
     kids = [item for item in found.items if item.depth == 2]
     previous, *shown = kids
-    assert previous.text == f"Show the previous {CHILD_PAGE}"
-    assert query(previous.href) == [*opened("Top", "Big"), ("children-of", ex("Big")), ("offset", "100")]
-    assert [item.text for item in shown] == [kid(n) for n in range(200, KIDS)]  # the last page: no "more"
-    assert shown[0].id == "t-1-0-200"
+    assert previous.text == "Show the previous 500 (501–1,000 of 1,250)"
+    assert query(previous.href) == [*opened("Top", "Big"), ("children-of", ex("Big")), ("offset", "500")]
+    assert [item.text for item in shown] == [kid(n) for n in range(1000, KIDS)]  # the last page: no "more"
+    assert shown[0].id == "t-1-0-1000"
     # A toggle keeps the page shown, so opening another node doesn't lose it.
     assert query(found.item("Left").toggle or "") == [*opened("Top", "Big", "Left"), *params[2:]]
 
 
 def test_children_page_first_previous(client: TestClient) -> None:
-    """Check that the link back to the first page has no offset."""
-    params = [*opened("Top", "Big"), ("children-of", ex("Big")), ("offset", "100")]
-    previous = next(item for item in tree(client, params).items if item.text.startswith("Show the previous"))
+    """Check that the link back to the first page has no offset, and says so, from an offset of less than a page."""
+    params = [*opened("Top", "Big"), ("children-of", ex("Big")), ("offset", "200")]
+    previous = next(item for item in tree(client, params).items if item.text.startswith("Show the "))
+    assert previous.text == "Show the first 200 (1–200)"
     assert query(previous.href) == opened("Top", "Big")
     assert previous.href.endswith("#t-1-0")
 
 
 def test_fragment_paged(client: TestClient) -> None:
     """Check that a fragment from an offset shows that page, with the link to the next if there is one."""
-    response = client.get(TREE, params=[("node", ex("Big")), ("at", "t-1-0"), ("offset", "200"), *opened("Big")])
+    response = client.get(TREE, params=[("node", ex("Big")), ("at", "t-1-0"), ("offset", "1000"), *opened("Big")])
     found = Tree(response.text)
-    assert [item.text for item in found.items] == [kid(n) for n in range(200, KIDS)]
-    assert found.items[0].id == "t-1-0-200"
+    assert [item.text for item in found.items] == [kid(n) for n in range(1000, KIDS)]
+    assert found.items[0].id == "t-1-0-1000"
 
 
 def test_fragment_second_page(client: TestClient) -> None:
     """Check that a fragment from an offset links to the page after it, in place and without JS."""
-    params = [("node", ex("Big")), ("at", "t-1-0"), *opened("Top"), ("offset", "100")]
+    params = [("node", ex("Big")), ("at", "t-1-0"), *opened("Top"), ("offset", "500")]
     found = Tree(client.get(TREE, params=params).text)
     more = found.items[-1]
-    assert more.text == "Show 50 more (201–250 of 250)"
-    assert query(more.load or "") == [("node", ex("Big")), ("at", "t-1-0"), *opened("Top"), ("offset", "200")]
-    assert query(more.href) == [*opened("Top", "Big"), ("children-of", ex("Big")), ("offset", "200")]
+    assert more.text == "Show the remaining 250 (1,001–1,250)"
+    assert query(more.load or "") == [("node", ex("Big")), ("at", "t-1-0"), *opened("Top"), ("offset", "1000")]
+    assert query(more.href) == [*opened("Top", "Big"), ("children-of", ex("Big")), ("offset", "1000")]
 
 
 def test_window_on_closed_node_ignored(client: TestClient) -> None:
     """Check that a window on a node that isn't shown open is ignored: the page shows its first page, if any."""
-    found = tree(client, [*opened("Top"), ("children-of", ex("Big")), ("offset", "100")])
+    found = tree(client, [*opened("Top"), ("children-of", ex("Big")), ("offset", "500")])
     assert found.shown() == [(0, "Free"), (0, "Top"), (1, "Big"), (1, "Left"), (1, "Right")]
     assert found.item("Big").expanded == "false"
 
@@ -451,13 +452,13 @@ def test_roots_paged(client: TestClient) -> None:
     first = tree(client, path=path).items
     assert len(first) == CHILD_PAGE + 1
     more = first[-1]
-    assert (more.text, more.load) == (f"Show {NOTES - CHILD_PAGE} more (101–120 of 120)", None)
-    assert query(more.href) == [("offset", "100")]
-    assert more.href.endswith("#t-100")
-    second = tree(client, [("offset", "100")], path).items
+    assert (more.text, more.load) == ("Show the remaining 20 (501–520)", None)
+    assert query(more.href) == [("offset", "500")]
+    assert more.href.endswith("#t-500")
+    second = tree(client, [("offset", "500")], path).items
     assert query(second[0].href) == []
-    assert [item.text for item in second[1:]] == [f"note {n:03}" for n in range(100, NOTES)]
-    assert client.get(path, params=[("offset", "120")]).status_code == 404
+    assert [item.text for item in second[1:]] == [f"note {n:03}" for n in range(500, NOTES)]
+    assert client.get(path, params=[("offset", "520")]).status_code == 404
 
 
 @pytest.mark.parametrize(("limit", "value"), [("MAX_SHOWN", 3), ("MAX_LINK_CHARS", 400)])
@@ -498,15 +499,15 @@ def test_read_children_order(client: TestClient) -> None:
             ("Alias", "/root/Alias"),
             ("Bottom", "/root/Bottom"),
         ]
-        page = read_children(connection, EntityType.CLASS, big, "_browl", "", offset=245, limit=3)
+        page = read_children(connection, EntityType.CLASS, big, "_browl", "", offset=1245, limit=3)
         assert ([node.link.name for node in page.nodes], page.offset, page.end, page.total) == (
-            [kid(245), kid(246), kid(247)],
-            245,
-            248,
+            [kid(1245), kid(1246), kid(1247)],
+            1245,
+            1248,
             KIDS,
         )
         roots = read_children(connection, EntityType.CLASS, None, "_browl", "")
         assert [(node.link.name, node.children, node.descendants) for node in roots.nodes] == [
             ("Free", 0, 0),
-            ("Top", 3, 257),
+            ("Top", 3, 1257),
         ]

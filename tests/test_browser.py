@@ -2134,15 +2134,15 @@ def test_tree_show_more_in_place(page: Page, trees: LiveServer) -> None:
     """Check that "Show more" adds the next page of children in place, the focus moving to its first."""
     page.goto(f"{trees.url}/_browl/tree/classes?{TOP_AND_BIG}")
     mark(page)
-    more = page.get_by_role("treeitem", name="Show 100 more")
+    more = page.get_by_role("treeitem", name="Show the next 500")
     with page.expect_request(TREE_FRAGMENT):
         more.click()
-    expect(tree_item(page, "Kid 100")).to_be_focused()
-    expect(tree_item(page, "Kid 100")).to_have_attribute("tabindex", "0")
-    expect(page.get_by_role("treeitem", name="Show 50 more")).to_be_visible()
+    expect(tree_item(page, "Kid 0500")).to_be_focused()
+    expect(tree_item(page, "Kid 0500")).to_have_attribute("tabindex", "0")
+    expect(page.get_by_role("treeitem", name="Show the remaining 250")).to_be_visible()
     expect(page.locator('[role="tree"] [tabindex="0"]')).to_have_count(1)
     page.keyboard.press("ArrowUp")
-    expect(tree_item(page, "Kid 099")).to_be_focused()
+    expect(tree_item(page, "Kid 0499")).to_be_focused()
     assert marked(page)
 
 
@@ -2151,14 +2151,14 @@ def test_tree_show_more_twice_in_place(page: Page, trees: LiveServer) -> None:
     page.goto(f"{trees.url}/_browl/tree/classes?{TOP_AND_BIG}")
     mark(page)
     requests = record_fragments(page)
-    page.get_by_role("treeitem", name="Show 100 more").click()
-    more = page.get_by_role("treeitem", name="Show 50 more")
+    page.get_by_role("treeitem", name="Show the next 500").click()
+    more = page.get_by_role("treeitem", name="Show the remaining 250")
     expect(more).to_be_visible()
     more.click()
-    expect(tree_item(page, "Kid 249")).to_be_visible()
-    expect(tree_item(page, "Kid 200")).to_be_focused()
+    expect(tree_item(page, "Kid 1249")).to_be_visible()
+    expect(tree_item(page, "Kid 1000")).to_be_focused()
     expect(page.locator(".tree-paging")).to_have_count(0)
-    assert [query_of(url)["offset"] for url in requests] == [["100"], ["200"]]
+    assert [query_of(url)["offset"] for url in requests] == [["500"], ["1000"]]
     assert marked(page)
 
 
@@ -2170,20 +2170,20 @@ def test_tree_show_more_failure_loads_page(page: Page, trees: LiveServer, failur
     else:
         page.route(TREE_FRAGMENT, lambda route: route.abort())
     page.goto(f"{trees.url}/_browl/tree/classes?{TOP_AND_BIG}")
-    page.get_by_role("treeitem", name="Show 100 more").click()
-    expect(page.get_by_role("treeitem", name="Show the previous 100")).to_be_visible()
-    assert query_of(page.url) == {"open": [f"{EX}/Top", f"{EX}/Big"], "children-of": [f"{EX}/Big"], "offset": ["100"]}
+    page.get_by_role("treeitem", name="Show the next 500").click()
+    expect(page.get_by_role("treeitem", name="Show the first 500")).to_be_visible()
+    assert query_of(page.url) == {"open": [f"{EX}/Top", f"{EX}/Big"], "children-of": [f"{EX}/Big"], "offset": ["500"]}
 
 
 @NO_JS
 def test_tree_show_more_without_javascript(page: Page, trees: LiveServer) -> None:
     """Check that, without JavaScript, "Show more" loads the page with the next page of children, and a link back."""
     page.goto(f"{trees.url}/_browl/tree/classes?{TOP_AND_BIG}")
-    page.get_by_role("treeitem", name="Show 100 more").click()
-    expect(tree_item(page, "Kid 100")).to_be_visible()
-    expect(tree_item(page, "Kid 099")).to_have_count(0)
-    page.get_by_role("treeitem", name="Show the previous 100").click()
-    expect(tree_item(page, "Kid 099")).to_be_visible()
+    page.get_by_role("treeitem", name="Show the next 500").click()
+    expect(tree_item(page, "Kid 0500")).to_be_visible()
+    expect(tree_item(page, "Kid 0499")).to_have_count(0)
+    page.get_by_role("treeitem", name="Show the first 500").click()
+    expect(tree_item(page, "Kid 0499")).to_be_visible()
 
 
 @pytest.mark.parametrize("failure", ["status", "network"])

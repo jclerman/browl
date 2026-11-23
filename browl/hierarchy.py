@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict
 from browl.derived import EntityType
 from browl.links import LOOKUP_BATCH, EntityLink, read_entity_links
 
-CHILD_PAGE = 100
+CHILD_PAGE = 500
 """The most children, or roots, read and shown at a time; "Show more" reads the next page."""
 
 MAX_GROUP_NAMES = 3

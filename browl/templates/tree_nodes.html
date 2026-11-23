@@ -39,13 +39,22 @@
 </li>
 {%- endmacro %}
 
+{# A paging link's label: what it shows, the nodes from `start` (counted from 0), `count` of them, and of how many,
+   unless they reach the end, `first` or `last`. #}
+{% macro paging_label(word, end_word, start, count, total, at_end) -%}
+Show the {{ end_word if at_end else word }} {{ "{:,}".format(count) }}
+  <small>({{ "{:,}".format(start + 1) }}–{{ "{:,}".format(start + count) }}
+  {%- if not at_end %} of {{ "{:,}".format(total) }}{% endif %})</small>
+{%- endmacro %}
+
 {# A page of nodes, with links to the pages before and after it, also tree items, so the keyboard reaches them. With
    htmx, the link to the next page adds it in place, unless it's the roots'. #}
 {% macro tree_items(list) -%}
 {%- set page = list.page -%}
 {%- if list.previous is not none %}
-<li role="none" class="tree-paging"><a role="treeitem" href="{{ list.previous }}" rel="nofollow">Show the previous
-  {{ "{:,}".format(page.previous_count) }}</a></li>
+{%- set start = page.offset - page.previous_count %}
+<li role="none" class="tree-paging"><a role="treeitem" href="{{ list.previous }}" rel="nofollow">
+  {{- paging_label("previous", "first", start, page.previous_count, page.total, start == 0) }}</a></li>
 {%- endif %}
 {%- for shown in list.nodes %}
 {{ tree_node(shown) }}
@@ -53,8 +62,7 @@
 {%- if list.more is not none %}
 <li role="none" class="tree-paging"><a role="treeitem" href="{{ list.more }}" rel="nofollow"
   {%- if list.more_load is not none %} hx-get="{{ list.more_load }}" hx-target="closest li" hx-swap="outerHTML"
-  hx-sync="this:drop"{% endif %}>Show {{ "{:,}".format(page.next_count) }} more
-  <small>({{ "{:,}".format(page.end + 1) }}–{{ "{:,}".format(page.end + page.next_count) }} of
-  {{ "{:,}".format(page.total) }})</small></a></li>
+  hx-sync="this:drop"{% endif %}>
+  {{- paging_label("next", "remaining", page.end, page.next_count, page.total, page.end + page.next_count == page.total) }}</a></li>
 {%- endif %}
 {%- endmacro %}

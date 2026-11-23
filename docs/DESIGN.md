@@ -1436,8 +1436,10 @@ too (P-38), and the JSON API's (P-33).
   name, and how many more: "Heart ≡ cor ≡ … (+3)". The link goes to the representative's page, which links to the
   others. A node with several parents shows under each, with its subtree.
 - **Order:** children and roots by display name, case-insensitively (ASCII), then IRI, so the order is total.
-- **Paging:** 100 children, or roots, at a time (`CHILD_PAGE`), as a node can have tens of thousands (NCBITaxon's
-  widest has 47,783: its first page reads in 80 ms, its last in 230 ms). A "Show 100 more" link follows the page.
+- **Paging:** 500 children, or roots, at a time (`CHILD_PAGE`), as a node can have tens of thousands (NCBITaxon's
+  widest has 47,783: its first page reads in 80 ms, its last in 230 ms). A link after the page says what it shows,
+  "Show the next 500 (501–1,000 of 4,210)", or "Show the remaining 150 (501–650)" once the rest fits in a page, and
+  one before a later page, "Show the previous 500 (501–1,000 of 4,210)", or "Show the first 500 (1–500)".
   With htmx it adds the next page in place; without, it loads the tree page showing that page of the node's
   children (`children-of=…&offset=…`), with a link back to the page before. Only one node's children are shown from
   an offset at a time. The roots' next page is always such a page, as the roots seldom pass 100.
