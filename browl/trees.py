@@ -149,7 +149,7 @@ def _read_query(request: Request) -> _Query | None:
     if offset is not None and not _OFFSET.fullmatch(offset):
         return None
     if node is None:
-        if at is not None:
+        if at is not None or (single[CHILDREN_OF_PARAM] is not None and offset is None):
             return None
     elif single[CHILDREN_OF_PARAM] is not None or at is None or len(at) > MAX_AT_CHARS or not _ELEMENT_ID.fullmatch(at):
         return None

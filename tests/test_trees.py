@@ -346,6 +346,7 @@ def test_fragment_opens_open_children(client: TestClient) -> None:
         [("offset", "-1")],
         [("offset", "2")],  # past the two roots
         [("offset", "1"), ("offset", "1")],
+        [("children-of", ex("Big")), *opened("Top", "Big")],  # no `offset`: the plain URL's page
         [("children-of", ex("Nope")), ("offset", "100")],
         [("children-of", ex("Big")), ("offset", "250"), *opened("Top", "Big")],
         [("node", ex("Big")), ("at", "t-1-0"), ("offset", "300")],
