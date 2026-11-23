@@ -163,7 +163,9 @@ async def test_imports(fuseki_url: str, ntriples: bytes, settings: Settings) -> 
 
 @pytest.mark.fuseki
 @pytest.mark.jvm
-async def test_anonymous_individuals(fuseki_url: str, settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_anonymous_individuals(
+    jvm: None, fuseki_url: str, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Check that usages in triples with a blank subject the owner map lacks are counted, not listed, as streamed.
 
     The tab's pages are of those listed: a page past them is a 404, not blank.
@@ -190,7 +192,7 @@ async def test_anonymous_individuals(fuseki_url: str, settings: Settings, monkey
 
 @pytest.mark.fuseki
 @pytest.mark.jvm
-async def test_several_values(fuseki_url: str, settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_several_values(jvm: None, fuseki_url: str, settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check a subject's several values of one property, IRIs, a literal and a blank node, through the table.
 
     Each is a usage by its place among the subject's values (`Usage.index`), so each page of one shows another axiom.
