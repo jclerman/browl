@@ -52,26 +52,33 @@ FIXTURE_MARKS = {"java": "jvm", "fuseki_url": "fuseki", "browser": "browser"}
 pytest_plugins = ["pytester"]
 
 
+STRAY_MARKS = pytest.StashKey[str]()
+"""Why a test fails: it has a mark of `FIXTURE_MARKS` without the fixture that gives it."""
+
+
 @pytest.hookimpl(tryfirst=True)  # before `-m` deselects by the marks
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Mark each test that uses a fixture of `FIXTURE_MARKS`, so the mark and the fixture can't disagree.
+    """Mark each test that uses a fixture of `FIXTURE_MARKS`; record why one with the mark but not the fixture fails.
 
-    Raises:
-        pytest.UsageError: If a test has such a mark without the fixture.
+    Such a test fails when it runs (`pytest_runtest_setup`), not at collection, so the run names it under xdist too.
     """
-    stray = []
     for item in items:
         fixtures = getattr(item, "fixturenames", ())
+        stray = []
         for fixture, mark in FIXTURE_MARKS.items():
             if fixture in fixtures:
                 item.add_marker(mark)
             elif item.get_closest_marker(mark):
-                stray.append(f"{item.nodeid} ({mark})")
-    if stray:
-        raise pytest.UsageError(
-            "These tests are marked without using the fixture that gives the mark; use the fixture instead:\n"
-            + "\n".join(stray)
-        )
+                stray.append(f"`{mark}` without the `{fixture}` fixture")
+        if stray:
+            item.stash[STRAY_MARKS] = f"marked {', '.join(stray)}; use the fixture, which gives the mark"
+
+
+@pytest.hookimpl(tryfirst=True)  # before its fixtures are set up
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Fail a test marked without the fixture that gives the mark."""
+    if reason := item.stash.get(STRAY_MARKS, None):
+        pytest.fail(reason, pytrace=False)
 
 
 @pytest.fixture

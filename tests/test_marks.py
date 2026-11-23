@@ -6,7 +6,7 @@ import pytest
 CONFTEST = """
 import pytest
 
-from tests.conftest import pytest_collection_modifyitems
+from tests.conftest import pytest_collection_modifyitems, pytest_runtest_setup
 
 
 @pytest.fixture
@@ -102,8 +102,9 @@ def test_select_by_derived_marks(inner: pytest.Pytester, expression: str, select
     assert len(run.getcalls("pytest_deselected")[0].items) == 4 - len(selected)
 
 
-def test_stray_mark_refused(inner: pytest.Pytester) -> None:
-    """Check that a mark written by hand on a test that doesn't use its fixture is an error naming the test."""
+@pytest.mark.parametrize("options", [[], ["--numprocesses", "2"]], ids=["serial", "xdist"])
+def test_stray_mark_fails(inner: pytest.Pytester, options: list[str]) -> None:
+    """Check that a test with a mark written by hand, without its fixture, fails with why, in xdist runs too."""
     inner.makepyfile(
         """
         import pytest
@@ -120,13 +121,12 @@ def test_stray_mark_refused(inner: pytest.Pytester) -> None:
             pass
         """
     )
-    result = inner.runpytest()
-    assert result.ret == pytest.ExitCode.USAGE_ERROR
-    result.stderr.fnmatch_lines(
+    result = inner.runpytest(*options)
+    result.assert_outcomes(passed=1, errors=1)
+    result.stdout.fnmatch_lines(
         [
-            "ERROR: These tests are marked without using the fixture *",
-            "test_stray_mark_refused.py::test_stray (jvm)",
-            "test_stray_mark_refused.py::test_stray (fuseki)",
+            "*ERROR at setup of test_stray*",
+            "marked `jvm` without the `java` fixture, `fuseki` without the `fuseki_url` fixture; use the fixture*",
+            "ERROR test_stray_mark_fails.py::test_stray*",
         ]
     )
-    result.stderr.no_fnmatch_line("*test_kept*")

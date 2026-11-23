@@ -71,7 +71,7 @@ instructions specific to coding agents. Requirements and architecture are in [`D
 - **Marks:** a test that uses the `java` (which `jvm` uses), `fuseki_url` or `browser` (which `page` uses) fixture,
   directly or through another fixture, gets the `jvm`, `fuseki` or `browser` mark automatically via
   `tests.conftest.pytest_collection_modifyitems`, for `-m` to select by (e.g. `-m "not jvm and not fuseki"`).
-  Don't write those marks by hand: collection fails on one without its fixture.
+  Don't write those marks by hand: a test with one but not its fixture fails.
 - **Parallel runs:** `make test` runs the tests in several processes (pytest-xdist), each in any order, so a test
   mustn't depend on another having run, or share state outside its process: use free ports (`port=0`), temporary
   directories and unique dataset names. Session fixtures run once per process.
