@@ -405,7 +405,7 @@ def test_app_loads_and_restarts(
     ],
 )
 def test_app_loads_each_syntax(
-    jvm: None,
+    java: None,
     settings: Settings,
     fuseki_url: str,
     fuseki_base: Path,

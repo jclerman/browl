@@ -1,4 +1,4 @@
-"""Tests for the marks `tests/conftest.py` gives the tests that use the `jvm`, `fuseki_url` or `browser` fixture."""
+"""Tests for the marks `tests/conftest.py` gives the tests that use the `java`, `fuseki_url` or `browser` fixture."""
 
 import pytest
 
@@ -10,7 +10,12 @@ from tests.conftest import pytest_collection_modifyitems
 
 
 @pytest.fixture
-def jvm():
+def java():
+    pass
+
+
+@pytest.fixture
+def jvm(java):
     pass
 
 
@@ -33,7 +38,7 @@ TESTS = """
 import pytest
 
 
-def test_direct(jvm):
+def test_direct(java):
     pass
 
 

@@ -549,8 +549,7 @@ async def test_stage_no_upload(settings: Settings) -> None:
     assert context.catalog is None
 
 
-@pytest.mark.usefixtures("jvm")
-async def test_ofn_import_converted(site: StaticServer, settings: Settings, data_dir: Path) -> None:
+async def test_ofn_import_converted(java: None, site: StaticServer, settings: Settings, data_dir: Path) -> None:
     """Check that an import in OWL Functional Syntax is converted to Turtle, for the loader, and its imports listed."""
     nested = site.page("/n.ttl", turtle(site.url + "/n.ttl"))
     ofn = site.page("/o.ofn", f"Ontology(<{site.url}/o.ofn>\nImport(<{nested}>)\nDeclaration(Class(<{EX}A>))\n)\n")
@@ -563,10 +562,9 @@ async def test_ofn_import_converted(site: StaticServer, settings: Settings, data
     assert f"<{EX}A>" in converted.read_text()
 
 
-@pytest.mark.usefixtures("jvm")
 @pytest.mark.parametrize("reasoner", [Reasoner.ELK, Reasoner.NONE])
 async def test_ofn_upload_resolves_no_import(
-    site: StaticServer, settings: Settings, data_dir: Path, tmp_path: Path, reasoner: Reasoner
+    java: None, site: StaticServer, settings: Settings, data_dir: Path, tmp_path: Path, reasoner: Reasoner
 ) -> None:
     """Check that neither the OFN conversion nor ROBOT, given the catalog, fetches an import or reads a local one.
 
@@ -594,8 +592,9 @@ SUBCLASS = "http://www.w3.org/2000/01/rdf-schema#subClassOf"
 OWL = "http://www.w3.org/2002/07/owl#"
 
 
-@pytest.mark.usefixtures("jvm")
-async def test_robot_reasons_with_fetched_import(site: StaticServer, settings: Settings, data_dir: Path) -> None:
+async def test_robot_reasons_with_fetched_import(
+    java: None, site: StaticServer, settings: Settings, data_dir: Path
+) -> None:
     """Check that ROBOT reasons with an import's content, from the fetched file, fetching nothing itself.
 
     The import defines `A ≡ p some D`, the upload says `C ⊑ p some D`: only with the import is `C ⊑ A` inferred.
@@ -615,10 +614,9 @@ async def test_robot_reasons_with_fetched_import(site: StaticServer, settings: S
     assert site.requested == ["/a.ttl"]
 
 
-@pytest.mark.usefixtures("jvm")
 @pytest.mark.parametrize("suffix", [".ttl", ".rdf"])
 async def test_rdf_upload_resolves_no_import(
-    site: StaticServer, settings: Settings, data_dir: Path, tmp_path: Path, suffix: str
+    java: None, site: StaticServer, settings: Settings, data_dir: Path, tmp_path: Path, suffix: str
 ) -> None:
     """Check that ROBOT, reasoning over an RDF upload, reads neither a relative import nor a `file:` one.
 
@@ -645,8 +643,7 @@ async def test_rdf_upload_resolves_no_import(
     assert site.requested == []
 
 
-@pytest.mark.usefixtures("jvm")
-async def test_unreadable_ofn_import(site: StaticServer, settings: Settings, data_dir: Path) -> None:
+async def test_unreadable_ofn_import(java: None, site: StaticServer, settings: Settings, data_dir: Path) -> None:
     """Check that an OFN import the OWLAPI can't read is dropped, mapped to an empty ontology, and reasoning goes on."""
     bad = site.page("/bad.ofn", f"Ontology(<{site.url}/bad.ofn>\nSubClassOf(\n", "text/owl-functional")
     context = JobContext(1, settings, Reasoner.ELK, store_upload(data_dir, turtle(f"{EX}o", bad)))

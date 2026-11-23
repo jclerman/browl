@@ -11,7 +11,7 @@ from browl.fuseki import FusekiClient, SparqlError
 from browl.rdf import IRI, RDF_DIR_LANG_STRING, RDF_LANG_STRING, XSD, BlankNode, Literal
 from tests.helpers import StaticServer
 
-pytestmark = [pytest.mark.usefixtures("jvm"), pytest.mark.anyio]
+pytestmark = pytest.mark.anyio
 
 FAMILY = "http://example.org/family#"
 PREFIXES = f"""PREFIX : <{FAMILY}>
@@ -61,7 +61,7 @@ async def test_select_stream(sparql: FusekiClient, family_dataset: str) -> None:
     assert len(streamed) > 30
 
 
-async def test_fragment(sparql: FusekiClient, family_dataset: str) -> None:
+async def test_fragment(jvm: None, sparql: FusekiClient, family_dataset: str) -> None:
     """Check that an entity's DESCRIBE fragment, with its blank-node closure, parses as its logical axioms."""
     ntriples = await sparql.construct(family_dataset, f"DESCRIBE <{FAMILY}Parent>")
 
@@ -74,7 +74,7 @@ async def test_fragment(sparql: FusekiClient, family_dataset: str) -> None:
     assert f"ObjectSomeValuesFrom(<{FAMILY}hasChild> <{FAMILY}Person>)" in axiom
 
 
-async def test_fragment_with_base_direction(sparql: FusekiClient, family_dataset: str) -> None:
+async def test_fragment_with_base_direction(jvm: None, sparql: FusekiClient, family_dataset: str) -> None:
     """Check that a fragment with an RDF 1.2 base direction parses: the OWLAPI reads the direction as part of a tag."""
     ntriples = await sparql.construct(family_dataset, f"DESCRIBE <{FAMILY}Person>")
     assert '"شخص"@ar--rtl'.encode() in ntriples
@@ -86,7 +86,7 @@ async def test_fragment_with_base_direction(sparql: FusekiClient, family_dataset
     assert f'AnnotationAssertion(rdfs:label <{FAMILY}Person> "شخص"@ar--rtl)' in await owlapi.run_java(axioms)
 
 
-async def test_fragment_with_imports(sparql: FusekiClient, family_dataset: str, site: StaticServer) -> None:
+async def test_fragment_with_imports(jvm: None, sparql: FusekiClient, family_dataset: str, site: StaticServer) -> None:
     """Check that the ontology's own fragment parses, keeping its import, without fetching it.
 
     The import's IRI is pointed at a local HTTP server, which records any request.

@@ -55,12 +55,13 @@ instructions specific to coding agents. Requirements and architecture are in [`D
 - pytest, in `tests/`. Use plain `assert`s and fixtures, not `unittest`-style classes.
 - Test data, such as small ontologies, goes in `tests/data/`. Keep it small; large-scale checks belong to the spikes and
   P-24, not the test suite.
-- Tests that need a JVM and `robot.jar` use the `jvm` fixture, which starts the JVM. Tests that need Fuseki use the
-  `fuseki_url` fixture: a Fuseki at `BROWL_TEST_FUSEKI_URL`, or one the tests start from `docker/fuseki` with Docker
-  (built by the tests, unless `BROWL_TEST_FUSEKI_IMAGE` names an image already built, as CI does). `make test` downloads
-  the pinned `robot.jar` once (`make robot-jar`), and on macOS the tests find Java 21 when `JAVA_HOME` is unset.
-  Locally, these tests are skipped when their needs are missing; in CI they fail instead, so CI runs every test.
-- Request a fixture as a parameter (`jvm: None`), even one used only for its side effect, so it's a reference that
+- Tests that need Java and `robot.jar` use the `java` fixture, e.g. to run ROBOT or the OFN conversion in a child
+  process; tests that call the OWLAPI in the test process use `jvm`, which also starts the JVM. Tests that need Fuseki
+  use the `fuseki_url` fixture: a Fuseki at `BROWL_TEST_FUSEKI_URL`, or one the tests start from `docker/fuseki` with
+  Docker (built by the tests, unless `BROWL_TEST_FUSEKI_IMAGE` names an image already built, as CI does). `make test`
+  downloads the pinned `robot.jar` once (`make robot-jar`), and on macOS the tests find Java 21 when `JAVA_HOME` is
+  unset. Locally, these tests are skipped when their needs are missing; in CI they fail instead, so CI runs every test.
+- Request a fixture as a parameter (`java: None`), even one used only for its side effect, so it's a reference that
   rename and navigation follow. Use `pytest.mark.usefixtures("…")` only for a whole module (`pytestmark`).
 - Test what only a browser shows (scripts such as `static/hash.js`, htmx, `<noscript>` fallbacks) with Playwright
   (pytest-playwright): have such tests use the `page` fixture and the `live_server` fixture, which serves an app on a
