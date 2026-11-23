@@ -170,8 +170,10 @@ comments:
   - table: search_value
     tableComment: >-
       The search index (browl.search.SqliteSearch): each name value that isn't empty once normalized, keyed in the
-      order search ranks values. The rows that share the key's first four columns (type, property_rank, language_rank,
-      entailed) form a lane, ordered within by length, normalized value, then value. A query seeks its matches in one
+      order search ranks values, with a word row for each later word start (browl.search.word_starts), keyed by the
+      normalized value from that word on, so a query matches the start of any word. The rows that share the key's
+      first five columns (type, property_rank, language_rank, entailed, word) form a lane, ordered within by length,
+      normalized value, then value. A query seeks its matches in one
       lane and of one length at a time, shortest first, so it never sorts them. The key holds at most
       browl.search.KEY_CHARS characters of each value, so a query seeks at most that many lengths per lane however long
       the values are. Ranks are positions in NAME_PROPERTIES and LANGUAGE_RANKING as built, which the search hook's
@@ -183,23 +185,32 @@ comments:
         The language's rank among the values' languages by LANGUAGE_RANKING (browl.names.language_rank), from 0;
         languages that rank alike, such as unlisted ones, share one.
       entailed: 0 if the entity has the value under the name property itself, 1 if through a sub-property.
-      length: The normalized value's length in characters, counted in Python, up to KEY_CHARS.
+      word: >-
+        0 for the whole value's row, 1 for a word row, keyed from a later word start; a query reads word lanes after
+        every whole-value lane, so matches from a value's start rank first.
+      length: The key's length in characters (the normalized value's, from the word on for a word row), counted in
+        Python, up to KEY_CHARS.
       normalized: >-
-        The value normalized for search (browl.names.normalize), its first KEY_CHARS characters.
+        The key: the value normalized for search (browl.names.normalize), from the word on for a word row, its first
+        KEY_CHARS characters.
       value: The value's lexical form, its first KEY_CHARS characters.
       entity: The entity (entity.id).
-      normalized_rest: The normalized value's characters after the first KEY_CHARS; NULL if there are none.
+      normalized_rest: The key's characters after the first KEY_CHARS; NULL if there are none.
       value_rest: The value's characters after the first KEY_CHARS; NULL if there are none.
       language: The value's language tag, lowercased; NULL if it has none.
+      word_start: >-
+        Where the key starts in the normalized value: 0 for the whole value's row, else the word's offset, so a hit
+        can mark the word in the value it shows.
   - table: search_lane
     tableComment: >-
-      The lanes of search_value: each (type, property_rank, language_rank, entailed) group that has values, with its
+      The lanes of search_value: each (type, property_rank, language_rank, entailed, word) group that has rows, with its
       longest value's length. A query seeks only lanes that exist, and no lengths past a lane's longest.
     columnComments:
       type: The entities' type (entity.type).
       property_rank: The name property's position in NAME_PROPERTIES, from 0.
       language_rank: The languages' rank (search_value.language_rank).
       entailed: 0 for direct values, 1 for values entailed through a sub-property.
+      word: 0 for whole values' rows, 1 for word rows (search_value.word).
       max_length: The lane's longest search_value.length, so at most KEY_CHARS.
       property: The name property's IRI.
   - table: edge

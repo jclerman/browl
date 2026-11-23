@@ -271,7 +271,7 @@ class _Lane:
     property: str
 
     def tier(self) -> tuple[bool, int, int, bool]:
-        """Return its rank among lanes (§2.6: whole values before words, then rules 2-4); a tier's lanes tie."""
+        """Return its rank among lanes (§2.6, rules 2-5); a tier's lanes tie."""
         return self.word, self.property_rank, self.language_rank, self.entailed
 
 

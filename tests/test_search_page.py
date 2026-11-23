@@ -13,7 +13,7 @@ from browl import search_page
 from browl.derived import EntityType, NotCurrentError
 from browl.pages import MAX_NAME_CHARS
 from browl.search import MAX_OFFSET, MAX_QUERY_CHARS
-from browl.search_page import PAGE_SIZE, marked_length
+from browl.search_page import PAGE_SIZE, marked_length, value_offset
 from tests.helpers import derived_stage, make_app
 from tests.test_trees import loaded
 
@@ -198,6 +198,20 @@ def test_suggestion_marks_match(client: TestClient) -> None:
     """Check that the query's match is marked, in the value shown, whatever its case."""
     page = suggest(client, "myo")
     assert page.marks == ["Myo", "myo"]
+
+
+def test_suggestion_marks_word(client: TestClient) -> None:
+    """Check that a match from a later word marks that word, in the whole value shown (U-19)."""
+    page = suggest(client, "MUS")
+    assert page.hits == [Hit(None, "heart muscle", "Class", "/heart")]
+    assert page.marks == ["mus"]
+
+
+def test_suggestion_word_after_whole(client: TestClient) -> None:
+    """Check that matches from a value's start come before matches from a later word."""
+    page = suggest(client, "p")
+    assert [hit.name for hit in page.hits] == ["punned", "has part"]
+    assert page.marks == ["p", "p"]
 
 
 def test_long_value_cut_short(client: TestClient) -> None:
@@ -479,3 +493,19 @@ def test_under_root_path(app: FastAPI) -> None:
 def test_marked_length(value: str, query: str, length: int) -> None:
     """Check how much of a value is marked as matching a normalized query."""
     assert marked_length(value, query) == length
+
+
+@pytest.mark.parametrize(
+    ("value", "offset", "start"),
+    [
+        ("T-cell", 2, 2),
+        ("  T-cell", 2, 4),  # normalizing drops leading whitespace
+        ("Ångström unit", 9, 9),
+        ("A\u030angstro\u0308m unit", 9, 11),  # combining accents, which normalizing drops
+        ("Straße unit", 7, 6),  # ß folds to ss
+        ("x", 0, 0),
+    ],
+)
+def test_value_offset(value: str, offset: int, start: int) -> None:
+    """Check where an offset in the normalized value falls in the value."""
+    assert value_offset(value, offset) == start

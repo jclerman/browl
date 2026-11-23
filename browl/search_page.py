@@ -1,5 +1,6 @@
 """The search route, `search`: the autocomplete fragment and the full results page (U-10, U-17; DESIGN.md §2.9)."""
 
+import bisect
 import sqlite3
 import unicodedata
 from collections.abc import Collection, Mapping, Sequence
@@ -86,13 +87,15 @@ class SearchRequest:
 
 
 class Marked(NamedTuple):
-    """Text cut short (`cut_name`), split where its match of the query ends.
+    """Text cut short (`cut_name`), split around its match of the query.
 
     Attributes:
-        marked: The start that matches the query; empty if none is marked.
+        before: What comes before the match: empty unless the match is a later word's (`SearchHit.word_start`).
+        marked: The match; empty if none is marked.
         rest: The rest.
     """
 
+    before: str
     marked: str
     rest: str
 
@@ -185,12 +188,32 @@ def marked_length(value: str, query: str) -> int:
     return len(value)
 
 
-def _split(text: str, query: str) -> Marked:
-    """Return a text cut short (`cut_name`), split where its match of the query ends, before any "…" the cut added."""
+def value_offset(value: str, offset: int) -> int:
+    """Return where in a value an offset in its normalized value (`browl.names.normalize`) falls, such as a word start.
+
+    It's the shortest start of the value that normalizes to at least that many characters, as characters and
+    normalized ones don't line up one to one (accents, case folding, leading whitespace).
+
+    Examples:
+        >>> value_offset("Ångström-unit", 9)
+        9
+        >>> value_offset("A\u030angstro\u0308m-unit", 9)
+        11
+    """
+    return bisect.bisect_left(range(len(value) + 1), offset, key=lambda end: len(normalize(value[:end])))
+
+
+def _split(text: str, query: str, word_start: int) -> Marked:
+    """Return a text cut short (`cut_name`), split around its match of the query.
+
+    The match starts at an offset in the normalized text (`SearchHit.word_start`). Only what's shown, before any "…"
+    the cut added, is marked.
+    """
     shown = cut_name(text)
     kept = len(shown) if shown == text else len(shown) - 1
-    end = marked_length(text[:kept], query)  # only what's shown: the query may be far longer
-    return Marked(shown[:end], shown[end:])
+    start = min(value_offset(text[:kept], word_start), kept)
+    end = start + marked_length(text[start:kept], query)  # only what's shown: the query may be far longer
+    return Marked(shown[:start], shown[start:end], shown[end:])
 
 
 def _id_texts(connection: sqlite3.Connection, iris: Sequence[str]) -> dict[str, str]:
@@ -231,9 +254,9 @@ def shown_hits(
     for hit in hits:
         link = links[hit.iri]
         if cut_name(hit.value) == link.name:  # the name is the value that matched
-            term, name = None, _split(hit.value, query)
+            term, name = None, _split(hit.value, query, hit.word_start)
         else:
-            term, name = _split(hit.value, query), Marked("", link.name)
+            term, name = _split(hit.value, query, hit.word_start), Marked("", "", link.name)
         types = ", ".join(TYPE_LABELS[kind] for kind in hit.types)
         shown.append(ShownHit(link, term, name, types, ids.get(hit.iri)))
     return shown

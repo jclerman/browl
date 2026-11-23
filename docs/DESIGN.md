@@ -67,7 +67,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **U-44** · A one-page view of an entity page, labeled "Scroll as one page": all of its content in one page scroll, with no panel scrolling on its own. Used for printing and on small screens (phones, short windows), and on demand with a toggle. | v1 |
 | **U-45** · An entity page shows where the entity sits in its hierarchy, in a hideable column beside the Overview's panels: its ancestors as one merged tree, each drawn once, with its direct children below it. | v1 |
 | **U-46** · In the hierarchy trees and the hierarchy column, deprecated entities (`owl:deprecated true`) are struck through, with a text equivalent for screen readers. | v1 |
-| **U-19** · Autocomplete also matches from the start of any word, ranked after matches from the start of the whole value. _(Q8; proposed for v1, was Later; P-41)_ | v1 |
+| **U-19** · Autocomplete also matches from the start of any word, ranked after matches from the start of the whole value. _(Q8; was Later; P-41)_ | v1 |
 | **U-47** · Search can cover every annotation property with literal values in the served ontology, not only the name properties. The full results page lists the properties the ontology has, with their value counts, to filter by. _(P-42)_ | v1 |
 | **U-48** · A visitor's search filters can be kept in their browser, when they ask, and the navigation bar's search box then uses them, showing that it's filtered and offering to clear the filters. _(P-43)_ | v1 |
 | **U-49** · A visitor can choose the order in which properties rank search results, in place of the name properties' order. _(P-42 makes it possible)_ | Later |
@@ -826,26 +826,38 @@ more minutes of loading ([S-4 findings](../research/S-4/README.md)).
 A `SearchBackend` interface with methods for indexing during pre-caching and for queries. Only its module knows the
 engine. _(Q11, N-5)_
 
-**v1 implementation** (`browl.search.SqliteSearch`, P-19): a table in the derived database, `search_value`, filled
+**v1 implementation** (`browl.search.SqliteSearch`, P-19, P-41): a table in the derived database, `search_value`, filled
 by the search pre-caching hook from `name_value` (`browl.precache.search`). The design's first plan, a range scan
 (`normalized >= q AND normalized < q + '\U0010FFFF'`) over an index on `name_value.normalized`, then ranking and grouping
 the matches in SQL, took about 1 s on NCBITaxon for a one-letter query: "a" matches 252 K of its 3.0 M values, and
 ranking shorter values first means sorting them all, as no index is in that order. N-2's target is 100 ms. _(Q8)_
 
-- **The table's key is the ranking's order:** (type, property rank, language rank, direct or entailed, length,
-  normalized value, value, entity). Each (type, property rank, language rank, entailed) group is a _lane_, listed with
-  its longest value in `search_lane`. Ranks are positions in `NAME_PROPERTIES` and `LANGUAGE_RANKING` as built, which
+- **The table's key is the ranking's order:** (type, property rank, language rank, direct or entailed, word, length,
+  normalized value, value, entity). Each (type, property rank, language rank, entailed, word) group is a _lane_, listed
+  with its longest value in `search_lane`. Ranks are positions in `NAME_PROPERTIES` and `LANGUAGE_RANKING` as built, which
   the hook's build key covers; languages that rank alike (e.g. unlisted ones) share a rank, so of an entity's value in
   two such languages one row is kept. A value that normalizes to nothing (only whitespace or combining marks) isn't
   indexed, as no query matches it. Lengths and cuts are computed in Python, as SQLite's `length()` stops at a NUL.
+- **Any word** (U-19, P-41). Besides its row for the whole value, each value gets a _word row_ for each later word
+  start: its key is the normalized value from that word on, and it stores the word's offset in the normalized value
+  (`word_start`), so a hit can mark the word in the whole value, which it shows. A word starts where a non-alphanumeric
+  character is followed by an alphanumeric one, in the normalized value (`browl.search.word_starts`); alphanumeric is
+  Unicode's letters and numbers (`str.isalnum`), so accented and non-Latin letters count, and accents, removed by
+  normalizing, never split a word. So "cell" finds "T-cell" and "dimethyl" finds "1,3-dimethylbutane", but a change
+  between letters and digits isn't a word start: "2" doesn't find "H2O". Word rows are lanes of their own, walked after
+  every whole-value lane (rule 2, below); within them the later rules apply, with the key's length (from the word on).
+  The keys are cut in one Python pass into a temporary table that the sorted insert reads: calling Python from SQL for
+  each row took 10 s longer on NCBITaxon. A regular expression (`(?<=[\W_])[^\W_]`) finds the same starts only 0.4 s
+  faster there, so the loop, which reads as the rule, is kept.
 - **The key holds at most 256 characters** (`KEY_CHARS`) of the normalized value and of the value, with the rest
   beside it. Otherwise a query that matches fewer IRIs than it wants, as most specific ones do, would seek every lane at
   every length up to its longest value: one class with a 100,000-character label made every such query take 1.7 s
   (P-19's review). Capped, a query seeks each lane at most 256 times, and huge values don't bloat the key. Values
   longer than 256 characters share the last length, and rank among themselves by their first 256; a query longer than
   that is matched against their whole normalized value in Python.
-- **A query** takes the exact matches first, then walks the lanes allowed by its filters in rank order and, within
-  each, the lengths upward from the query's: one index seek per lane and length, the lanes of one rank merged by value.
+- **A query** takes the exact matches first, then walks the lanes allowed by its filters in rank order, the word lanes
+  last, and, within each, the lengths upward from the query's (from the query's own, for a word lane, as a word row
+  whose key is the query isn't an exact match): one index seek per lane and length, the lanes of one rank merged by value.
   It stops once it has enough IRIs, so it never sorts the matches. Each row's IRI comes from `entity`, so results are
   grouped per IRI as they're read. Filters choose lanes: entity type, name property, and whether entailed values count.
   A type filter is part of the key, not a residual filter: as one, annotation properties' matches of "a" took 1.8 s
@@ -857,45 +869,47 @@ ranking shorter values first means sorting them all, as no index is in that orde
 - **Measured** on NCBITaxon ([P-19 findings](../research/P-19/README.md)): every query measured took 0.1–0.9 ms
   median, 9 ms at most, whether it matches 252 K values, one, or none. A query that matches few seeks every lane at
   every length up to its longest, at most `KEY_CHARS`, about 5 µs a seek: 50 lanes of 150 lengths is about 40 ms, and
-  the worst, 50 lanes of 256, about 65 ms.
-- **Why at pre-caching:** the table adds 12 s to NCBITaxon's pre-caching of about 3¼ minutes, under 1 s on smaller
-  ontologies. Building it in the background once the generation is ready, as the usage table is (2.5), would save those
-  seconds but need its own file and that build's machinery, and the range scan as a slower path meanwhile.
+  the worst, 50 lanes of 256, about 65 ms. Word rows ([P-41 findings](../research/P-41/README.md)) double the lanes,
+  and so that worst case: on NCBITaxon, a query with no match takes 1.4 ms rather than 0.65 ms, and the rest are as
+  fast as before, about 1 ms at most.
+- **Word rows cost** on NCBITaxon: 7.46 M of them beside 3.03 M whole values, about 2.5 a value, so `search_value`
+  grows from 247 MiB to 828 MiB and its build from 12 s to 46 s, more than the 2–3× guessed, as the build grows with
+  the rows. SQLite's FTS5 builds an index of the same values in 8.8 s and 166 MiB, but returns matches unranked, so a
+  query sorts every match, as the range scan did: 1.0 s for "a", 2.1 s for "s". Asking it only for word matches, when
+  the whole values don't fill the page, doesn't save it: no value starts with "sp.", but 1.39 M have a later word
+  that starts with "sp", and sorting them takes 1.7 s. A dedicated engine (Elasticsearch, Typesense) would rank by
+  relevance, not by these rules, or index each word's suffix as word rows do, which isn't smaller or faster to build.
+- **Why at pre-caching:** the table adds 46 s to NCBITaxon's pre-caching of about 3¾ minutes, a few seconds on
+  smaller ontologies. Running pre-caching's hooks in parallel could hide most of it, as the search hook needs only the
+  names hook and works without Fuseki while the hierarchies and usage hooks wait on it; SQLite's one writer means it
+  would build its table in a file of its own, attached once done. Building it in the background once the generation
+  is ready, as the usage table is (2.5), would save those seconds but need its own file and that build's machinery,
+  and the range scan as a slower path meanwhile.
 
 **Ranking** _(Q9, Q10)_, in order:
 
 1. Exact match before prefix match.
-2. Position of the property in the configured name list.
-3. Position of the language in the language ranking. Untagged values come last by default (O-5).
-4. A direct value before one entailed through a sub-property, as for display names (2.7). _(P-19)_
-5. Shorter value, by the normalized value's length.
-6. Alphabetical: by normalized value, so case and accents don't split the order, then by value (code point).
+2. A match from the start of the whole value before one from the start of a later word. _(U-19, P-41)_
+3. Position of the property in the configured name list.
+4. Position of the language in the language ranking. Untagged values come last by default (O-5).
+5. A direct value before one entailed through a sub-property, as for display names (2.7). _(P-19)_
+6. Shorter value, by the normalized value's length, from the word on for a word match.
+7. Alphabetical: by normalized value, so case and accents don't split the order, then by value (code point).
 
 IRIs with the same best value keep an order that's arbitrary, but the same for every query.
 
 Results are grouped per IRI: an IRI appears once, with its best-matching value shown, and a punned IRI is one result
-listing its types, as it has one page. A query matches the start of the whole value; leading whitespace is ignored, in
+listing its types, as it has one page. A query matches the start of the whole value or of a later word; leading
+whitespace is ignored, in
 the query and in values, and a blank query finds nothing. A query also takes a limit and an offset, for paging, and
 says whether more results follow.
 
 **Normalization:** Unicode NFKD, accents removed, case folded, leading whitespace removed. The same function is used
 at index and query time.
 
-**Proposed: wider search** (U-19, U-47–U-49, A-11, O-13; P-41–P-44). Not yet built; the rest of this section
-describes search as built (P-19, P-20).
+**Proposed: wider search** (U-47–U-49, A-11, O-13; P-42–P-44). Not yet built; the rest of this section
+describes search as built (P-19, P-20, P-41).
 
-- **Any word** (U-19, P-41). Besides its row for the whole value, each value gets a row for each later word start: its
-  key is the normalized value from that word on, flagged as a word match, and it stores the word's offset in the value,
-  so a hit can mark the word, and the whole value, which it shows. It's always on. A word starts where a
-  non-alphanumeric character is followed by an alphanumeric one, in the normalized value; alphanumeric is Unicode's
-  letters and numbers (`str.isalnum`), so accented and non-Latin letters count, and accents, removed by normalizing,
-  never split a word. So "cell" finds "T-cell" and "dimethyl" finds "1,3-dimethylbutane", but a change between letters
-  and digits isn't a word start: "2" doesn't find "H2O". Word rows are lanes of their own, walked after every
-  whole-value lane: all matches from the start of a whole value rank first (a new rule between 1 and 2), and within
-  word matches the usual rules apply, with length the key's (from the word on). Nothing else in a query changes.
-  - **Cost**, to measure first on NCBITaxon: the table grows by about the mean number of words per value, perhaps
-    2–3× its 247 MiB, and its build by a similar factor of its 12 s. The worst-case query, which seeks every lane at
-    every length, doubles at most, as the lanes do.
 - **Every annotation property** (U-47, P-42). A second bulk query reads every literal value of each annotation
   property on the ontology's entities into the index, with the property it's asserted with. Name values stay in
   `name_value`, for display names.
@@ -903,7 +917,7 @@ describes search as built (P-19, P-20).
     query, in Python: the name properties in their order first, then the others, by display name. So reordering the
     name properties needs no new index (only new display names, A-11), and a query may give its own order (U-49).
   - **Entailment moves to the query.** "Direct and entailed" for a chosen property means its lanes, then the lanes of
-    its sub-properties, found in the annotation-property hierarchy (`edge`), so rule 4 holds. An entailed value is
+    its sub-properties, found in the annotation-property hierarchy (`edge`), so rule 5 holds. An entailed value is
     then stored once, as itself, not once per name property above it.
   - **Lanes multiply**, and a query that matches few seeks each at every length: 50 lanes of 256 lengths is about
     65 ms (above). An ontology with 100 annotation properties in 3 languages and 2 types could have 600. So P-42 first
@@ -1595,10 +1609,11 @@ too (P-38), and the JSON API's (P-33).
   each URL has one response, for the page cache (2.10).
 - **A hit** shows the value that matched in italics, then "→" and the entity's display name, in the accent color and
   bold, if that's a different string; else the name alone, still styled as a name, so the reader can tell which they're
-  looking at. The query's match is marked (`<mark>`) in whichever is shown: the shortest start of the value that
-  normalizes to the query (§2.6). Its types are in a column on the right; a punned IRI lists each. The results page
-  shows hits the same way, with each one's CURIE, else IRI, muted, between its name and its types, on one line where
-  the screen is wide enough, rather than in a tooltip, which the keyboard and touch screens can't reach.
+  looking at. The query's match is marked (`<mark>`) in whichever is shown: the shortest part of the value that
+  normalizes to the query, from its start, or for a word match from the word's (§2.6). Its types are in a column on
+  the right; a punned IRI lists each. The results page shows hits the same way, with each one's CURIE, else IRI,
+  muted, between its name and its types, on one line where the screen is wide enough, rather than in a tooltip, which
+  the keyboard and touch screens can't reach.
 - **The results page** has the box, and filters (U-10): entity types and name properties as checkboxes, none checked
   meaning all, and a choice of all values or direct ones only. Name properties are labelled by display name, else as
   `NAME_PROPERTIES` names them. It shows 50 hits a page, with Previous and Next links, as deep as search's
@@ -1803,7 +1818,6 @@ flowchart LR
         P40["P-40 Shorter tree URLs"]
     end
     subgraph P5["Phase 5: Search, caching, auth"]
-        P41["P-41 Any-word search"]
         P42["P-42 All annotation properties"]
         P43["P-43 Sticky search filters"]
         P44["P-44 Admin search settings"]
@@ -1897,7 +1911,7 @@ go into this document.
 | --- | --- | --- | --- | --- | --- |
 | P-19 | `SearchBackend` interface and SQLite implementation; ranking | U-10, U-11, U-12, N-5 | P-11 | Done | [#26](https://github.com/jclerman/browl/issues/26) |
 | P-20 | Autocomplete UI (accessible combobox) with type and property filters | U-10, U-17 | P-19, P-14 | Done | [#32](https://github.com/jclerman/browl/issues/32) |
-| P-41 | Any-word matching: a row per later word start in `search_value`, in lanes walked after the whole-value ones, with the word's offset for marking; measure size and build time on NCBITaxon first (2.6, Proposed) | U-19 | P-19, P-20 | To do | [#131](https://github.com/jclerman/browl/issues/131) |
+| P-41 | Any-word matching: a row per later word start in `search_value`, in lanes walked after the whole-value ones, with the word's offset for marking; measure size and build time on NCBITaxon first (2.6) | U-19 | P-19, P-20 | Done | [#131](https://github.com/jclerman/browl/issues/131) |
 | P-42 | Every annotation property searchable: a bulk query of their literal values; lanes keyed by property, walked in an order chosen per query; entailment through the annotation-property hierarchy at query time; the results page lists the ontology's properties with counts; measure lane counts and worst-case queries first (2.6, Proposed) | U-47 | P-19, P-20 | To do | [#132](https://github.com/jclerman/browl/issues/132) |
 | P-43 | Sticky search filters: kept in the browser on request, used by the navigation bar's box, with a "Filtered" indicator that clears them; the results page's bar carries its filters (2.6, Proposed) | U-48 | P-20 | To do | [#133](https://github.com/jclerman/browl/issues/133) |
 | P-44 | Admin search settings: name properties and their order, language ranking and properties left out, stored per ontology IRI over the environment's defaults; a settings page from the ontology's properties and languages; applied by pre-caching into a new file beside the served one (2.6, Proposed) | A-11, O-13 | P-22, P-42 | To do | [#134](https://github.com/jclerman/browl/issues/134) |
