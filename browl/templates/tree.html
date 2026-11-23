@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% from "tree_nodes.html" import tree_items %}
+{% block title %}{{ name }}{% endblock %}
+{% block content %}
+{# A hierarchy's tree page (`browl.trees`, DESIGN.md §2.13). #}
+<div class="tree-page">
+  <h1 id="tree-name">{{ name }}</h1>
+  {% if tree.page.total %}
+  <ul class="tree" role="tree" aria-labelledby="tree-name">
+    {{- tree_items(tree) }}
+  </ul>
+  {% else %}
+  <p class="note">None.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -473,6 +473,67 @@
       "def": "CREATE TABLE counts (\n    hierarchy TEXT NOT NULL,\n    node INTEGER NOT NULL,\n    children INTEGER NOT NULL,\n    descendants INTEGER NOT NULL,\n    PRIMARY KEY (hierarchy, node)\n) WITHOUT ROWID"
     },
     {
+      "name": "root",
+      "type": "table",
+      "comment": "Each hierarchy's roots, the nodes (as in counts) with no parent in edge, which the tree pages start from (DESIGN.md 2.13), stored in key order.",
+      "columns": [
+        {
+          "name": "hierarchy",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "Which hierarchy, as in edge.hierarchy."
+        },
+        {
+          "name": "node",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "The root (entity.id)."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "sqlite_autoindex_root_1",
+          "def": "PRIMARY KEY (hierarchy, node)",
+          "table": "root",
+          "columns": [
+            "hierarchy",
+            "node"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "hierarchy",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (hierarchy)",
+          "table": "root",
+          "columns": [
+            "hierarchy"
+          ]
+        },
+        {
+          "name": "node",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (node)",
+          "table": "root",
+          "columns": [
+            "node"
+          ]
+        },
+        {
+          "name": "sqlite_autoindex_root_1",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (hierarchy, node)",
+          "table": "root",
+          "columns": [
+            "hierarchy",
+            "node"
+          ]
+        }
+      ],
+      "def": "CREATE TABLE root (\n    hierarchy TEXT NOT NULL,\n    node INTEGER NOT NULL,\n    PRIMARY KEY (hierarchy, node)\n) WITHOUT ROWID"
+    },
+    {
       "name": "usage_root",
       "type": "table",
       "comment": "The blank-node owner map's roots (P-27, DESIGN.md 2.5, browl.precache.owner_map): the axioms that reach entities through blank nodes (class expressions, lists, annotations on reified axioms), by the top-level triple, reified axiom or unlinked blank node each hangs from. Only roots that are some entity's usage (usage_ref) are kept.",
@@ -803,6 +864,20 @@
       ],
       "parent_cardinality": "exactly_one",
       "def": "counts.node references entity.id",
+      "virtual": true
+    },
+    {
+      "table": "root",
+      "columns": [
+        "node"
+      ],
+      "cardinality": "zero_or_more",
+      "parent_table": "entity",
+      "parent_columns": [
+        "id"
+      ],
+      "parent_cardinality": "exactly_one",
+      "def": "root.node references entity.id",
       "virtual": true
     },
     {

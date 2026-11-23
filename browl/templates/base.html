@@ -10,7 +10,9 @@
   <title>{% block title %}{% endblock %}{% block title_suffix %} · {{ frame.title_end }}{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', path='browl.css').path }}">
   <script src="{{ url_for('static', path='htmx.min.js').path }}" defer></script>
+  <script src="{{ url_for('static', path='links.js').path }}" defer></script>
   <script src="{{ url_for('static', path='tabs.js').path }}" defer></script>
+  <script src="{{ url_for('static', path='tree.js').path }}" defer></script>
   {% if hash_script is defined and hash_script %}
   <script src="{{ url_for('static', path='hash.js').path }}" data-lookup="{{ hash_script.lookup }}"
           data-path="{{ hash_script.path }}" data-prefix-only="{{ hash_script.prefix_only }}" defer></script>
@@ -30,10 +32,11 @@
       <div class="site-search"></div>
       {# A menu on narrow screens; on wide ones the stylesheet shows its links in the bar, and hides its button. #}
       <details class="site-menu">
-        <summary>Browse</summary>
+        {# On narrow screens the button names the tree page shown, as its link is hidden in the closed menu. #}
+        <summary>Browse{% if frame.current_tree %}<span class="current-tree">: {{ frame.current_tree }}</span>{% endif %}</summary>
         <ul>
-          {% for link, label in frame.trees %}
-          <li><a href="{{ link }}">{{ label }}</a></li>
+          {% for link, label, current in frame.trees %}
+          <li><a href="{{ link }}"{% if current %} aria-current="page"{% endif %}>{{ label }}</a></li>
           {% endfor %}
           {% if frame.is_admin %}
           <li class="admin-link"><a href="{{ frame.admin }}">Admin</a></li>

@@ -67,6 +67,13 @@ relations:
     def: counts.node references entity.id
     cardinality: zero_or_more
     parentCardinality: exactly_one
+  - table: root
+    columns: [node]
+    parentTable: entity
+    parentColumns: [id]
+    def: root.node references entity.id
+    cardinality: zero_or_more
+    parentCardinality: exactly_one
   - table: usage_root
     columns: [owner]
     parentTable: entity
@@ -179,6 +186,13 @@ comments:
       node: The node (entity.id).
       children: How many immediate children it has.
       descendants: How many distinct descendants it has, each counted once however many paths lead to it.
+  - table: root
+    tableComment: >-
+      Each hierarchy's roots, the nodes (as in counts) with no parent in edge, which the tree pages start from
+      (DESIGN.md 2.13), stored in key order.
+    columnComments:
+      hierarchy: Which hierarchy, as in edge.hierarchy.
+      node: The root (entity.id).
   - table: usage_root
     tableComment: >-
       The blank-node owner map's roots (P-27, DESIGN.md 2.5, browl.precache.owner_map): the axioms that reach entities

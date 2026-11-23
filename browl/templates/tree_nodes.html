@@ -1,0 +1,64 @@
+{# Hierarchy trees' nodes (`browl.trees.ShownList`), as WAI-ARIA tree items, for the tree pages and the hierarchy
+   column (DESIGN.md §2.9 "Tree pages"). #}
+
+{% macro counts(node) -%}
+{{ "{:,}".format(node.children) }} {{ "child" if node.children == 1 else "children" }} ·
+{{ "{:,}".format(node.descendants) }} {{ "descendant" if node.descendants == 1 else "descendants" }}
+{%- endmacro %}
+
+{# A node's name, and an equivalence group's other members' (U-9). The link is to the representative's page, which
+   links to the others. #}
+{% macro node_label(node) -%}
+<bdi>{{ node.link.name }}</bdi>
+{%- for other in node.equivalents %} ≡ <bdi>{{ other.name }}</bdi>{% endfor %}
+{%- if node.more_equivalents %} ≡ … <small>(+{{ "{:,}".format(node.more_equivalents) }})</small>{% endif %}
+{%- endmacro %}
+
+{% macro tree_node(shown) -%}
+{%- set node = shown.node -%}
+{%- set is_open = shown.children is not none -%}
+<li role="none">
+  {%- if shown.toggle is not none -%}
+  <a class="tree-toggle" href="{{ shown.toggle }}" rel="nofollow" hx-get="{{ shown.load }}" hx-target="next ul" hx-swap="innerHTML"
+     hx-sync="this:drop"><span class="visually-hidden">{{ "Close" if is_open else "Open" }}
+     <bdi>{{ node.link.name }}</bdi></span></a>
+  {%- else %}<span class="tree-leaf"></span>{% endif -%}
+  <a role="treeitem" id="{{ shown.id }}" href="{{ node.link.href }}"
+     {%- if node.children %} aria-expanded="{{ 'true' if is_open else 'false' }}" aria-owns="{{ shown.id }}-g"
+     aria-describedby="{{ shown.id }}-n"{% endif %}>{{ node_label(node) }}</a>
+  {%- if node.children %}
+  <span class="tree-counts" id="{{ shown.id }}-n">{{ counts(node) }}</span>
+  <ul role="group" id="{{ shown.id }}-g"{% if is_open %} data-loaded{% else %} hidden{% endif %}>
+    {%- if is_open %}{{ tree_items(shown.children) }}{% endif -%}
+  </ul>
+  {%- endif -%}
+</li>
+{%- endmacro %}
+
+{# A paging link's label: what it shows, the nodes from `start` (counted from 0), `count` of them, and of how many,
+   unless they reach the end, `first` or `last`. #}
+{% macro paging_label(word, end_word, start, count, total, at_end) -%}
+Show the {{ end_word if at_end else word }} {{ "{:,}".format(count) }}
+  <small>({{ "{:,}".format(start + 1) }}–{{ "{:,}".format(start + count) }}
+  {%- if not at_end %} of {{ "{:,}".format(total) }}{% endif %})</small>
+{%- endmacro %}
+
+{# A page of nodes, with links to the pages before and after it, also tree items, so the keyboard reaches them. With
+   htmx, the link to the next page adds it in place. #}
+{% macro tree_items(list) -%}
+{%- set page = list.page -%}
+{%- if list.previous is not none %}
+{%- set start = page.offset - page.previous_count %}
+<li role="none" class="tree-paging"><a role="treeitem" href="{{ list.previous }}" rel="nofollow">
+  {{- paging_label("previous", "first", start, page.previous_count, page.total, start == 0) }}</a></li>
+{%- endif %}
+{%- for shown in list.nodes %}
+{{ tree_node(shown) }}
+{%- endfor %}
+{%- if list.more is not none %}
+<li role="none" class="tree-paging"><a role="treeitem" href="{{ list.more }}" rel="nofollow"
+  {%- if list.more_load is not none %} hx-get="{{ list.more_load }}" hx-target="closest li" hx-swap="outerHTML"
+  hx-sync="this:drop"{% endif %}>
+  {{- paging_label("next", "remaining", page.end, page.next_count, page.total, page.end + page.next_count == page.total) }}</a></li>
+{%- endif %}
+{%- endmacro %}

@@ -585,6 +585,7 @@ are documented in [`SCHEMA.md`](SCHEMA.md):
 | `edge` | Parent → child per hierarchy (classes; each property type), between equivalence-group representatives | The edges query (subclass, sub-property and equivalent-class triples): 20–21 s on NCBITaxon, 3.02 M rows. The whole hook, which also groups, counts and inserts `equiv_group` and `counts`, takes about 42 s and 0.9 GB, and `edge`, `counts` and their index 164 MiB; on Uberon and HPO, 0.5 s ([P-12 findings](../research/P-12/README.md)) |
 | `equiv_group` | Entity → group representative, for groups of more than one | Union-find over `owl:equivalentClass` between named classes, and over cycles of edges (below) |
 | `counts` | Per node: immediate children, distinct descendants | `edge`, in Python (below) |
+| `root` | Each hierarchy's roots, which the tree pages start from (P-18) | `edge`, in Python: found on demand, they'd take a scan of `counts` and a lookup in `edge` per node, 1–2 s on NCBITaxon |
 | `usage_root`, `usage_ref`, `usage_blank` | The blank-node owner map (P-27): each blank-node root that's a usage, with its kind, owner, predicate and store label; the entities each is a usage of; per entity, its triples with a blank subject | One bulk query over the blank nodes, found by their types and predicates (`owner-map.rq`, `browl.precache.owner_map`): 5–7 s on Uberon and HPO; on NCBITaxon 26 s, 2.69 M rows ([S-7 findings](../research/S-7/README.md)). The whole hook takes 9 s on Uberon, and 34–49 s on NCBITaxon, where it grows the process by 0.33 GB; NCBITaxon's tables are 78 MiB (P-27a) |
 | `hash_prefix` | Distinct URL paths that have hash entities under them | `entity` |
 | `prefix` | CURIE prefix → namespace | The built-in ones, overridden by the ontology file's own, overridden by `EXTRA_PREFIXES` ([2.7](#27-display-names)) |
@@ -760,11 +761,11 @@ by value. Fuseki can (`?s ?p <entity>`), so P-27 keeps two things instead ([S-7 
 triples with an IRI on both sides (asserted, or inferred if a reasoner ran), from one bulk query with the
 `owl:equivalentClass` triples, over the imports too. An edge counts only between two entities declared with the
 hierarchy's type, so a punned IRI is in each of its types' hierarchies, and a sub-property edge between an object and a
-data property is dropped. Roots are nodes with no named parent. `owl:Thing`, `owl:Nothing` and the top and bottom
-properties are in no hierarchy, even if declared, so the children of `owl:Thing` are roots. Without a reasoner, only
-asserted edges count: a class whose only named parent is inside a logical definition, as in `A ≡ B and (r some C)`, is
-a root, though a reasoner would put it under B. Unreasoned OBO editors' files often look like this; choosing a
-reasoner at upload (A-3) avoids it.
+data property is dropped. Roots are nodes with no named parent, stored in `root`. `owl:Thing`, `owl:Nothing` and the top
+and bottom properties are in no hierarchy, even if declared, so the children of `owl:Thing` are roots. Without a
+reasoner, only asserted edges count: a class whose only named parent is inside a logical definition, as in
+`A ≡ B and (r some C)`, is a root, though a reasoner would put it under B. Unreasoned OBO editors' files often look like
+this; choosing a reasoner at upload (A-3) avoids it.
 
 - **Nodes:** classes linked by `owl:equivalentClass` form one group (a weakly connected component of the equivalences),
   shown as one node (U-9); so do the members of a cycle of edges, which OWL makes equivalent, with a warning that names
@@ -1344,6 +1345,8 @@ Every page has the same frame (U-27, U-28, U-29):
   which P-22 sets. Sign-in itself is a small link at the bar's end, to the admin upload page, whose sign-in P-22 adds.
   Pages have no footer: an entity page, filling the window, has no room for one.
 - On narrow screens, the tree links collapse into a menu: a `<details>` element, so it opens without JS.
+- On a tree page, that tree's link is marked (`aria-current="page"`, bold and underlined), and the narrow screens'
+  menu button names it ("Browse: Classes"), so the page is clear when scrolled.
 - The ontology name is its title, else its IRI, capped in length; it's read once per generation (`PageFrame`). The bar
   has no in-page (`#…`) links, such as a skip link, since on a path hash entities share the hash-IRI script would look
   up their fragments as entities.
@@ -1425,6 +1428,52 @@ CSS nesting gets the one-page view, without the toggle. _(P-16d)_
   - **Nodes** are the tree pages': counts, links, expansion through `?node=`, and keyboard use. Equivalence groups are
     one node (U-9). A property's column uses its own property hierarchy. An entity in no hierarchy gets no column.
   - **Data:** walking up `edge` in SQLite via `edge_child`, with no Fuseki query.
+
+**Tree pages** (U-7–U-9, U-17, P-18): `tree/{hierarchy}` (2.13), one per hierarchy, as nested lists that may use the
+full width. The node component and the reads under it (`browl.hierarchy`, SQLite alone) are the hierarchy column's
+too (P-38), and the JSON API's (P-33).
+
+- **A node** is its name, linking to its page, then its counts, "12 children · 87 descendants", in muted text; a leaf
+  has none. An equivalence group is one node (U-9), named after its representative, then up to two other members, by
+  name, and how many more: "Heart ≡ cor ≡ … (+3)". The link goes to the representative's page, which links to the
+  others. A node with several parents shows under each, with its subtree.
+- **Order:** children and roots by display name, case-insensitively (ASCII), then IRI, so the order is total.
+- **Paging:** 500 children, or roots, at a time (`CHILD_PAGE`), as a node can have tens of thousands. Each read sorts
+  all of a node's children (NCBITaxon's widest, 47,783: 80 ms for its first page, 230 ms for its last), inside N-3; if
+  that changes, the known upgrade is a sort rank among its siblings for each child, stored at pre-caching, so a page
+  reads a range of ranks. The link after a page says what it shows, "Show the next 500 (501–1,000 of 4,210)", or
+  "Show the remaining 150 (501–650)"; the one before a later page, "Show the previous 500 (501–1,000 of 4,210)", or
+  "Show the first 500 (1–500)". With htmx it adds the next page in place (the roots' too); without, it loads the
+  tree page showing that page (`children-of=…&offset=…`, or `offset=` alone for the roots), with a link back. Only
+  one node's children are shown from an offset at a time.
+- **Open nodes in the URL:** without JS, a node's toggle (▸, ▾) is a link to the tree page with that node opened or
+  closed too, so a URL keeps its tree through reloads and new loads. `open=` names the nodes shown open, each once,
+  by its representative's IRI, in tree order: an IRI no node has, or a node under a closed one, drops out, and
+  closing a node drops those shown open only inside it. A node opens wherever it appears, under each parent. The
+  link ends in the node's element id, so the page scrolls back to it. As the combinations are endless, toggles and
+  paging links are `rel="nofollow"`, and a tree page with a query is marked `noindex`.
+- **Limits**, so one request stays cheap: a URL's first 100 open nodes (`MAX_OPEN`); about 5,000 nodes shown
+  (`MAX_SHOWN`), as a node under several open parents opens under each; links naming open nodes in about 2 M
+  characters in all (`MAX_LINK_CHARS`), as each toggle names them all; and reads sorting about 100,000 children in
+  all (`MAX_CHILDREN_READ`). Past these, the open nodes left are shown closed, and the toggle of a node that can't
+  open opens only it and the nodes above it, so it fits. A page renders in the thread pool: one of 5,000 nodes takes
+  about 100 ms.
+- **Errors:** an unknown node, a repeated parameter, `children-of` without `offset`, or an offset past the last
+  (checked before anything is read) is a 404, so each page has one URL.
+- **With htmx** the toggle fetches the node's children once (`?node=…&at=…`), and `static/tree.js` then opens and
+  closes it in place. The fragment's URL names only the open nodes above it, enough for its links to work without
+  JS. Opening in place doesn't change the URL, but the toggle's link follows the node's state. A fragment that
+  can't be fetched loads the toggle's page instead, and a click with a modifier key is left to the browser.
+- **Element ids** follow each node's place: the roots `t-0`, `t-1`, …, a node's children its id and their index
+  (`t-1-0`). A fragment's request names its node's id, or for the roots their prefix (`at=`), so its ids are unique
+  on the page; P-38's column can use another prefix. `at=` is at most 256 characters (`MAX_AT_CHARS`), as each child
+  repeats it; a deeper node's fragment is a 404, so its toggle loads the page.
+- **Keyboard** (U-17): the WAI-ARIA tree pattern, with roving `tabindex`; a node's link is the `treeitem`, its
+  children's list its `group` (by `aria-owns`), and its counts its description. Departures from it: the toggles are
+  the mouse's alone (`tabindex="-1"`, `aria-hidden`; a click on one leaves the focus on its item), and the "previous"
+  and "Show more" links are tree items, so the keys reach them; after "Show more" the focus goes to the first node
+  added. Enter follows an item's link. Left to P-25: type-ahead, `*`, and the pattern
+  without JS, where the roles are there but the arrow keys aren't, and Tab reaches each toggle and link.
 
 **Visual design** (U-29):
 
@@ -1529,7 +1578,7 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | Path | Purpose |
 | --- | --- |
 | `search` | Autocomplete endpoint (htmx fragment) and a full results page |
-| `tree/{hierarchy}` | Tree root page, `hierarchy` one of `classes`, `object-properties`, `data-properties` and `annotation-properties` (the navigation bar links them); `?node=` returns one node's children (htmx fragment) |
+| `tree/{hierarchy}` | Tree page, `hierarchy` one of `classes`, `object-properties`, `data-properties` and `annotation-properties` (the navigation bar links them). `open=` (repeated), `children-of=`, `offset=`; a fragment: `node=`, `at=` (marked `noindex`). See [2.9](#29-page-layout), Tree pages (P-18) |
 | `iri?iri=…` | Fallback entity URLs (Q1b) |
 | `hash?path=…&fragment=…` | The page for a hash URL's path and fragment, for the hash-IRI script ([2.3](#23-iri--url-mapping), Lookup); marked `noindex`, as its pages are at their hash URLs |
 | `usage-count?iri=…` | An entity's Usage tab label with its count, "Usage (128)", which its page fetches once it renders ([2.8](#28-entity-pages)); marked `noindex`; a 404 for an IRI with no entity (P-27b) |
@@ -1613,8 +1662,8 @@ dependencies change.
 flowchart LR
     subgraph P4["Phase 4: Browsing"]
         P17["P-17 Home page"]
-        P18["P-18 Hierarchy trees"]
         P38["P-38 Hierarchy column"]
+        P40["P-40 Shorter tree URLs"]
     end
     subgraph P5["Phase 5: Search, caching, auth"]
         P19["P-19 Search backend"]
@@ -1635,9 +1684,8 @@ flowchart LR
     S5b["S-5b OLS4 comparison"]
 
     P19 --> P20
-    P18 --> P38
-    P17 & P18 & P19 & P38 --> P33
-    P18 & P20 & P38 --> P25
+    P17 & P19 & P38 --> P33
+    P20 & P38 --> P25
     P22 --> P23
     P22 & P31 --> P36
     P31 --> P32
@@ -1698,8 +1746,9 @@ go into this document.
 | P-15b | Axioms as a typed tree of Pydantic nodes, rendered to Manchester syntax in Python; tokens for templates, so no regex runs over ontology text (2.8) | U-3 | P-15 | Done | [#98](https://github.com/jclerman/browl/issues/98) |
 | P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout; panel data built apart from its HTML (2.8); entity pages fill the window, the panels at fixed positions and scrolling within themselves, with a one-page view for printing, small screens and on demand (2.9) | U-3, U-9, U-30, U-31, U-32, U-44 | P-12, P-15b | Done | [#37](https://github.com/jclerman/browl/issues/37) (sub-issues [#29](https://github.com/jclerman/browl/issues/29), [#38](https://github.com/jclerman/browl/issues/38), [#39](https://github.com/jclerman/browl/issues/39), [#103](https://github.com/jclerman/browl/issues/103)) |
 | P-17 | Ontology home page, with the dropped-imports warning and the triple counts the job state keeps (P-8); link the ontology and version IRIs only if `http` or `https` (`browl.derived.Meta`) | U-1 | P-14 | To do | [#30](https://github.com/jclerman/browl/issues/30) |
-| P-18 | Hierarchy trees with lazy loading (htmx) and keyboard support | U-7, U-17 | P-12, P-14 | To do | [#31](https://github.com/jclerman/browl/issues/31) |
+| P-18 | Hierarchy trees with lazy loading (htmx) and keyboard support | U-7, U-17 | P-12, P-14 | Done | [#31](https://github.com/jclerman/browl/issues/31) |
 | P-38 | Hierarchy column on entity pages: the entity's ancestors as one merged tree, each drawn once, and its direct children, from P-18's nodes (2.9) | U-45 | P-16, P-18 | To do | [#120](https://github.com/jclerman/browl/issues/120) |
+| P-40 | Tree URLs name open nodes by CURIE, else IRI, about 4× shorter; an index on `entity.curie` (2.9, 2.13) | U-17 | P-18 | To do | [#125](https://github.com/jclerman/browl/issues/125) |
 | P-27 | Usage tab on entity pages: the blank-node owner map, streaming up to 20 K usages per request, and the usage table built in the background after a load (2.5, 2.8) | U-26 | P-9, P-16, S-4, S-7 | Done | [#41](https://github.com/jclerman/browl/issues/41) (sub-issues [#108](https://github.com/jclerman/browl/issues/108), [#109](https://github.com/jclerman/browl/issues/109), [#110](https://github.com/jclerman/browl/issues/110)) |
 
 ### Phase 5: Search, caching, auth

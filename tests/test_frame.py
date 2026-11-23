@@ -195,7 +195,7 @@ def test_no_ontology_iri(app: FastAPI) -> None:
         run(client, app, ontology=None, title=None)
         page = frame(client)
         assert page.nav == [*TREE_LINKS, SIGN_IN]
-        labels = " ".join(label for _, label in TREES).split()
+        labels = " ".join(tree.label for tree in TREES).split()
         assert page.nav_text.split() == ["browl", "Browse", *labels, "Sign", "in"]
 
 
