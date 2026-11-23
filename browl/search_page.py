@@ -165,6 +165,11 @@ def read_request(request: Request, properties: Collection[str]) -> SearchRequest
     return SearchRequest(text, types, chosen, values == "direct", offset, suggest == "1")
 
 
+def _normalized_length(value: str, end: int) -> int:
+    """Return the length of a value's first characters once normalized (`browl.names.normalize`)."""
+    return len(normalize(value[:end]))
+
+
 def marked_length(value: str, query: str) -> int:
     """Return how many of a value's first characters match a normalized query (`browl.names.normalize`), to mark.
 
@@ -178,42 +183,56 @@ def marked_length(value: str, query: str) -> int:
         >>> marked_length("  Heart", "he")
         4
     """
-    if not query:
-        return 0
-    for end in range(1, len(value) + 1):
-        if len(normalize(value[:end])) >= len(query):
-            while end < len(value) and unicodedata.combining(value[end]):
-                end += 1
-            return end
-    return len(value)
+    ends = range(len(value) + 1)
+    end = min(bisect.bisect_left(ends, len(query), key=lambda end: _normalized_length(value, end)), len(value))
+    while 0 < end < len(value) and unicodedata.combining(value[end]):
+        end += 1
+    return end
 
 
 def value_offset(value: str, offset: int) -> int:
     """Return where in a value an offset in its normalized value (`browl.names.normalize`) falls, such as a word start.
 
-    It's the shortest start of the value that normalizes to at least that many characters, as characters and
-    normalized ones don't line up one to one (accents, case folding, leading whitespace).
+    It's the longest start of the value that normalizes to at most that many characters, so a character that
+    normalizing expands, holding the offset, is included.
 
     Examples:
         >>> value_offset("Ångström-unit", 9)
         9
         >>> value_offset("A\u030angstro\u0308m-unit", 9)
         11
+        >>> value_offset("½ cup", 2)  # ½ normalizes to three characters
+        0
     """
-    return bisect.bisect_left(range(len(value) + 1), offset, key=lambda end: len(normalize(value[:end])))
+    ends = range(len(value) + 1)
+    return bisect.bisect_right(ends, offset, key=lambda end: _normalized_length(value, end)) - 1
+
+
+_WORD_SCAN = 3 * MAX_QUERY_CHARS
+"""How many of a value's characters `_split` reads to find a word past what's shown, so a hit's cost is bounded."""
 
 
 def _split(text: str, query: str, word_start: int) -> Marked:
-    """Return a text cut short (`cut_name`), split around its match of the query.
+    """Return a text cut short (`cut_name`), split around its match of the query, from a normalized offset.
 
-    The match starts at an offset in the normalized text (`SearchHit.word_start`). Only what's shown, before any "…"
-    the cut added, is marked.
+    The match starts at `SearchHit.word_start` in the normalized text. A match in what's shown is marked there, up to
+    any "…" the cut added. A match past it is shown from its word on, after "…", unless it's further in than
+    `_WORD_SCAN` characters of the text, when nothing is marked.
     """
     shown = cut_name(text)
-    kept = len(shown) if shown == text else len(shown) - 1
-    start = min(value_offset(text[:kept], word_start), kept)
-    end = start + marked_length(text[start:kept], query)  # only what's shown: the query may be far longer
-    return Marked(shown[:start], shown[start:end], shown[end:])
+    head = text[: len(shown) if shown == text else len(shown) - 1]
+    if word_start < _normalized_length(head, len(head)) or not word_start:
+        start = value_offset(head, word_start)
+        end = start + marked_length(head[start:], query)  # only what's shown: the query may be far longer
+        return Marked(shown[:start], shown[start:end], shown[end:])
+    scanned = text[:_WORD_SCAN]
+    start = value_offset(scanned, word_start)
+    if start == len(scanned):
+        return Marked("", "", shown)
+    rest = text[start:]
+    tail = cut_name(rest)
+    end = marked_length(rest[: len(tail) if tail == rest else len(tail) - 1], query)
+    return Marked("…", tail[:end], tail[end:])
 
 
 def _id_texts(connection: sqlite3.Connection, iris: Sequence[str]) -> dict[str, str]:

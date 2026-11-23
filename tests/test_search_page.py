@@ -13,7 +13,7 @@ from browl import search_page
 from browl.derived import EntityType, NotCurrentError
 from browl.pages import MAX_NAME_CHARS
 from browl.search import MAX_OFFSET, MAX_QUERY_CHARS
-from browl.search_page import PAGE_SIZE, marked_length, value_offset
+from browl.search_page import PAGE_SIZE, Marked, _split, marked_length, value_offset
 from tests.helpers import derived_stage, make_app
 from tests.test_trees import loaded
 
@@ -50,6 +50,7 @@ def search_stage() -> object:
     values: list[tuple[str, str, str, str | None, bool]] = [
         (ex("heart"), LABEL, "heart muscle", "en", True),
         (ex("heart"), SYNONYM, "myocardium", "en", True),
+        (ex("heart"), SYNONYM, "cardiac muscle tissue", "en", True),
         (ex("myoblast"), LABEL, "Myoblast", "en", True),
         (ex("hasPart"), LABEL, "has part", "en", True),
         (ex("pun"), LABEL, "punned", "en", True),
@@ -212,6 +213,20 @@ def test_suggestion_word_after_whole(client: TestClient) -> None:
     page = suggest(client, "p")
     assert [hit.name for hit in page.hits] == ["punned", "has part"]
     assert page.marks == ["p", "p"]
+
+
+def test_suggestion_marks_word_in_term(client: TestClient) -> None:
+    """Check that a word match in a value that isn't the name marks that word in the value."""
+    page = suggest(client, "tiss")
+    assert page.hits == [Hit("cardiac muscle tissue", "heart muscle", "Class", "/heart")]
+    assert page.marks == ["tiss"]
+
+
+def test_results_mark_word(client: TestClient) -> None:
+    """Check that the results page marks a word match as the autocomplete does."""
+    page = results(client, [("q", "mus")])
+    assert [hit.name for hit in page.hits] == ["heart muscle"]
+    assert page.marks == ["mus"]
 
 
 def test_long_value_cut_short(client: TestClient) -> None:
@@ -504,8 +519,27 @@ def test_marked_length(value: str, query: str, length: int) -> None:
         ("A\u030angstro\u0308m unit", 9, 11),  # combining accents, which normalizing drops
         ("Straße unit", 7, 6),  # ß folds to ss
         ("x", 0, 0),
+        ("  T-cell", 0, 2),
+        ("½ cup", 2, 0),  # in a character normalizing expands: it starts there
     ],
 )
 def test_value_offset(value: str, offset: int, start: int) -> None:
     """Check where an offset in the normalized value falls in the value."""
     assert value_offset(value, offset) == start
+
+
+@pytest.mark.parametrize(
+    ("text", "query", "word_start", "split"),
+    [
+        ("T-cell", "cell", 2, ("T-", "cell", "")),
+        ("  Heart", "he", 0, ("  ", "He", "art")),
+        ("½ cup", "2", 2, ("", "½", " cup")),  # the character holding the word is marked
+        ("Dose ⑴ low", "1", 6, ("Dose ", "⑴", " low")),
+        ("x " * 60 + "target", "targ", 120, ("…", "targ", "et")),  # past the cut: shown from the word on
+        ("x " * 45 + "target thing", "target", 90, ("x " * 45, "target", " th…")),  # shown, then cut
+        ("x " * 2_000 + "target", "targ", 4_000, ("", "", f"{'x ' * 49}x…")),  # past `_WORD_SCAN`: unmarked
+    ],
+)
+def test_split(text: str, query: str, word_start: int, split: tuple[str, str, str]) -> None:
+    """Check how a hit's text is split around its match, from the match's normalized offset."""
+    assert _split(text, query, word_start) == Marked(*split)
