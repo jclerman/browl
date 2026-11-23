@@ -1383,7 +1383,8 @@ Every page has the same frame (U-27, U-28, U-29):
 **Navigation bar** (U-27): full width, on every page, stays at the top when scrolling.
 
 - Contents: the ontology name (a link to the home page), the autocomplete search box, and links to the four tree pages.
-- The full search page with type and property filters (U-10) is reached from the search box, e.g. "All results…".
+- The full search page with type and property filters (U-10) is reached from the search box, by "All results…" or
+  Enter (below, Search).
 - An admin link appears only for signed-in admins: the base template shows it when `request.state.is_admin` is true,
   which P-22 sets. Sign-in itself is a small link at the bar's end, to the admin upload page, whose sign-in P-22 adds.
   Pages have no footer: an entity page, filling the window, has no room for one.
@@ -1519,6 +1520,31 @@ too (P-38), and the JSON API's (P-33).
   added. Enter follows an item's link. Left to P-25: type-ahead, `*`, and the pattern
   without JS, where the roles are there but the arrow keys aren't, and Tab reaches each toggle and link.
 
+**Search** (U-10, U-17, P-20): the navigation bar's search box and the full results page, `search` (2.13).
+
+- **The box** is a form that opens the full results page, so it works without JS. With it, it's a WAI-ARIA combobox
+  (`static/search.js`): typing fetches up to 10 suggestions as an htmx fragment, after a 150 ms pause, each request
+  replacing any still pending (`hx-sync="this:replace"`), so a superseded one is aborted and its answer never shown.
+  Down and Up move the active option (`aria-activedescendant`; past either end, back to the box), Enter opens it, or
+  with none active submits the form, and Escape closes the list until the text changes, then clears the box. "No
+  matches" is a disabled option; the last option is "All results…", the full results page for the text. A status
+  region announces how many suggestions there are. The fragment is asked for by a parameter, not by `HX-Request`, so
+  each URL has one response, for the page cache (2.10).
+- **A hit** shows the value that matched in italics, then "→" and the entity's display name, in the accent color and
+  bold, if that's a different string; else the name alone, still styled as a name, so the reader can tell which they're
+  looking at. The query's match is marked (`<mark>`) in whichever is shown: the shortest start of the value that
+  normalizes to the query (§2.6). Its types are in a column on the right; a punned IRI lists each. The results page
+  shows hits the same way, with each one's CURIE, else IRI, muted, between its name and its types, on one line where
+  the screen is wide enough, rather than in a tooltip, which the keyboard and touch screens can't reach.
+- **The results page** has the box, and filters (U-10): entity types and name properties as checkboxes, none checked
+  meaning all, and a choice of all values or direct ones only. Name properties are labelled by display name, else as
+  `NAME_PROPERTIES` names them. It shows 50 hits a page, with Previous and Next links, as deep as search's
+  `MAX_OFFSET` allows.
+- **Input**: invalid parameters, and repeats of those 2.13 doesn't list as repeated, get the "not found" page, as tree
+  pages do. A blank query finds nothing: an empty fragment, which closes the list, or the form alone.
+- **No server-side deadline** (from P-19's review): each query's cost is already bounded (§2.6, Bounds), and the
+  box's pause and replacing of requests keep typing from piling them up.
+
 **Visual design** (U-29):
 
 - Readable text measure: prose such as annotation values is capped at roughly 70–80 characters per line. Trees, tables
@@ -1565,7 +1591,10 @@ before the usage table is ready, P-27c) isn't cached, as it changes once the tab
 _(Q13)_ Including the generation number in the key means a reload invalidates entries in every worker without
 coordination. Pages differ for admins (the navigation bar's admin link, 2.9), so the key must also include whether
 the user is an admin, or the cache must hold pages without the frame's per-user part and add it after the lookup
-(from P-14a's review). The cache wraps a plain function that stores rendered strings. `functools.lru_cache` is not
+(from P-14a's review). If search pages and fragments (2.9, Search) are cached, key them on the query as
+`search_page._params` gives it, plus `suggest`, not on the raw URL: their `type` and `property` filters are repeated
+parameters, which it gives each once, in a fixed order, so reordered URLs share an entry (from P-20's review). The
+cache wraps a plain function that stores rendered strings. `functools.lru_cache` is not
 applied to `async` handlers, because it would store unrun coroutine objects rather than pages.
 
 ### 2.11 Authentication and admins
@@ -1621,12 +1650,12 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 
 | Path | Purpose |
 | --- | --- |
-| `search` | Autocomplete endpoint (htmx fragment) and a full results page |
+| `search` | The full results page, `q=`, `type=` and `property=` (repeated), `values=direct`, `offset=`; with `suggest=1` (no `offset=`), the autocomplete's fragment; both `noindex`. See [2.9](#29-page-layout), Search (P-20) |
 | `tree/{hierarchy}` | Tree page, `hierarchy` one of `classes`, `object-properties`, `data-properties` and `annotation-properties` (the navigation bar links them). `open=` (repeated), `children-of=`, `offset=`; a fragment: `node=`, `at=` (marked `noindex`). See [2.9](#29-page-layout), Tree pages (P-18) |
 | `iri?iri=…` | Fallback entity URLs (Q1b) |
 | `hash?path=…&fragment=…` | The page for a hash URL's path and fragment, for the hash-IRI script ([2.3](#23-iri--url-mapping), Lookup); marked `noindex`, as its pages are at their hash URLs |
 | `usage-count?iri=…` | An entity's Usage tab label with its count, "Usage (128)", which its page fetches once it renders ([2.8](#28-entity-pages)); marked `noindex`; a 404 for an IRI with no entity (P-27b) |
-| `static/…` | CSS, htmx, hash-IRI script, page-tabs script |
+| `static/…` | CSS, htmx, hash-IRI script, page-tabs, tree and search-box scripts |
 | `admin/…` | Upload, status, admin list, sign-in/out |
 | `admin/upload` | The upload form (A-2, A-3) and the load job's status. The form is parsed as it streams in, the file written straight to the jobs volume, never held whole in memory or spooled to a temporary file; its reasoner field must come before its file. The job is claimed only once the file's name has been checked and its first 8 KiB found to look like the syntax the name says, so a malformed request or a mislabelled, OWL/XML or compressed file leaves the served ontology alone. A post a browser sent from another site's page (by `Sec-Fetch-Site`) is refused, against CSRF (P-6) |
 | `admin/status` | The load job's stage, start time, uploaded file (name, syntax, size), and failed stage and reason (A-5, A-6): an HTML fragment for htmx requests (`HX-Request`), which polls itself while a job runs, else a page, which polls the same way, or refreshes itself while a job runs if JS is off (P-5) |
@@ -1800,7 +1829,7 @@ go into this document.
 | ID | Work item | Delivers | Depends on | Status | Tracking |
 | --- | --- | --- | --- | --- | --- |
 | P-19 | `SearchBackend` interface and SQLite implementation; ranking | U-10, U-11, U-12, N-5 | P-11 | Done | [#26](https://github.com/jclerman/browl/issues/26) |
-| P-20 | Autocomplete UI (accessible combobox) with type and property filters | U-10, U-17 | P-19, P-14 | To do | [#32](https://github.com/jclerman/browl/issues/32) |
+| P-20 | Autocomplete UI (accessible combobox) with type and property filters | U-10, U-17 | P-19, P-14 | Done | [#32](https://github.com/jclerman/browl/issues/32) |
 | P-33 | JSON API over the pages' data: routes under `api/` returning the models the pages render (2.8, 2.13) | U-42 | P-16, P-17, P-18, P-19, P-27, P-38 | To do | [#76](https://github.com/jclerman/browl/issues/76) |
 | P-21 | Page cache keyed by generation | O-10, N-3 | P-16 | To do | [#40](https://github.com/jclerman/browl/issues/40) |
 | P-22 | Google sign-in, admin-route protection, dev no-auth mode (cancelling a job: P-36) | A-1, O-6, O-7 | P-6 | To do | [#17](https://github.com/jclerman/browl/issues/17) |

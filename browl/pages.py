@@ -23,8 +23,9 @@ from starlette.responses import Response
 from starlette.templating import Jinja2Templates
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from browl.derived import DerivedReader, EntityType, NotCurrentError, entities_with_iri, read_meta
+from browl.derived import DerivedReader, EntityType, NotCurrentError, entities_with_iri, read_meta, ready_generation
 from browl.jobs import JobState, Site
+from browl.search import MAX_QUERY_CHARS
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,12 @@ TREES = (
 )
 """Each hierarchy's tree page (DESIGN.md §2.13), in the navigation bar's order."""
 
+SEARCH_PATH = "search"
+"""The search route's path under the reserved prefix (`browl.search_page`), which the navigation bar's box opens."""
+
+SUGGEST_PARAM = "suggest"
+"""The query parameter that asks for the autocomplete fragment, as `suggest=1`, rather than the search page."""
+
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none';"
     " form-action 'self'; frame-ancestors 'none'"
@@ -83,6 +90,12 @@ CONTENT_SECURITY_POLICY = (
 
 SECURITY_HEADERS = {"X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY"}
 """Headers every response gets, including those the policy exempts."""
+
+_BIDI_CONTROLS = re.compile("[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+"""The bidirectional-text controls `bidi_encoded` encodes."""
+
+_OFFSET = re.compile(r"[1-9][0-9]{0,8}")
+"""An `offset=` a paged URL may give (`read_offset`): a positive integer without a sign or leading zeros."""
 
 
 @dataclass(frozen=True)
@@ -137,9 +150,6 @@ def is_web_iri(iri: str) -> bool:
     return iri.lower().startswith(("http://", "https://"))
 
 
-_BIDI_CONTROLS = re.compile("[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
-
-
 def bidi_encoded(iri: str) -> str:
     """Return an IRI with its bidirectional-text controls percent-encoded, so it's shown in the order it's read.
 
@@ -172,6 +182,29 @@ def href(request: Request, path: str, fragment: str | None = None) -> str:
     return join_link(link_root(request.scope), path, fragment)
 
 
+def single_params(request: Request, names: Iterable[str]) -> dict[str, str | None] | None:
+    """Return the values of parameters that may be given once, each None if it's absent; None if one is repeated."""
+    single: dict[str, str | None] = {}
+    for name in names:
+        values = request.query_params.getlist(name)
+        if len(values) > 1:
+            return None
+        single[name] = values[0] if values else None
+    return single
+
+
+def read_offset(value: str | None) -> int | None:
+    """Return a paged URL's offset: 0 if it's absent; None if it isn't valid (`_OFFSET`), so each page has one URL.
+
+    Examples:
+        >>> read_offset(None), read_offset("50"), read_offset("050"), read_offset("+5")
+        (0, 50, None, None)
+    """
+    if value is None:
+        return 0
+    return int(value) if _OFFSET.fullmatch(value) else None
+
+
 def frame_context(request: Request) -> dict[str, object]:
     """Return what the base template's frame needs: the navigation bar's links, the title's end, and the user's role.
 
@@ -191,6 +224,9 @@ def frame_context(request: Request) -> dict[str, object]:
                 (href(request, f"{reserved}/tree/{tree.slug}"), tree.label, tree.slug == current) for tree in TREES
             ],
             "current_tree": next((tree.label for tree in TREES if tree.slug == current), None),
+            "search": href(request, f"{reserved}/{SEARCH_PATH}"),
+            "suggest": href(request, f"{reserved}/{SEARCH_PATH}?{SUGGEST_PARAM}=1"),
+            "max_query_chars": MAX_QUERY_CHARS,
             "admin": href(request, f"{reserved}/admin/upload"),
             "is_admin": getattr(request.state, "is_admin", False) is True,
             "title_end": isolate(link.title) if link.title is not None else SITE_NAME,
@@ -244,9 +280,7 @@ async def read_derived[T](
     """
     if state is None:
         state = await request.app.state.jobs.current()
-    generation = state.ready_generation
-    if generation is None:
-        raise NotCurrentError("no generation is ready")
+    generation = ready_generation(state)
     reader: DerivedReader = request.app.state.derived
     return await reader.read(generation, function)
 

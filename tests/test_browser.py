@@ -32,6 +32,7 @@ from browl.rdf import RDF as RDF_NS
 from browl.usage_tab import PageNotFoundError, UsageGroup, UsageTab
 from tests.conftest import DATA
 from tests.helpers import WAIT_S, LiveServer, derived_stage, iso, make_app, no_axioms
+from tests.test_search_page import SYNONYM, search_stage
 from tests.test_trees import tree_stage
 
 pytestmark = [pytest.mark.browser, pytest.mark.usefixtures("data_dir")]
@@ -2292,3 +2293,233 @@ def test_tree_modifier_click_left_to_browser(page: Page, trees: LiveServer) -> N
     opened.value.wait_for_load_state()
     assert query_of(opened.value.url) == {"open": [f"{EX}/Top"]}
     expect(tree_item(page, "Top")).to_have_attribute("aria-expanded", "false")
+
+
+# The search box (P-20, U-10, U-17, DESIGN.md §2.9 "Search")
+
+SUGGEST = re.compile(r"/_browl/search\?suggest=1")
+
+
+@pytest.fixture
+def searchable(live_server: Callable[[FastAPI], LiveServer]) -> LiveServer:
+    """Return a live server with `tests.test_search_page`' names loaded and indexed."""
+    server = live_server(make_app(NAME_PROPERTIES=["rdfs:label", SYNONYM]))
+    server.app.state.jobs.register(Stage.PRE_CACHING, search_stage())
+    server.call(server.app.state.jobs.start())
+    server.call(server.app.state.jobs.wait())
+    return server
+
+
+def stub_entity_pages(page: Page, server: LiveServer) -> None:
+    """Answer requests for entity pages with a stub, as they'd need Fuseki."""
+    page.route(
+        re.compile(rf"{re.escape(server.url)}/(myoblast|heart)$"),
+        lambda route: route.fulfill(status=200, content_type="text/html", body="<title>stub</title>"),
+    )
+
+
+def search_box(page: Page) -> Locator:
+    """Return the navigation bar's search box."""
+    return page.get_by_role("combobox", name="Search names")
+
+
+def typed(page: Page, server: LiveServer, text: str) -> Locator:
+    """Open the search page, type text in the navigation bar's box, and return the box."""
+    page.goto(f"{server.url}/_browl/search")
+    box = search_box(page)
+    box.fill(text)
+    return box
+
+
+def test_search_suggests_and_keys(page: Page, searchable: LiveServer) -> None:
+    """Check the combobox pattern's keys, pointer and focus, and the status region (U-17).
+
+    Typing lists suggestions and announces how many; Down and Up move the active option, and past either end back to
+    the box; hovering marks an option; Alt+Down opens the list with none active; Tab closes it and focus reopens it;
+    Escape closes it, then clears the box.
+    """
+    page.goto(f"{searchable.url}/_browl/search")
+    box = search_box(page)
+    status = page.locator("#site-search-status")
+    box.fill("myo")
+    listbox = page.get_by_role("listbox", name="Suggestions")
+    expect(listbox).to_be_visible()
+    expect(box).to_have_attribute("aria-expanded", "true")
+    options = listbox.get_by_role("option")
+    expect(options).to_have_count(3)  # two hits and "All results…"
+    expect(status).to_have_text("2 suggestions")
+    no_active = re.compile(".*")
+    box.press("ArrowDown")
+    expect(box).to_have_attribute("aria-activedescendant", "search-option-0")
+    expect(options.nth(0)).to_have_attribute("aria-selected", "true")
+    box.press("ArrowUp")  # from the first, back to the box
+    expect(box).not_to_have_attribute("aria-activedescendant", no_active)
+    expect(options.nth(0)).to_have_attribute("aria-selected", "false")
+    box.press("ArrowDown")
+    box.press("ArrowDown")
+    box.press("ArrowDown")
+    expect(box).to_have_attribute("aria-activedescendant", "search-option-all")
+    box.press("ArrowDown")  # past the end, back to the box
+    expect(box).not_to_have_attribute("aria-activedescendant", no_active)
+    box.press("ArrowUp")  # from none, to the last
+    expect(box).to_have_attribute("aria-activedescendant", "search-option-all")
+    options.nth(1).hover()
+    expect(box).to_have_attribute("aria-activedescendant", "search-option-1")
+    expect(options.nth(1)).to_have_attribute("aria-selected", "true")
+    expect(options.nth(2)).to_have_attribute("aria-selected", "false")
+    page.mouse.move(0, 0)  # else the reopened list's option under the pointer is marked again
+    expect(box).to_be_focused()
+    box.press("Escape")
+    expect(listbox).to_be_hidden()
+    expect(box).to_have_attribute("aria-expanded", "false")
+    box.press("Alt+ArrowDown")
+    expect(listbox).to_be_visible()
+    expect(box).not_to_have_attribute("aria-activedescendant", no_active)
+    box.press("Tab")
+    expect(listbox).to_be_hidden()
+    expect(box).to_have_attribute("aria-expanded", "false")
+    box.focus()
+    expect(listbox).to_be_visible()
+    expect(box).to_have_attribute("aria-expanded", "true")
+    box.press("Escape")
+    box.press("Escape")
+    expect(box).to_have_value("")
+    expect(status).to_have_text("")
+    box.fill("myob")
+    expect(options).to_have_count(2)
+    expect(status).to_have_text("1 suggestion")
+
+
+def test_search_enter_follows_option(page: Page, searchable: LiveServer) -> None:
+    """Check that Enter on an active option opens its entity's page."""
+    stub_entity_pages(page, searchable)
+    box = typed(page, searchable, "myo")
+    expect(page.get_by_role("option")).to_have_count(3)
+    box.press("ArrowDown")
+    box.press("ArrowDown")
+    box.press("Enter")
+    expect(page).to_have_url(f"{searchable.url}/heart")
+
+
+def test_search_click_follows_option(page: Page, searchable: LiveServer) -> None:
+    """Check that clicking an option opens its entity's page."""
+    stub_entity_pages(page, searchable)
+    typed(page, searchable, "myo")
+    page.get_by_role("option").first.click()
+    expect(page).to_have_url(f"{searchable.url}/myoblast")
+
+
+def test_search_enter_without_option_opens_results(page: Page, searchable: LiveServer) -> None:
+    """Check that Enter with no active option opens the full results page."""
+    box = typed(page, searchable, "myo")
+    expect(page.get_by_role("option")).to_have_count(3)
+    box.press("Enter")
+    expect(page).to_have_url(f"{searchable.url}/_browl/search?q=myo")
+    expect(page.locator(".hits .hit")).to_have_count(2)
+
+
+def test_search_all_results_option(page: Page, searchable: LiveServer) -> None:
+    """Check that "All results…" opens the full results page for the query."""
+    typed(page, searchable, "he")
+    page.get_by_role("option", name="All results…").click()
+    expect(page).to_have_url(f"{searchable.url}/_browl/search?q=he")
+
+
+def test_search_only_latest_shown(page: Page, searchable: LiveServer) -> None:
+    """Check that a slow response for earlier text never replaces the suggestions for the text typed since."""
+    held: list[Route] = []
+    failed: list[str] = []
+    page.on("requestfailed", lambda request: failed.append(request.url))
+    page.route(SUGGEST, lambda route: held.append(route) if "q=m&" in route.request.url + "&" else route.continue_())
+    box = typed(page, searchable, "m")
+    wait_until(page, lambda: bool(held), "the first request")
+    box.fill("myo")
+    expect(page.get_by_role("option")).to_have_count(3)
+    wait_until(page, lambda: held[0].request.url in failed, "htmx to abort the first request")
+    with contextlib.suppress(PlaywrightError):
+        held[0].continue_()
+    expect(page.get_by_role("option")).to_have_count(3)
+
+
+@NO_JS
+def test_search_without_javascript(page: Page, searchable: LiveServer) -> None:
+    """Check that, without JS, submitting the box opens the full results page (U-17)."""
+    page.goto(f"{searchable.url}/_browl/search")
+    box = page.locator("#site-search-box")
+    box.fill("myo")
+    box.press("Enter")
+    expect(page).to_have_url(f"{searchable.url}/_browl/search?q=myo")
+    expect(page.locator(".hits .hit")).to_have_count(2)
+
+
+@pytest.mark.parametrize(("width", "one_line"), [(1000, True), (360, False)])
+def test_search_hit_one_line(page: Page, searchable: LiveServer, width: int, one_line: bool) -> None:
+    """Check that a results-page hit, with its CURIE, takes one line on a wide screen, and wraps on a narrow one."""
+    page.set_viewport_size({"width": width, "height": 800})
+    page.goto(f"{searchable.url}/_browl/search?q=myo")
+    hit = page.locator(".hits .hit").nth(1)  # myocardium → heart muscle, ex:heart
+    name, curie = hit.locator(".hit-name").bounding_box(), hit.locator(".hit-id").bounding_box()
+    assert name is not None and curie is not None
+    assert (abs(name["y"] - curie["y"]) < name["height"]) is one_line
+
+
+def test_search_escape_outlasts_pending_answer(page: Page, searchable: LiveServer) -> None:
+    """Check that the answer to a request pending when Escape closed the list doesn't reopen it."""
+    held: list[Route] = []
+    page.route(SUGGEST, lambda route: held.append(route) if "q=myo&" in route.request.url + "&" else route.continue_())
+    box = typed(page, searchable, "he")
+    listbox = page.get_by_role("listbox", name="Suggestions")
+    expect(listbox.get_by_role("option")).to_have_count(2)
+    box.fill("myo")
+    wait_until(page, lambda: bool(held), "the request for myo")
+    box.press("Escape")
+    expect(listbox).to_be_hidden()
+    held[0].continue_()
+    expect(page.locator("#site-search-list [role=option]")).to_have_count(3)  # the answer, swapped in
+    expect(listbox).to_be_hidden()
+    expect(box).to_have_attribute("aria-expanded", "false")
+
+
+def test_search_cleared_box_ignores_pending_answer(page: Page, searchable: LiveServer) -> None:
+    """Check that once Escape has cleared the box, the answer to the old text's pending request is never shown."""
+    held: list[Route] = []
+    failed: list[str] = []
+    page.on("requestfailed", lambda request: failed.append(request.url))
+    page.route(SUGGEST, lambda route: held.append(route) if "q=myo&" in route.request.url + "&" else route.continue_())
+    box = typed(page, searchable, "myo")
+    wait_until(page, lambda: bool(held), "the request for myo")
+    with page.expect_response(lambda response: "q=&" in response.url + "&"):
+        box.press("Escape")  # the list isn't open, so this clears the box
+    expect(box).to_have_value("")
+    wait_until(page, lambda: held[0].request.url in failed, "htmx to abort the request for myo")
+    with contextlib.suppress(PlaywrightError):
+        held[0].continue_()
+    expect(page.locator("#site-search-list [role=option]")).to_have_count(0)
+    expect(box).to_have_attribute("aria-expanded", "false")
+
+
+def test_search_retyped_after_clearing(page: Page, searchable: LiveServer) -> None:
+    """Check that after Escape clears the box, typing the same text again asks for its suggestions again."""
+    page.goto(f"{searchable.url}/_browl/search")
+    box = search_box(page)
+    status = page.locator("#site-search-status")
+    box.fill("myo")
+    options = page.get_by_role("option")
+    expect(options).to_have_count(3)
+    box.press("Escape")
+    box.press("Escape")
+    expect(box).to_have_value("")
+    expect(status).to_have_text("")
+    box.fill("myo")
+    expect(options).to_have_count(3)
+    expect(status).to_have_text("2 suggestions")
+
+
+def test_search_no_matches(page: Page, searchable: LiveServer) -> None:
+    """Check that "No matches" is announced, and that the keys skip it, as a disabled option."""
+    box = typed(page, searchable, "zzz")
+    expect(page.locator("#site-search-status")).to_have_text("No matches")
+    box.press("ArrowDown")
+    expect(box).to_have_attribute("aria-activedescendant", "search-option-all")
+    page.get_by_role("option", name="No matches").hover()
+    expect(box).to_have_attribute("aria-activedescendant", "search-option-all")

@@ -1,0 +1,12 @@
+{# A search hit (`browl.search_page.ShownHit`), laid out as DESIGN.md §2.9, Search, describes. #}
+{% macro hit_row(hit) -%}
+<span class="hit-text">
+  {%- if hit.term is not none -%}
+  <bdi class="hit-term"><mark>{{ hit.term.marked }}</mark>{{ hit.term.rest }}</bdi> <span class="hit-arrow" aria-hidden="true">→</span><span class="visually-hidden">, for</span> {% endif -%}
+  <bdi class="hit-name">{% if hit.name.marked %}<mark>{{ hit.name.marked }}</mark>{% endif %}{{ hit.name.rest }}</bdi>
+</span>
+{%- if hit.id_text is not none %}
+<code class="hit-id" dir="ltr">{{ hit.id_text | bidi_encoded }}</code>
+{%- endif %}
+<span class="hit-types">{{ hit.types }}</span>
+{%- endmacro %}

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% from "search_hits.html" import hit_row %}
+{% block title %}{% if blank %}Search{% else %}Search: {{ text | isolate }}{% endif %}{% endblock %}
+{% block content %}
+{# The full results page, with type and property filters (U-10; `browl.search_page`). #}
+<div class="search-page">
+  <h1>Search</h1>
+  <form class="search-form" action="{{ action }}" method="get" role="search">
+    <p class="search-query">
+      <label for="search-text">Names starting with</label>
+      <input id="search-text" type="search" name="q" value="{{ text }}" maxlength="{{ max_query_chars }}"
+             autocomplete="off" spellcheck="false">
+      <button type="submit">Search</button>
+    </p>
+    <div class="search-filters">
+      <fieldset>
+        <legend>Entity types <small>(none checked: all)</small></legend>
+        {% for value, label, checked in types %}
+        <label><input type="checkbox" name="type" value="{{ value }}"{% if checked %} checked{% endif %}> {{ label }}</label>
+        {% endfor %}
+      </fieldset>
+      <fieldset>
+        <legend>Name properties <small>(none checked: all)</small></legend>
+        {% for choice in properties %}
+        <label><input type="checkbox" name="property" value="{{ choice.iri }}"{% if choice.checked %} checked{% endif %}>
+          <bdi>{{ choice.label }}</bdi></label>
+        {% endfor %}
+      </fieldset>
+      <fieldset>
+        <legend>Values</legend>
+        <label><input type="radio" name="values" value="all"{% if not direct %} checked{% endif %}> Direct, and entailed through sub-properties</label>
+        <label><input type="radio" name="values" value="direct"{% if direct %} checked{% endif %}> Direct only</label>
+      </fieldset>
+    </div>
+  </form>
+  {% if not blank %}
+  <section class="search-results" aria-labelledby="results-heading">
+    <h2 id="results-heading">Results</h2>
+    {% if hits %}
+    <p class="note">Showing {{ "{:,}".format(offset + 1) }}–{{ "{:,}".format(offset + hits | length) }}</p>
+    <ol class="hits" start="{{ offset + 1 }}">
+      {% for hit in hits %}
+      <li><a class="hit" href="{{ hit.link.href }}">{{ hit_row(hit) }}</a></li>
+      {% endfor %}
+    </ol>
+    {% else %}
+    <p class="note">{% if offset %}No more results.{% else %}No matches.{% endif %}</p>
+    {% endif %}
+    {% if previous is not none or next is not none %}
+    <nav class="search-paging" aria-label="Result pages">
+      {% if previous is not none %}<a href="{{ previous }}" rel="prev nofollow">Previous</a>{% endif %}
+      {% if next is not none %}<a href="{{ next }}" rel="next nofollow">Next</a>{% endif %}
+    </nav>
+    {% endif %}
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

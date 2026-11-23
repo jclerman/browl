@@ -13,7 +13,7 @@ from fastapi.responses import Response
 from browl.derived import EntityType
 from browl.hierarchy import ChildPage, TreeNode, count_roots, node_ids, node_iris, read_children, read_node
 from browl.lookup import PANEL_HEADERS, not_found
-from browl.pages import TREES, href, link_root, read_derived, templates
+from browl.pages import TREES, href, link_root, read_derived, read_offset, single_params, templates
 from browl.tabs import with_query
 
 TREE_PAGES = {tree.slug: tree for tree in TREES}
@@ -51,9 +51,6 @@ ROOT_ID = "t"
 
 MAX_AT_CHARS = 256
 """The longest element id `at=…` may give, as each child's ids and links repeat it."""
-
-_OFFSET = re.compile(r"[1-9][0-9]{0,8}")
-"""An offset `offset=…` may give: a positive integer without a sign or leading zeros, so each page has one URL."""
 
 _ELEMENT_ID = re.compile(r"[a-z]+(?:-[0-9]{1,9})+")
 """An element id `at=…` may give, as `ShownNode.id` makes them."""
@@ -125,16 +122,13 @@ class _Query:
 
 def _read_query(request: Request) -> _Query | None:
     """Return what a tree page's URL asks for; None if it repeats a parameter, or gives one that isn't valid."""
-    params = request.query_params
-    single: dict[str, str | None] = {}
-    for name in (CHILDREN_OF_PARAM, OFFSET_PARAM, NODE_PARAM, AT_PARAM):
-        values = params.getlist(name)
-        if len(values) > 1:
-            return None
-        single[name] = values[0] if values else None
+    single = single_params(request, (CHILDREN_OF_PARAM, OFFSET_PARAM, NODE_PARAM, AT_PARAM))
+    if single is None:
+        return None
     children_of, offset = single[CHILDREN_OF_PARAM], single[OFFSET_PARAM]
     node, at = single[NODE_PARAM], single[AT_PARAM]
-    if offset is not None and not _OFFSET.fullmatch(offset):
+    number = read_offset(offset)
+    if number is None:
         return None
     if at is None:  # the page
         if node is not None or (children_of is not None and offset is None):
@@ -145,8 +139,8 @@ def _read_query(request: Request) -> _Query | None:
         or not (_ROOTS_ID if node is None else _ELEMENT_ID).fullmatch(at)
     ):
         return None
-    opened = list(dict.fromkeys(params.getlist(OPEN_PARAM)))[:MAX_OPEN]
-    return _Query(opened, children_of, int(offset or 0), node, at)
+    opened = list(dict.fromkeys(request.query_params.getlist(OPEN_PARAM)))[:MAX_OPEN]
+    return _Query(opened, children_of, number, node, at)
 
 
 @dataclass
