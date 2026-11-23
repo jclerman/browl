@@ -26,25 +26,27 @@ SEARCH_LIMIT = 10
 _LAST_CHAR = "\U0010ffff"  # sorts after any other character, as UTF-8 bytes too
 
 
-@dataclass(frozen=True)
+@validated_dataclass(frozen=True)
 class SearchQuery:
     """A search (U-10): name values that start with the text, ignoring case and accents (U-11).
 
     Attributes:
         text: What the values start with; leading whitespace is ignored, and a query of only whitespace finds nothing.
-        types: The entity types to find; None for all.
-        properties: The name properties (IRIs) whose values to search; None for all.
+        types: The entity types to find; None for all, and an empty set for none.
+        properties: The name properties (IRIs) whose values to search; None for all, and an empty set for none.
         entailed: Whether values entailed through a sub-property count too, or only direct ones.
-        limit: How many results to return.
+        limit: How many results to return, at least one.
         offset: How many of the best results to skip, for paging.
+
+    Pydantic checks the attributes' types and bounds, and makes `types` and `properties` frozensets.
     """
 
     text: str
-    types: Collection[EntityType] | None = None
-    properties: Collection[str] | None = None
+    types: frozenset[EntityType] | None = None
+    properties: frozenset[str] | None = None
     entailed: bool = True
-    limit: int = SEARCH_LIMIT
-    offset: int = 0
+    limit: PositiveInt = SEARCH_LIMIT
+    offset: NonNegativeInt = 0
 
 
 @dataclass(frozen=True)
@@ -219,7 +221,7 @@ def search(connection: sqlite3.Connection, query: SearchQuery) -> SearchResults:
     text = normalize(query.text).lstrip()
     wanted = query.offset + query.limit + 1  # one more, to tell whether there are more
     lanes = _lanes(connection, query)
-    if not text or not lanes or query.limit <= 0:
+    if not text or not lanes:
         return SearchResults([], more=False)
     best: dict[str, tuple[_Match, bool]] = {}
 

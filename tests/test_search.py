@@ -5,6 +5,7 @@ from contextlib import closing
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from browl.derived import DerivedReader, EntityType
 from browl.precache.core import Hook
@@ -197,7 +198,6 @@ async def test_paging(data_dir: Path) -> None:
     pages = [find(settings, "m", limit=2, offset=offset) for offset in (0, 2, 4)]
     assert [[hit.value for hit in page.hits] for page in pages] == [["m0", "m1"], ["m2", "m3"], ["m4"]]
     assert [page.more for page in pages] == [True, True, False]
-    assert find(settings, "m", limit=0) == SearchResults([], more=False)
 
 
 async def test_many_lengths(data_dir: Path) -> None:
@@ -218,3 +218,20 @@ async def test_backend(data_dir: Path) -> None:
     finally:
         reader.close()
     assert [hit.value for hit in results.hits] == ["apple"]
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [{"limit": 0}, {"offset": -1}, {"types": {"individual"}}, {"properties": "not a set"}],
+    ids=["no results", "negative offset", "unknown type", "properties not a set"],
+)
+def test_query_checked(fields: dict[str, object]) -> None:
+    """Check that a query's fields are checked when it's made."""
+    with pytest.raises(ValidationError):
+        SearchQuery("x", **fields)  # type: ignore[arg-type]
+
+
+def test_query_filters_frozen() -> None:
+    """Check that a query's filters are frozensets, whatever collection they're given as."""
+    query = SearchQuery("x", types=[EntityType.CLASS], properties=(RDFS_LABEL,))
+    assert (query.types, query.properties) == (frozenset({EntityType.CLASS}), frozenset({RDFS_LABEL}))
