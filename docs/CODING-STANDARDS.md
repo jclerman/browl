@@ -55,17 +55,19 @@ instructions specific to coding agents. Requirements and architecture are in [`D
 - pytest, in `tests/`. Use plain `assert`s and fixtures, not `unittest`-style classes.
 - Test data, such as small ontologies, goes in `tests/data/`. Keep it small; large-scale checks belong to the spikes and
   P-24, not the test suite.
-- Mark tests that need a JVM and `robot.jar` with `@pytest.mark.jvm` and have them use the `jvm` fixture, which starts
-  the JVM. Mark tests that need Fuseki with `@pytest.mark.fuseki` and have them use the `fuseki_url` fixture: a Fuseki
-  at `BROWL_TEST_FUSEKI_URL`, or one the tests start from `docker/fuseki` with Docker (built by the tests, unless
-  `BROWL_TEST_FUSEKI_IMAGE` names an image already built, as CI does). `make test` downloads the pinned `robot.jar` once
-  (`make robot-jar`), and on macOS the tests find Java 21 when `JAVA_HOME` is unset. Locally, these tests are skipped
-  when their needs are missing; in CI they fail instead, so CI runs every test.
+- Tests that need a JVM and `robot.jar` use the `jvm` fixture, which starts the JVM. Tests that need Fuseki use the
+  `fuseki_url` fixture: a Fuseki at `BROWL_TEST_FUSEKI_URL`, or one the tests start from `docker/fuseki` with Docker
+  (built by the tests, unless `BROWL_TEST_FUSEKI_IMAGE` names an image already built, as CI does). `make test` downloads
+  the pinned `robot.jar` once (`make robot-jar`), and on macOS the tests find Java 21 when `JAVA_HOME` is unset.
+  Locally, these tests are skipped when their needs are missing; in CI they fail instead, so CI runs every test.
 - Test what only a browser shows (scripts such as `static/hash.js`, htmx, `<noscript>` fallbacks) with Playwright
-  (pytest-playwright): mark such tests `@pytest.mark.browser`, and have them use the `page` fixture and the
-  `live_server` fixture, which serves an app on a free local port, since a browser can't reach the `TestClient`. Hold or
-  stub responses with `page.route`, so tests of ordering or failures don't depend on timing. `make test` installs the
-  headless Chromium (`make browser`); these tests are skipped or fail without it, like those above.
+  (pytest-playwright): have such tests use the `page` fixture and the `live_server` fixture, which serves an app on a
+  free local port, since a browser can't reach the `TestClient`. Hold or stub responses with `page.route`, so tests of
+  ordering or failures don't depend on timing. `make test` installs the headless Chromium (`make browser`); these tests
+  are skipped or fail without it, like those above.
+- **Marks:** a test that uses the `jvm`, `fuseki_url` or `browser` fixture (which `page` uses), directly or through
+  another fixture, gets the `jvm`, `fuseki` or `browser` mark for you, for `-m` to select by (e.g.
+  `-m "not jvm and not fuseki"`). Don't write these marks by hand: collection fails on one without its fixture.
 - **Parallel runs:** `make test` runs the tests in several processes (pytest-xdist), each in any order, so a test
   mustn't depend on another having run, or share state outside its process: use free ports (`port=0`), temporary
   directories and unique dataset names. Session fixtures run once per process.
