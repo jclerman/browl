@@ -1766,6 +1766,80 @@ entities by graph must skip the inferred graph. One behavior to settle then: the
 shortcut `rdfs:subClassOf` links that reasoning removes, since they're asserted, so trees (P-12) would need to drop
 them again.
 
+**Editing, and keeping the derived data current** _(post-log)_. If browl later allows editing, an edit written to
+Fuseki shows at once on every page that queries the store, but not in the derived database or the usage table
+([2.5](#25-derived-data-pre-caching)), which are built once per load. A first look (2026-11-22) at whether they could
+be updated in place, so that an edit doesn't need a full reload:
+
+- **Reasoning comes first.** With a reasoner, the store holds the reasoned output ([2.4](#24-load-pipeline)), so an
+  edit leaves its inferences stale: a removed axiom's inferences stay, and an added one infers nothing. Each edit would
+  need reasoning again (ELK reasons incrementally in-process, through the OWLAPI that JPype already loads, but needs
+  about 16 GB for NCBITaxon), or the asserted change shown at once with the inferences marked stale and reasoned again
+  in the background. Editing also needs asserted and inferred kept apart (above), so only asserted axioms are edited.
+- **Most tables update locally.** `meta`, `prefix` and `hash_prefix` are small. `entity` gains or loses rows as
+  declarations change: a new entity takes the next id, and a deleted one leaves a gap. `name_value`, display names and
+  CURIEs are recomputed for the edited entity alone, except after an edit to the name properties' sub-property tree,
+  which changes every entity's entailed values (rare enough to rebuild for). The owner map's roots are recomputed for
+  each subject the edit touches; new blank nodes get new labels. `edge` gains or loses the edited triple's edge.
+  `usage_count` changes by one per usage.
+- **Some are harder.** `equiv_group` merges cheaply with union-find, but a split recomputes the group's component,
+  cycles included. `counts.descendants` counts distinct descendants in a graph with multiple parents: an edge added or
+  moved changes the count of every ancestor on the old and new paths, and whether a node was already a descendant by
+  another path is a set computation, over millions of nodes near the root; only where the hierarchy is a tree does
+  arithmetic suffice. The usage table is keyed by dense positions, so one new usage shifts every later row of its
+  entity (a million rows for an entity with a million usages), and its subjects are ordered by name rank, so renaming
+  an entity moves its rows in the tab of every entity it refers to.
+- **The files are written once.** Each generation's files are renamed into place whole and opened read-only and
+  `immutable`, so reads take no locks, and the page cache is keyed by generation. Writing them in place gives that up,
+  and copying them per edit is too slow (NCBITaxon's are over 1 GB together). Fuseki and SQLite also can't commit
+  together, so edits would need a log with sequence numbers, applied in order, so that a crash between the two can be
+  replayed or rebuilt.
+
+A possible design keeps the generation model:
+
+1. An edit commits to Fuseki and appends to an edit log, and its effect on the derived data goes into a small writable
+   SQLite overlay (WAL): replacement rows for the locally updated tables, per entity, and each entity's added and
+   removed usages. The usage table still answers a page with one range read, adjusted by the overlay as it's read,
+   which is cheap while the overlay is small.
+2. Pages read the generation's files and the overlay, and the page cache is keyed by generation and edit sequence.
+3. Whatever is costly to keep exact (descendant counts, renamed subjects' order, split equivalence groups) is shown as
+   it was, or as updating, until the next rebuild.
+4. A background rebuild, once edits pause for a while, builds the next generation as a load does, then drops the
+   overlay's edits it includes. As the build reads the store in many queries, not one snapshot, either the edits are
+   held back from the store during its queries, or the overlay's entries are idempotent and every edit from the
+   sequence number at the build's start is replayed.
+
+That is worth its complexity only for large ontologies. Uberon goes from upload to ready in 7 s without a reasoner,
+and its usage table builds in about as long, so for ontologies of that size a full rebuild a short while after edits
+stop, with the page saying it's saving, is far simpler. On NCBITaxon a full rebuild takes minutes (the usage table
+about 4), and there only the locally updated tables would be kept exact, leaving the descendant counts and usage
+positions to the background rebuild.
+
+A middle path makes the hard items exact as well, without moving the whole ontology into memory (as WebProtégé holds
+it in the OWLAPI, which would replace Fuseki and most of SQLite). Fuseki stays the store of record, and pages still
+render from the triples fetched for each:
+
+1. The locally updated tables are made writable (WAL rather than `immutable`) and updated as each edit is applied.
+2. Only the global structures are held in memory and updated per edit: the hierarchies with their counts, as arrays
+   and descendant bitsets (one is about 375 KB on NCBITaxon's 3 M nodes, so recomputing a few hundred ancestors takes
+   milliseconds), and each entity's usage order, in an order-statistic tree, so a page is found and a usage inserted
+   in O(log n). There's one worker (2.1), so nothing in memory is shared between processes.
+3. They're built from SQLite at each start, in tens of seconds on NCBITaxon, with pages falling back meanwhile as the
+   Usage tab does before its table is ready, and held throughout: tens of MB for the hierarchies, a few hundred MB for
+   NCBITaxon's 22 M usages.
+4. The usage table on disk falls behind, as rewriting its rows per edit is too slow, so a restart replays the edit log
+   on top of it, and a periodic rebuild saves the current state and shortens the log.
+
+Against the overlay, it shows the same edits as quickly; what it adds is that the descendant counts, renamed subjects'
+order and split equivalence groups are exact at once. Both need a periodic rebuild, but here it only saves the state, so
+it can wait for a quiet time (nightly, say); with the overlay it's what corrects those items, so it's wanted soon after
+each burst of edits. That matters on NCBITaxon, where a rebuild holds the GIL for minutes, and hardly at all for
+ontologies of Uberon's size. Its costs are the startup time (growing with the edits since the last rebuild), the memory
+held, the order-statistic tree, and keeping Fuseki, SQLite and memory consistent through a crash.
+
+Neither design keeps inferences current. Showing an edit's inferences at once needs an incremental reasoner held in
+memory (ELK through the OWLAPI, about 16 GB for NCBITaxon), and that is close to the fully in-memory model: a redesign.
+
 Out of scope for now: a quality report on upload (ROBOT `report`, which assumes OBO conventions that not every
 ontology follows) and version history beyond the diff between two loads that [ONTOLOGY-DIFF.md](ONTOLOGY-DIFF.md)
 considers.
