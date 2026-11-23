@@ -964,10 +964,11 @@ Tabs (U-28; see [2.9](#29-page-layout)):
       not links at the ends, so nothing moves from page to page, and a small GET form, "Page N of M". Without JS
       they load the page; with htmx they swap in its tab panel alone (`panel=1`, from the hash route on a hash
       entity's page), scrolled to its top, the focus kept on the control used, else on the panel, and push the
-      page's URL, so Back and Forward step through pages ([2.9](#29-page-layout)). A modifier-click is left to the
-      browser, and a panel that can't be fetched loads the page instead. In the window-filling frame it
-      stays in view as the tab panel scrolls, within the panel rather than in the tab bar, which holds only tabs and
-      the one-page toggle; in the one-page view it scrolls with the page. The count is in the tab's label only.
+      page's URL, so Back and Forward step through pages ([2.9](#29-page-layout)); Go reads `02` as 2, and replaces
+      the entry if it's the page shown. A modifier-click on Previous or Next is left to the browser, and a panel that
+      can't be fetched loads the page instead. In the window-filling frame it stays in view as the tab panel scrolls,
+      within the panel rather than in the tab bar, which holds only tabs and the one-page toggle; in the one-page view
+      it scrolls with the page. The count is in the tab's label only.
   - **Layout** _(P-27b)_: a frame-like `<dl>`, as on the Overview: each subject once, in the label column, linked to
     its page (`named_iri`), "No single subject" for the group with none; its axioms beneath, one per line, in
     Manchester syntax with the Overview's tokens (`manchester`), sorted by kind and text.
@@ -1369,7 +1370,10 @@ script, is exempt; every response, it included, gets `X-Frame-Options: DENY` and
   history uses only `htmx`); a tab chosen records its own panel, if it's paged, or drops the record. Back or Forward
   fetches the recorded panel while the paging is shown; otherwise the page shows another tab than the entry's URL
   names, and is reloaded. Pushed entries outlive a reload, so this holds after one too. A fragment change is the
-  hash-IRI script's. Tab and page requests share one queue, on the panel, so the latest wins.
+  hash-IRI script's, and a popstate that keeps the URL (a click on a link to it) changes nothing. An entry's record
+  is set only if it has none, as the panel shown may be another entry's, still loading. Tab and page requests share
+  one queue, on the panel, so the latest wins; a click on the selected tab cancels another tab's pending request,
+  but not a Usage page's, which is the selected tab's too.
 - They follow the WAI-ARIA tabs pattern, with manual activation, since opening a tab fetches its panel: the arrow
   keys, Home and End move focus between tabs, and Enter or Space opens one. Only the selected tab is in the Tab
   sequence. A click with a modifier key is left to the browser, and a panel that can't be fetched loads the tab's

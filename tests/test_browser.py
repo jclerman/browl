@@ -1647,6 +1647,26 @@ def test_usage_go_swaps_panel(page: Page, paged: LiveServer) -> None:
     assert marked(page)
 
 
+def test_usage_go_leading_zero_and_page_shown(page: Page, paged: LiveServer) -> None:
+    """Check that the form reads `02` as page 2, and replaces the entry of the page shown (#118, C3).
+
+    So each page keeps one URL, and no entry is repeated. The paging swapped in is a new element.
+    """
+    page.goto(f"{paged.url}{THING}?tab=usage")
+    mark(page)
+    length = page.evaluate("history.length")
+    for value in ("02", "2"):
+        pager(page).evaluate("(nav) => { nav.dataset.old = 'true'; }")
+        with page.expect_request(PANEL) as request:
+            go_to(page, value)
+        assert query_of(request.value.url)["page"] == ["2"]
+        expect(pager(page)).not_to_have_attribute("data-old", "true")
+        expect(page).to_have_url(f"{paged.url}{THING}?tab=usage&page=2")
+        expect_usage_page(page, 2)
+    assert page.evaluate("history.length") == length + 1
+    assert marked(page)
+
+
 def test_usage_go_invalid_number(page: Page, paged: LiveServer) -> None:
     """Check that the form fetches nothing for a number that isn't one of the pages.
 
@@ -1739,6 +1759,31 @@ def test_tab_click_while_page_loads(page: Page, paged: LiveServer) -> None:
     expect(page).to_have_url(f"{paged.url}{THING}")
 
 
+@pytest.mark.parametrize("step", ["Next", "Back"])
+def test_selected_tab_click_while_page_loads(page: Page, paged: LiveServer, step: str) -> None:
+    """Check that a click on the selected Usage tab while Next's or Back's panel loads lets it load (#118, S1).
+
+    The panel's requests share one queue, which would abort the load for a click it then drops.
+    """
+    page.goto(f"{paged.url}{THING}?tab=usage")
+    held: list[Route] = []
+    if step == "Next":
+        page.route(re.compile(r"page=2&panel=1"), lambda route: held.append(route))
+        pager_link(page, "Next").click()
+        number, query = 2, "?tab=usage&page=2"
+    else:
+        pager_link(page, "Next").click()
+        expect_usage_page(page, 2)
+        page.route(re.compile(r"\?tab=usage&panel=1"), lambda route: held.append(route))
+        page.go_back()
+        number, query = 1, "?tab=usage"
+    wait_until(page, lambda: bool(held), "the request for the page's panel")
+    tab(page, USAGE_LABEL).click()
+    let_through(held[0])
+    expect(page).to_have_url(f"{paged.url}{THING}{query}")
+    expect_usage_page(page, number)
+
+
 def test_usage_next_twice_while_loading(page: Page, paged: LiveServer) -> None:
     """Check that Next clicked again while the next page's panel loads shows that page once, in one history entry."""
     page.goto(f"{paged.url}{THING}?tab=usage")
@@ -1754,6 +1799,25 @@ def test_usage_next_twice_while_loading(page: Page, paged: LiveServer) -> None:
     expect(page).to_have_url(f"{paged.url}{THING}?tab=usage&page=2")
     expect_usage_page(page, 2)
     assert page.evaluate("history.length") == length + 1
+
+
+def test_usage_next_while_back_loads(page: Page, paged: LiveServer) -> None:
+    """Check that Next on the page shown while Back's panel loads keeps the panel Back's entry records (#118, C1)."""
+    page.goto(f"{paged.url}{THING}?tab=usage")
+    for number in (2, 3):
+        pager_link(page, "Next").click()
+        expect_usage_page(page, number)
+    held: list[Route] = []
+    page.route(re.compile(r"page=2&panel=1"), lambda route: held.append(route), times=1)
+    page.go_back()
+    wait_until(page, lambda: bool(held), "the request for page 2's panel")
+    pager_link(page, "Next").click()  # page 3's, still shown
+    expect(page).to_have_url(f"{paged.url}{THING}?tab=usage&page=4")
+    expect_usage_page(page, 4)
+    let_through(held[0])
+    page.go_back()
+    expect(page).to_have_url(f"{paged.url}{THING}?tab=usage&page=2")
+    expect_usage_page(page, 2)
 
 
 @pytest.mark.parametrize("name", ["Previous", "Next"])
@@ -1813,6 +1877,26 @@ def test_usage_back_failure_reloads(page: Page, paged: LiveServer, failure: str)
     assert not marked(page)
 
 
+def test_usage_back_to_foreign_panel_reloads(page: Page, paged: LiveServer) -> None:
+    """Check that Back to an entry whose recorded panel is on another site reloads the page rather than fetch it.
+
+    Not left to htmx's `selfRequestsOnly` and the policy, which would refuse it, the panel unchanged (#118, C10).
+    """
+    page.goto(f"{paged.url}{THING}?tab=usage")
+    page.evaluate("history.replaceState({ browlPanel: 'http://attacker.test/?panel=1' }, '')")
+    mark(page)
+    pager_link(page, "Next").click()
+    expect_usage_page(page, 2)
+    requests: list[str] = []
+    page.on("request", lambda request: requests.append(request.url))
+    with page.expect_event("load"):
+        page.go_back()
+    assert not marked(page)
+    expect(page).to_have_url(f"{paged.url}{THING}?tab=usage")
+    expect_usage_page(page, 1)
+    assert not [url for url in requests if "attacker" in url]
+
+
 def test_hash_entity_usage_pages(page: Page, paged: LiveServer) -> None:
     """Check that a hash entity's Usage pages come from the hash route, their URLs keeping the fragment.
 
@@ -1858,6 +1942,36 @@ def test_usage_back_over_fragment_change(page: Page, paged: LiveServer) -> None:
     expect(page).to_have_url(f"{paged.url}/example.org/onto?tab=usage&page=2#Alpha")
     expect_usage_page(page, 2)
     assert requests == []
+    assert marked(page)
+
+
+def test_link_to_url_shown_keeps_page(page: Page, paged: LiveServer) -> None:
+    """Check that a click on a link to the URL shown keeps the page, and the panel its entry records (#118, C2).
+
+    Such as a hash entity's link to itself. Chromium handles it as a fragment navigation that replaces the entry,
+    dropping its state, and fires popstate before the click returns.
+    """
+    page.goto(f"{paged.url}/example.org/onto?tab=usage#Alpha")
+    expect(page.locator("main h1")).to_have_text(f"{EX}/onto#Alpha")
+    pager_link(page, "Next").click()
+    expect_usage_page(page, 2)
+    mark(page)
+    navigations = page.evaluate("""() => {
+      const types = [];
+      navigation.addEventListener("navigate", (event) => types.push(event.navigationType));
+      const link = Object.assign(document.createElement("a"), { href: location.href });
+      document.body.append(link);
+      link.click();
+      return types;
+    }""")
+    assert "reload" not in navigations
+    assert marked(page)
+    page.go_back()
+    expect_usage_page(page, 1)
+    with page.expect_request(PANEL) as request:
+        page.go_forward()
+    assert query_of(request.value.url)["page"] == ["2"]
+    expect_usage_page(page, 2)
     assert marked(page)
 
 
