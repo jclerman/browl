@@ -10,7 +10,7 @@ import pytest
 from browl import owlapi
 from tests.helpers import StaticServer
 
-pytestmark = [pytest.mark.jvm, pytest.mark.usefixtures("jvm"), pytest.mark.anyio]
+pytestmark = [pytest.mark.usefixtures("jvm"), pytest.mark.anyio]
 
 OWL = "http://www.w3.org/2002/07/owl#"
 RDF_TYPE = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"

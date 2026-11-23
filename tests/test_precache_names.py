@@ -197,7 +197,6 @@ async def test_no_valid_name_property(data_dir: Path) -> None:
     assert entity_names(settings, 1) == {(f"{EX}A", "class"): (f"{EX}A", None)}
 
 
-@pytest.mark.fuseki
 async def test_names_on_real_fuseki(fuseki_url: str, data_dir: Path) -> None:
     """Check the names hook on a real Fuseki: sub-property chains and cycles, languages, punning, and the imports.
 

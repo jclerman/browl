@@ -44,7 +44,7 @@ jobs:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
 
-      # Java for the tests marked jvm; `make test` downloads robot.jar for them, and those marked fuseki start browl's
+      # Java for the tests marked java; `make test` downloads robot.jar for them, and those marked fuseki start browl's
       # Fuseki image, built below. GitHub sets CI, so tests whose needs are missing fail instead of being skipped
       # (tests/conftest.py).
       - uses: actions/setup-java@v6

@@ -127,8 +127,7 @@ def test_axioms_fail_alone(monkeypatch: pytest.MonkeyPatch) -> None:
     assert '<dd><a href="/onto#A">' in page
 
 
-@pytest.mark.usefixtures("no_annotations")
-def test_frame(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_frame(no_annotations: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check the axioms panel's frame: sections and their lines, the class's implied equivalents linked and marked."""
     a, b, c, d = (owl.Entity(kind=owl.EntityKind.CLASS, iri=f"{IRI}{name}") for name in ("", "B", "C", "D"))
 
@@ -153,11 +152,12 @@ def test_frame(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "more equivalents" not in page
 
 
-@pytest.mark.usefixtures("no_annotations")
 @pytest.mark.parametrize(
     ("viewed", "cap", "implied", "more"), [("C", 5, 2, False), ("C", 1, 1, True), ("B", 5, 0, False)]
 )
-def test_implied_equivalents(monkeypatch: pytest.MonkeyPatch, viewed: str, cap: int, implied: int, more: bool) -> None:
+def test_implied_equivalents(
+    no_annotations: None, monkeypatch: pytest.MonkeyPatch, viewed: str, cap: int, implied: int, more: bool
+) -> None:
     """Check a class's implied equivalents: on a member that isn't the representative, cut at the cap, or none."""
     monkeypatch.setattr(browl.overview, "_read_axioms", no_axioms)
     monkeypatch.setattr(browl.overview, "MAX_EQUIVALENTS", cap)
@@ -182,10 +182,13 @@ def test_usage_tab_untouched(client: TestClient, caplog: pytest.LogCaptureFixtur
     assert not [record for record in caplog.records if record.name == "browl.overview"]
 
 
-@pytest.mark.jvm
-@pytest.mark.usefixtures("jvm")
-@pytest.mark.usefixtures("no_annotations")
-def test_fragment_error(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+def test_fragment_error(
+    jvm: None,
+    no_annotations: None,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Check that a fragment the OWLAPI can't parse fails only the axioms panel, and its parser's error is logged."""
 
     async def fetched(*args: object) -> bytes:
@@ -204,10 +207,13 @@ def test_fragment_error(client: TestClient, monkeypatch: pytest.MonkeyPatch, cap
     assert "Stack trace:" in caplog.text
 
 
-@pytest.mark.jvm
-@pytest.mark.usefixtures("jvm")
-@pytest.mark.usefixtures("no_annotations")
-def test_java_error(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+def test_java_error(
+    jvm: None,
+    no_annotations: None,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Check that any other Java exception, here from the conversion, fails only the axioms panel, and is logged."""
 
     async def fetched(*args: object) -> bytes:
@@ -229,9 +235,8 @@ def test_java_error(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog:
     assert "IllegalStateException: the conversion broke" in caplog.text
 
 
-@pytest.mark.usefixtures("no_annotations")
 def test_rdf_syntax_error(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    no_annotations: None, client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Check that an IRI the fetch finds invalid fails only the axioms panel, and is logged."""
     error = RDFSyntaxError("not a valid IRI")
@@ -249,8 +254,7 @@ def test_rdf_syntax_error(
     assert record.exc_info is not None and record.exc_info[1] is error
 
 
-@pytest.mark.usefixtures("no_annotations")
-def test_escaped_illegal_iri(caplog: pytest.LogCaptureFixture) -> None:
+def test_escaped_illegal_iri(no_annotations: None, caplog: pytest.LogCaptureFixture) -> None:
     """Check that a stored IRI with an escaped illegal character, which Jena writes escaped, fails only the panel."""
 
     def fuseki(request: httpx2.Request) -> httpx2.Response:
@@ -289,8 +293,7 @@ def record_fetches(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
     return fetches
 
 
-@pytest.mark.usefixtures("no_annotations")
-def test_one_generation(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_one_generation(no_annotations: None, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that the panel reads the generation the page found its entity in, though a newer one is ready since."""
     state = ready_state(client)
     assert state.generation is not None and state.ready_generation is not None
@@ -325,8 +328,8 @@ def test_one_generation(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> 
     ],
     ids=["no-imports", "dropped-import", "loaded-import", "newer-job"],
 )
-@pytest.mark.usefixtures("no_annotations")
 def test_dataset_clause(
+    no_annotations: None,
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     imports: tuple[ImportResult, ...],
@@ -370,8 +373,7 @@ async def test_failed_query_cancels_other() -> None:
         assert cancelled.is_set()
 
 
-@pytest.mark.usefixtures("no_annotations")
-def test_too_many(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_too_many(no_annotations: None, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that a fragment that mentions too many IRIs isn't fetched further, and the panel says so."""
     queries = []
 

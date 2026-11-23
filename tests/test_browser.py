@@ -35,7 +35,7 @@ from tests.helpers import WAIT_S, LiveServer, derived_stage, iso, make_app, no_a
 from tests.test_search_page import SYNONYM, search_stage
 from tests.test_trees import tree_stage
 
-pytestmark = [pytest.mark.browser, pytest.mark.usefixtures("data_dir")]
+pytestmark = pytest.mark.usefixtures("data_dir")
 
 EX = "http://example.org"
 SPECIAL = f"{EX}/vocab#f{{g}}"

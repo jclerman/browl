@@ -184,9 +184,7 @@ def test_startup_starts_jvm(monkeypatch: pytest.MonkeyPatch, robot_jar: Path) ->
     assert calls == [(robot_jar, "768m")]
 
 
-@pytest.mark.jvm
-@pytest.mark.usefixtures("jvm")
-def test_startup_with_running_jvm(robot_jar: Path) -> None:
+def test_startup_with_running_jvm(jvm: None, robot_jar: Path) -> None:
     """Check that the app starts when the JVM is already running, as in tests, whose client runs off the main thread."""
     with TestClient(create_app(make_settings(ROBOT_JAR=str(robot_jar)))) as client:
         assert client.get("/_browl/health").status_code == 200

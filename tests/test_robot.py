@@ -174,9 +174,7 @@ async def test_tool_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     assert lines == ["secret= lang=C added=yes"]
 
 
-@pytest.mark.jvm
-@pytest.mark.usefixtures("jvm")
-async def test_robot_fetches_nothing(site: StaticServer, settings: Settings, data_dir: Path) -> None:
+async def test_robot_fetches_nothing(java: None, site: StaticServer, settings: Settings, data_dir: Path) -> None:
     """Check that ROBOT fails on an import missing from the catalog, naming it, and never requests it."""
     url, requested = site.url, site.requested
     path = data_dir / "uploads" / "1" / "ontology.ttl"
@@ -413,10 +411,8 @@ def test_app_runs_stage(
     assert (data_dir / "uploads" / "1" / REASONED).exists() is (reason is None)
 
 
-@pytest.mark.jvm
-@pytest.mark.usefixtures("jvm")
 @pytest.mark.parametrize("reasoner", [Reasoner.ELK, Reasoner.HERMIT])
-async def test_success(settings: Settings, data_dir: Path, tmp_path: Path, reasoner: Reasoner) -> None:
+async def test_success(java: None, settings: Settings, data_dir: Path, tmp_path: Path, reasoner: Reasoner) -> None:
     """Check that a reasoned ontology replaces the upload as the one served, with inferred parents."""
     context = await reason(settings, data_dir, "ok.ofn", reasoner)
     assert context.reasoned == context.ontology == context.upload.with_name(REASONED)
@@ -424,9 +420,7 @@ async def test_success(settings: Settings, data_dir: Path, tmp_path: Path, reaso
     assert "SubClassOf(Dog Pet)" in await axioms(context.reasoned, "http://example.org/s2/", settings, tmp_path)
 
 
-@pytest.mark.jvm
-@pytest.mark.usefixtures("jvm")
-async def test_materialize_and_shortcuts(settings: Settings, data_dir: Path, tmp_path: Path) -> None:
+async def test_materialize_and_shortcuts(java: None, settings: Settings, data_dir: Path, tmp_path: Path) -> None:
     """Check reasoning's result: materialized restrictions added, shortcuts removed, all else and equivalences kept."""
     settings = make_settings(ROBOT_JAR=str(find_robot_jar()), MATERIALIZE_PROPERTIES=[f"{NS}part_of"])
     context = await reason(settings, data_dir, "shortcuts.ofn")
@@ -474,8 +468,6 @@ async def test_materialize_and_shortcuts(settings: Settings, data_dir: Path, tmp
     }
 
 
-@pytest.mark.jvm
-@pytest.mark.usefixtures("jvm")
 @pytest.mark.parametrize(
     ("fixture", "reasoner", "expected"),
     [
@@ -487,7 +479,7 @@ async def test_materialize_and_shortcuts(settings: Settings, data_dir: Path, tmp
     ],
 )
 async def test_logical_failures(
-    settings: Settings, data_dir: Path, fixture: str, reasoner: Reasoner, expected: str
+    java: None, settings: Settings, data_dir: Path, fixture: str, reasoner: Reasoner, expected: str
 ) -> None:
     """Check that an inconsistent or incoherent ontology, or one ROBOT can't parse, fails saying so, with no output."""
     with pytest.raises(StageError) as raised:
@@ -497,9 +489,7 @@ async def test_logical_failures(
     assert names == [browl.imports.CATALOG, f"ontology{Path(fixture).suffix}"]
 
 
-@pytest.mark.jvm
-@pytest.mark.usefixtures("jvm")
-async def test_reasons_over_converted(settings: Settings, data_dir: Path, tmp_path: Path) -> None:
+async def test_reasons_over_converted(java: None, settings: Settings, data_dir: Path, tmp_path: Path) -> None:
     """Check that an OWL Functional Syntax upload is reasoned over as the Turtle the imports stage converted it to."""
     context = JobContext(1, settings, Reasoner.ELK, upload(data_dir, "ok.ofn"))
     await imports_stage(context)
@@ -510,9 +500,7 @@ async def test_reasons_over_converted(settings: Settings, data_dir: Path, tmp_pa
     assert "SubClassOf(Dog Pet)" in await axioms(context.reasoned, "http://example.org/s2/", settings, tmp_path)
 
 
-@pytest.mark.jvm
-@pytest.mark.usefixtures("jvm")
-async def test_time_limit(data_dir: Path) -> None:
+async def test_time_limit(java: None, data_dir: Path) -> None:
     """Check that a run past REASONER_TIMEOUT_S is killed, and the job records the time limit."""
     settings = make_settings(ROBOT_JAR=str(find_robot_jar()), REASONER_TIMEOUT_S=1)
     context = job(settings, Reasoner.HERMIT, pigeonhole(data_dir / "uploads" / "1" / "ontology.ofn", 9))
@@ -522,9 +510,7 @@ async def test_time_limit(data_dir: Path) -> None:
     assert asyncio.get_running_loop().time() - started < 5
 
 
-@pytest.mark.jvm
-@pytest.mark.usefixtures("jvm")
-async def test_memory_limit(data_dir: Path) -> None:
+async def test_memory_limit(java: None, data_dir: Path) -> None:
     """Check that a heap breach ends ROBOT, and the job records the memory limit."""
     settings = make_settings(ROBOT_JAR=str(find_robot_jar()), REASONER_MAX_HEAP="8m")
     with pytest.raises(StageError, match=r"^memory limit: reasoning needed more than REASONER_MAX_HEAP \(8m\)$"):

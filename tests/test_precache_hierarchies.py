@@ -394,7 +394,6 @@ ex:hasPart a owl:ObjectProperty ; rdfs:subPropertyOf ex:has .
 """
 
 
-@pytest.mark.fuseki
 async def test_hierarchies_on_real_fuseki(fuseki_url: str, data_dir: Path) -> None:
     """Check the hook on a real Fuseki: blank-node parents and equivalents are left out, and imports are seen."""
     settings = make_settings()

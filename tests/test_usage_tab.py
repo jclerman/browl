@@ -47,7 +47,7 @@ from browl.usages import Usage, UsageSource, UsageStore, read_usages
 from tests.helpers import connect, fuseki_dataset, loaded, make_app, make_settings, ontology_ntriples
 from tests.test_usages import usage_triples
 
-pytestmark = [pytest.mark.anyio]
+pytestmark = pytest.mark.anyio
 
 NS = "http://example.org/axioms#"
 PANEL = {"path": "/axioms", "tab": "usage", "panel": "1"}
@@ -99,8 +99,6 @@ def lone_axiom(ntriples: bytes) -> owl.AnyAxiom:
     return node
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 @pytest.mark.parametrize("size", [1, 3, 50])
 async def test_every_usage_once(
     store: UsageStore, settings: Settings, monkeypatch: pytest.MonkeyPatch, size: int
@@ -267,8 +265,6 @@ def annotations_shown(page: str) -> list[str]:
     return found
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 def test_subjects(client: TestClient) -> None:
     """Check a class's and a property's subjects: by name, then those with no single subject, then non-entities.
 
@@ -306,8 +302,6 @@ def test_subjects(client: TestClient) -> None:
     assert len(lines_shown(has_part)) == 2  # its two general class axioms
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 def test_annotations(client: TestClient) -> None:
     """Check that an axiom shows its annotations only when the usage is found through them alone, nested by depth."""
     assert annotations_shown(panel(client, "Fungus").text) == [":remark :Fungus"]  # on Tricky SubClassOf Animal
@@ -328,8 +322,6 @@ def test_annotations(client: TestClient) -> None:
     assert "axiom-annotations" not in animal
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 def test_label(client: TestClient) -> None:
     """Check the Usage tab's label: fetched after an Overview renders, inline when the Usage tab is shown."""
     count = f"/_browl/usage-count?iri={NS.replace(':', '%3A').replace('/', '%2F').replace('#', '%23')}Dog"
@@ -344,8 +336,6 @@ def test_label(client: TestClient) -> None:
     assert client.get("/_browl/usage-count").status_code == 404
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 def test_pages(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check the paging: a subject split across pages marked "(continued)", links to the pages around, and a form."""
     monkeypatch.setattr(browl.usage_tab, "PAGE_USAGES", 1)
@@ -377,8 +367,6 @@ def test_pages(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     assert fallback.headers["Location"] == "/axioms?tab=usage&page=2#Pet"
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 @pytest.mark.parametrize("page", ["0", "6", "-1", "01", "1.5", "two", "", "1e1", "999999999", "1000000000"])
 def test_page_not_found(client: TestClient, monkeypatch: pytest.MonkeyPatch, page: str) -> None:
     """Check that a page that isn't a positive integer without leading zeros, or is past the last, is a 404."""
@@ -387,8 +375,6 @@ def test_page_not_found(client: TestClient, monkeypatch: pytest.MonkeyPatch, pag
     assert client.get("/_browl/hash", params={**PANEL, "fragment": "Dog", "page": ["1", "1"]}).status_code == 404
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 def test_one_page(client: TestClient) -> None:
     """Check that a tab of one page has no paging, and an explicit first page is the same."""
     page = panel(client, "Dog").text
@@ -397,8 +383,6 @@ def test_one_page(client: TestClient) -> None:
     assert panel(client, "Dog", page="2").status_code == 404
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 def test_preparing(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Check that an entity with more usages than streamed shows its count and "Preparing…", without reading them."""
     monkeypatch.setattr(browl.usage_tab, "MAX_STREAMED_USAGES", 4)
@@ -421,8 +405,6 @@ def test_preparing(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: 
     assert "Preparing the usages of http://example.org/axioms#Animal" in caplog.text
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 def test_table_pages(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that once the usage table is ready, every entity's pages and label are those streamed before.
 
@@ -480,8 +462,6 @@ def preparing(page: str) -> tuple[str, str | None] | None:
     return " ".join(text.split()), poll and poll.group(1)
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 def test_preparing_polls(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that "Preparing…" polls its own page's panel, and says how long the table's build has left if known.
 
@@ -500,8 +480,6 @@ def test_preparing_polls(client: TestClient, monkeypatch: pytest.MonkeyPatch) ->
     assert MESSAGE in page
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 def test_no_usages(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that an entity with no usages says so."""
 
@@ -519,8 +497,6 @@ MESSAGE = "The usages can't be shown just now."
 TOO_LARGE = "This page's usages are too large to show here."
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 @pytest.mark.parametrize("failing", ["count_usages", "read_usages", "fetch_usage_fragments", "usage_axioms"])
 def test_failure(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, failing: str
@@ -547,8 +523,6 @@ def test_failure(
         assert (count.status_code, count.text) == (200, "Usage")
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 def test_too_many_iris(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Check that a page whose axioms mention too many IRIs says so, rather than fetch, parse and link them all."""
     monkeypatch.setattr(browl.axioms, "MAX_FRAGMENT_IRIS", 2)
@@ -557,8 +531,6 @@ def test_too_many_iris(client: TestClient, monkeypatch: pytest.MonkeyPatch, capl
     assert "mentions" in caplog.text and "more than 2" in caplog.text
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 def test_too_large(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Check that a page whose fragments, or a property's values, are too large for a query's result says so.
 
@@ -571,8 +543,6 @@ def test_too_large(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: 
     assert "the page's values are too large: the result is longer than 40 characters" in caplog.text
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 def test_unlisted(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that usages counted but not listed, such as anonymous individuals', make no pages past those listed.
 
@@ -672,9 +642,7 @@ def test_unclaimed_on_page(monkeypatch: pytest.MonkeyPatch) -> None:
     assert groups == [UsageGroup(subject=subject.iri, axioms=[claimed]), UsageGroup(subject=None, axioms=[stray])]
 
 
-@pytest.mark.jvm
-@pytest.mark.usefixtures("jvm")
-def test_java_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_java_failure(jvm: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that a Java exception while reading a page's axioms is a `FragmentError`, which fails only the tab."""
 
     def fail(*args: object) -> None:
@@ -686,8 +654,6 @@ def test_java_failure(monkeypatch: pytest.MonkeyPatch) -> None:
         asyncio.run(owlapi.run_java(browl.usage_tab.usage_axioms, triples, b"", f"{NS}E", {f"{NS}A": 1}))
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 async def test_fragment_types(store: UsageStore) -> None:
     """Check that a page's fragment has the declaration types of the IRIs it mentions, and no others' or other types.
 
@@ -709,9 +675,7 @@ CLASSES = "".join(f"<{NS}{name}> {RDF_TYPE} <{OWL_NS}Class> .\n" for name in "AB
 """Declarations of classes A to E."""
 
 
-@pytest.mark.jvm
-@pytest.mark.usefixtures("jvm")
-def test_shared_and_unclaimed(caplog: pytest.LogCaptureFixture) -> None:
+def test_shared_and_unclaimed(jvm: None, caplog: pytest.LogCaptureFixture) -> None:
     """Check that an axiom about two subjects goes to the first that lacks one, and one about none goes with no subject.
 
     That one is logged, and a fragment the OWLAPI can't parse fails.
@@ -731,10 +695,7 @@ def test_shared_and_unclaimed(caplog: pytest.LogCaptureFixture) -> None:
         asyncio.run(owlapi.run_java(browl.usage_tab.usage_axioms, b"not N-Triples", b"", f"{NS}E", subjects))
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
-@pytest.mark.usefixtures("jvm")
-async def test_blank_object(fuseki_url: str, settings: Settings) -> None:
+async def test_blank_object(jvm: None, fuseki_url: str, settings: Settings) -> None:
     """Check a property's usage whose object is blank, an anonymous individual: its triple is fetched by its label."""
     remark = f"<{NS}remark>"
     triples = f"{CLASSES}{remark} {RDF_TYPE} <{OWL_NS}AnnotationProperty> .\n<{NS}A> {remark} _:x .\n"
@@ -745,8 +706,6 @@ async def test_blank_object(fuseki_url: str, settings: Settings) -> None:
     assert [axiom.manchester for axiom in group.axioms] == [f"<{NS}A> <{NS}remark> _:b1"]
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 async def test_imports(fuseki_url: str, ntriples: bytes, settings: Settings, store: UsageStore) -> None:
     """Check that with some triples in a named graph, as an import's, read with the imports' clause, pages are the same.
 
@@ -840,9 +799,7 @@ def column_kinds(ntriples: bytes) -> tuple[set[tuple[str, bool]], list[tuple[str
     return kinds, texts
 
 
-@pytest.mark.jvm
-@pytest.mark.usefixtures("jvm")
-def test_columns_by_kind(ntriples: bytes) -> None:
+def test_columns_by_kind(jvm: None, ntriples: bytes) -> None:
     """Check which kinds of axiom are shown in columns under their subject, and that their parts make the whole."""
     kinds, texts = asyncio.run(owlapi.run_java(column_kinds, ntriples))
     assert kinds == {(kind, True) for kind in SPLIT_KINDS} | {(kind, False) for kind in WHOLE_KINDS}
@@ -853,8 +810,6 @@ def test_columns_by_kind(ntriples: bytes) -> None:
     assert other.subject_split(f"{NS}Dog") is None
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 def test_columns(client: TestClient) -> None:
     """Check the columns: a line in them reads, for a screen reader, as the whole axiom; others span both.
 
@@ -897,10 +852,8 @@ def symmetric_triples(predicate: str, type_: str) -> bytes:
     return f"{declared}<{NS}Z> <{OWL_NS}{predicate}> <{NS}A> .\n".encode()
 
 
-@pytest.mark.jvm
-@pytest.mark.usefixtures("jvm")
 @pytest.mark.parametrize(("predicate", "type_", "keyword"), SYMMETRIC)
-def test_symmetric_subject_first(predicate: str, type_: str, keyword: str) -> None:
+def test_symmetric_subject_first(jvm: None, predicate: str, type_: str, keyword: str) -> None:
     """Check that a symmetric axiom stated on Z, on A's Usage tab, is written with Z, its subject, first."""
     triples = symmetric_triples(predicate, type_)
     found, _ = asyncio.run(owlapi.run_java(browl.usage_tab.usage_axioms, triples, b"", f"{NS}A", {f"{NS}Z": 1}))
@@ -911,10 +864,7 @@ def test_symmetric_subject_first(predicate: str, type_: str, keyword: str) -> No
     assert (owl.manchester_text(split.keyword), owl.manchester_text(split.rest)) == (keyword, f"<{NS}A>")
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
-@pytest.mark.usefixtures("jvm")
-async def test_symmetric_on_both_tabs(fuseki_url: str, settings: Settings) -> None:
+async def test_symmetric_on_both_tabs(jvm: None, fuseki_url: str, settings: Settings) -> None:
     """Check `Z DisjointWith A`, stated on Z, on A's tabs: on its Usage tab under Z, Z first; on its Overview, as Z."""
     triples = symmetric_triples("disjointWith", "Class")
     async with loaded(fuseki_url, settings, {None: triples}, "") as small:
@@ -974,8 +924,6 @@ def test_highlight_and_columns_rendered() -> None:
     assert mark in page.split('<ul class="axiom-annotations">')[1]
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 def test_highlight(client: TestClient) -> None:
     """Check that the entity is highlighted in its Usage tab's axioms, but not as a subject.
 
@@ -989,8 +937,6 @@ def test_highlight(client: TestClient) -> None:
     assert mark.replace("Dog", "Mineral") in mineral.split('<ul class="axiom-annotations">')[1]
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 def test_table_failure(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Check that a usage table that fails to read fails only the tab's content, with a message, and is logged."""
 
@@ -1003,8 +949,6 @@ def test_table_failure(client: TestClient, monkeypatch: pytest.MonkeyPatch, capl
     assert "Couldn't read the usage table for http://example.org/axioms#Animal" in caplog.text
 
 
-@pytest.mark.fuseki
-@pytest.mark.jvm
 async def test_missing_value(store: UsageStore, caplog: pytest.LogCaptureFixture) -> None:
     """Check that a property's usage past its subject's values, which can't happen, is logged and left out."""
     usage = Usage(UsageSource.PREDICATE, IRI(f"{NS}Cat"), index=5)

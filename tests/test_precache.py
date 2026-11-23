@@ -516,7 +516,6 @@ async def loaded(fuseki_url: str) -> AsyncIterator[tuple[httpx2.AsyncClient, int
             await http.delete(f"/$/datasets/{name}")
 
 
-@pytest.mark.fuseki
 async def test_stage_on_real_fuseki(settings: Settings, loaded: tuple[httpx2.AsyncClient, int]) -> None:
     """Check pre-caching on a real Fuseki: the ontology's IRIs, and bulk results that pass their completeness check.
 
@@ -601,7 +600,6 @@ async def test_rebuild_fuseki_down(settings: Settings, monkeypatch: pytest.Monke
     assert derived_files(settings) == []
 
 
-@pytest.mark.fuseki
 async def test_ontology_header_on_real_fuseki(fuseki_url: str, settings: Settings) -> None:
     """Check on a real Fuseki that the ontology's IRIs and title come only from its own graph, not what it imports.
 
@@ -1049,7 +1047,6 @@ async def test_entities_warning_shortens_iris(settings: Settings, caplog: pytest
     assert len(message) < 500
 
 
-@pytest.mark.fuseki
 async def test_entities_on_real_fuseki(fuseki_url: str, settings: Settings) -> None:
     """Check the entities hook on a real Fuseki: the ontology, and the classes and properties of it and its imports.
 
