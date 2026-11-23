@@ -69,7 +69,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **U-46** · In the hierarchy trees and the hierarchy column, deprecated entities (`owl:deprecated true`) are struck through, with a text equivalent for screen readers. | v1 |
 | **U-19** · Autocomplete also matches from the start of any word, ranked after matches from the start of the whole value. _(Q8; proposed for v1, was Later; P-41)_ | v1 |
 | **U-47** · Search can cover every annotation property with literal values in the served ontology, not only the name properties. The full results page lists the properties the ontology has, with their value counts, to filter by. _(P-42)_ | v1 |
-| **U-48** · A visitor's search filters can be kept in their browser, and the navigation bar's search box then uses them, showing that it's filtered and offering to clear the filters. _(P-43)_ | v1 |
+| **U-48** · A visitor's search filters can be kept in their browser, when they ask, and the navigation bar's search box then uses them, showing that it's filtered and offering to clear the filters. _(P-43)_ | v1 |
 | **U-49** · A visitor can choose the order in which properties rank search results, in place of the name properties' order. _(P-42 makes it possible)_ | Later |
 | **U-18** · Named individuals have pages, and each class page lists its individuals in an Individuals tab, with paging. _(Q17)_ | Later |
 | **U-20** · Autocomplete tolerates typos. _(Q8)_ | Later |
@@ -914,9 +914,12 @@ describes P-19 as built.
     count (kept in `search_lane`). Long values such as definitions are indexed like any other; their key holds their
     first `KEY_CHARS` characters.
   - **Showing hits:** the autocomplete shows them as now (2.9, Search), without the property. The results page shows
-    them as a table: the matched value and the entity's name (with its CURIE, else IRI), then the property the value
-    is from, then the types, last as now.
-- **Sticky filters** (U-48, P-43). The results page offers to use its filters in the search box. `static/search.js`
+    them as a table, one line per hit where the screen is wide enough: the matched value and the entity's name, its
+    CURIE, else IRI, muted, then the property the value is from, then the types, last as now.
+- **Sticky filters** (U-48, P-43). The results page has a button, "Use these filters in the search box", which makes
+  its filters the box's; using filters on the results page doesn't by itself, so a one-off search never narrows the
+  box unnoticed. They then apply to the box's suggestions, and to the results page opened from the box; a results
+  page's own URL always keeps its own filters. `static/search.js`
   keeps them in the browser's storage and adds them to the box's requests and its form; the bar shows "Filtered", with
   a control that clears them. URLs stay the same for every visitor, so the page cache (2.10) is unaffected, and
   without JS the box searches with the defaults. On the results page itself, the bar's form carries the page's filters
@@ -935,10 +938,6 @@ describes P-19 as built.
     status page shows it; if it fails, the current file stays and the admin sees why. On NCBITaxon it takes about
     3¼ minutes, as a load's pre-caching does, unless only the hooks whose keys changed are run again, on a copy of the
     current file.
-- **To settle when they're built:**
-  - Whether the results page's filters become the box's on request (a button) or whenever they're used. Either way
-    they then apply to the box's suggestions, and to the results page opened from the box; a results page's own URL
-    always keeps its own filters.
 
 **Later:** an external engine such as Typesense for typo tolerance (U-20), swapped in behind the same interface.
 Building the index in the background after the generation is ready, if a framework for such
