@@ -44,7 +44,7 @@
       {% endfor %}
     </ol>
     {% else %}
-    <p class="note">No matches.</p>
+    <p class="note">{% if offset %}No more results.{% else %}No matches.{% endif %}</p>
     {% endif %}
     {% if previous is not none or next is not none %}
     <nav class="search-paging" aria-label="Result pages">

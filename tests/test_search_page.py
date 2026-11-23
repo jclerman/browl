@@ -317,6 +317,17 @@ def test_paging(client: TestClient) -> None:
     assert previous == [("q", "item"), ("type", "class"), ("values", "direct")]
 
 
+@pytest.mark.parametrize(
+    ("text", "offset", "note"), [("zzz", None, "No matches."), ("item", MAX_OFFSET, "No more results.")]
+)
+def test_no_results_note(client: TestClient, text: str, offset: int | None, note: str) -> None:
+    """Check that a page with no results says there are none, or past the first page, no more."""
+    params = [("q", text)] + ([("offset", str(offset))] if offset else [])
+    response = client.get(SEARCH, params=params)
+    assert Hits(response.text).hits == []
+    assert f'<p class="note">{note}</p>' in response.text
+
+
 def test_previous_from_between_pages(client: TestClient) -> None:
     """Check that Previous from an offset under a page goes to the first page, which has no offset."""
     links = dict(results(client, [("q", "item"), ("offset", "10")]).links)
@@ -350,6 +361,7 @@ def test_paging_stops_at_max_offset(client: TestClient, monkeypatch: pytest.Monk
         [("q", "a"), ("offset", str(MAX_OFFSET + 1))],
         [("q", "a"), ("offset", "1" * 5_000)],  # past int()'s digit limit
         [("q", "a"), ("suggest", "yes")],
+        [("q", "a"), ("suggest", "1"), ("offset", "50")],
         [("q", "a" * (MAX_QUERY_CHARS + 1))],
     ],
 )

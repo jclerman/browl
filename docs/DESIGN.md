@@ -1541,8 +1541,9 @@ too (P-38), and the JSON API's (P-33).
   as `NAME_PROPERTIES` names them. It shows 50 hits a page, with Previous and Next links,
   as deep as search's `MAX_OFFSET` allows. Both are `noindex`.
 - **Input**: a repeated `q`, `values`, `offset` or `suggest`, an unknown type or name property, an offset that isn't a
-  positive integer without leading zeros or is past `MAX_OFFSET`, or text over `MAX_QUERY_CHARS` gets the "not found"
-  page, as tree pages do. A blank query finds nothing: an empty fragment, which closes the list, or the form alone.
+  positive integer without leading zeros, is past `MAX_OFFSET`, or comes with `suggest`, or text over
+  `MAX_QUERY_CHARS` gets the "not found" page, as tree pages do. A blank query finds nothing: an empty fragment,
+  which closes the list, or the form alone.
 - **No server-side deadline** (from P-19's review): each query's cost is already bounded (§2.6, Bounds), and the
   box's pause and replacing of requests keep typing from piling them up.
 

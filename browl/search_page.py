@@ -137,7 +137,7 @@ def read_request(request: Request, properties: Collection[str]) -> SearchRequest
     if len(text) > MAX_QUERY_CHARS or (values is not None and values not in _VALUES) or suggest not in (None, "1"):
         return None
     offset = read_offset(single[OFFSET_PARAM])
-    if offset is None or offset > MAX_OFFSET:
+    if offset is None or offset > MAX_OFFSET or (offset and suggest):  # the fragment isn't paged
         return None
     try:
         types = tuple(dict.fromkeys(EntityType(kind) for kind in params.getlist(TYPE_PARAM)))
