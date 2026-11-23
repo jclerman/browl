@@ -173,9 +173,10 @@ def marked_length(value: str, query: str) -> int:
 
 
 def _split(text: str, query: str) -> tuple[str, str]:
-    """Return a text cut short (`cut_name`), split where its match of the query ends."""
+    """Return a text cut short (`cut_name`), split where its match of the query ends, before any "…" the cut added."""
     shown = cut_name(text)
-    end = min(marked_length(text, query), len(shown))
+    kept = len(shown) if shown == text else len(shown) - 1
+    end = marked_length(text[:kept], query)  # only what's shown: the query may be far longer
     return shown[:end], shown[end:]
 
 

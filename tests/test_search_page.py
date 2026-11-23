@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from browl import search_page
 from browl.derived import EntityType
+from browl.pages import MAX_NAME_CHARS
 from browl.search import MAX_OFFSET, MAX_QUERY_CHARS
 from browl.search_page import PAGE_SIZE, marked_length
 from tests.helpers import derived_stage, make_app
@@ -24,6 +25,8 @@ SYNONYM = "http://www.geneontology.org/formats/oboInOwl#hasExactSynonym"
 SEARCH = "/_browl/search"
 MANY = PAGE_SIZE + 5
 """How many classes named "item …" there are: more than a page."""
+LONG = "zebra " + "z" * MAX_NAME_CHARS
+"""A label longer than pages show."""
 
 
 def ex(name: str) -> str:
@@ -40,6 +43,7 @@ def search_stage() -> object:
         (ex("pun"), EntityType.CLASS),
         (ex("pun"), EntityType.ANNOTATION_PROPERTY),
         (ex("other"), EntityType.CLASS),
+        (ex("long"), EntityType.CLASS),
         (SYNONYM, EntityType.ANNOTATION_PROPERTY),
     ]
     entities += [(ex(f"item{n}"), EntityType.CLASS) for n in range(MANY)]
@@ -50,6 +54,7 @@ def search_stage() -> object:
         (ex("hasPart"), LABEL, "has part", "en", True),
         (ex("pun"), LABEL, "punned", "en", True),
         (ex("other"), LABEL, "other thing", "en", False),
+        (ex("long"), LABEL, LONG, "en", True),
         (SYNONYM, LABEL, "has exact synonym", "en", True),
     ]
     values += [(ex(f"item{n}"), LABEL, f"item {n:03}", "en", True) for n in range(MANY)]
@@ -59,6 +64,7 @@ def search_stage() -> object:
         ex("hasPart"): ("has part", None),
         ex("pun"): ("punned", None),
         ex("other"): ("other thing", None),
+        ex("long"): (LONG, None),
         SYNONYM: ("has exact synonym", None),
     }
     names |= {ex(f"item{n}"): (f"item {n:03}", None) for n in range(MANY)}
@@ -192,6 +198,14 @@ def test_suggestion_marks_match(client: TestClient) -> None:
     """Check that the query's match is marked, in the value shown, whatever its case."""
     page = suggest(client, "myo")
     assert page.marks == ["Myo", "myo"]
+
+
+def test_long_value_cut_short(client: TestClient) -> None:
+    """Check that a long value is cut short, and that its mark stops before the "…", however long the query."""
+    page = suggest(client, LONG)
+    shown = LONG[: MAX_NAME_CHARS - 1]
+    assert page.hits == [Hit(None, f"{shown}…", "Class", "/long")]
+    assert page.marks == [shown]
 
 
 def test_punned_one_hit(client: TestClient) -> None:
