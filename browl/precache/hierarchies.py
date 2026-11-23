@@ -87,9 +87,7 @@ async def hierarchies(context: PreCacheContext) -> None:
         columns = tuple(stream.variables.index(name) for name in ("child", "relation", "parent"))
         async for batch in batched(stream):
             await context.db.run(functools.partial(_stage, batch, columns))
-    for hierarchy in HIERARCHIES:
-        await context.db.run(functools.partial(_fill, hierarchy))
-    await context.db.run(drop_staging)
+    await context.db.run(fill_staged)
     for table in ("equiv_group", "edge", "counts", "root"):
         await context.db.create_indexes(table)
 
@@ -101,20 +99,15 @@ def create_staging(connection: sqlite3.Connection) -> None:
     )
 
 
-def drop_staging(connection: sqlite3.Connection) -> None:
-    """Drop `edge_staging`, once every hierarchy is filled."""
-    connection.execute("DROP TABLE edge_staging")
-
-
 def fill_staged(connection: sqlite3.Connection) -> None:
-    """Fill every hierarchy from `edge_staging`, then drop it, as the hook does; for tests that stage their own edges.
+    """Fill every hierarchy from `edge_staging`, then drop it.
 
     Raises:
         StageError: A hierarchy is too dense to count its descendants within `DESCENDANT_BUDGET`.
     """
     for hierarchy in HIERARCHIES:
         _fill(hierarchy, connection)
-    drop_staging(connection)
+    connection.execute("DROP TABLE edge_staging")
 
 
 def _stage(batch: list[tuple[Term | None, ...]], columns: tuple[int, ...], connection: sqlite3.Connection) -> None:
