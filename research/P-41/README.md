@@ -58,3 +58,38 @@ Ten results per query; the maximum is usually the first, cold run.
 
 The worst case seeks every lane at every length: here a query with no match, at 1.4 ms, against 0.65 ms without word
 rows. As the design expected, it at most doubles, since the lanes double. N-2 (p95 under 100 ms) holds.
+
+## FTS5, compared
+
+Would SQLite's full-text index, FTS5, do better? `fts5_bench.py` builds a contentless FTS5 table of the same
+normalized values (`unicode61` tokenizer, `detail=full` for phrase queries, prefix indexes of 1–3 characters) in the
+scratch file `bench.py` filled, and times queries ranked as §2.6 ranks them, in SQL, ten IRIs a query:
+
+```sh
+poetry run python research/P-41/fts5_bench.py SCRATCH_DB
+```
+
+It builds in 8.8 s, plus 1.6 s to optimize, into 166 MiB: about a fifth of the word rows' time and size. But FTS5
+returns matches in row order, not in the ranking's, so a query sorts every match, as P-19's first range scan did.
+Medians of five runs:
+
+| Query | Values matched | Time |
+| --- | --- | --- |
+| `a` | 770,374 | 972 ms |
+| `s` | 1,702,159 | 2,077 ms |
+| `ba` | 185,942 | 251 ms |
+| `virus` | 169,176 | 237 ms |
+| `bacterium` | 102,409 | 143 ms |
+| `unclassified` | 66,199 | 88 ms |
+| `hom` | 2,751 | 4 ms |
+| `sapiens` | 19 | 0.1 ms |
+| `sp.` | 1,390,868 | 1,735 ms |
+
+N-2 (p95 under 100 ms) fails for any common word. Keeping the whole-value table and asking FTS5 only for word matches,
+when the whole values don't fill the page, doesn't save it: no value starts with `sp.`, but 1.39 M have a later word
+that starts with `sp`, so that query still sorts them all, in 1.7 s. A type or property filter that leaves few whole
+values matching would do the same. So word rows stay: about 37 s more than FTS5 to build, for every query in about a millisecond.
+
+A dedicated engine (Elasticsearch, Typesense, Postgres full text) has the same choice to make: either rank by relevance
+rather than by §2.6's rules, or index every word start's suffix (or every prefix of every word) much as word rows do,
+which isn't smaller or faster to build. Its gains are elsewhere, such as typo tolerance (U-20).
