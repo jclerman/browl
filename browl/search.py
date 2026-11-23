@@ -143,7 +143,7 @@ class SqliteSearch(SearchBackend):
         """
         settings = context.job.settings
         await context.db.run(
-            lambda connection: _fill(connection, name_property_iris(settings), settings.language_ranking)
+            lambda connection: fill_index(connection, name_property_iris(settings), settings.language_ranking)
         )
 
     async def search(self, generation: int, query: SearchQuery) -> SearchResults:
@@ -155,7 +155,8 @@ BACKEND: type[SearchBackend] = SqliteSearch
 """The search engine in use, whose `index` pre-caching calls."""
 
 
-def _fill(connection: sqlite3.Connection, properties: Sequence[str], ranking: Sequence[str]) -> None:
+def fill_index(connection: sqlite3.Connection, properties: Sequence[str], ranking: Sequence[str]) -> None:
+    """Fill the index from `name_value`, ranking values by the name properties' IRIs and the language ranking."""
     # Lengths and cuts are Python's: SQLite's length() and substr() stop at a NUL, which a literal may hold.
     connection.create_function("key_length", 1, lambda text: min(len(text), KEY_CHARS), deterministic=True)
     connection.create_function("key_head", 1, lambda text: text[:KEY_CHARS], deterministic=True)

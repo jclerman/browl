@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 from browl.derived import INDEXES, SCHEMA, EntityType
-from browl.search import SearchQuery, _fill, search
+from browl.search import SearchQuery, fill_index, search
 
 QUERIES = ["a", "s", "e", "ba", "hom", "homo sapiens", "unclassified", "candidatus", "zzz", "x" * 40]
 
@@ -33,7 +33,7 @@ def main() -> None:
     for sql in INDEXES["entity"] + INDEXES["name_value"]:
         connection.execute(sql)
     start = time.perf_counter()
-    _fill(connection, ["http://www.w3.org/2000/01/rdf-schema#label"], ["en", "none"])
+    fill_index(connection, ["http://www.w3.org/2000/01/rdf-schema#label"], ["en", "none"])
     print(f"build: {time.perf_counter() - start:.1f} s")
     size = connection.execute("SELECT sum(pgsize) FROM dbstat WHERE name = 'search_value'").fetchone()[0]
     print(f"search_value: {size / 2**20:.0f} MiB")

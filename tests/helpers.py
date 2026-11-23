@@ -371,7 +371,7 @@ def derived_stage(
                     " SELECT id, ?, ?, ?, ?, ? FROM entity WHERE iri = ?",
                     [(p, value, normalize(value), lang, direct, iri) for iri, p, value, lang, direct in name_values],
                 )
-                search._fill(connection, name_property_iris(settings), settings.language_ranking)
+                search.fill_index(connection, name_property_iris(settings), settings.language_ranking)
 
     async def stage(context: JobContext) -> None:
         await asyncio.to_thread(build, context)

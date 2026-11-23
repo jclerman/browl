@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from browl import search_page
-from browl.derived import EntityType
+from browl.derived import EntityType, NotCurrentError
 from browl.pages import MAX_NAME_CHARS
 from browl.search import MAX_OFFSET, MAX_QUERY_CHARS
 from browl.search_page import PAGE_SIZE, marked_length
@@ -297,15 +297,48 @@ def test_entailed_filter(client: TestClient) -> None:
     assert results(client, [("q", "oth"), ("values", "direct")]).hits == []
 
 
+class Checked(html.parser.HTMLParser):
+    """A form's checked inputs, as (name, value).
+
+    Attributes:
+        checked: The checked inputs, in order.
+    """
+
+    def __init__(self, page: str) -> None:
+        """Parse a page."""
+        super().__init__()
+        self.checked: list[tuple[str | None, str | None]] = []
+        self.feed(page)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        """Note a checked input."""
+        at = dict(attrs)
+        if tag == "input" and "checked" in at:
+            self.checked.append((at.get("name"), at.get("value")))
+
+
 def test_filters_shown_checked(client: TestClient) -> None:
-    """Check that the form shows the filters the URL asks for, and names name properties by display name, else CURIE."""
-    response = client.get(SEARCH, params=[("q", "a"), ("type", "class"), ("property", SYNONYM), ("values", "direct")])
-    text = response.text
-    assert 'value="class" checked' in text
-    assert f'value="{SYNONYM}" checked' in text
-    assert 'value="direct" checked' in text
-    assert "has exact synonym" in text  # the synonym property's display name
-    assert "rdfs:label" in text  # undeclared: its CURIE
+    """Check that the form shows the filters the URL asks for, each once, and labels name properties as it should."""
+    params = [("q", "a"), ("type", "class"), ("type", "object_property"), ("type", "class")]
+    params += [("property", SYNONYM), ("property", LABEL), ("values", "direct")]
+    text = client.get(SEARCH, params=params).text
+    assert Checked(text).checked == [
+        ("type", "class"),
+        ("type", "object_property"),
+        ("property", LABEL),
+        ("property", SYNONYM),
+        ("values", "direct"),
+    ]
+    assert "<bdi>has exact synonym</bdi>" in text  # the synonym property's display name
+    assert "<bdi>rdfs:label</bdi>" in text  # undeclared: as set
+
+
+def test_several_filters(client: TestClient) -> None:
+    """Check that several types, or several name properties, checked find hits of any of them (U-10)."""
+    both = [("type", "class"), ("type", "object_property")]
+    assert [hit.name for hit in results(client, [("q", "has"), *both]).hits] == ["has part"]
+    properties = [("property", LABEL), ("property", SYNONYM), ("property", LABEL)]
+    assert [hit.name for hit in results(client, [("q", "myo"), *properties]).hits] == ["Myoblast", "heart muscle"]
 
 
 def test_property_labelled_as_set() -> None:
@@ -328,7 +361,10 @@ def test_paging(client: TestClient) -> None:
     assert "Previous" not in links
     params = urllib.parse.parse_qsl(urllib.parse.urlsplit(links["Next"]).query)
     assert params == [("q", "item"), ("type", "class"), ("values", "direct"), ("offset", str(PAGE_SIZE))]
-    second = results(client, params)
+    response = client.get(SEARCH, params=params)
+    assert f"Showing {PAGE_SIZE + 1}–{MANY}" in response.text
+    assert f'<ol class="hits" start="{PAGE_SIZE + 1}">' in response.text
+    second = Hits(response.text)
     assert [hit.name for hit in second.hits] == [f"item {n:03}" for n in range(PAGE_SIZE, MANY)]
     assert "Next" not in dict(second.links)
     previous = urllib.parse.parse_qsl(urllib.parse.urlsplit(dict(second.links)["Previous"]).query)
@@ -386,6 +422,16 @@ def test_paging_stops_at_max_offset(client: TestClient, monkeypatch: pytest.Monk
 def test_not_found(client: TestClient, params: list[tuple[str, str]]) -> None:
     """Check that a repeated or invalid parameter gets the "not found" page."""
     assert client.get(SEARCH, params=params).status_code == 404
+
+
+def test_not_current(app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a search while the derived database isn't current gets the "loading" page."""
+
+    async def not_current(*args: object) -> None:
+        raise NotCurrentError("rebuilding")
+
+    monkeypatch.setattr(app.state.search, "search", not_current)
+    assert client.get(SEARCH, params={"q": "myo"}).status_code == 503
 
 
 def test_search_box_in_bar(client: TestClient) -> None:

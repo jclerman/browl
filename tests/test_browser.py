@@ -2323,6 +2323,14 @@ def search_box(page: Page) -> Locator:
     return page.get_by_role("combobox", name="Search names")
 
 
+def typed(page: Page, server: LiveServer, text: str) -> Locator:
+    """Open the search page, type text in the navigation bar's box, and return the box."""
+    page.goto(f"{server.url}/_browl/search")
+    box = search_box(page)
+    box.fill(text)
+    return box
+
+
 def test_search_suggests_and_keys(page: Page, searchable: LiveServer) -> None:
     """Check the combobox pattern's keys, pointer and focus, and the status region (U-17).
 
@@ -2385,9 +2393,7 @@ def test_search_suggests_and_keys(page: Page, searchable: LiveServer) -> None:
 def test_search_enter_follows_option(page: Page, searchable: LiveServer) -> None:
     """Check that Enter on an active option opens its entity's page."""
     stub_entity_pages(page, searchable)
-    page.goto(f"{searchable.url}/_browl/search")
-    box = search_box(page)
-    box.fill("myo")
+    box = typed(page, searchable, "myo")
     expect(page.get_by_role("option")).to_have_count(3)
     box.press("ArrowDown")
     box.press("ArrowDown")
@@ -2398,17 +2404,14 @@ def test_search_enter_follows_option(page: Page, searchable: LiveServer) -> None
 def test_search_click_follows_option(page: Page, searchable: LiveServer) -> None:
     """Check that clicking an option opens its entity's page."""
     stub_entity_pages(page, searchable)
-    page.goto(f"{searchable.url}/_browl/search")
-    search_box(page).fill("myo")
+    typed(page, searchable, "myo")
     page.get_by_role("option").first.click()
     expect(page).to_have_url(f"{searchable.url}/myoblast")
 
 
 def test_search_enter_without_option_opens_results(page: Page, searchable: LiveServer) -> None:
     """Check that Enter with no active option opens the full results page."""
-    page.goto(f"{searchable.url}/_browl/search")
-    box = search_box(page)
-    box.fill("myo")
+    box = typed(page, searchable, "myo")
     expect(page.get_by_role("option")).to_have_count(3)
     box.press("Enter")
     expect(page).to_have_url(f"{searchable.url}/_browl/search?q=myo")
@@ -2417,8 +2420,7 @@ def test_search_enter_without_option_opens_results(page: Page, searchable: LiveS
 
 def test_search_all_results_option(page: Page, searchable: LiveServer) -> None:
     """Check that "All results…" opens the full results page for the query."""
-    page.goto(f"{searchable.url}/_browl/search")
-    search_box(page).fill("he")
+    typed(page, searchable, "he")
     page.get_by_role("option", name="All results…").click()
     expect(page).to_have_url(f"{searchable.url}/_browl/search?q=he")
 
@@ -2426,16 +2428,16 @@ def test_search_all_results_option(page: Page, searchable: LiveServer) -> None:
 def test_search_only_latest_shown(page: Page, searchable: LiveServer) -> None:
     """Check that a slow response for earlier text never replaces the suggestions for the text typed since."""
     held: list[Route] = []
+    failed: list[str] = []
+    page.on("requestfailed", lambda request: failed.append(request.url))
     page.route(SUGGEST, lambda route: held.append(route) if "q=m&" in route.request.url + "&" else route.continue_())
-    page.goto(f"{searchable.url}/_browl/search")
-    box = search_box(page)
-    box.fill("m")
+    box = typed(page, searchable, "m")
     wait_until(page, lambda: bool(held), "the first request")
     box.fill("myo")
     expect(page.get_by_role("option")).to_have_count(3)
-    with contextlib.suppress(PlaywrightError):  # htmx aborted it
+    wait_until(page, lambda: held[0].request.url in failed, "htmx to abort the first request")
+    with contextlib.suppress(PlaywrightError):
         held[0].continue_()
-    page.wait_for_timeout(300)
     expect(page.get_by_role("option")).to_have_count(3)
 
 
@@ -2465,9 +2467,7 @@ def test_search_escape_outlasts_pending_answer(page: Page, searchable: LiveServe
     """Check that the answer to a request pending when Escape closed the list doesn't reopen it."""
     held: list[Route] = []
     page.route(SUGGEST, lambda route: held.append(route) if "q=myo&" in route.request.url + "&" else route.continue_())
-    page.goto(f"{searchable.url}/_browl/search")
-    box = search_box(page)
-    box.fill("he")
+    box = typed(page, searchable, "he")
     listbox = page.get_by_role("listbox", name="Suggestions")
     expect(listbox.get_by_role("option")).to_have_count(2)
     box.fill("myo")
@@ -2486,9 +2486,7 @@ def test_search_cleared_box_ignores_pending_answer(page: Page, searchable: LiveS
     failed: list[str] = []
     page.on("requestfailed", lambda request: failed.append(request.url))
     page.route(SUGGEST, lambda route: held.append(route) if "q=myo&" in route.request.url + "&" else route.continue_())
-    page.goto(f"{searchable.url}/_browl/search")
-    box = search_box(page)
-    box.fill("myo")
+    box = typed(page, searchable, "myo")
     wait_until(page, lambda: bool(held), "the request for myo")
     with page.expect_response(lambda response: "q=&" in response.url + "&"):
         box.press("Escape")  # the list isn't open, so this clears the box
@@ -2519,9 +2517,7 @@ def test_search_retyped_after_clearing(page: Page, searchable: LiveServer) -> No
 
 def test_search_no_matches(page: Page, searchable: LiveServer) -> None:
     """Check that "No matches" is announced, and that the keys skip it, as a disabled option."""
-    page.goto(f"{searchable.url}/_browl/search")
-    box = search_box(page)
-    box.fill("zzz")
+    box = typed(page, searchable, "zzz")
     expect(page.locator("#site-search-status")).to_have_text("No matches")
     box.press("ArrowDown")
     expect(box).to_have_attribute("aria-activedescendant", "search-option-all")
