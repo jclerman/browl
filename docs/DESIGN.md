@@ -66,6 +66,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **U-32** · The panels are compact: each annotation value or axiom takes one line, wrapping only when it doesn't fit. A property with several values (e.g. 10 synonyms) is named once, with one line per value. | v1 |
 | **U-44** · A one-page view of an entity page, labeled "Scroll as one page": all of its content in one page scroll, with no panel scrolling on its own. Used for printing and on small screens (phones, short windows), and on demand with a toggle. | v1 |
 | **U-45** · An entity page shows where the entity sits in its hierarchy, in a hideable column beside the Overview's panels: its ancestors as one merged tree, each drawn once, with its direct children below it. | v1 |
+| **U-46** · In the hierarchy trees and the hierarchy column, deprecated entities (`owl:deprecated true`) are struck through, with a text equivalent for screen readers. | v1 |
 | **U-18** · Named individuals have pages, and each class page lists its individuals in an Individuals tab, with paging. _(Q17)_ | Later |
 | **U-19** · Autocomplete also matches from the start of any word. _(Q8)_ | Later |
 | **U-20** · Autocomplete tolerates typos. _(Q8)_ | Later |
@@ -1425,8 +1426,9 @@ CSS nesting gets the one-page view, without the toggle. _(P-16d)_
     above)"). The entity is highlighted, with its direct children collapsed below it. So the column's size grows with
     the number of ancestors, not with the number of paths, which multiplies at every join.
   - **Only the column merges:** the tree pages (P-18) show a node under each of its parents.
-  - **Nodes** are the tree pages': counts, links, expansion through `?node=`, and keyboard use. Equivalence groups are
-    one node (U-9). A property's column uses its own property hierarchy. An entity in no hierarchy gets no column.
+  - **Nodes** are the tree pages': counts, links, expansion through `?node=`, keyboard use, and deprecated entities
+    struck through (U-46, P-39). Equivalence groups are one node (U-9). A property's column uses its own property
+    hierarchy. An entity in no hierarchy gets no column.
   - **Data:** walking up `edge` in SQLite via `edge_child`, with no Fuseki query.
 
 **Tree pages** (U-7–U-9, U-17, P-18): `tree/{hierarchy}` (2.13), one per hierarchy, as nested lists that may use the
@@ -1663,6 +1665,7 @@ flowchart LR
     subgraph P4["Phase 4: Browsing"]
         P17["P-17 Home page"]
         P38["P-38 Hierarchy column"]
+        P39["P-39 Deprecated struck through"]
         P40["P-40 Shorter tree URLs"]
     end
     subgraph P5["Phase 5: Search, caching, auth"]
@@ -1685,7 +1688,7 @@ flowchart LR
 
     P19 --> P20
     P17 & P19 & P38 --> P33
-    P20 & P38 --> P25
+    P20 & P38 & P39 --> P25
     P22 --> P23
     P22 & P31 --> P36
     P31 --> P32
@@ -1748,6 +1751,7 @@ go into this document.
 | P-17 | Ontology home page, with the dropped-imports warning and the triple counts the job state keeps (P-8); link the ontology and version IRIs only if `http` or `https` (`browl.derived.Meta`) | U-1 | P-14 | To do | [#30](https://github.com/jclerman/browl/issues/30) |
 | P-18 | Hierarchy trees with lazy loading (htmx) and keyboard support | U-7, U-17 | P-12, P-14 | Done | [#31](https://github.com/jclerman/browl/issues/31) |
 | P-38 | Hierarchy column on entity pages: the entity's ancestors as one merged tree, each drawn once, and its direct children, from P-18's nodes (2.9) | U-45 | P-16, P-18 | To do | [#120](https://github.com/jclerman/browl/issues/120) |
+| P-39 | Deprecated entities struck through, with a text equivalent, in the tree pages and the hierarchy column, from a flag stored at pre-caching (2.5); whether to mark them elsewhere too is open | U-46 | P-18 | To do | [#123](https://github.com/jclerman/browl/issues/123) |
 | P-40 | Tree URLs name open nodes by CURIE, else IRI, about 4× shorter; an index on `entity.curie` (2.9, 2.13) | U-17 | P-18 | To do | [#125](https://github.com/jclerman/browl/issues/125) |
 | P-27 | Usage tab on entity pages: the blank-node owner map, streaming up to 20 K usages per request, and the usage table built in the background after a load (2.5, 2.8) | U-26 | P-9, P-16, S-4, S-7 | Done | [#41](https://github.com/jclerman/browl/issues/41) (sub-issues [#108](https://github.com/jclerman/browl/issues/108), [#109](https://github.com/jclerman/browl/issues/109), [#110](https://github.com/jclerman/browl/issues/110)) |
 
@@ -1767,7 +1771,7 @@ go into this document.
 | ID | Work item | Delivers | Depends on | Status | Tracking |
 | --- | --- | --- | --- | --- | --- |
 | P-24 | Performance check against N-1–N-3 targets at scale; whether streaming extraction alongside the TDB2 load is worth it | N-1–N-3 | all above | To do | [#42](https://github.com/jclerman/browl/issues/42) |
-| P-25 | Accessibility pass (trees, combobox, no-JS pages) | U-17 | P-18, P-20, P-38 | To do | [#35](https://github.com/jclerman/browl/issues/35) |
+| P-25 | Accessibility pass (trees, combobox, no-JS pages) | U-17 | P-18, P-20, P-38, P-39 | To do | [#35](https://github.com/jclerman/browl/issues/35) |
 | P-29 | Store the upload, fetched imports and ROBOT's output compressed at rest (gzip shrank Uberon 13–16×, P-8), and accept compressed uploads; measure the cost first | A-2 | P-8 | To do | [#71](https://github.com/jclerman/browl/issues/71) |
 | P-31 | Show load progress: each stage's elapsed time, ROBOT's current step, triples loaded of the total, the import being handled; for pre-caching, each hook's name, elapsed time and rows written (of the expected total where known); and background builds after a load (P-27c's usage table), with their progress | A-5 | P-8 | To do | [#73](https://github.com/jclerman/browl/issues/73) |
 | P-32 | Show the reasoner's own progress (per task, as Protégé does), running ROBOT's reasoning through its Java API with a progress monitor | A-5 | P-31, P-30 | To do | [#74](https://github.com/jclerman/browl/issues/74) |
