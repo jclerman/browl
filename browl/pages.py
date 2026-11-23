@@ -23,7 +23,7 @@ from starlette.responses import Response
 from starlette.templating import Jinja2Templates
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from browl.derived import DerivedReader, EntityType, NotCurrentError, entities_with_iri, read_meta
+from browl.derived import DerivedReader, EntityType, NotCurrentError, entities_with_iri, read_meta, ready_generation
 from browl.jobs import JobState, Site
 from browl.search import MAX_QUERY_CHARS
 
@@ -75,6 +75,12 @@ TREES = (
     TreePage("annotation-properties", "Annotation properties", EntityType.ANNOTATION_PROPERTY),
 )
 """Each hierarchy's tree page (DESIGN.md §2.13), in the navigation bar's order."""
+
+SEARCH_PATH = "search"
+"""The search route's path under the reserved prefix (`browl.search_page`), which the navigation bar's box opens."""
+
+SUGGEST_PARAM = "suggest"
+"""The query parameter that asks for the autocomplete fragment, as `suggest=1`, rather than the search page."""
 
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none';"
@@ -218,8 +224,8 @@ def frame_context(request: Request) -> dict[str, object]:
                 (href(request, f"{reserved}/tree/{tree.slug}"), tree.label, tree.slug == current) for tree in TREES
             ],
             "current_tree": next((tree.label for tree in TREES if tree.slug == current), None),
-            "search": href(request, f"{reserved}/search"),
-            "suggest": href(request, f"{reserved}/search?suggest=1"),
+            "search": href(request, f"{reserved}/{SEARCH_PATH}"),
+            "suggest": href(request, f"{reserved}/{SEARCH_PATH}?{SUGGEST_PARAM}=1"),
             "max_query_chars": MAX_QUERY_CHARS,
             "admin": href(request, f"{reserved}/admin/upload"),
             "is_admin": getattr(request.state, "is_admin", False) is True,
@@ -274,9 +280,7 @@ async def read_derived[T](
     """
     if state is None:
         state = await request.app.state.jobs.current()
-    generation = state.ready_generation
-    if generation is None:
-        raise NotCurrentError("no generation is ready")
+    generation = ready_generation(state)
     reader: DerivedReader = request.app.state.derived
     return await reader.read(generation, function)
 

@@ -17,10 +17,14 @@ from contextlib import closing, contextmanager, suppress
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic.dataclasses import dataclass as validated_dataclass
 
 from browl.jobtypes import Reasoner
+
+if TYPE_CHECKING:
+    from browl.jobs import JobState
 
 logger = logging.getLogger(__name__)
 
@@ -280,6 +284,17 @@ def is_hash_prefix(connection: sqlite3.Connection, path: str) -> bool:
 
 class NotCurrentError(Exception):
     """The derived database for a generation is missing, unreadable, or built for another generation or build keys."""
+
+
+def ready_generation(state: "JobState") -> int:
+    """Return a job state's ready generation, whose derived database pages read.
+
+    Raises:
+        NotCurrentError: No generation is ready.
+    """
+    if state.ready_generation is None:
+        raise NotCurrentError("no generation is ready")
+    return state.ready_generation
 
 
 def derived_dir(data_dir: Path) -> Path:

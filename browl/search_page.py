@@ -13,12 +13,14 @@ from fastapi import APIRouter, Request
 from fastapi.responses import Response
 from pydantic import ValidationError
 
-from browl.derived import TYPE_LABELS, EntityType, NotCurrentError
+from browl.derived import TYPE_LABELS, EntityType, ready_generation
 from browl.links import EntityLink, read_entity_links
 from browl.lookup import PANEL_HEADERS, not_found
 from browl.names import name_properties, normalize
 from browl.pages import (
     MAX_IRI_CHARS,
+    SEARCH_PATH,
+    SUGGEST_PARAM,
     cut_name,
     cut_text,
     href,
@@ -40,9 +42,6 @@ from browl.search import (
 from browl.settings import Settings
 from browl.tabs import with_query
 
-SEARCH_PATH = "search"
-"""The search route's path under the reserved prefix."""
-
 QUERY_PARAM = "q"
 """The query parameter that gives the search's text."""
 
@@ -58,13 +57,11 @@ VALUES_PARAM = "values"
 OFFSET_PARAM = "offset"
 """The query parameter that says how many results come before those shown; absent for none."""
 
-SUGGEST_PARAM = "suggest"
-"""The query parameter that asks for the autocomplete fragment, as `suggest=1`, rather than the page."""
-
 PAGE_SIZE = 50
 """How many results the full results page shows at once."""
 
 _VALUES = ("all", "direct")
+"""What `values=` may give."""
 
 router = APIRouter()
 """The search route, under the reserved prefix."""
@@ -299,9 +296,7 @@ async def search_page(request: Request) -> Response:
     if asked.suggest and not normalized:
         return templates.TemplateResponse(request, "search_suggestions.html", {"blank": True}, headers=PANEL_HEADERS)
     state = await request.app.state.jobs.current()
-    generation = state.ready_generation
-    if generation is None:
-        raise NotCurrentError("no generation is ready")
+    generation = ready_generation(state)
     results = SearchResults((), more=False)  # the page's form alone
     if normalized:
         backend: SearchBackend = request.app.state.search

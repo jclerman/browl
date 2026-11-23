@@ -13,13 +13,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import browl
-from browl import admin, derived, imports, loading, lookup, owlapi, precache, robot, search_page, trees
+from browl import admin, derived, imports, loading, lookup, owlapi, precache, robot, search, search_page, trees
 from browl.derived import DerivedReader, NotCurrentError
 from browl.fuseki import FusekiClient, dataset_clause, ping
 from browl.jobs import JobContext, JobRunner, JobState, Stage, StageFunction
 from browl.pages import STATIC_DIR, PageFrame, SiteGate, derived_not_current
 from browl.precache.core import has_loaded_imports
-from browl.search import SqliteSearch
 from browl.settings import Settings, load_settings
 from browl.usage_tables import UsageTables
 from browl.usages import UsageCounts, ready_store
@@ -134,7 +133,7 @@ def create_app(
 
             app.state.jobs = await JobRunner.open(settings, functions, on_ready=on_ready)
             app.state.derived = DerivedReader(settings.data_dir, keys)
-            app.state.search = SqliteSearch(app.state.derived)
+            app.state.search = search.BACKEND(app.state.derived)
             try:
                 rebuilding = False
                 if stages is None:

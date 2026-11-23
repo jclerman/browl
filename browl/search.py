@@ -107,7 +107,15 @@ class SearchResults:
 
 
 class SearchBackend(ABC):
-    """A search engine: indexes the name values during pre-caching, and answers queries (N-5)."""
+    """A search engine: indexes the name values during pre-caching, and answers queries (N-5).
+
+    Args:
+        reader: Reads the derived database.
+    """
+
+    def __init__(self, reader: DerivedReader) -> None:
+        """Read through the reader."""
+        self.reader = reader
 
     @staticmethod
     @abstractmethod
@@ -124,15 +132,7 @@ class SearchBackend(ABC):
 
 
 class SqliteSearch(SearchBackend):
-    """Search over the derived database's `search_value` table, keyed in ranking order (DESIGN.md §2.6).
-
-    Args:
-        reader: Reads the derived database.
-    """
-
-    def __init__(self, reader: DerivedReader) -> None:
-        """Read through the reader."""
-        self.reader = reader
+    """Search over the derived database's `search_value` table, keyed in ranking order (DESIGN.md §2.6)."""
 
     @staticmethod
     async def index(context: "PreCacheContext") -> None:

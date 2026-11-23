@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from itertools import batched
 
-from browl.derived import DerivedReader, NotCurrentError, UsageRootKind
+from browl.derived import DerivedReader, UsageRootKind, ready_generation
 from browl.fuseki import UNION_FROM, FusekiClient, SparqlError, dataset_clause, filled_query
 from browl.jobs import JobState
 from browl.links import LOOKUP_BATCH
@@ -152,9 +152,7 @@ def ready_store(state: JobState) -> tuple[int, str]:
     Raises:
         NotCurrentError: No generation is ready.
     """
-    generation = state.ready_generation
-    if generation is None:
-        raise NotCurrentError("no generation is ready")
+    generation = ready_generation(state)
     # Pages are served only once the latest job is ready, so its imports are the ready generation's; if a new job has
     # started meanwhile, seeing the imports' graphs too is always right, if slower.
     clause = dataset_clause(has_loaded_imports(state.imports)) if state.generation == generation else UNION_FROM
