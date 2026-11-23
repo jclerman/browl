@@ -25,6 +25,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from browl.derived import DerivedReader, EntityType, NotCurrentError, entities_with_iri, read_meta
 from browl.jobs import JobState, Site
+from browl.search import MAX_QUERY_CHARS
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +192,9 @@ def frame_context(request: Request) -> dict[str, object]:
                 (href(request, f"{reserved}/tree/{tree.slug}"), tree.label, tree.slug == current) for tree in TREES
             ],
             "current_tree": next((tree.label for tree in TREES if tree.slug == current), None),
+            "search": href(request, f"{reserved}/search"),
+            "suggest": href(request, f"{reserved}/search?suggest=1"),
+            "max_query_chars": MAX_QUERY_CHARS,
             "admin": href(request, f"{reserved}/admin/upload"),
             "is_admin": getattr(request.state, "is_admin", False) is True,
             "title_end": isolate(link.title) if link.title is not None else SITE_NAME,

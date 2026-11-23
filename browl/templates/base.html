@@ -13,6 +13,7 @@
   <script src="{{ url_for('static', path='links.js').path }}" defer></script>
   <script src="{{ url_for('static', path='tabs.js').path }}" defer></script>
   <script src="{{ url_for('static', path='tree.js').path }}" defer></script>
+  <script src="{{ url_for('static', path='search.js').path }}" defer></script>
   {% if hash_script is defined and hash_script %}
   <script src="{{ url_for('static', path='hash.js').path }}" data-lookup="{{ hash_script.lookup }}"
           data-path="{{ hash_script.path }}" data-prefix-only="{{ hash_script.prefix_only }}" defer></script>
@@ -28,8 +29,17 @@
         {%- if frame.name is not none %} · <bdi>{{ frame.name }}</bdi>{% endif -%}
         {%- if frame.home is not none %}</a>{% endif -%}
       </span>
-      {# The search box (P-20) goes here. #}
-      <div class="site-search"></div>
+      {# The search box: a WAI-ARIA combobox with htmx's suggestions (`static/search.js`); without JS, a plain form
+         that opens the full results page (U-10, U-17). #}
+      <form class="site-search" action="{{ frame.search }}" method="get" role="search">
+        <label for="site-search-box" class="visually-hidden">Search names</label>
+        <input id="site-search-box" type="search" name="q" placeholder="Search" maxlength="{{ frame.max_query_chars }}"
+               autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false"
+               aria-controls="site-search-list" hx-get="{{ frame.suggest }}" hx-trigger="input changed delay:150ms"
+               hx-target="#site-search-list" hx-swap="innerHTML" hx-sync="this:replace">
+        <ul id="site-search-list" class="search-list" role="listbox" aria-label="Suggestions" hidden></ul>
+        <span id="site-search-status" class="visually-hidden" role="status"></span>
+      </form>
       {# A menu on narrow screens; on wide ones the stylesheet shows its links in the bar, and hides its button. #}
       <details class="site-menu">
         {# On narrow screens the button names the tree page shown, as its link is hidden in the closed menu. #}

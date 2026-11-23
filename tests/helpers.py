@@ -21,7 +21,7 @@ import jpype
 import uvicorn
 from fastapi import FastAPI
 
-from browl import derived
+from browl import derived, search
 from browl.app import create_app
 from browl.derived import DerivedReader
 from browl.fuseki import END_VARIABLE, TSV, FusekiClient
@@ -29,6 +29,7 @@ from browl.imports import OWL_IMPORTS
 from browl.jobs import JobContext, StageFunction
 from browl.jobtypes import ImportResult, Reasoner
 from browl.loading import dataset_name
+from browl.names import name_property_iris, normalize
 from browl.precache import hierarchies
 from browl.precache.core import Hook
 from browl.precache.entities import Reserved, fill_hash_prefix, insert_entities
@@ -330,6 +331,7 @@ def derived_stage(
     names: Mapping[str, tuple[str | None, str | None]] | None = None,
     equivalence_groups: Sequence[Sequence[str]] = (),
     edges: Sequence[tuple[str, str, str]] | None = None,
+    name_values: Sequence[tuple[str, str, str, str | None, bool]] = (),
 ) -> StageFunction:
     """Return a load job stage that builds the job's derived database with these entities, and the ontology if given.
 
@@ -337,7 +339,8 @@ def derived_stage(
     hook writes them (`browl.precache.entities`). `names` gives IRIs' display names and CURIEs; `equivalence_groups`
     classes' equivalence groups (the `equiv_group` table), each with its representative first. `edges`, if given,
     are the edges query's rows, (child, relation IRI, parent), from which the hierarchies hook fills `equiv_group`,
-    `edge`, `counts` and `root`.
+    `edge`, `counts` and `root`. `name_values` gives name values, (IRI, name property IRI, value, language, direct),
+    which fill `name_value` and the search index (`browl.search`) for each type the IRI has.
     """
 
     def build(context: JobContext) -> None:
@@ -362,6 +365,13 @@ def derived_stage(
                     [(child, hierarchies.RELATION_CODES[relation], parent) for child, relation, parent in edges],
                 )
                 hierarchies.fill_staged(connection)
+            if name_values:
+                connection.executemany(
+                    "INSERT INTO name_value (entity, property, value, normalized, language, direct)"
+                    " SELECT id, ?, ?, ?, ?, ? FROM entity WHERE iri = ?",
+                    [(p, value, normalize(value), lang, direct, iri) for iri, p, value, lang, direct in name_values],
+                )
+                search._fill(connection, name_property_iris(settings), settings.language_ranking)
 
     async def stage(context: JobContext) -> None:
         await asyncio.to_thread(build, context)

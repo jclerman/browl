@@ -32,6 +32,7 @@ from browl.rdf import RDF as RDF_NS
 from browl.usage_tab import PageNotFoundError, UsageGroup, UsageTab
 from tests.conftest import DATA
 from tests.helpers import WAIT_S, LiveServer, derived_stage, iso, make_app, no_axioms
+from tests.test_search_page import SYNONYM, search_stage
 from tests.test_trees import tree_stage
 
 pytestmark = [pytest.mark.browser, pytest.mark.usefixtures("data_dir")]
@@ -2292,3 +2293,128 @@ def test_tree_modifier_click_left_to_browser(page: Page, trees: LiveServer) -> N
     opened.value.wait_for_load_state()
     assert query_of(opened.value.url) == {"open": [f"{EX}/Top"]}
     expect(tree_item(page, "Top")).to_have_attribute("aria-expanded", "false")
+
+
+# The search box (P-20, U-10, U-17, DESIGN.md §2.9 "Search")
+
+SUGGEST = re.compile(r"/_browl/search\?suggest=1")
+
+
+@pytest.fixture
+def searchable(live_server: Callable[[FastAPI], LiveServer]) -> LiveServer:
+    """Return a live server with `tests.test_search_page`' names loaded and indexed."""
+    server = live_server(make_app(NAME_PROPERTIES=["rdfs:label", SYNONYM]))
+    server.app.state.jobs.register(Stage.PRE_CACHING, search_stage())
+    server.call(server.app.state.jobs.start())
+    server.call(server.app.state.jobs.wait())
+    return server
+
+
+def stub_entity_pages(page: Page, server: LiveServer) -> None:
+    """Answer requests for entity pages with a stub, as they'd need Fuseki."""
+    page.route(
+        re.compile(rf"{re.escape(server.url)}/(myoblast|heart)$"),
+        lambda route: route.fulfill(status=200, content_type="text/html", body="<title>stub</title>"),
+    )
+
+
+def search_box(page: Page) -> Locator:
+    """Return the navigation bar's search box."""
+    return page.get_by_role("combobox", name="Search names")
+
+
+def test_search_suggests_and_keys(page: Page, searchable: LiveServer) -> None:
+    """Check the combobox pattern: typing lists suggestions; down and up move the active option; Escape closes."""
+    page.goto(f"{searchable.url}/_browl/search")
+    box = search_box(page)
+    box.fill("myo")
+    listbox = page.get_by_role("listbox", name="Suggestions")
+    expect(listbox).to_be_visible()
+    expect(box).to_have_attribute("aria-expanded", "true")
+    options = listbox.get_by_role("option")
+    expect(options).to_have_count(3)  # two hits and "All results…"
+    expect(page.locator("#site-search-status")).to_have_text("2 suggestions")
+    box.press("ArrowDown")
+    expect(box).to_have_attribute("aria-activedescendant", "search-option-0")
+    expect(options.nth(0)).to_have_attribute("aria-selected", "true")
+    box.press("ArrowDown")
+    box.press("ArrowDown")
+    expect(box).to_have_attribute("aria-activedescendant", "search-option-all")
+    box.press("ArrowDown")  # past the end, back to the box
+    expect(box).not_to_have_attribute("aria-activedescendant", re.compile(".*"))
+    box.press("ArrowUp")  # from none, to the last
+    expect(box).to_have_attribute("aria-activedescendant", "search-option-all")
+    expect(box).to_be_focused()
+    box.press("Escape")
+    expect(listbox).to_be_hidden()
+    expect(box).to_have_attribute("aria-expanded", "false")
+    box.press("Escape")
+    expect(box).to_have_value("")
+
+
+def test_search_enter_follows_option(page: Page, searchable: LiveServer) -> None:
+    """Check that Enter on an active option opens its entity's page."""
+    stub_entity_pages(page, searchable)
+    page.goto(f"{searchable.url}/_browl/search")
+    box = search_box(page)
+    box.fill("myo")
+    expect(page.get_by_role("option")).to_have_count(3)
+    box.press("ArrowDown")
+    box.press("ArrowDown")
+    box.press("Enter")
+    expect(page).to_have_url(f"{searchable.url}/heart")
+
+
+def test_search_click_follows_option(page: Page, searchable: LiveServer) -> None:
+    """Check that clicking an option opens its entity's page."""
+    stub_entity_pages(page, searchable)
+    page.goto(f"{searchable.url}/_browl/search")
+    search_box(page).fill("myo")
+    page.get_by_role("option").first.click()
+    expect(page).to_have_url(f"{searchable.url}/myoblast")
+
+
+def test_search_enter_without_option_opens_results(page: Page, searchable: LiveServer) -> None:
+    """Check that Enter with no active option opens the full results page."""
+    page.goto(f"{searchable.url}/_browl/search")
+    box = search_box(page)
+    box.fill("myo")
+    expect(page.get_by_role("option")).to_have_count(3)
+    box.press("Enter")
+    expect(page).to_have_url(f"{searchable.url}/_browl/search?q=myo")
+    expect(page.locator(".hits .hit")).to_have_count(2)
+
+
+def test_search_all_results_option(page: Page, searchable: LiveServer) -> None:
+    """Check that "All results…" opens the full results page for the query."""
+    page.goto(f"{searchable.url}/_browl/search")
+    search_box(page).fill("he")
+    page.get_by_role("option", name="All results…").click()
+    expect(page).to_have_url(f"{searchable.url}/_browl/search?q=he")
+
+
+def test_search_only_latest_shown(page: Page, searchable: LiveServer) -> None:
+    """Check that a slow response for earlier text never replaces the suggestions for the text typed since."""
+    held: list[Route] = []
+    page.route(SUGGEST, lambda route: held.append(route) if "q=m&" in route.request.url + "&" else route.continue_())
+    page.goto(f"{searchable.url}/_browl/search")
+    box = search_box(page)
+    box.fill("m")
+    wait_until(page, lambda: bool(held), "the first request")
+    box.fill("myo")
+    expect(page.get_by_role("option")).to_have_count(3)
+    with contextlib.suppress(PlaywrightError):  # htmx aborted it
+        held[0].continue_()
+    page.wait_for_timeout(300)
+    expect(page.get_by_role("option")).to_have_count(3)
+
+
+@NO_JS
+def test_search_without_javascript(page: Page, searchable: LiveServer) -> None:
+    """Check that, without JS, submitting the box opens the full results page (U-17)."""
+    page.goto(f"{searchable.url}/_browl/search")
+    box = page.locator("#site-search-box")
+    box.fill("myo")
+    box.press("Enter")
+    expect(page).to_have_url(f"{searchable.url}/_browl/search?q=myo")
+    expect(page.locator(".hits .hit")).to_have_count(2)

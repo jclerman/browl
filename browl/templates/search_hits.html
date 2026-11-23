@@ -1,0 +1,12 @@
+{# A search hit (`browl.search_page.ShownHit`), as the autocomplete and the results page show it (DESIGN.md §2.9,
+   Search): the matched value, in italics with the query's match marked, then "→" and the entity's name; or the name
+   alone, if it's the value that matched. The name is always styled as one, so it reads as the entity either way.
+   Its types sit in a column of their own. #}
+{% macro hit_row(hit) -%}
+<span class="hit-text">
+  {%- if hit.marked is not none -%}
+  <bdi class="hit-term"><mark>{{ hit.marked }}</mark>{{ hit.rest }}</bdi> <span class="hit-arrow" aria-hidden="true">→</span><span class="visually-hidden">, for</span> {% endif -%}
+  <bdi class="hit-name">{% if hit.name_marked %}<mark>{{ hit.name_marked }}</mark>{% endif %}{{ hit.name_rest }}</bdi>
+</span>
+<span class="hit-types">{{ hit.types }}</span>
+{%- endmacro %}

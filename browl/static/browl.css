@@ -105,11 +105,20 @@ code {
 }
 
 .site-search {
+  position: relative; /* the suggestions open under the box */
   flex: 1 1 12rem;
+  max-width: 32rem;
 }
 
-.site-search:empty {
-  display: none; /* until P-20 fills it */
+.site-search input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: calc(var(--space) / 4) calc(var(--space) / 2);
+  color: var(--fg);
+  font: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
 }
 
 .site-nav a {
@@ -743,4 +752,138 @@ code {
       }
     }
   }
+}
+
+/* Search (U-10, DESIGN.md §2.9): a hit is its matched value in italics, then "→" and the entity's name in the accent
+   color, or the name alone; the query's match is marked. Its types are in a column on the right. */
+
+.search-list {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  left: 0;
+  z-index: 4;
+  min-width: min(28rem, calc(100vw - 2 * var(--space)));
+  max-height: 70vh;
+  margin: 2px 0 0;
+  padding: calc(var(--space) / 4) 0;
+  overflow-y: auto;
+  list-style: none;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 4px 8px rgb(0 0 0 / 15%);
+}
+
+.search-list li > a {
+  display: flex;
+  gap: var(--space);
+  align-items: baseline;
+  padding: calc(var(--space) / 4) calc(var(--space) / 2);
+  color: inherit;
+  text-decoration: none;
+}
+
+.search-list [aria-selected="true"] > a {
+  background: var(--bar-bg);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.search-none {
+  padding: calc(var(--space) / 4) calc(var(--space) / 2);
+  color: var(--muted);
+}
+
+.search-all {
+  border-top: 1px solid var(--border);
+}
+
+.search-all a {
+  color: var(--accent);
+}
+
+.hit-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.hit-term {
+  font-style: italic;
+}
+
+.hit-arrow {
+  color: var(--muted);
+}
+
+.hit-name {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.hit mark {
+  color: inherit;
+  background: var(--mark-bg);
+}
+
+.hit-types {
+  flex: none;
+  color: var(--muted);
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+
+.search-page {
+  max-width: 60rem;
+}
+
+.search-query input {
+  width: min(30rem, 100%);
+}
+
+.search-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space);
+}
+
+.search-filters fieldset {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.search-filters label {
+  display: block;
+}
+
+.hits {
+  padding-left: 2.5em;
+}
+
+.hits li {
+  margin-bottom: calc(var(--space) / 2);
+}
+
+.hits .hit {
+  display: flex;
+  gap: var(--space);
+  align-items: baseline;
+  color: inherit;
+  text-decoration: none;
+}
+
+.hits .hit:hover .hit-name,
+.hits .hit:focus-visible .hit-name {
+  text-decoration: underline;
+}
+
+.hit-id {
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+.search-paging {
+  display: flex;
+  gap: var(--space);
 }
