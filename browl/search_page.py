@@ -28,7 +28,15 @@ from browl.pages import (
     single_params,
     templates,
 )
-from browl.search import MAX_OFFSET, MAX_QUERY_CHARS, SEARCH_LIMIT, SearchBackend, SearchHit, SearchQuery
+from browl.search import (
+    MAX_OFFSET,
+    MAX_QUERY_CHARS,
+    SEARCH_LIMIT,
+    SearchBackend,
+    SearchHit,
+    SearchQuery,
+    SearchResults,
+)
 from browl.settings import Settings
 from browl.tabs import with_query
 
@@ -95,7 +103,7 @@ class ShownHit:
             else empty.
         name_rest: The rest of the entity's name.
         types: Its types' labels, joined.
-        id_text: Its CURIE, else its IRI cut short, which the results page shows under it.
+        id_text: Its CURIE, else its IRI cut short, which the results page shows; None in the autocomplete.
     """
 
     link: EntityLink
@@ -104,7 +112,7 @@ class ShownHit:
     name_marked: str
     name_rest: str
     types: str
-    id_text: str
+    id_text: str | None
 
 
 @dataclass(frozen=True)
@@ -194,7 +202,12 @@ def _id_texts(connection: sqlite3.Connection, iris: Sequence[str]) -> dict[str, 
 
 
 def shown_hits(
-    connection: sqlite3.Connection, hits: Sequence[SearchHit], query: str, prefix: str, root: str
+    connection: sqlite3.Connection,
+    hits: Sequence[SearchHit],
+    query: str,
+    prefix: str,
+    root: str,
+    with_ids: bool = False,
 ) -> list[ShownHit]:
     """Return how the hits are shown, from the derived database.
 
@@ -204,10 +217,11 @@ def shown_hits(
         query: The query's text, normalized.
         prefix: The reserved prefix.
         root: The app's root path, for links (`browl.pages.link_root`).
+        with_ids: Whether to read their CURIEs, which the results page shows, and the autocomplete doesn't.
     """
     iris = [hit.iri for hit in hits]
     links = read_entity_links(connection, iris, prefix, root)
-    ids = _id_texts(connection, iris)
+    ids: dict[str, str] = _id_texts(connection, iris) if with_ids else {}
     shown = []
     for hit in hits:
         link = links[hit.iri]
@@ -218,7 +232,7 @@ def shown_hits(
             marked, rest = _split(hit.value, query)
             name_marked, name_rest = "", link.name
         types = ", ".join(TYPE_LABELS[kind] for kind in hit.types)
-        shown.append(ShownHit(link, marked, rest, name_marked, name_rest, types, ids[hit.iri]))
+        shown.append(ShownHit(link, marked, rest, name_marked, name_rest, types, ids.get(hit.iri)))
     return shown
 
 
@@ -281,29 +295,29 @@ async def search_page(request: Request) -> Response:
         )
     except ValidationError:
         return not_found(request)  # e.g. a lone surrogate
+    normalized = normalize(asked.text)
+    if asked.suggest and not normalized:
+        return templates.TemplateResponse(request, "search_suggestions.html", {"blank": True}, headers=PANEL_HEADERS)
     state = await request.app.state.jobs.current()
     generation = state.ready_generation
     if generation is None:
         raise NotCurrentError("no generation is ready")
-    backend: SearchBackend = request.app.state.search
-    results = await backend.search(generation, query)
+    results = SearchResults((), more=False)  # the page's form alone
+    if normalized:
+        backend: SearchBackend = request.app.state.search
+        results = await backend.search(generation, query)
     prefix = settings.reserved_prefix
     root = link_root(request.scope)
-    normalized = normalize(asked.text)
 
     def read(connection: sqlite3.Connection) -> tuple[list[ShownHit], list[PropertyChoice]]:
-        hits = shown_hits(connection, results.hits, normalized, prefix, root)
+        hits = shown_hits(connection, results.hits, normalized, prefix, root, with_ids=not asked.suggest)
         choices = [] if asked.suggest else property_choices(connection, properties, asked.properties)
         return hits, choices
 
     hits, choices = await read_derived(request, read, state)
     page_path = f"/{prefix}/{SEARCH_PATH}"
     if asked.suggest:
-        context = {
-            "hits": hits,
-            "blank": not normalized,
-            "all_results": href(request, with_query(page_path, _params(asked))),
-        }
+        context = {"hits": hits, "blank": False, "all_results": href(request, with_query(page_path, _params(asked)))}
         return templates.TemplateResponse(request, "search_suggestions.html", context, headers=PANEL_HEADERS)
     previous = next_ = None
     if asked.offset:

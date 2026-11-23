@@ -244,6 +244,24 @@ def test_blank_fragment_empty(client: TestClient, text: str) -> None:
     assert response.text.strip() == ""
 
 
+def test_blank_query_not_searched(app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a blank query isn't searched for, and that its fragment reads nothing."""
+
+    async def fail(*args: object) -> None:
+        raise AssertionError("searched")
+
+    monkeypatch.setattr(app.state.search, "search", fail)
+    assert client.get(SEARCH, params={"q": " "}).status_code == 200
+    monkeypatch.setattr(search_page, "read_derived", fail)
+    assert client.get(SEARCH, params={"q": " ", "suggest": "1"}).text.strip() == ""
+
+
+def test_fragment_reads_no_ids(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that the autocomplete doesn't read the hits' CURIEs, which it doesn't show."""
+    monkeypatch.setattr(search_page, "_id_texts", lambda *args: pytest.fail("read the ids"))
+    assert len(suggest(client, "myo").hits) == 2
+
+
 def test_blank_page_shows_form(client: TestClient) -> None:
     """Check that the results page with no query shows its form, and no results."""
     response = client.get(SEARCH)
