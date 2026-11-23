@@ -1,19 +1,16 @@
-"""Shared fixtures, the skip rules for tests that need a JVM, Fuseki or a browser, and the marks for them.
+"""Shared fixtures, the skip rules for tests that need Java, Fuseki or a browser, and the marks for them.
 
-The `java` fixture is for tests that need Java and `robot.jar` (`ROBOT_JAR`, else the one `make robot-jar` downloads,
-else the settings' default path), such as those that run ROBOT or the OFN conversion in a child process; `jvm` also
-starts the JVM in the test process, for tests that call the OWLAPI there. JPype and child processes find Java through
-`JAVA_HOME`, so point it at Java 21; on macOS, when it's unset, the tests set it to Java 21 if that's installed. The
-`fuseki_url` fixture gives a Fuseki: the one at `BROWL_TEST_FUSEKI_URL`, or one the tests start from `docker/fuseki`
-with Docker, building the image unless `BROWL_TEST_FUSEKI_IMAGE` names one already built (as CI does). Tests that build
-stores for it (`fuseki_base`) also need Jena's tools (`JENA_HOME`, else the ones `make jena` downloads) and its base
-directory: for the Fuseki the tests start, a temporary directory mounted as its base; for one at
-`BROWL_TEST_FUSEKI_URL`, `BROWL_TEST_FUSEKI_BASE`. pytest-playwright's `page` fixture uses `browser`, which launches
-Playwright's headless Chromium (`make browser`). Locally, tests whose needs are missing are skipped; in CI (`CI` set)
-they fail instead, so CI runs every test.
+- `java`: Java and `robot.jar` (`ROBOT_JAR`, else `make robot-jar`'s, else the settings' default), e.g. to run ROBOT in
+  a child process. On macOS, when `JAVA_HOME` is unset, it's set to Java 21 if that's installed. `jvm` also starts the
+  JVM in the test process, for the OWLAPI.
+- `fuseki_url`: the Fuseki at `BROWL_TEST_FUSEKI_URL`, or one started from `docker/fuseki` with Docker, built unless
+  `BROWL_TEST_FUSEKI_IMAGE` names an image (as CI does). `fuseki_base` also needs Jena's tools (`JENA_HOME`, else
+  `make jena`'s) and the Fuseki's base directory: a temporary one for a Fuseki the tests start, else
+  `BROWL_TEST_FUSEKI_BASE`.
+- `browser`, which pytest-playwright's `page` uses: Playwright's headless Chromium (`make browser`).
 
-A test that uses one of these fixtures, directly or through another fixture, gets the matching mark (`FIXTURE_MARKS`),
-which `-m` selects by (e.g. `-m "not java and not fuseki"`). Use the fixture; don't write the mark by hand.
+Tests whose needs are missing are skipped locally, and fail in CI (`CI` set). These fixtures give the tests that use
+them a mark (`FIXTURE_MARKS`; see docs/CODING-STANDARDS.md).
 """
 
 import json
