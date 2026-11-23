@@ -1538,7 +1538,7 @@ too (P-38), and the JSON API's (P-33).
   where the screen is wide enough. Not as a tooltip, which the keyboard and touch screens can't reach.
 - **The results page** has the box, and filters (U-10): entity types and name properties as checkboxes, none checked
   meaning all, and a choice of all values or direct ones only. Name properties are labelled by display name, else
-  CURIE (built-in prefixes and `EXTRA_PREFIXES`), else IRI. It shows 50 hits a page, with Previous and Next links,
+  as `NAME_PROPERTIES` names them. It shows 50 hits a page, with Previous and Next links,
   as deep as search's `MAX_OFFSET` allows. Both are `noindex`.
 - **Input**: a repeated `q`, `values`, `offset` or `suggest`, an unknown type or name property, an offset that isn't a
   positive integer without leading zeros or is past `MAX_OFFSET`, or text over `MAX_QUERY_CHARS` gets the "not found"

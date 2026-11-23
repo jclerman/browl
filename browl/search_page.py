@@ -6,7 +6,7 @@ Both show each hit the same way (DESIGN.md §2.9, Search): the value that matche
 
 import sqlite3
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
 from fastapi import APIRouter, Request
@@ -16,7 +16,7 @@ from pydantic import ValidationError
 from browl.derived import TYPE_LABELS, EntityType, NotCurrentError
 from browl.links import EntityLink, read_entity_links
 from browl.lookup import PANEL_HEADERS, not_found
-from browl.names import BUILTIN_PREFIXES, name_property_iris, normalize
+from browl.names import name_properties, normalize
 from browl.pages import (
     MAX_IRI_CHARS,
     cut_name,
@@ -113,7 +113,7 @@ class PropertyChoice:
 
     Attributes:
         iri: Its IRI.
-        label: Its display name, else its CURIE, else its IRI, cut short.
+        label: Its display name, else its name in `NAME_PROPERTIES`, cut short.
         checked: Whether the query names it.
     """
 
@@ -122,12 +122,12 @@ class PropertyChoice:
     checked: bool
 
 
-def read_request(request: Request, properties: Sequence[str]) -> SearchRequest | None:
+def read_request(request: Request, properties: Collection[str]) -> SearchRequest | None:
     """Return what a search URL asks for; None if a parameter is repeated where it mustn't be, or isn't valid.
 
     Args:
         request: The request.
-        properties: The name properties' IRIs (`name_property_iris`), which `property=` may name.
+        properties: The name properties' IRIs (`browl.names.name_properties`), which `property=` may name.
     """
     params = request.query_params
     single = single_params(request, (QUERY_PARAM, VALUES_PARAM, OFFSET_PARAM, SUGGEST_PARAM))
@@ -221,20 +221,15 @@ def shown_hits(
     return shown
 
 
-def _curie(iri: str, prefixes: dict[str, str]) -> str:
-    """Return an IRI as a CURIE, by the first prefix that covers it, else the IRI itself."""
-    for name, namespace in prefixes.items():
-        if iri.startswith(namespace) and len(iri) > len(namespace):
-            return f"{name}:{iri[len(namespace) :]}"
-    return iri
-
-
 def property_choices(
-    connection: sqlite3.Connection, properties: Sequence[str], chosen: Sequence[str], settings: Settings
+    connection: sqlite3.Connection, properties: Mapping[str, str], chosen: Sequence[str]
 ) -> list[PropertyChoice]:
-    """Return the name properties the results page offers, labeled by display name, else CURIE, else IRI.
+    """Return the name properties the results page offers, labeled by display name, else by their setting's name.
 
-    A CURIE uses the built-in prefixes and `EXTRA_PREFIXES`, as `NAME_PROPERTIES` does (`name_property_iris`).
+    Args:
+        connection: The derived database.
+        properties: The name properties, by IRI, each with its name in `NAME_PROPERTIES` (`name_properties`).
+        chosen: The IRIs of those the query names.
     """
     names: dict[str, str] = {}
     if properties:
@@ -246,8 +241,9 @@ def property_choices(
         )
         for iri, name in rows:
             names.setdefault(iri, name)
-    prefixes = BUILTIN_PREFIXES | settings.extra_prefixes
-    return [PropertyChoice(iri, cut_name(names.get(iri) or _curie(iri, prefixes)), iri in chosen) for iri in properties]
+    return [
+        PropertyChoice(iri, cut_name(names.get(iri) or setting), iri in chosen) for iri, setting in properties.items()
+    ]
 
 
 def _params(asked: SearchRequest, offset: int = 0) -> list[tuple[str, str]]:
@@ -269,7 +265,7 @@ async def search_page(request: Request) -> Response:
     A blank query finds nothing: the fragment is then empty, and the page shows only its form.
     """
     settings: Settings = request.app.state.settings
-    properties = name_property_iris(settings)
+    properties = name_properties(settings)
     asked = read_request(request, properties)
     if asked is None:
         return not_found(request)
@@ -296,7 +292,7 @@ async def search_page(request: Request) -> Response:
 
     def read(connection: sqlite3.Connection) -> tuple[list[ShownHit], list[PropertyChoice]]:
         hits = shown_hits(connection, results.hits, normalized, prefix, root)
-        choices = [] if asked.suggest else property_choices(connection, properties, asked.properties, settings)
+        choices = [] if asked.suggest else property_choices(connection, properties, asked.properties)
         return hits, choices
 
     hits, choices = await read_derived(request, read, state)

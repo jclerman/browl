@@ -38,20 +38,25 @@ def expand_curie(name: str, prefixes: Mapping[str, str]) -> str:
     return name
 
 
-def name_property_iris(settings: Settings) -> list[str]:
-    """Return the IRIs of the name properties (`NAME_PROPERTIES`, O-4), best first, without repeats.
+def name_properties(settings: Settings) -> dict[str, str]:
+    """Return the name properties (`NAME_PROPERTIES`, O-4), best first, by IRI, each with the first name given for it.
 
     A CURIE is expanded with the built-in prefixes and `EXTRA_PREFIXES`, not the ontology's own, so a setting means the
     same whatever is loaded. A name that's still not an IRI is left out, with a warning.
     """
     prefixes = BUILTIN_PREFIXES | settings.extra_prefixes
-    iris = []
+    names: dict[str, str] = {}
     for name in settings.name_properties:
         try:
-            iris.append(IRI(expand_curie(name, prefixes)))
+            names.setdefault(IRI(expand_curie(name, prefixes)), name)
         except RDFSyntaxError:
             logger.warning("The name property %r isn't an IRI or a known CURIE; it's left out", name)
-    return list(dict.fromkeys(iris))
+    return names
+
+
+def name_property_iris(settings: Settings) -> list[str]:
+    """Return the IRIs of the name properties, best first, without repeats (`name_properties`)."""
+    return list(name_properties(settings))
 
 
 def normalize(text: str) -> str:

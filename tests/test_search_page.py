@@ -256,6 +256,18 @@ def test_filters_shown_checked(client: TestClient) -> None:
     assert "rdfs:label" in text  # undeclared: its CURIE
 
 
+def test_property_labelled_as_set() -> None:
+    """Check that a name property without a display name is labelled as `NAME_PROPERTIES` names it.
+
+    Its IRI is in two prefixes' namespaces, so a CURIE made from them could differ from the setting's.
+    """
+    app = make_app(NAME_PROPERTIES=["rdfs:label", "exa:name"], EXTRA_PREFIXES={"ex": EX, "exa": f"{EX}a/"})
+    with loaded(app, search_stage()) as client:
+        text = client.get(SEARCH, params={"q": "a"}).text
+    assert "<bdi>exa:name</bdi>" in text
+    assert "ex:a/name" not in text
+
+
 def test_paging(client: TestClient) -> None:
     """Check that the results page pages through the hits, keeping the query and filters in its links."""
     first = results(client, [("q", "item"), ("type", "class")])
