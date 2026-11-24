@@ -921,32 +921,33 @@ name properties' ([P-42 findings](../research/P-42/README.md)).
   to 46, and none is misplaced. P-44 lets an admin override it (A-11).
 - **Searched by default: names, IDs and synonyms.** The name properties and the label and synonym list, and any other
   name-like property whose values are on fewer than 2 entities each, on average (`NAME_REUSE`): a value that names or
-  identifies one entity, whatever the ontology calls the property. So RadLex's `Acronym`, `Misspelling`,
-  `Unsanctioned_Term` and `RadLexID`, which no list names, are searched by default, as are OBO ontologies' `id`,
-  `hasAlternativeId` and (on HPO and Uberon) `hasDbXref`; properties whose values repeat aren't: sources, creators,
-  versions of change, OBO namespaces (RadLex's `Source` 11 entities a value, `created_by` 47–72), nor NCBITaxon's
-  `hasDbXref` (165, as its genetic codes are on 3.0 M classes). The others are searched when chosen. Default properties
-  are kept in `search_property` even without values of their own, so an ontology whose labels are all under a
-  sub-property of `rdfs:label` is still searched. Measured cost: default search's worst median rose from 24 to 39 ms
-  on HPO (17 properties) and from 26 to 52 ms on Uberon (21), with one run of 20 at 182 ms; N-2 holds. A comment can
-  be short and unique enough to pass (RadLex's `Comment`, 1.92 entities a value); P-44 lets an admin move it.
+  identifies one entity, whatever the ontology calls the property. Here, as for common values, a value is its lexical
+  form, whatever its language, and an entity an `entity` row: a punned IRI counts once per type. So RadLex's `Acronym`,
+  `Misspelling`, `Unsanctioned_Term` and `RadLexID`, which no list names, are searched by default, as are OBO
+  ontologies' `id`, `hasAlternativeId` and (on HPO and Uberon) `hasDbXref`; properties whose values repeat aren't:
+  sources, creators, versions of change, OBO namespaces (RadLex's `Source` 11 entities a value, `created_by` 47–72), nor
+  NCBITaxon's `hasDbXref` (165, as its genetic codes are on 3.0 M classes). The others are searched when chosen. Default
+  properties are kept in `search_property` even without values of their own, so an ontology whose labels are all under a
+  sub-property of `rdfs:label` is still searched. Measured cost: default search's worst median rose from 24 to 39 ms on
+  HPO (17 properties) and from 26 to 52 ms on Uberon (21), with one run of 20 at 182 ms; N-2 holds. A comment can be
+  short and unique enough to pass (RadLex's `Comment`, 1.92 entities a value); P-44 lets an admin move it.
 - **Super-properties are listed too.** A property with no values of its own, but with sub-properties that have some
   (RadLex's `mapping_term`), is kept in `search_property`, name-like unless all of those are prose, and searched by
   default if all of those are (RadLex's `mapping_term`, over its synonyms, acronyms and misspellings), so choosing it
   never adds one that isn't; choosing it searches them, with entailed values. The results page counts its
   sub-properties' values beside its own.
 - **Common values are counted, not listed.** A name-like value on more than 10% of the ontology's entities
-  (`COMMON_SHARE`), and on at least 1,000 (`COMMON_MIN`), tells no entities apart, so it gets no rows in the lane
-  index. `common_value` holds it once, with how many entities of each type have it and how many that type has. A query
-  matches it as it matches indexed values, by the start of the value or of a later word, with the same property and
-  type filters, and the results page says so above the hits, on the first page: "`GC_ID:1` (database cross-reference)
-  is on 2,291,619 classes (76%): too many to list". So the visitor learns the value is there without paging through
-  millions of entities. The rule is by value, not property: of NCBITaxon's `hasDbXref` values, `GC_ID:1` and
-  `GC_ID:11` (genetic codes, 98% of its 3.1 M values) are common, while its 18.6 K cross-references, such as
+  (`COMMON_SHARE`), and on at least 1,000 (`COMMON_MIN`), in any language, tells no entities apart, so it gets no rows
+  in the lane index. `common_value` holds it once, with how many entities of each type have it and how many that type
+  has. A query matches it as it matches indexed values, by the start of the value or of a later word, with the same
+  property and type filters, and the results page says so above the hits, on the first page: "`GC_ID:1` (database
+  cross-reference) is on 2,291,619 classes (76%): too many to list". So the visitor learns the value is there without
+  paging through millions of entities. The rule is by value, not property: of NCBITaxon's `hasDbXref` values, `GC_ID:1`
+  and `GC_ID:11` (genetic codes, 98% of its 3.1 M values) are common, while its 18.6 K cross-references, such as
   `PMID:7857801` on 4,521 taxa, are indexed. On NCBITaxon the common values are those two and `ncbi_taxonomy`
   (`hasOBONamespace`, on every class): 6.0 M of its 9.7 M values. HPO and Uberon have none; their most frequent
-  name-like value is on 641 entities. A share rather than a count scales with the ontology; the minimum keeps a
-  small ontology's values all listed.
+  name-like value is on 641 entities. A share rather than a count scales with the ontology; the minimum keeps a small
+  ontology's values all listed.
 - **Entailment at query time:** each value is stored once, under the property it's asserted with, and "direct and
   entailed" for a chosen property adds its sub-properties' lanes (Lane order, above). The sub-properties come from a
   property path query (`rdfs:subPropertyOf+`), stored as their closure in `sub_property`, rather than from the

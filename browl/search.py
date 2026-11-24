@@ -283,14 +283,15 @@ def fill_index(connection: sqlite3.Connection, ranking: Sequence[str]) -> None:
 def _fill_common(connection: sqlite3.Connection) -> None:
     """Fill `common_value` with the common name-like values: each with, per entity type, its entities and the type's.
 
-    A value is counted across languages, by its lexical form. Found by one pass over the name-like values, grouped,
-    then one more over those of the few properties with a common value, joined to `entity` for the types.
+    A value is counted by its lexical form, whatever its languages, and its entities are `entity` rows, as are the
+    total's: a punned IRI counts once per type, as the counts shown are per type. Found by one pass over the name-like
+    values, grouped, then one more over every value, joined to the common ones, and to `entity` for the types.
     """
     total = connection.execute("SELECT count(*) FROM entity").fetchone()[0]
     least = max(COMMON_MIN, int(total * COMMON_SHARE) + 1)
     common = connection.execute(
         "SELECT v.property, v.value FROM annotation_value AS v JOIN search_property AS p ON p.id = v.property"
-        " WHERE NOT p.prose GROUP BY v.property, v.value HAVING count(*) >= ?",
+        " WHERE NOT p.prose GROUP BY v.property, v.value HAVING count(DISTINCT v.entity) >= ?",
         (least,),
     ).fetchall()
     if not common:

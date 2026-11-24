@@ -677,6 +677,64 @@ async def test_common_value_found(
     assert all(hit.value != "GC_ID:1" for hit in results.hits)
 
 
+async def build_shared(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch, classes: int, on: int, common_min: int, languages: int = 1
+) -> None:
+    """Build labelled classes, `on` of them with the cross-reference `X:1`, in this many languages, and `COMMON_MIN`."""
+    monkeypatch.setattr(search_module, "COMMON_MIN", common_min)
+    values = [(f"c{n}", LABEL, LABEL, f'"class {n}"@en') for n in range(classes)]
+    tags = ["en", "fr", "de"][:languages]
+    values += [(f"c{n}", XREF, XREF, f'"X:1"@{tag}') for n in range(on) for tag in tags]
+    await build(settings, values)
+
+
+@pytest.mark.parametrize(
+    ("classes", "on", "common_min", "languages", "common"),
+    [
+        (20, 4, 5, 1, False),  # on fewer than COMMON_MIN
+        (20, 5, 5, 1, True),
+        (29, 3, 1, 1, False),  # on exactly 10% of the 30 entities, with the ontology
+        (29, 4, 1, 1, True),
+        (20, 3, 5, 2, False),  # 6 values, but on 3 entities
+    ],
+    ids=["under the minimum", "at the minimum", "at the share", "over the share", "two languages"],
+)
+async def test_common_value_threshold(
+    data_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    classes: int,
+    on: int,
+    common_min: int,
+    languages: int,
+    common: bool,
+) -> None:
+    """Check which values are common: on at least `COMMON_MIN` entities and more than `COMMON_SHARE` of them.
+
+    Entities count, not values: a value in two languages on an entity counts once.
+    """
+    settings = make_settings()
+    await build_shared(settings, monkeypatch, classes, on, common_min, languages)
+    results = find(settings, "x:1", properties=frozenset({XREF_IRI}))
+    assert [(found.value, found.counts) for found in results.common] == (
+        [("X:1", ((EntityType.CLASS, on, classes),))] if common else []
+    )
+    assert len(results.hits) == (0 if common else on)
+
+
+async def test_id_in_two_languages_searched_by_default(data_dir: Path) -> None:
+    """Check that a property whose values are each on one entity, in two languages, is searched by default.
+
+    Its reuse counts entities, not values (`NAME_REUSE`).
+    """
+    settings = make_settings()
+    ident = f"<{EX}id>"
+    await build(settings, [(f"c{n}", ident, ident, f'"ID:{n}"@{tag}') for n in range(3) for tag in ("en", "fr")])
+    with closing(connect(settings, 1, HOOKS_USED)) as connection:
+        defaults = {p.iri: p.by_default for p in search_properties(connection)}
+    assert defaults[f"{EX}id"]
+    assert found(settings, "id:1") == ["c1"]
+
+
 def test_property_labels() -> None:
     """Check a property's label: its display name, else its CURIE by the longest namespace, else its IRI.
 

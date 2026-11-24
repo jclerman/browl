@@ -43,9 +43,12 @@ XREF = f"{OBO_IN_OWL}hasDbXref"
 DEFINITION = f"{IAO}0000115"
 
 
-def stats(*words: int, values: int = 1, unique: int = 1) -> Stats:
-    """Return a property's statistics: its values' word counts, and how many values and distinct ones it has."""
-    return Stats(Counter(words), values, unique)
+def stats(*words: int, values: int = 1, unique: int = 1, uses: int | None = None) -> Stats:
+    """Return a property's statistics: its values' word counts, how many values and distinct ones it has, and uses.
+
+    Its uses, (entity, value) pairs, are its values unless given.
+    """
+    return Stats(Counter(words), values, unique, values if uses is None else uses)
 
 
 @pytest.mark.parametrize(
@@ -61,6 +64,7 @@ def stats(*words: int, values: int = 1, unique: int = 1) -> Stats:
         (f"{EX}id", stats(1, values=1000, unique=1000), {}, (False, True)),  # each value on one entity
         (f"{EX}xref", stats(1, values=1999, unique=1000), {}, (False, True)),  # on just under 2, on average
         (f"{EX}source", stats(1, values=2000, unique=1000), {}, (False, False)),  # on 2
+        (f"{EX}languages", stats(1, values=2000, unique=1000, uses=1000), {}, (False, True)),  # each in 2 languages
         (f"{EX}namespace", stats(1, values=3_000_000, unique=1), {}, (False, False)),
     ],
     ids=[
@@ -74,6 +78,7 @@ def stats(*words: int, values: int = 1, unique: int = 1) -> Stats:
         "unique",
         "nearly unique",
         "repeated",
+        "two languages",
         "one value",
     ],
 )

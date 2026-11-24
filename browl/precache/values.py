@@ -75,7 +75,8 @@ NCBITaxon, name-like properties have medians of at most 5 and prose ones 8 to 46
 
 NAME_REUSE = 2
 """A name-like property is searched by default if its values are on fewer than this many entities each, on average:
-names, IDs and synonyms tell entities apart, while categories, sources, dates of change and creators repeat."""
+names, IDs and synonyms tell entities apart, while categories, sources, dates of change and creators repeat. An entity
+is an `entity` row, so a punned IRI counts once per type, and a value is its lexical form, whatever its language."""
 
 ANNOTATION_VALUES = """SELECT ?entity ?property ?value
 WHERE {{
@@ -130,11 +131,13 @@ class Stats:
         words: How many values have each word count.
         values: How many values it has, on declared entities.
         unique: How many distinct values (lexical forms) those are.
+        uses: How many (entity, lexical form) pairs those are: a value in two languages on one entity is one use.
     """
 
     words: Counter[int]
     values: int
     unique: int
+    uses: int
 
 
 def classify(
@@ -167,7 +170,7 @@ def classify(
         ):
             kinds[iri] = (True, False)
         else:
-            kinds[iri] = (False, found.values < NAME_REUSE * found.unique)
+            kinds[iri] = (False, found.uses < NAME_REUSE * found.unique)
     ancestors: defaultdict[str, list[tuple[bool, bool]]] = defaultdict(list)
     for iri, kind in list(kinds.items()):
         for ancestor in supers.get(iri, ()):
@@ -261,9 +264,10 @@ def fill_staged(names: Sequence[str], words: Mapping[str, Counter[int]], connect
         " GROUP BY entity.id, p.id, s.value, s.language ORDER BY entity.id"
     )
     stats = {
-        iri: Stats(words[iri], values, unique)
-        for iri, values, unique in connection.execute(
-            "SELECT p.iri, count(*), count(DISTINCT v.value) FROM annotation_value AS v"
+        iri: Stats(words[iri], values, unique, uses)
+        for iri, values, unique, uses in connection.execute(
+            "SELECT p.iri, sum(v.languages), count(DISTINCT v.value), count(*) FROM (SELECT property, value,"
+            "  count(*) AS languages FROM annotation_value GROUP BY property, entity, value) AS v"
             " JOIN search_property AS p ON p.id = v.property GROUP BY v.property"
         )
     }
