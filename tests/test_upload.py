@@ -532,7 +532,7 @@ def test_upload_page_while_running_polls(client: TestClient, loading: threading.
     assert loading.wait(timeout=5)
     text = client.get(UPLOAD).text
     assert 'hx-trigger="every' in text
-    assert '<noscript><meta http-equiv="refresh"' in text
+    assert f'<noscript><meta http-equiv="refresh" content="2; url={UPLOAD}"></noscript>' in text
     response = client.get("/example.org/onto")
     assert response.status_code == 503
     assert "<h1>Loading the ontology</h1>" in response.text

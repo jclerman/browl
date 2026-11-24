@@ -370,6 +370,24 @@ def test_refused_upload_page_loads_afresh(page: Page, status_server: LiveServer)
 
 
 @NO_JS
+def test_refused_upload_page_refreshes_without_javascript(
+    page: Page, status_server: LiveServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Check that, without JavaScript, a refused upload's page refreshes by a GET, never re-posting the form."""
+    monkeypatch.setattr(browl.admin, "STATUS_POLL_S", REFRESH_S)
+    loaded, navigations = refuse_upload(page, status_server)
+    page.wait_for_event("request", lambda request: request.is_navigation_request())
+    status_server.call(release(loaded))
+    expect(page.locator("#job-status")).to_contain_text("is ready")
+    nav = page.get_by_role("navigation", name="Site")
+    expect(nav.get_by_role("link", name="New ontology")).to_be_visible()
+    page.wait_for_timeout(REFRESH_S * 2 * 1000)
+    assert navigations
+    assert set(navigations) == {("GET", f"{status_server.url}{UPLOAD}")}
+    assert status_server.call(status_server.app.state.jobs.current()).generation == 1
+
+
+@NO_JS
 @pytest.mark.parametrize("path", [STATUS, UPLOAD])
 def test_status_refreshes_without_javascript(
     page: Page, status_server: LiveServer, monkeypatch: pytest.MonkeyPatch, path: str

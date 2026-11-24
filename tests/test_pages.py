@@ -355,7 +355,7 @@ def test_status_page_ended_no_redirect(client: TestClient, app: FastAPI, path: s
 
 def test_status_page(client: TestClient, app: FastAPI) -> None:
     """Check that a request not from htmx gets the status in a page, which refreshes without JS while a job runs."""
-    refresh = '<noscript><meta http-equiv="refresh" content="2"></noscript>'
+    refresh = f'<noscript><meta http-equiv="refresh" content="2; url={STATUS}"></noscript>'
     response = client.get(STATUS)
     assert response.status_code == 200
     assert response.headers["Cache-Control"] == "no-store"

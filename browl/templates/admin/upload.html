@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {# The upload form (A-2, A-3) and the load job's status (A-5, A-6), which htmx polls while a job runs; without JS
-   (U-17), the page refreshes itself instead. While a job runs, the form is disabled, as the server would refuse it.
-   The reasoner field comes before the file: the server reads the form as it streams in, and needs the choice when the
-   file starts. #}
-{% block head %}{% if job.running %}<noscript><meta http-equiv="refresh" content="{{ poll_s }}"></noscript>{% endif %}{% endblock %}
+   (U-17), the page refreshes itself instead, by a GET, so a refused upload's POST isn't re-sent. While a job runs,
+   the form is disabled, as the server would refuse it. The reasoner field comes before the file: the server reads the
+   form as it streams in, and needs the choice when the file starts. #}
+{% block head %}{% if job.running %}<noscript><meta http-equiv="refresh" content="{{ poll_s }}; url={{ url_for('upload_page').path }}"></noscript>{% endif %}{% endblock %}
 {% block title %}Upload an ontology{% endblock %}
 {% block content %}
 <h1>Upload an ontology</h1>
