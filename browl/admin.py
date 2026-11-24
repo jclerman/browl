@@ -1,5 +1,7 @@
 """Admin routes, under `/{RESERVED_PREFIX}/admin` (DESIGN.md §2.13). Authentication isn't enforced yet (P-22)."""
 
+from urllib.parse import urlsplit
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.openapi.docs import get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -22,17 +24,32 @@ router = APIRouter(prefix="/admin")
 async def job_status(request: Request) -> HTMLResponse:
     """Show the load job's stage, start time, and failed stage and reason (A-5, A-6).
 
-    An htmx request gets just the status fragment, which the upload page embeds; while a job runs, the fragment polls
-    this route and replaces itself. Any other request gets the fragment in a page, which, while a job runs, polls the
-    same way, or refreshes itself when JavaScript is off.
+    An htmx request gets just the status fragment, which polls this route while a job runs; any other request gets a
+    page. A poll that finds the job ended gets `HX-Redirect` to a fresh GET of its page, so the header shows the new
+    ontology (#101); a reload would re-send a refused upload's POST. Only a running job's fragment polls, so no loop.
     """
-    template = "admin/_job_status.html" if request.headers.get("HX-Request") == "true" else "admin/status.html"
+    htmx = request.headers.get("HX-Request") == "true"
+    job = await request.app.state.jobs.current()
+    headers = {"Cache-Control": "no-store"}
+    if htmx and not job.running:
+        headers["HX-Redirect"] = _polling_page(request)
     return templates.TemplateResponse(
         request,
-        template,
-        {"job": await request.app.state.jobs.current(), "stages": list(Stage), "poll_s": STATUS_POLL_S},
-        headers={"Cache-Control": "no-store"},
+        "admin/_job_status.html" if htmx else "admin/status.html",
+        {"job": job, "stages": list(Stage), "poll_s": STATUS_POLL_S},
+        headers=headers,
     )
+
+
+def _polling_page(request: Request) -> str:
+    """Return the path of the admin page an htmx poll came from (`HX-Current-URL`), or else the status page's.
+
+    Only the path is compared, so another origin's URL with the upload page's path passes; that's harmless, as the
+    result is always one of the two pages' own paths.
+    """
+    status_path = request.url_for("job_status").path
+    current = urlsplit(request.headers.get("HX-Current-URL", "")).path
+    return current if current in {status_path, request.url_for("upload_page").path} else status_path
 
 
 REASONER_LABELS = {Reasoner.NONE: "None", Reasoner.ELK: "ELK", Reasoner.HERMIT: "HermiT"}

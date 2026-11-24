@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {# htmx polls the fragment while a job runs; without JS (U-17), the page refreshes itself instead. #}
-{% block head %}{% if job.running %}<noscript><meta http-equiv="refresh" content="{{ poll_s }}"></noscript>{% endif %}{% endblock %}
+{% block head %}{% if job.running %}<noscript><meta http-equiv="refresh" content="{{ poll_s }}; url={{ url_for('job_status').path }}"></noscript>{% endif %}{% endblock %}
 {% block title %}Load status{% endblock %}
 {% block content %}
 <h1>Load status</h1>

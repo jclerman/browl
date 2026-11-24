@@ -52,6 +52,9 @@ EXEMPT = [
 ]
 
 STATUS = "/_browl/admin/status"
+UPLOAD = "/_browl/admin/upload"
+BASE = "http://testserver"
+"""The origin of the test client's requests, as htmx's `HX-Current-URL` would name it."""
 HTMX = {"HX-Request": "true"}
 
 
@@ -305,9 +308,54 @@ def test_status_failed(client: TestClient, app: FastAPI) -> None:
     assert SECRET_REASON not in html
 
 
+def test_status_poll_running_no_redirect(client: TestClient, app: FastAPI) -> None:
+    """Check that a poll while a job runs swaps in the fragment, without leaving the page."""
+    start_job(client, app)
+    assert "HX-Redirect" not in client.get(STATUS, headers={**HTMX, "HX-Current-URL": f"{BASE}{UPLOAD}"}).headers
+
+
+@pytest.mark.parametrize(
+    ("current", "target"),
+    [
+        (None, STATUS),
+        (f"{BASE}{STATUS}", STATUS),
+        (f"{BASE}{UPLOAD}", UPLOAD),
+        (f"{BASE}{UPLOAD}?x=1#job-status", UPLOAD),
+        ("https://attacker.test/", STATUS),
+        ("//attacker.test/x", STATUS),
+        (f"{BASE}/_browl/admin/docs", STATUS),
+        (f"{BASE}{UPLOAD}/../docs", STATUS),
+        ("https://attacker.test/_browl/admin/upload", UPLOAD),
+    ],
+)
+@pytest.mark.parametrize("reasoning", [None, SECRET_REASON])
+def test_status_poll_ended_redirects(
+    client: TestClient, app: FastAPI, reasoning: str | None, current: str | None, target: str
+) -> None:
+    """Check that a poll finding the job ended, ready or failed, sends htmx to a fresh GET of its page (#101).
+
+    The page is the upload page's or the status page's path, whatever the `HX-Current-URL` it sent; any other path,
+    or none, goes to the status page. Another site's URL with the upload page's path is harmless: only the path is used.
+    """
+    run_job(client, app, reasoning)
+    headers = HTMX if current is None else {**HTMX, "HX-Current-URL": current}
+    response = client.get(STATUS, headers=headers)
+    assert response.headers["HX-Redirect"] == target
+    assert response.headers["Cache-Control"] == "no-store"
+
+
+@pytest.mark.parametrize("path", [STATUS, UPLOAD])
+def test_status_page_ended_no_redirect(client: TestClient, app: FastAPI, path: str) -> None:
+    """Check that a page loaded after the job ended doesn't redirect or poll, so it can't reload in a loop."""
+    run_job(client, app)
+    response = client.get(path, headers={"HX-Current-URL": f"{BASE}{path}"})
+    assert "HX-Redirect" not in response.headers
+    assert f'hx-get="{STATUS}' not in response.text
+
+
 def test_status_page(client: TestClient, app: FastAPI) -> None:
     """Check that a request not from htmx gets the status in a page, which refreshes without JS while a job runs."""
-    refresh = '<noscript><meta http-equiv="refresh" content="2"></noscript>'
+    refresh = f'<noscript><meta http-equiv="refresh" content="2; url={STATUS}"></noscript>'
     response = client.get(STATUS)
     assert response.status_code == 200
     assert response.headers["Cache-Control"] == "no-store"

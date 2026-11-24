@@ -38,6 +38,7 @@ from browl.upload import (
 from tests.helpers import make_app, make_settings
 
 UPLOAD = "/_browl/admin/upload"
+UPLOAD_WAIT = "A load is running; you can upload once it ends."
 pytestmark = pytest.mark.anyio
 
 TURTLE = b"@prefix ex: <http://example.org/> .\nex:a a ex:B .\n"
@@ -531,10 +532,31 @@ def test_upload_page_while_running_polls(client: TestClient, loading: threading.
     assert loading.wait(timeout=5)
     text = client.get(UPLOAD).text
     assert 'hx-trigger="every' in text
-    assert '<noscript><meta http-equiv="refresh"' in text
+    assert f'<noscript><meta http-equiv="refresh" content="2; url={UPLOAD}"></noscript>' in text
     response = client.get("/example.org/onto")
     assert response.status_code == 503
     assert "<h1>Loading the ontology</h1>" in response.text
+
+
+def test_form_disabled_while_running(client: TestClient, loading: threading.Event) -> None:
+    """Check that while a job runs, the form's controls are disabled, with a note saying why."""
+    post(client)
+    assert loading.wait(timeout=5)
+    text = client.get(UPLOAD).text
+    assert '<fieldset class="upload-controls" disabled aria-describedby="upload-wait">' in text
+    assert f'<p id="upload-wait" class="note">{UPLOAD_WAIT}</p>' in text
+
+
+@pytest.mark.parametrize("ended", [False, True])
+def test_form_enabled_unless_running(client: TestClient, app: FastAPI, ended: bool) -> None:
+    """Check that with no job, or once it has ended, the form's controls are enabled, without the note."""
+    if ended:
+        post(client)
+        finish(client, app)
+    text = client.get(UPLOAD).text
+    assert '<fieldset class="upload-controls">' in text
+    assert "disabled" not in text
+    assert UPLOAD_WAIT not in text
 
 
 def asgi_request(receive: Receive, boundary: bytes = b"b") -> Request:
