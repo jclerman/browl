@@ -934,30 +934,38 @@ name properties' ([P-42 findings](../research/P-42/README.md)).
   (RadLex's `mapping_term`), is kept in `search_property`, name-like unless all of those are prose, and searched by
   default if all of those are (RadLex's `mapping_term`, over its synonyms, acronyms and misspellings), so choosing it
   never adds one that isn't; choosing it searches them, with entailed values. The results page counts its
-  sub-properties' values beside its own. - **Common values are counted, not listed.** A name-like value on more than 10%
-  of the ontology's entities (`COMMON_SHARE`), and on at least 1,000 (`COMMON_MIN`), tells no entities apart, so it gets
-  no rows in the lane index. `common_value` holds it once, with how many entities of each type have it and how many that
-  type has. A query matches it as it matches indexed values, by the start of the value or of a later word, with the same
-  property and type filters, and the results page says so above the hits, on the first page: "`GC_ID:1` (database
-  cross-reference) is on 2,291,619 classes (76%): too many to list". So the visitor learns the value is there without
-  paging through millions of entities. The rule is by value, not property: of NCBITaxon's `hasDbXref` values, `GC_ID:1`
-  and `GC_ID:11` (genetic codes, 98% of its 3.1 M values) are common, while its 18.6 K cross-references, such as
+  sub-properties' values beside its own.
+- **Common values are counted, not listed.** A name-like value on more than 10% of the ontology's entities
+  (`COMMON_SHARE`), and on at least 1,000 (`COMMON_MIN`), tells no entities apart, so it gets no rows in the lane
+  index. `common_value` holds it once, with how many entities of each type have it and how many that type has. A query
+  matches it as it matches indexed values, by the start of the value or of a later word, with the same property and
+  type filters, and the results page says so above the hits, on the first page: "`GC_ID:1` (database cross-reference)
+  is on 2,291,619 classes (76%): too many to list". So the visitor learns the value is there without paging through
+  millions of entities. The rule is by value, not property: of NCBITaxon's `hasDbXref` values, `GC_ID:1` and
+  `GC_ID:11` (genetic codes, 98% of its 3.1 M values) are common, while its 18.6 K cross-references, such as
   `PMID:7857801` on 4,521 taxa, are indexed. On NCBITaxon the common values are those two and `ncbi_taxonomy`
   (`hasOBONamespace`, on every class): 6.0 M of its 9.7 M values. HPO and Uberon have none; their most frequent
-  name-like value is on 641 entities. A share rather than a count scales with the ontology; the minimum keeps a small
-  ontology's values all listed. - **Entailment at query time:** each value is stored once, under the property it's
-  asserted with, and "direct and entailed" for a chosen property adds its sub-properties' lanes (Lane order, above). The
-  sub-properties come from a property path query (`rdfs:subPropertyOf+`), stored as their closure in `sub_property`,
-  rather than from the annotation-property hierarchy (`edge`): the path reaches each once however the properties cycle,
-  where `edge` joins a cycle into one node, and the search hook runs before the hierarchies hook. - **Measured** on an
-  Apple M3 Pro (P-42), from the values the research fetched, 20 runs of 12 queries each: | | HPO | Uberon | NCBITaxon |
-  | --- | --- | --- | --- | | Lanes (whole + word) | 59 | 75 | 24 | | `search_value`; with `rdfs:label` alone | 38 MiB;
-  11 | 40 MiB; 8 | 957 MiB; 828 MiB | | Storing the values; the index | 0.4 s; 2.5 s | 0.3 s; 2.7 s | 32 s; 107 s | |
-  Default search, worst median (max) | 24 ms (77) | 26 ms (48) | 9 ms (25) | | Every name-like property, worst median
-  (max) | 39 ms (70) | 52 ms (71) | 16 ms (52) | So N-2 holds. The lanes are fewer than in the research, as non-string
-  values are left out. On NCBITaxon, indexing the common values too took 180 s and 1.6 GiB, about P-41's cost per row;
-  counting them instead saves 6.0 M values' rows (each has 2–3: `ncbi_taxonomy` and `taxonomy`, `GC_ID:1`, `ID:1` and
-  `1`). Its values query takes about 2 minutes, against 50 s for the name values.
+  name-like value is on 641 entities. A share rather than a count scales with the ontology; the minimum keeps a
+  small ontology's values all listed.
+- **Entailment at query time:** each value is stored once, under the property it's asserted with, and "direct and
+  entailed" for a chosen property adds its sub-properties' lanes (Lane order, above). The sub-properties come from a
+  property path query (`rdfs:subPropertyOf+`), stored as their closure in `sub_property`, rather than from the
+  annotation-property hierarchy (`edge`): the path reaches each once however the properties cycle, where `edge` joins a
+  cycle into one node, and the search hook runs before the hierarchies hook.
+- **Measured** on an Apple M3 Pro (P-42), from the values the research fetched, 20 runs of 12 queries each:
+
+  | | HPO | Uberon | NCBITaxon |
+  | --- | --- | --- | --- |
+  | Lanes (whole + word) | 59 | 75 | 24 |
+  | `search_value`; with `rdfs:label` alone | 38 MiB; 11 | 40 MiB; 8 | 957 MiB; 828 MiB |
+  | Storing the values; the index | 0.4 s; 2.5 s | 0.3 s; 2.7 s | 32 s; 107 s |
+  | Default search, worst median (max) | 24 ms (77) | 26 ms (48) | 9 ms (25) |
+  | Every name-like property, worst median (max) | 39 ms (70) | 52 ms (71) | 16 ms (52) |
+
+  So N-2 holds. The lanes are fewer than in the research, as non-string values are left out. On NCBITaxon, indexing
+  the common values too took 180 s and 1.6 GiB, about P-41's cost per row; counting them instead saves 6.0 M values'
+  rows (each has 2–3: `ncbi_taxonomy` and `taxonomy`, `GC_ID:1`, `ID:1` and `1`). Its values query takes about
+  2 minutes, against 50 s for the name values.
 - **The results page** lists the name-like properties that have values, or sub-properties that do, in walk order (Lane
   order, above), each with its value count and its sub-properties', in two groups: "Names, IDs, and synonyms", those
   searched by default, then "Other properties" (2.9, Search).
