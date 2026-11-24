@@ -928,9 +928,9 @@ name properties' ([P-42 findings](../research/P-42/README.md)).
   sources, creators, versions of change, OBO namespaces (RadLex's `Source` 11 entities a value, `created_by` 47–72), nor
   NCBITaxon's `hasDbXref` (165, as its genetic codes are on 3.0 M classes). The others are searched when chosen. Default
   properties are kept in `search_property` even without values of their own, so an ontology whose labels are all under a
-  sub-property of `rdfs:label` is still searched. Measured cost: default search's worst median rose from 24 to 39 ms on
-  HPO (17 properties) and from 26 to 52 ms on Uberon (21), with one run of 20 at 182 ms; N-2 holds. A comment can be
-  short and unique enough to pass (RadLex's `Comment`, 1.92 entities a value); P-44 lets an admin move it.
+  sub-property of `rdfs:label` is still searched. Measured cost (below): default search's worst median is 16 ms on HPO
+  (17 properties) and 21 ms on Uberon (21); N-2 holds. A comment can be short and unique enough to pass (RadLex's
+  `Comment`, 1.92 entities a value); P-44 lets an admin move it.
 - **Super-properties are listed too.** A property with no values of its own, but with sub-properties that have some
   (RadLex's `mapping_term`), is kept in `search_property`, name-like unless all of those are prose, and searched by
   default if all of those are (RadLex's `mapping_term`, over its synonyms, acronyms and misspellings), so choosing it
@@ -953,15 +953,17 @@ name properties' ([P-42 findings](../research/P-42/README.md)).
   property path query (`rdfs:subPropertyOf+`, from each annotation property), stored as their closure in `sub_property`,
   rather than from the annotation-property hierarchy (`edge`): the path reaches each once however the properties cycle,
   where `edge` joins a cycle into one node, and the search hook runs before the hierarchies hook.
-- **Measured** on an Apple M3 Pro (P-42), from the values the research fetched, 20 runs of 12 queries each:
+- **Measured** on an Apple M3 Pro (P-42), from the values the research fetched: 17 queries (`a` to 40 `x`s), each run
+  20 times, the default properties or every name-like one; the worst median is the slowest query's median, and the
+  max its slowest run. The properties, lanes and common values are read once, as `SqliteSearch` keeps them.
 
   | | HPO | Uberon | NCBITaxon |
   | --- | --- | --- | --- |
   | Lanes (whole + word) | 59 | 75 | 24 |
   | `search_value`; with `rdfs:label` alone | 38 MiB; 11 | 40 MiB; 8 | 957 MiB; 828 MiB |
-  | Storing the values; the index | 0.4 s; 2.5 s | 0.3 s; 2.7 s | 32 s; 107 s |
-  | Default search, worst median (max) | 24 ms (77) | 26 ms (48) | 9 ms (25) |
-  | Every name-like property, worst median (max) | 39 ms (70) | 52 ms (71) | 16 ms (52) |
+  | Storing the values; the index | 0.4 s; 2.0 s | 0.4 s; 2.2 s | 36 s; 80 s |
+  | Default search, worst median (max) | 16 ms (51) | 21 ms (28) | 6 ms (64) |
+  | Every name-like property, worst median (max) | 17 ms (41) | 21 ms (25) | 6 ms (9) |
 
   So N-2 holds. The lanes are fewer than in the research, as non-string values are left out. On NCBITaxon, indexing
   the common values too took 180 s and 1.6 GiB, about P-41's cost per row; counting them instead saves 6.0 M values'
