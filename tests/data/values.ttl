@@ -1,0 +1,43 @@
+@prefix ex: <http://example.org/values#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix obo: <http://purl.obolibrary.org/obo/> .
+@prefix oboInOwl: <http://www.geneontology.org/formats/oboInOwl#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+
+# The annotation values hook's test data (tests/test_precache_values.py). rdfs:label and rdfs:comment are built in, so
+# not declared.
+
+<http://example.org/values> a owl:Ontology ;
+    rdfs:comment "An ontology for testing which annotation values are stored and how." .
+
+ex:Heart a owl:Class ;
+    rdfs:label "heart"@en, "cœur"@fr ;
+    oboInOwl:hasExactSynonym "cardium" ;
+    oboInOwl:hasDbXref "FMA:7088" ;
+    obo:IAO_0000115 "A hollow organ." ;
+    ex:note "This note has more than eight words, so it is prose." ;
+    ex:code "AB-12" ;
+    ex:myLabel "ticker" ;
+    ex:deepLabel "pump" ;
+    ex:loopA "loop" ;
+    ex:typed "typed"^^xsd:string ;
+    dcterms:date "2020-01-01T00:00:00"^^xsd:dateTime ;
+    owl:deprecated true ;
+    rdfs:seeAlso "http://example.org/"^^xsd:anyURI ;
+    rdfs:seeAlso ex:Other .
+
+ex:Undeclared rdfs:label "nobody" .
+
+oboInOwl:hasExactSynonym a owl:AnnotationProperty .
+oboInOwl:hasDbXref a owl:AnnotationProperty .
+obo:IAO_0000115 a owl:AnnotationProperty .
+dcterms:date a owl:AnnotationProperty .
+ex:note a owl:AnnotationProperty .
+ex:code a owl:AnnotationProperty .
+ex:typed a owl:AnnotationProperty .
+ex:myLabel a owl:AnnotationProperty ; rdfs:subPropertyOf rdfs:label .
+ex:deepLabel a owl:AnnotationProperty ; rdfs:subPropertyOf ex:myLabel .
+ex:loopA a owl:AnnotationProperty ; rdfs:subPropertyOf ex:loopB .
+ex:loopB a owl:AnnotationProperty ; rdfs:subPropertyOf ex:loopA .

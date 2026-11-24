@@ -3,8 +3,8 @@
 import bisect
 import sqlite3
 import unicodedata
-from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 from typing import NamedTuple
 
 from fastapi import APIRouter, Request
@@ -34,8 +34,10 @@ from browl.search import (
     SEARCH_LIMIT,
     SearchBackend,
     SearchHit,
+    SearchProperty,
     SearchQuery,
     SearchResults,
+    search_properties,
 )
 from browl.settings import Settings
 from browl.tabs import with_query
@@ -47,7 +49,7 @@ TYPE_PARAM = "type"
 """The query parameter, repeated, that names each entity type to find; none for all."""
 
 PROPERTY_PARAM = "property"
-"""The query parameter, repeated, that names each name property, by IRI, whose values to search; none for all."""
+"""The query parameter, repeated, that names each property, by IRI, whose values to search; none for the defaults."""
 
 VALUES_PARAM = "values"
 """The query parameter that says which values count: `all`, the default, or `direct`, without entailed ones."""
@@ -72,7 +74,8 @@ class SearchRequest:
     Attributes:
         text: The query's text, as given.
         types: The entity types to find, in `EntityType`'s order; empty for all.
-        properties: The name properties to search, by IRI, in `NAME_PROPERTIES`' order; empty for all.
+        properties: The properties to search, by IRI, each once, sorted; empty for those searched by default. Once
+            checked against the served ontology's (`_choices`), in their walk order (`browl.search.search_properties`).
         direct: Whether only direct values count.
         offset: How many results come before those shown.
         suggest: Whether it asks for the autocomplete fragment.
@@ -110,6 +113,8 @@ class ShownHit:
         name: The entity's name, with the match marked if it's the matched value.
         types: Its types' labels, joined.
         id_text: Its CURIE, else its IRI cut short, which the results page shows; None in the autocomplete.
+        property: The label of the property the value is from, which the results page shows; None in the
+            autocomplete.
     """
 
     link: EntityLink
@@ -117,29 +122,32 @@ class ShownHit:
     name: Marked
     types: str
     id_text: str | None
+    property: str | None = None
 
 
 @dataclass(frozen=True)
 class PropertyChoice:
-    """A name property the results page lets the visitor search.
+    """A property the results page lets the visitor search: a name-like one with values (DESIGN.md §2.6).
 
     Attributes:
         iri: Its IRI.
-        label: Its display name, else its name in `NAME_PROPERTIES`, cut short.
+        label: Its display name, else its name in `NAME_PROPERTIES`, else its IRI, cut short.
+        values: How many values it has.
+        by_default: Whether a search that checks none searches it.
         checked: Whether the query names it.
     """
 
     iri: str
     label: str
+    values: int
+    by_default: bool
     checked: bool
 
 
-def read_request(request: Request, properties: Collection[str]) -> SearchRequest | None:
+def read_request(request: Request) -> SearchRequest | None:
     """Return what a search URL asks for; None if a parameter is repeated where it mustn't be, or isn't valid.
 
-    Args:
-        request: The request.
-        properties: The name properties' IRIs (`browl.names.name_properties`), which `property=` may name.
+    The properties `property=` names are checked once the served ontology's are read (`_choices`).
     """
     params = request.query_params
     single = single_params(request, (QUERY_PARAM, VALUES_PARAM, OFFSET_PARAM, SUGGEST_PARAM))
@@ -155,14 +163,11 @@ def read_request(request: Request, properties: Collection[str]) -> SearchRequest
         kinds = {EntityType(kind) for kind in params.getlist(TYPE_PARAM)}
     except ValueError:
         return None
-    named = set(params.getlist(PROPERTY_PARAM))
-    if not named <= set(properties):
-        return None
     # In a fixed order, each once, so a query's links, and the page cache's key (DESIGN.md §2.10), don't depend on
     # the URL's.
     types = tuple(kind for kind in EntityType if kind in kinds)
-    chosen = tuple(iri for iri in properties if iri in named)
-    return SearchRequest(text, types, chosen, values == "direct", offset, suggest == "1")
+    named = tuple(sorted(set(params.getlist(PROPERTY_PARAM))))
+    return SearchRequest(text, types, named, values == "direct", offset, suggest == "1")
 
 
 def _normalized_length(value: str, end: int) -> int:
@@ -281,28 +286,29 @@ def shown_hits(
     return shown
 
 
-def property_choices(
-    connection: sqlite3.Connection, properties: Mapping[str, str], chosen: Sequence[str]
-) -> list[PropertyChoice]:
-    """Return the name properties the results page offers, labeled by display name, else by their setting's name.
+def property_label(found: SearchProperty, names: Mapping[str, str]) -> str:
+    """Return how a property is labeled: its display name, else its name in `NAME_PROPERTIES`, else its IRI, cut short.
+
+    Args:
+        found: The property.
+        names: The name properties, by IRI, each with its name in `NAME_PROPERTIES` (`name_properties`).
+    """
+    return cut_name(found.name or names.get(found.iri) or found.iri)
+
+
+def _choices(connection: sqlite3.Connection, names: Mapping[str, str], chosen: Sequence[str]) -> list[PropertyChoice]:
+    """Return the properties the results page offers: the name-like ones with values, in walk order.
 
     Args:
         connection: The derived database.
-        properties: The name properties, by IRI, each with its name in `NAME_PROPERTIES` (`name_properties`).
+        names: The name properties, by IRI, each with its name in `NAME_PROPERTIES` (`name_properties`), which walk
+            first.
         chosen: The IRIs of those the query names.
     """
-    names: dict[str, str] = {}
-    if properties:
-        placeholders = ", ".join("?" * len(properties))
-        rows = connection.execute(
-            f"SELECT iri, display_name FROM entity WHERE iri IN ({placeholders}) AND display_name IS NOT NULL"
-            " ORDER BY type",
-            list(properties),
-        )
-        for iri, name in rows:
-            names.setdefault(iri, name)
     return [
-        PropertyChoice(iri, cut_name(names.get(iri) or setting), iri in chosen) for iri, setting in properties.items()
+        PropertyChoice(found.iri, property_label(found, names), found.values, found.by_default, found.iri in chosen)
+        for found in search_properties(connection, list(names))
+        if found.values and not found.prose
     ]
 
 
@@ -325,8 +331,8 @@ async def search_page(request: Request) -> Response:
     A blank query finds nothing: the fragment is then empty, and the page shows only its form.
     """
     settings: Settings = request.app.state.settings
-    properties = name_properties(settings)
-    asked = read_request(request, properties)
+    names = name_properties(settings)
+    asked = read_request(request)
     if asked is None:
         return not_found(request)
     try:
@@ -334,6 +340,7 @@ async def search_page(request: Request) -> Response:
             asked.text,
             types=frozenset(asked.types) or None,
             properties=frozenset(asked.properties) or None,
+            order=tuple(names),
             entailed=not asked.direct,
             limit=SEARCH_LIMIT if asked.suggest else PAGE_SIZE,
             offset=0 if asked.suggest else asked.offset,
@@ -345,6 +352,12 @@ async def search_page(request: Request) -> Response:
         return templates.TemplateResponse(request, "search_suggestions.html", {"blank": True}, headers=PANEL_HEADERS)
     state = await request.app.state.jobs.current()
     generation = ready_generation(state)
+    named = asked.properties
+    choices = await read_derived(request, lambda connection: _choices(connection, names, named), state)
+    offered = [choice.iri for choice in choices]
+    if not set(asked.properties) <= set(offered):
+        return not_found(request)
+    asked = replace(asked, properties=tuple(iri for iri in offered if iri in asked.properties))
     results = SearchResults((), more=False)  # the page's form alone
     if normalized:
         backend: SearchBackend = request.app.state.search
@@ -352,12 +365,17 @@ async def search_page(request: Request) -> Response:
     prefix = settings.reserved_prefix
     root = link_root(request.scope)
 
-    def read(connection: sqlite3.Connection) -> tuple[list[ShownHit], list[PropertyChoice]]:
-        hits = shown_hits(connection, results.hits, normalized, prefix, root, with_ids=not asked.suggest)
-        choices = [] if asked.suggest else property_choices(connection, properties, asked.properties)
-        return hits, choices
+    labels = {choice.iri: choice.label for choice in choices}
 
-    hits, choices = await read_derived(request, read, state)
+    def read(connection: sqlite3.Connection) -> list[ShownHit]:
+        hits = shown_hits(connection, results.hits, normalized, prefix, root, with_ids=not asked.suggest)
+        if asked.suggest:
+            return hits
+        return [
+            replace(hit, property=labels.get(found.property)) for hit, found in zip(hits, results.hits, strict=True)
+        ]
+
+    hits = await read_derived(request, read, state)
     page_path = f"/{prefix}/{SEARCH_PATH}"
     if asked.suggest:
         context = {"hits": hits, "blank": False, "all_results": href(request, with_query(page_path, _params(asked)))}

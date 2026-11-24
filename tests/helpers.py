@@ -10,6 +10,7 @@ import threading
 import time
 import urllib.parse
 import uuid
+from collections import Counter, defaultdict
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -29,8 +30,8 @@ from browl.imports import OWL_IMPORTS
 from browl.jobs import JobContext, StageFunction
 from browl.jobtypes import ImportResult, Reasoner
 from browl.loading import dataset_name
-from browl.names import name_property_iris, normalize
-from browl.precache import hierarchies
+from browl.names import name_property_iris
+from browl.precache import hierarchies, values
 from browl.precache.core import Hook
 from browl.precache.entities import Reserved, fill_hash_prefix, fill_type_count, insert_entities
 from browl.precache.keys import build_keys
@@ -236,6 +237,13 @@ NAME_HEADER = f"?entity\t?name\t?property\t?value\t?{END_VARIABLE}\n"
 NAME_END = "\t\t\t\ttrue\n"
 NAME_RESULT = f'{NAME_HEADER}<{EX}onto#A>\t{LABEL}\t{LABEL}\t"A"@en\t\n{NAME_END}'
 
+VALUES_HEADER = f"?entity\t?property\t?value\t?{END_VARIABLE}\n"
+VALUES_END = "\t\t\ttrue\n"
+VALUES_RESULT = f'{VALUES_HEADER}<{EX}onto#A>\t{LABEL}\t"A"@en\t\n{VALUES_END}'
+SUB_HEADER = f"?sub\t?property\t?{END_VARIABLE}\n"
+SUB_END = "\t\ttrue\n"
+SUB_RESULT = SUB_HEADER + SUB_END
+
 
 EDGE_HEADER = f"?child\t?relation\t?parent\t?{END_VARIABLE}\n"
 EDGE_END = "\t\t\ttrue\n"
@@ -273,7 +281,10 @@ AXIOM_COUNT_QUERIES = {
 
 
 def answer(query: str) -> str:
-    """Return a stubbed Fuseki's answer: the entities', names', edges', owner map's, usage scan's, else the header's."""
+    """Return a stubbed Fuseki's answer to a query, by its variables.
+
+    The entities', names', annotation values', sub-properties', edges', owner map's, usage scan's, else the header's.
+    """
     if "?subject ?predicate ?object" in query:
         return SCAN_RESULT
     if "?triples" in query:
@@ -284,6 +295,10 @@ def answer(query: str) -> str:
         return OWNER_MAP_RESULT
     if "?entity ?name" in query:
         return NAME_RESULT
+    if "?entity ?property ?value" in query:
+        return VALUES_RESULT
+    if "?sub ?property" in query:
+        return SUB_RESULT
     if "?child ?relation" in query:
         return EDGE_RESULT
     # The axiom counts' queries (browl.precache.axiom_counts), by their SELECT clause: none.
@@ -344,7 +359,8 @@ def derived_stage(
     names: Mapping[str, tuple[str | None, str | None]] | None = None,
     equivalence_groups: Sequence[Sequence[str]] = (),
     edges: Sequence[tuple[str, str, str]] | None = None,
-    name_values: Sequence[tuple[str, str, str, str | None, bool]] = (),
+    annotation_values: Sequence[tuple[str, str, str, str | None]] = (),
+    sub_properties: Sequence[tuple[str, str]] = (),
 ) -> StageFunction:
     """Return a load job stage that builds the job's derived database with these entities, and the ontology if given.
 
@@ -352,8 +368,9 @@ def derived_stage(
     hook writes them (`browl.precache.entities`). `names` gives IRIs' display names and CURIEs; `equivalence_groups`
     classes' equivalence groups (the `equiv_group` table), each with its representative first. `edges`, if given,
     are the edges query's rows, (child, relation IRI, parent), from which the hierarchies hook fills `equiv_group`,
-    `edge`, `counts` and `root`. `name_values` gives name values, (IRI, name property IRI, value, language, direct),
-    which fill `name_value` and the search index (`browl.search`) for each type the IRI has.
+    `edge`, `counts` and `root`. `annotation_values` gives annotation values, (IRI, property IRI, value, language), and
+    `sub_properties` the sub-property query's rows, (sub-property, property), from which the annotation values hook
+    fills its tables (`browl.precache.values`) and the search hook its index (`browl.search`).
     """
 
     def build(context: JobContext) -> None:
@@ -379,13 +396,15 @@ def derived_stage(
                     [(child, hierarchies.RELATION_CODES[relation], parent) for child, relation, parent in edges],
                 )
                 hierarchies.fill_staged(connection)
-            if name_values:
-                connection.executemany(
-                    "INSERT INTO name_value (entity, property, value, normalized, language, direct)"
-                    " SELECT id, ?, ?, ?, ?, ? FROM entity WHERE iri = ?",
-                    [(p, value, normalize(value), lang, direct, iri) for iri, p, value, lang, direct in name_values],
-                )
-                search.fill_index(connection, name_property_iris(settings), settings.language_ranking)
+            if annotation_values:
+                words: defaultdict[str, Counter[int]] = defaultdict(Counter)
+                for _, prop, value, _ in annotation_values:
+                    words[prop][len(value.split())] += 1
+                values.create_staging(connection)
+                connection.executemany("INSERT INTO value_staging VALUES (?, ?, ?, ?)", annotation_values)
+                connection.executemany("INSERT INTO sub_staging VALUES (?, ?)", sub_properties)
+                values.fill_staged(name_property_iris(settings), words, connection)
+                search.fill_index(connection, settings.language_ranking)
 
     async def stage(context: JobContext) -> None:
         await asyncio.to_thread(build, context)

@@ -111,18 +111,22 @@ def best_values(values: Iterable[Literal], ranking: Sequence[str]) -> list[str]:
 
 
 @contextmanager
-def rank_tables(connection: sqlite3.Connection, properties: Sequence[str], ranking: Sequence[str]) -> Iterator[None]:
-    """Create temporary tables of the name values' ranks for the duration, for display names and search.
+def rank_tables(
+    connection: sqlite3.Connection, properties: Sequence[str], ranking: Sequence[str], table: str = "name_value"
+) -> Iterator[None]:
+    """Create temporary tables of values' ranks for the duration, for display names and search.
 
     `property_rank (property, rank)` gives each name property's position, and `language_rank (language, rank)` each
-    language tag in `name_value` its rank by `language_rank`, as dense integers from 0: tags that rank alike share one.
+    language tag in the table its rank by `language_rank`, as dense integers from 0: tags that rank alike share one.
 
     Args:
-        connection: A connection to the derived database, with `name_value` filled.
+        connection: A connection to the derived database, with the table filled.
         properties: The name properties' IRIs, best first (`name_property_iris`).
         ranking: The language ranking, lowercased (`Settings.language_ranking`).
+        table: The table whose values' languages to rank, with a `language` column: `name_value` or
+            `annotation_value`.
     """
-    tags = [row[0] for row in connection.execute("SELECT DISTINCT language FROM name_value")]
+    tags = [row[0] for row in connection.execute(f"SELECT DISTINCT language FROM {table}")]
     ranks = {tag: language_rank(tag, ranking) for tag in tags}
     dense = {rank: n for n, rank in enumerate(sorted(set(ranks.values())))}
     connection.execute("CREATE TEMP TABLE property_rank (property TEXT PRIMARY KEY, rank INTEGER NOT NULL)")

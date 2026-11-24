@@ -73,11 +73,28 @@ CREATE TABLE name_value (
     language TEXT,
     direct INTEGER NOT NULL
 );
+CREATE TABLE annotation_value (
+    entity INTEGER NOT NULL,
+    property INTEGER NOT NULL,
+    value TEXT NOT NULL,
+    language TEXT
+);
+CREATE TABLE search_property (
+    id INTEGER PRIMARY KEY,
+    iri TEXT NOT NULL,
+    prose INTEGER NOT NULL,
+    by_default INTEGER NOT NULL,
+    value_count INTEGER NOT NULL
+);
+CREATE TABLE sub_property (
+    property INTEGER NOT NULL,
+    sub INTEGER NOT NULL,
+    PRIMARY KEY (property, sub)
+) WITHOUT ROWID;
 CREATE TABLE search_value (
     type TEXT NOT NULL,
-    property_rank INTEGER NOT NULL,
+    property INTEGER NOT NULL,
     language_rank INTEGER NOT NULL,
-    entailed INTEGER NOT NULL,
     word INTEGER NOT NULL,
     length INTEGER NOT NULL,
     normalized TEXT NOT NULL,
@@ -87,17 +104,15 @@ CREATE TABLE search_value (
     value_rest TEXT,
     language TEXT,
     word_start INTEGER NOT NULL,
-    PRIMARY KEY (type, property_rank, language_rank, entailed, word, length, normalized, value, entity, word_start)
+    PRIMARY KEY (type, property, language_rank, word, length, normalized, value, entity, word_start)
 ) WITHOUT ROWID;
 CREATE TABLE search_lane (
     type TEXT NOT NULL,
-    property_rank INTEGER NOT NULL,
+    property INTEGER NOT NULL,
     language_rank INTEGER NOT NULL,
-    entailed INTEGER NOT NULL,
     word INTEGER NOT NULL,
     max_length INTEGER NOT NULL,
-    property TEXT NOT NULL,
-    PRIMARY KEY (type, property_rank, language_rank, entailed, word)
+    PRIMARY KEY (type, property, language_rank, word)
 ) WITHOUT ROWID;
 CREATE TABLE edge (
     hierarchy TEXT NOT NULL,
@@ -165,6 +180,8 @@ INDEXES: dict[str, tuple[str, ...]] = {
         "CREATE INDEX entity_path ON entity (path, fragment)",
     ),
     "name_value": ("CREATE INDEX name_value_entity ON name_value (entity)",),
+    "annotation_value": ("CREATE INDEX annotation_value_entity ON annotation_value (entity)",),
+    "search_property": ("CREATE UNIQUE INDEX search_property_iri ON search_property (iri)",),
     "edge": ("CREATE INDEX edge_child ON edge (hierarchy, child)",),
     "equiv_group": ("CREATE INDEX equiv_group_representative ON equiv_group (representative)",),
     # The home page's order (`browl.home`), so it reads the first prefixes rather than sorting them all per view.

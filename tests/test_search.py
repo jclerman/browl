@@ -8,12 +8,14 @@ import pytest
 from pydantic import ValidationError
 
 from browl.derived import DerivedReader, EntityType
+from browl.names import name_property_iris
 from browl.precache.core import Hook
 from browl.precache.entities import entities
 from browl.precache.keys import build_keys
 from browl.precache.names import names
 from browl.precache.search import search as search_hook
 from browl.precache.stage import HOOKS, pre_caching_stage
+from browl.precache.values import annotation_values
 from browl.search import (
     KEY_CHARS,
     MAX_LIMIT,
@@ -26,7 +28,18 @@ from browl.search import (
     word_starts,
 )
 from browl.settings import Settings
-from tests.helpers import LABEL, ONTOLOGY_RESULT, connect, fuseki, job, make_settings
+from tests.helpers import (
+    LABEL,
+    ONTOLOGY_RESULT,
+    SUB_END,
+    SUB_HEADER,
+    VALUES_END,
+    VALUES_HEADER,
+    connect,
+    fuseki,
+    job,
+    make_settings,
+)
 from tests.test_precache_names import PREF_LABEL, SKOS, entity_result, name_result
 
 pytestmark = pytest.mark.anyio
@@ -34,27 +47,46 @@ pytestmark = pytest.mark.anyio
 EX = "http://example.org/"
 RDFS_LABEL = "http://www.w3.org/2000/01/rdf-schema#label"
 SUB = f"<{EX}sub>"  # a sub-property of a name property: its values are entailed
-HOOKS_USED: Sequence[Hook] = (entities, names, search_hook)
+HOOKS_USED: Sequence[Hook] = (entities, names, annotation_values, search_hook)
 
 type Value = tuple[str, str, str, str]  # entity's local name, name property, property, literal
+
+
+def values_result(*values: tuple[str, str, str]) -> str:
+    """Return the annotation values query's result for (entity IRI, property, literal) rows."""
+    return VALUES_HEADER + "".join(f"<{e}>\t{p}\t{v}\t\n" for e, p, v in values) + VALUES_END
+
+
+def sub_result(*pairs: tuple[str, str]) -> str:
+    """Return the sub-properties query's result for (sub-property, property) rows."""
+    return SUB_HEADER + "".join(f"{sub}\t{prop}\t\n" for sub, prop in pairs) + SUB_END
 
 
 async def build(settings: Settings, values: Sequence[Value], declared: Sequence[tuple[str, str]] = ()) -> None:
     """Build generation 1's derived database, declaring the entities given (local name, OWL type), else classes.
 
-    Without declared entities, each entity named in the values is a class.
+    Without declared entities, each entity named in the values is a class. A value's property is a sub-property of its
+    name property, if they differ.
     """
     kinds = declared or [(name, "Class") for name in dict.fromkeys(name for name, *_ in values)]
     rows = [(f"{EX}{name}", n, p, literal) for name, n, p, literal in values]
     found = [(f"{EX}{name}", kind) for name, kind in kinds]
-    async with fuseki(ONTOLOGY_RESULT, entity_result(*found), name_result(*rows)) as http:
+    asserted = dict.fromkeys((entity, p, literal) for entity, _, p, literal in rows)
+    subs = dict.fromkeys((p, n) for _, n, p, _ in rows if p != n)
+    bodies = (name_result(*rows), values_result(*asserted), sub_result(*subs))
+    async with fuseki(ONTOLOGY_RESULT, entity_result(*found), *bodies) as http:
         await pre_caching_stage(job(settings, 1), http, hooks=HOOKS_USED)
+
+
+def query(settings: Settings, text: str, **filters: object) -> SearchQuery:
+    """Return a query, walking the name properties first, in order, as the search page's do."""
+    return SearchQuery(text, **({"order": tuple(name_property_iris(settings))} | filters))  # type: ignore[arg-type]
 
 
 def find(settings: Settings, text: str, **filters: object) -> SearchResults:
     """Return the results of a query on generation 1."""
     with closing(connect(settings, 1, HOOKS_USED)) as connection:
-        return search(connection, SearchQuery(text, **filters))  # type: ignore[arg-type]
+        return search(connection, query(settings, text, **filters))
 
 
 def found(settings: Settings, text: str, **filters: object) -> list[str]:
@@ -67,7 +99,7 @@ def seeks(settings: Settings, text: str, **filters: object) -> int:
     statements: list[str] = []
     with closing(connect(settings, 1, HOOKS_USED)) as connection:
         connection.set_trace_callback(statements.append)
-        search(connection, SearchQuery(text, **filters))  # type: ignore[arg-type]
+        search(connection, query(settings, text, **filters))
     return sum("FROM search_value" in statement for statement in statements)
 
 
@@ -528,9 +560,9 @@ async def test_paging_across_exact_matches(data_dir: Path) -> None:
     assert seeks(settings, "m", limit=1) < seeks(settings, "m", limit=2)
 
 
-def test_search_hook_after_names() -> None:
-    """Check that the search hook runs after the names hook, whose `name_value` it reads."""
-    assert HOOKS.index(search_hook) > HOOKS.index(names)
+def test_search_hook_after_values() -> None:
+    """Check that the search hook runs after the annotation values hook, whose `annotation_value` it reads."""
+    assert HOOKS.index(search_hook) > HOOKS.index(annotation_values) > HOOKS.index(entities)
 
 
 async def test_many_lengths(data_dir: Path) -> None:

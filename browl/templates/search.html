@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "search_hits.html" import hit_row %}
+{% from "search_hits.html" import hit_text %}
 {% block title %}{% if blank %}Search{% else %}Search: {{ text | isolate }}{% endif %}{% endblock %}
 {% block content %}
 {# The full results page, with type and property filters (U-10; `browl.search_page`). #}
@@ -19,11 +19,12 @@
         <label><input type="checkbox" name="type" value="{{ value }}"{% if checked %} checked{% endif %}> {{ label }}</label>
         {% endfor %}
       </fieldset>
-      <fieldset>
-        <legend>Name properties <small>(none checked: all)</small></legend>
+      <fieldset class="search-properties">
+        <legend>Properties <small>(none checked: those marked *, the names and synonyms)</small></legend>
         {% for choice in properties %}
         <label><input type="checkbox" name="property" value="{{ choice.iri }}"{% if choice.checked %} checked{% endif %}>
-          <bdi>{{ choice.label }}</bdi></label>
+          <bdi>{{ choice.label }}</bdi>{% if choice.by_default %} *{% endif %}
+          <small class="note">({{ "{:,}".format(choice.values) }})</small></label>
         {% endfor %}
       </fieldset>
       <fieldset>
@@ -38,11 +39,21 @@
     <h2 id="results-heading">Results</h2>
     {% if hits %}
     <p class="note">Showing {{ "{:,}".format(offset + 1) }}–{{ "{:,}".format(offset + hits | length) }}</p>
-    <ol class="hits" start="{{ offset + 1 }}">
-      {% for hit in hits %}
-      <li><a class="hit" href="{{ hit.link.href }}">{{ hit_row(hit) }}</a></li>
-      {% endfor %}
-    </ol>
+    <table class="hits">
+      <thead>
+        <tr><th scope="col">Match</th><th scope="col">ID</th><th scope="col">Property</th><th scope="col">Types</th></tr>
+      </thead>
+      <tbody>
+        {% for hit in hits %}
+        <tr>
+          <td><a class="hit" href="{{ hit.link.href }}">{{ hit_text(hit) }}</a></td>
+          <td>{% if hit.id_text is not none %}<code class="hit-id" dir="ltr">{{ hit.id_text | bidi_encoded }}</code>{% endif %}</td>
+          <td class="hit-property"><bdi>{{ hit.property or "" }}</bdi></td>
+          <td class="hit-types">{{ hit.types }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
     {% else %}
     <p class="note">{% if offset %}No more results.{% else %}No matches.{% endif %}</p>
     {% endif %}
