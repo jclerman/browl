@@ -355,22 +355,33 @@ def test_entailed_filter(client: TestClient) -> None:
 
 
 def test_property_choices(client: TestClient) -> None:
-    """Check that the page offers the name-like properties with values, name properties first, with their counts.
+    """Check that the page offers the name-like properties with values, with their counts, in two groups.
 
-    Then those searched by default, marked, then the others, each by display name; prose isn't offered (U-47). A
-    property's count says how many values its sub-properties add.
+    First the names, IDs and synonyms, which a search with none checked searches, name properties first, then the
+    others; each group by display name. Prose isn't offered (U-47). A property's count says how many values its
+    sub-properties add.
     """
     text = client.get(SEARCH, params={"q": "a"}).text
+    assert "(none checked: names, IDs, and synonyms)" in text
     offered = re.findall(r'name="property" value="([^"]+)"', text)
     assert offered == [LABEL, SYNONYM, XREF, SUB_LABEL, SOURCE]
-    shown = re.findall(r"<bdi>([^<]+)</bdi>( \*)?\s*<small class=\"note\">\(([^)]*)\)</small>", text)
-    assert shown == [
-        ("rdfs:label", " *", f"{MANY + 10:,}, and 1 in sub-properties"),  # the punned IRI's label counts per type
-        ("has exact synonym", " *", "2"),
-        ("database cross reference", " *", "1"),  # its values are on one entity each
-        ("sub-label", " *", "1"),
-        ("source", "", "3"),  # its value is on 3
-    ]
+    groups = re.findall(
+        r'<fieldset class="property-group[^"]*">\s*<legend>([^<]+)</legend>(.*?)</fieldset>', text, re.DOTALL
+    )
+    shown = {
+        legend: re.findall(r"<bdi>([^<]+)</bdi>\s*<small class=\"note\">\(([^)]*)\)</small>", body)
+        for legend, body in groups
+    }
+    assert shown == {
+        "Names, IDs, and synonyms": [
+            ("rdfs:label", f"{MANY + 10:,}, and 1 in sub-properties"),  # the punned IRI's label counts per type
+            ("has exact synonym", "2"),
+            ("database cross reference", "1"),  # its values are on one entity each
+            ("sub-label", "1"),
+        ],
+        "Other properties": [("source", "3")],  # its value is on 3
+    }
+    assert "*" not in "".join(body for _, body in groups)
 
 
 def test_default_properties(client: TestClient) -> None:

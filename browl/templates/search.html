@@ -18,14 +18,20 @@
         {% endfor %}
       </fieldset>
       <fieldset class="search-properties">
-        <legend>Properties <small>(none checked: those marked *, the names, IDs and synonyms)</small></legend>
-        <div class="property-choices">
-          {% for choice in properties %}
-          <label><input type="checkbox" name="property" value="{{ choice.iri }}" form="site-search"{% if choice.checked %} checked{% endif %}>
-            <span><bdi>{{ choice.label }}</bdi>{% if choice.by_default %} *{% endif %}
-            <small class="note">({{ "{:,}".format(choice.values) }}{% if choice.sub_values %}, and {{ "{:,}".format(choice.sub_values) }} in sub-properties{% endif %})</small></span></label>
-          {% endfor %}
-        </div>
+        <legend>Properties <small>(none checked: names, IDs, and synonyms)</small></legend>
+        {% for group, title in ((properties | selectattr("by_default") | list, "Names, IDs, and synonyms"),
+                                (properties | rejectattr("by_default") | list, "Other properties")) if group %}
+        <fieldset class="property-group{% if not loop.first or not group[0].by_default %} other-properties{% endif %}">
+          <legend>{{ title }}</legend>
+          <div class="property-choices">
+            {% for choice in group %}
+            <label><input type="checkbox" name="property" value="{{ choice.iri }}" form="site-search"{% if choice.checked %} checked{% endif %}>
+              <span><bdi>{{ choice.label }}</bdi>
+              <small class="note">({{ "{:,}".format(choice.values) }}{% if choice.sub_values %}, and {{ "{:,}".format(choice.sub_values) }} in sub-properties{% endif %})</small></span></label>
+            {% endfor %}
+          </div>
+        </fieldset>
+        {% endfor %}
       </fieldset>
       <fieldset>
         <legend>Values</legend>

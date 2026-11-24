@@ -959,8 +959,8 @@ name properties' ([P-42 findings](../research/P-42/README.md)).
   counting them instead saves 6.0 M values' rows (each has 2–3: `ncbi_taxonomy` and `taxonomy`, `GC_ID:1`, `ID:1` and
   `1`). Its values query takes about 2 minutes, against 50 s for the name values.
 - **The results page** lists the name-like properties that have values, or sub-properties that do, in walk order (Lane
-  order, above), each with its value count and its sub-properties', and marks those searched by default (2.9,
-  Search).
+  order, above), each with its value count and its sub-properties', in two groups: "Names, IDs, and synonyms", those
+  searched by default, then "Other properties" (2.9, Search).
 
 **Ranking** _(Q9, Q10)_, in order:
 
@@ -1747,25 +1747,26 @@ too (P-38), and the JSON API's (P-33).
   wrap as one block, the names on a line of their own. The autocomplete doesn't show the property.
 - **The results page** has the box, and filters (U-10): entity types as checkboxes, none checked meaning all; the
   name-like properties with values, or with sub-properties that have some, as checkboxes (P-42), in walk order, each
-  with its value count and its sub-properties', and those searched by default marked "*", none checked meaning those;
-  and a choice of all values or direct ones only. A property is labelled by display name, else as `NAME_PROPERTIES`
-  names it, else by CURIE, else by IRI; a `property=` naming one the page doesn't offer gets "not found". Above the
-  hits, the first page lists the common values that match (§2.6), each with its property and its count and share of each
-  type, "too many to list"; the autocomplete doesn't. It shows 50 hits a page, with Previous and Next links, as deep as
-  search's `MAX_OFFSET` allows. P-45 will page it as the Usage tab is paged, through one pager element both share: at
-  the top, with "Page n of N" and a form to go to any page, and the number of results, counted up to the deepest page
-  (1,051 IRIs), as an exact total would read every match. One box (P-42): the page has no box of its own. Its filters
-  belong to the navigation bar's form (`form=`), so the bar's box searches with them, submitted with or without JS and
-  in its suggestions (`hx-include`), and on the page it holds the page's query; a Search button by the filters submits
-  the form too. So the visitor gets the autocomplete with the filters, and never two boxes. Laid out (P-42): on a window
-  at least 56rem wide and 32rem tall, the page has two rows: the headings, "Search" on the left and "Results" with its
-  count on the right, and under them the filters and a panel of the hits, shown with a prompt before any search. So the
-  titles come before the content, and the hits get the rest of the height. The filters and the hits each scroll within
-  the window, as an entity page fills it (U-30), so the filters stay in view while the results scroll. The property
-  choices flow into as many columns of at least 14rem as fit, each name wrapping beside its checkbox. The panel is
-  focusable, so the keyboard can scroll it, and the table's header stays at its top. Otherwise they stack and the page
-  scrolls as one. The bar links to the page, "Advanced search", beside the box, so its filters can be set before
-  searching; the autocomplete's "All results…" opens it too.
+  with its value count and its sub-properties', in two groups, "Names, IDs, and synonyms" (those searched by default)
+  and "Other properties", whose names are muted so the first stand out, none checked meaning the first; and a choice of
+  all values or direct ones only. A property is labelled by display name, else as `NAME_PROPERTIES` names it, else by
+  CURIE, else by IRI; a `property=` naming one the page doesn't offer gets "not found". Above the hits, the first page
+  lists the common values that match (§2.6), each with its property and its count and share of each type, "too many to
+  list"; the autocomplete doesn't. It shows 50 hits a page, with Previous and Next links, as deep as search's
+  `MAX_OFFSET` allows. P-45 will page it as the Usage tab is paged, through one pager element both share: at the top,
+  with "Page n of N" and a form to go to any page, and the number of results, counted up to the deepest page (1,051
+  IRIs), as an exact total would read every match. One box (P-42): the page has no box of its own. Its filters belong to
+  the navigation bar's form (`form=`), so the bar's box searches with them, submitted with or without JS and in its
+  suggestions (`hx-include`), and on the page it holds the page's query; a Search button by the filters submits the form
+  too. So the visitor gets the autocomplete with the filters, and never two boxes. Laid out (P-42): on a window at least
+  56rem wide and 32rem tall, the page has two rows: the headings, "Search" on the left and "Results" with its count on
+  the right, and under them the filters and a panel of the hits, shown with a prompt before any search. So the titles
+  come before the content, and the hits get the rest of the height. The filters and the hits each scroll within the
+  window, as an entity page fills it (U-30), so the filters stay in view while the results scroll. The property choices
+  flow into as many columns of at least 14rem as fit, each name wrapping beside its checkbox. The panel is focusable, so
+  the keyboard can scroll it, and the table's header stays at its top. Otherwise they stack and the page scrolls as one.
+  The bar links to the page, "Advanced search", beside the box, so its filters can be set before searching; the
+  autocomplete's "All results…" opens it too.
 - **Input**: invalid parameters, and repeats of those 2.13 doesn't list as repeated, get the "not found" page, as tree
   pages do. A blank query finds nothing: an empty fragment, which closes the list, or the form alone.
 - **No server-side deadline** (from P-19's review): each query's cost is already bounded (§2.6, Bounds), and the

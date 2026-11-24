@@ -1013,14 +1013,43 @@ code {
       background: var(--bg);
     }
 
+    /* Stacked, full width; as blocks, since a column flexbox that wraps sizes the multi-column properties box too
+       tall. */
     .search-filters {
-      flex-direction: column;
+      display: block;
+    }
+
+    .search-filters > fieldset {
+      box-sizing: border-box;
+      width: 100%;
+      margin: 0 0 var(--space);
     }
 
     .search-page .search-properties {
       max-height: none;
     }
   }
+}
+
+/* The properties in two groups, the names, IDs and synonyms first; the others' names muted, so those stand out. */
+.search-filters .property-group {
+  margin: 0 0 calc(var(--space) / 2);
+  padding: 0;
+  border: none;
+}
+
+.property-group > legend {
+  margin-bottom: calc(var(--space) / 4);
+  padding: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.other-properties bdi {
+  color: var(--muted);
 }
 
 /* The property choices flow into as many columns as fit, each at least 14rem. */
