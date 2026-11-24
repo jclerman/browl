@@ -9,6 +9,7 @@
   {% if noindex is defined and noindex %}<meta name="robots" content="noindex">{% endif %}
   <title>{% block title %}{% endblock %}{% block title_suffix %} · {{ frame.title_end }}{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', path='browl.css').path }}">
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', path='browl-logo.svg').path }}">
   <script src="{{ url_for('static', path='htmx.min.js').path }}" defer></script>
   <script src="{{ url_for('static', path='links.js').path }}" defer></script>
   <script src="{{ url_for('static', path='tabs.js').path }}" defer></script>
@@ -23,12 +24,13 @@
   {# The navigation bar (U-27). No in-page `#…` links in the frame (DESIGN.md §2.9). #}
   <header class="site-bar">
     <nav class="site-nav" aria-label="Site">
+      {% if frame.name is not none %}
       <span class="site-name">
         {%- if frame.home is not none %}<a href="{{ frame.home }}">{% endif -%}
-        <span class="brand">browl</span>
-        {%- if frame.name is not none %} · <bdi>{{ frame.name }}</bdi>{% endif -%}
+        <bdi>{{ frame.name }}</bdi>
         {%- if frame.home is not none %}</a>{% endif -%}
       </span>
+      {% endif %}
       {# The search box (U-10, U-17; DESIGN.md §2.9, Search; `static/search.js`). #}
       <form class="site-search" action="{{ frame.search }}" method="get" role="search">
         <label for="site-search-box" class="visually-hidden">Search the ontology</label>
@@ -53,7 +55,12 @@
         </ul>
       </details>
       {# In the bar, not a footer, so it stays in view on an entity page, which fills the window (DESIGN.md §2.9). #}
-      <a class="sign-in" href="{{ frame.admin }}">Sign in</a>
+      {# Under it, browl's credit, quieter than the ontology's name. #}
+      <div class="site-end">
+        <a class="sign-in" href="{{ frame.admin }}">Sign in</a>
+        <a class="hosted-with" href="{{ frame.project }}">hosted with
+          <img src="{{ url_for('static', path='browl-wordmark.svg').path }}" alt="browl" width="43" height="18"></a>
+      </div>
     </nav>
   </header>
   <main class="content">

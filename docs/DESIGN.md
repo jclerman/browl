@@ -1445,8 +1445,8 @@ Every page has the same frame (U-27, U-28, U-29):
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────┐
-│ browl · <ontology name>   [ Search… ]   Classes  Object props        │  navigation bar
-│                                Data props  Annotation props  Sign in │
+│ <ontology name>   [ Search… ]   Classes  Object props        Sign in │  navigation bar
+│                    Data props  Annotation props    hosted with browl │
 ├──────────────────────────────────────────────────────────────────────┤
 │  Class  Heart                                                        │  page header
 │  ▸ IRI                                                               │
@@ -1462,11 +1462,15 @@ Every page has the same frame (U-27, U-28, U-29):
 **Navigation bar** (U-27): full width, on every page, stays at the top when scrolling.
 
 - Contents: the ontology name (a link to the home page), the autocomplete search box, and links to the four tree pages.
+  An ontology with neither title nor IRI has no name in the bar.
 - The full search page with type and property filters (U-10) is reached from the search box, by "All results…" or
   Enter (below, Search).
 - An admin link appears only for signed-in admins: the base template shows it when `request.state.is_admin` is true,
   which P-22 sets. Sign-in itself is a small link at the bar's end, to the admin upload page, whose sign-in P-22 adds.
   Pages have no footer: an entity page, filling the window, has no room for one.
+- Under the sign-in link, browl credits itself: "hosted with" and the wordmark (`static/browl-wordmark.svg`), linking to
+  the project's repository (`PROJECT_URL`) until browl has a documentation site. It is smaller and muted, so the
+  ontology's name leads the bar. The logo (`static/browl-logo.svg`) is every page's favicon.
 - On narrow screens, the tree links collapse into a menu: a `<details>` element, so it opens without JS.
 - On a tree page, that tree's link is marked (`aria-current="page"`, bold and underlined), and the narrow screens'
   menu button names it ("Browse: Classes"), so the page is clear when scrolled.

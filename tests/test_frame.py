@@ -16,7 +16,14 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 import browl.pages
 from browl.derived import EntityType, NotCurrentError
 from browl.jobs import JobContext, Stage
-from browl.pages import CONTENT_SECURITY_POLICY, MAX_NAME_CHARS, SECURITY_HEADERS, STATIC_DIR, TREES
+from browl.pages import (
+    CONTENT_SECURITY_POLICY,
+    MAX_NAME_CHARS,
+    PROJECT_URL,
+    SECURITY_HEADERS,
+    STATIC_DIR,
+    TREES,
+)
 from tests.helpers import derived_stage, make_app
 
 pytestmark = pytest.mark.usefixtures("data_dir")
@@ -36,6 +43,7 @@ TREE_LINKS = [
 ]
 ADMIN_LINK = ("/_browl/admin/upload", "Admin")
 SIGN_IN = ("/_browl/admin/upload", "Sign in")
+CREDIT = (PROJECT_URL, "hosted with")
 
 
 class Frame(html.parser.HTMLParser):
@@ -140,7 +148,7 @@ def test_frame_on_every_page(client: TestClient, path: str) -> None:
     An in-page link (`#…`) would be looked up as an entity by the hash-IRI script on a path hash entities share.
     """
     page = frame(client, path)
-    assert page.nav == [("/onto", "browl · The <Onto>"), *TREE_LINKS, SIGN_IN]
+    assert page.nav == [("/onto", "The <Onto>"), *TREE_LINKS, SIGN_IN, CREDIT]
     assert not page.footer
     assert not [link for link, _ in page.nav if link.startswith("#")]
 
@@ -162,7 +170,7 @@ def test_frame_on_unavailable_pages(app: FastAPI, loaded: bool) -> None:
         assert ("Retry-After" in response.headers) is loaded
         assert response.headers["Content-Security-Policy"] == CONTENT_SECURITY_POLICY
         page = Frame(response.text)
-        assert page.nav[-len(TREE_LINKS) - 1 :] == [*TREE_LINKS, SIGN_IN]
+        assert page.nav[-len(TREE_LINKS) - 2 :] == [*TREE_LINKS, SIGN_IN, CREDIT]
         assert ("The <Onto>" in page.nav_text) is loaded
 
 
@@ -190,13 +198,13 @@ def test_admin_link(app: FastAPI, value: object, shown: bool) -> None:
 
 
 def test_no_ontology_iri(app: FastAPI) -> None:
-    """Check that an ontology with neither IRI nor title gets just browl's name, linking nowhere."""
+    """Check that an ontology with neither IRI nor title gets no name in the bar."""
     with TestClient(app) as client:
         run(client, app, ontology=None, title=None)
         page = frame(client)
-        assert page.nav == [*TREE_LINKS, SIGN_IN]
+        assert page.nav == [*TREE_LINKS, SIGN_IN, CREDIT]
         labels = " ".join(tree.label for tree in TREES).split()
-        assert page.nav_text.split() == ["browl", "Search", "the", "ontology", "Browse", *labels, "Sign", "in"]
+        assert page.nav_text.split() == ["Search", "the", "ontology", "Browse", *labels, "Sign", "in", "hosted", "with"]
 
 
 def test_ontology_without_page(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -205,8 +213,8 @@ def test_ontology_without_page(client: TestClient, monkeypatch: pytest.MonkeyPat
     client.app.state.derived.close()  # type: ignore[attr-defined]
     run(client, client.app, title="Unlinked")  # type: ignore[arg-type]
     page = frame(client)
-    assert page.nav == [*TREE_LINKS, SIGN_IN]
-    assert "browl · Unlinked" in page.nav_text
+    assert page.nav == [*TREE_LINKS, SIGN_IN, CREDIT]
+    assert "Unlinked" in page.nav_text
     assert title(client).endswith(" · \u2068Unlinked\u2069")
 
 
@@ -216,22 +224,22 @@ def test_hash_iri_home(app: FastAPI, root: str) -> None:
     with TestClient(app, root_path=root) as client:
         run(client, app, ontology="http://example.org/vocab#onto", title=None)
         page = frame(client, f"{root}/example.org/x")
-        assert page.nav[0] == (f"{root}/vocab#onto", "browl · http://example.org/vocab#onto")
+        assert page.nav[0] == (f"{root}/vocab#onto", "http://example.org/vocab#onto")
 
 
 def test_long_name_cut(app: FastAPI) -> None:
     """Check that a long ontology name is cut short."""
     with TestClient(app) as client:
         run(client, app, title="x" * (MAX_NAME_CHARS + 1))
-        assert frame(client).nav[0][1] == f"browl · {'x' * (MAX_NAME_CHARS - 1)}…"
+        assert frame(client).nav[0][1] == f"{'x' * (MAX_NAME_CHARS - 1)}…"
         assert title(client).endswith(f" · \u2068{'x' * (MAX_NAME_CHARS - 1)}…\u2069")
 
 
 def test_new_generation_renamed(client: TestClient, app: FastAPI) -> None:
     """Check that the navigation bar shows the newly loaded ontology's name once a new load is ready."""
-    assert frame(client).nav[0][1] == "browl · The <Onto>"
+    assert frame(client).nav[0][1] == "The <Onto>"
     run(client, app, title="Second")
-    assert frame(client).nav[0][1] == "browl · Second"
+    assert frame(client).nav[0][1] == "Second"
     assert title(client).endswith(" · \u2068Second\u2069")
 
 
@@ -241,8 +249,9 @@ def test_under_root_path(app: FastAPI) -> None:
         run(client, app)
         page = frame(client, "/site/example.org/x")
         assert page.nav == [
-            ("/site/onto", "browl · The <Onto>"),
+            ("/site/onto", "The <Onto>"),
             *[(f"/site{link}", text) for link, text in [*TREE_LINKS, SIGN_IN]],
+            CREDIT,
         ]
 
 
@@ -271,14 +280,14 @@ def test_unreadable_name(
         for path in ["/_browl/admin/upload", "/_browl/admin/status"]:
             response = client.get(path)
             assert response.status_code == 200
-            assert Frame(response.text).nav == [*TREE_LINKS, SIGN_IN]
+            assert Frame(response.text).nav == [*TREE_LINKS, SIGN_IN, CREDIT]
             assert " · browl</title>" in response.text
     assert len(calls) == 1  # the failure is kept until RETRY_AFTER_S has passed
     assert bool(caplog.records) is not isinstance(error, NotCurrentError)
     monkeypatch.setattr(reader, "read", real_read)
     later = monotonic() + browl.pages.RETRY_AFTER_S + 1
     monkeypatch.setattr(browl.pages, "monotonic", lambda: later)
-    assert frame(client).nav[0][1] == "browl · Second"
+    assert frame(client).nav[0][1] == "Second"
 
 
 @pytest.mark.parametrize(
@@ -315,6 +324,25 @@ def test_htmx_served_locally(client: TestClient) -> None:
     page = client.get("/onto").text
     assert '<script src="/_browl/static/htmx.min.js"' in page
     assert not re.search(r"<script[^>]*src=\"(https?:)?//", page)
+
+
+def test_favicon(client: TestClient) -> None:
+    """Check that pages name the logo as their icon, and that the app serves it as SVG."""
+    page = client.get("/onto").text
+    assert '<link rel="icon" type="image/svg+xml" href="/_browl/static/browl-logo.svg">' in page
+    response = client.get("/_browl/static/browl-logo.svg")
+    assert response.status_code == 200
+    assert response.headers["Content-Type"].startswith("image/svg+xml")
+
+
+def test_credit(client: TestClient) -> None:
+    """Check that the bar credits browl with its wordmark, linking to the project, and that the app serves it as SVG."""
+    page = client.get("/onto").text
+    wordmark = '<img src="/_browl/static/browl-wordmark.svg" alt="browl"'
+    assert re.search(rf'<a class="hosted-with" href="{PROJECT_URL}">hosted with\s*{wordmark}', page)
+    response = client.get("/_browl/static/browl-wordmark.svg")
+    assert response.status_code == 200
+    assert response.headers["Content-Type"].startswith("image/svg+xml")
 
 
 def palettes() -> list[dict[str, str]]:
