@@ -68,8 +68,9 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **U-45** · An entity page shows where the entity sits in its hierarchy, in a hideable column beside the Overview's panels: its ancestors as one merged tree, each drawn once, with its direct children below it. | v1 |
 | **U-46** · In the hierarchy trees and the hierarchy column, deprecated entities (`owl:deprecated true`) are struck through, with a text equivalent for screen readers. | v1 |
 | **U-19** · Autocomplete also matches from the start of any word, ranked after matches from the start of the whole value. _(Q8; was Later; P-41)_ | v1 |
-| **U-47** · Search can cover every annotation property with literal values in the served ontology, not only the name properties. The full results page lists the properties the ontology has, with their value counts, to filter by. _(P-42)_ | v1 |
+| **U-47** · Search can cover every annotation property with literal values in the served ontology, not only the name properties. By default it searches the name properties and synonyms, and others when chosen. The full results page lists the properties the ontology has, with their value counts, to filter by. _(P-42)_ | v1 |
 | **U-48** · A visitor's search filters can be kept in their browser, when they ask, and the navigation bar's search box then uses them, showing that it's filtered and offering to clear the filters. _(P-43)_ | v1 |
+| **U-50** · Prose properties (definitions, comments, notes) can be searched by full text: a value matches if it has every query word, in any order, and every quoted phrase, its words adjacent and in order; matches rank by relevance. They're searched when chosen on the full results page, which shows their hits apart from name matches. _(P-46)_ | v1 |
 | **U-49** · A visitor can choose the order in which properties rank search results, in place of the name properties' order. _(P-42 makes it possible)_ | Later |
 | **U-18** · Named individuals have pages, and each class page lists its individuals in an Individuals tab, with paging. _(Q17)_ | Later |
 | **U-20** · Autocomplete tolerates typos. _(Q8)_ | Later |
@@ -103,7 +104,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **A-7** · Admins can add and remove admin email addresses. The seed admins (O-6) can't be removed through the UI. _(Q16a)_ | v1 |
 | **A-8** · Detailed logs for each stage, inline or on a linked page. _(Q7b)_ | Later |
 | **A-10** · An admin can cancel a running load, rebuild or background build (such as P-27c's usage table), e.g. if it's taking too long. A cancelled load leaves the ontology being served as it was. | v1 |
-| **A-11** · An admin can change, for the served ontology, the name properties and their order, the language ranking, and which annotation properties search indexes, choosing from the properties and languages the ontology has. The change applies without reloading the ontology, while the site keeps serving the current pages until it's ready. _(P-44)_ | v1 |
+| **A-11** · An admin can change, for the served ontology, the name properties and their order, the language ranking, which annotation properties search indexes, which of them are prose (U-50) and which it searches by default (U-47), choosing from the properties and languages the ontology has. The change applies without reloading the ontology, while the site keeps serving the current pages until it's ready. _(P-44)_ | v1 |
 | **A-9** · Several ontologies loaded and ready to serve. Whether one or many are served at a time is to be decided. _(Q14)_ | Later |
 
 ### 1.4 Operator requirements
@@ -908,30 +909,64 @@ offset, for paging, and says whether more results follow.
 **Normalization:** Unicode NFKD, accents removed, case folded, leading whitespace removed. The same function is used
 at index and query time.
 
-**Proposed: wider search** (U-47–U-49, A-11, O-13; P-42–P-44). Not yet built; the rest of this section
+**Proposed: wider search** (U-47–U-50, A-11, O-13; P-42–P-44, P-46). Not yet built; the rest of this section
 describes search as built (P-19, P-20, P-41).
 
 - **Every annotation property** (U-47, P-42). A second bulk query reads every literal value of each annotation
-  property on the ontology's entities into the index, with the property it's asserted with. Name values stay in
-  `name_value`, for display names.
+  property on the ontology's entities, declared or built in (NCBITaxon doesn't declare `rdfs:label`), with the
+  property it's asserted with, into `annotation_value`: every value, prose included, as P-46's full-text index
+  reads it there. Strings and language-tagged strings are kept, not dates, booleans or URIs. Name values stay in
+  `name_value`, for display names. Measured on HPO, Uberon and NCBITaxon
+  ([P-42 findings](../research/P-42/README.md)).
+  - **Names and prose.** Each property is either _name-like_ (labels, synonyms, IDs, cross-references) or _prose_
+    (definitions, comments, notes), and each kind has its own index: name-like values the lane index, prose a
+    full-text index (below). In the lane index, prose made it 36–54× larger on HPO and Uberon, as a long value gets a
+    word row per word, and its ranking, shortest value first, says little about prose.
+  - **Which is which:** a property in a built-in prose list (`IAO_0000115`, `rdfs:comment`, `skos:definition`,
+    `dc:description`, …) is prose; one in a built-in name list (the name properties, `skos:prefLabel`,
+    `skos:altLabel`, `oboInOwl`'s synonyms, `IAO_0000118`, …) or a sub-property of one is name-like; any other is
+    prose if its median value has at least 8 words (`PROSE_WORDS`). On the three ontologies, name-like properties have
+    medians of at most 5 words and prose ones 8 to 46, and none is misplaced. An admin can override it (A-11).
+  - **Searched by default:** the name properties and the synonym properties found as above. Other name-like
+    properties, such as IDs and cross-references (NCBITaxon's 3.1 M `hasDbXref` values, e.g. `GC_ID:1`), and prose
+    are searched when chosen. An admin can change the default set (A-11).
   - **Keyed by property, not by rank.** A lane's property is an id, and the order lanes are walked in is decided per
     query, in Python: the name properties in their order first, then the others, by display name. So reordering the
     name properties needs no new index (only new display names, A-11), and a query may give its own order (U-49).
   - **Entailment moves to the query.** "Direct and entailed" for a chosen property means its lanes, then the lanes of
     its sub-properties, found in the annotation-property hierarchy (`edge`), so rule 5 holds. An entailed value is
     then stored once, as itself, not once per name property above it.
-  - **Lanes multiply**, and a query that matches few seeks each at every length: 50 lanes of 256 lengths is about
-    65 ms (above), and each lane comes with a word lane (P-41). An ontology with 100 annotation properties in 3
-    languages and 2 types could have 600, and as many word lanes. So P-42 first
-    measures lane counts and worst cases on Uberon, HPO and NCBITaxon. Unless that shows otherwise, a query searches
-    only the name properties by default (the autocomplete, and the results page with none checked), and other
-    properties when chosen; P-42 may also cap the lengths walked per lane.
-  - **The results page** lists the properties that have indexed values, name properties first, each with its value
-    count (kept in `search_lane`). Long values such as definitions are indexed like any other; their key holds their
-    first `KEY_CHARS` characters.
+  - **Lanes, measured:** HPO has 70, Uberon 127 and NCBITaxon 36 (each with its word lane), not the 600 feared. A
+    query that matches few seeks each at every length, so one over every name-like property takes up to 30 ms on
+    HPO and 60 ms on Uberon, and one over the default properties up to 16 ms on Uberon, with its synonyms. With prose
+    in the lane index too, Uberon's 213 lanes took up to 806 ms. Reading small lanes whole halved that; an index
+    ordered by value, with each busy prefix's best values, made every query take under 11 ms, but cost 50–80% more
+    space and was slow past the values it keeps. Neither is adopted.
+  - **Cost:** without prose, Uberon's `search_value` is 48 MiB rather than 8 with `rdfs:label` alone, built in 2.4 s.
+    NCBITaxon's grows from 828 MiB to 1.7 GiB and its build from 49 s to 127 s, and its values query takes about
+    2 minutes, against 50 s for the name values. Its added values are nearly all `hasDbXref` and `hasOBONamespace`
+    (one value, `ncbi_taxonomy`, on every class).
+  - **The results page** lists the properties that have indexed values, name properties first, then the other
+    name-like ones, then prose, each with its value count (kept in `search_lane`, and for prose beside the full-text
+    index).
   - **Showing hits:** the autocomplete shows them as now (2.9, Search), without the property. The results page shows
     them as a table, one line per hit where the screen is wide enough: the matched value and the entity's name, its
     CURIE, else IRI, muted, then the property the value is from, then the types, last as now.
+- **Prose** (U-50, P-46). An FTS5 table over the prose values, with external content, so it holds only its index:
+  the `unicode61` tokenizer, accents removed, and prefix indexes of 1–3 characters. A query requires each of its
+  words, as a prefix, in any order, and ranks values by BM25; each IRI is listed once, by its best value, with its
+  matched words marked (`highlight()`). The results page shows prose hits apart from name matches, after them.
+  - **Phrases:** a quoted part of the query (`"bone marrow" lung`) is a phrase: its words whole, adjacent and in
+    order. A quote left open runs to the end. browl builds the FTS5 query from the words it splits, as `unicode61`
+    does, each quoted, so the visitor's text never reaches FTS5's syntax (`OR`, `NEAR`, column filters). Phrases need
+    the word positions FTS5 keeps by default, and take no longer than words: `"part of the"` 3.2 ms, against 5.8 ms
+    for its words. Name search ignores quotes, as it already matches contiguous text.
+  - **Measured:** about 8 MiB for HPO's and Uberon's 5 MiB of prose, 2% of the lane index's size for the same
+    values, built in 0.3 s. A query takes 0.3–3 ms for topic words, and 40 ms for `a` (29 K matches), as BM25 scores
+    every match: about 1.3 µs each. For ontologies with more prose, a word of one or two letters can be required to
+    match a whole word rather than a prefix.
+  - **Why not the lanes:** besides their size, prose wants words in any order, ranked by relevance, as full-text
+    engines do; FTS5 was too slow for names only because §2.6's ranking made each query sort every match (P-41).
 - **Sticky filters** (U-48, P-43). The results page has a button, "Use these filters in the search box", which makes
   its filters the box's; using filters on the results page doesn't by itself, so a one-off search never narrows the
   box unnoticed. They then apply to the box's suggestions, and to the results page opened from the box; a results
@@ -1831,6 +1866,7 @@ flowchart LR
         P43["P-43 Sticky search filters"]
         P44["P-44 Admin search settings"]
         P45["P-45 Shared results pager"]
+        P46["P-46 Prose search"]
         P21["P-21 Page cache"]
         P22["P-22 Sign-in"]
         P23["P-23 Admin list"]
@@ -1849,6 +1885,7 @@ flowchart LR
     P17 & P38 --> P33
     P38 & P39 --> P25
     P22 & P42 --> P44
+    P42 --> P46
     P22 --> P23
     P22 & P31 --> P36
     P31 --> P32
@@ -1922,10 +1959,11 @@ go into this document.
 | P-19 | `SearchBackend` interface and SQLite implementation; ranking | U-10, U-11, U-12, N-5 | P-11 | Done | [#26](https://github.com/jclerman/browl/issues/26) |
 | P-20 | Autocomplete UI (accessible combobox) with type and property filters | U-10, U-17 | P-19, P-14 | Done | [#32](https://github.com/jclerman/browl/issues/32) |
 | P-41 | Any-word matching: a row per later word start in `search_value`, in lanes walked after the whole-value ones, with the word's offset for marking; measure size and build time on NCBITaxon first (2.6) | U-19 | P-19, P-20 | Done | [#131](https://github.com/jclerman/browl/issues/131) |
-| P-42 | Every annotation property searchable: a bulk query of their literal values; lanes keyed by property, walked in an order chosen per query; entailment through the annotation-property hierarchy at query time; the results page lists the ontology's properties with counts; measure lane counts and worst-case queries first (2.6, Proposed) | U-47 | P-19, P-20 | To do | [#132](https://github.com/jclerman/browl/issues/132) |
+| P-42 | Every annotation property searchable: a bulk query of their literal values; each property name-like or prose, by built-in lists, the property hierarchy and value lengths; name-like values in lanes keyed by property, walked in an order chosen per query, the name properties and synonyms by default; entailment through the annotation-property hierarchy at query time; the results page lists the ontology's properties with counts (2.6, Proposed; measured first, [P-42 findings](../research/P-42/README.md)) | U-47 | P-19, P-20 | To do | [#132](https://github.com/jclerman/browl/issues/132) |
 | P-43 | Sticky search filters: kept in the browser on request, used by the navigation bar's box, with a "Filtered" indicator that clears them; the results page's bar carries its filters (2.6, Proposed) | U-48 | P-20 | To do | [#133](https://github.com/jclerman/browl/issues/133) |
-| P-44 | Admin search settings: name properties and their order, language ranking and properties left out, stored per ontology IRI over the environment's defaults; a settings page from the ontology's properties and languages; applied by pre-caching into a new file beside the served one (2.6, Proposed) | A-11, O-13 | P-22, P-42 | To do | [#134](https://github.com/jclerman/browl/issues/134) |
+| P-44 | Admin search settings: name properties and their order, language ranking, properties left out, which are prose and which are searched by default, stored per ontology IRI over the environment's defaults; a settings page from the ontology's properties and languages; applied by pre-caching into a new file beside the served one (2.6, Proposed) | A-11, O-13 | P-22, P-42 | To do | [#134](https://github.com/jclerman/browl/issues/134) |
 | P-45 | Shared results pager: one pager model and macro for the Usage tab and the search results page, htmx optional; on the results page at the top, with "Page n of N", a form to go to any page, and the number of results counted up to `MAX_OFFSET + PAGE_SIZE + 1` IRIs, not by the autocomplete; measure the count's cost on NCBITaxon (2.6, 2.9) | U-10, U-17, U-26 | P-20, P-27, P-41 | To do | [#139](https://github.com/jclerman/browl/issues/139) |
+| P-46 | Prose search: an FTS5 index of the prose properties' values, ranked by BM25, searched when chosen; the results page shows its hits apart from name matches, with the matched words marked (2.6, Proposed) | U-50 | P-42 | To do | [#140](https://github.com/jclerman/browl/issues/140) |
 | P-33 | JSON API over the pages' data: routes under `api/` returning the models the pages render (2.8, 2.13) | U-42 | P-16, P-17, P-18, P-19, P-27, P-38 | To do | [#76](https://github.com/jclerman/browl/issues/76) |
 | P-21 | Page cache keyed by generation | O-10, N-3 | P-16 | To do | [#40](https://github.com/jclerman/browl/issues/40) |
 | P-22 | Google sign-in, admin-route protection, dev no-auth mode (cancelling a job: P-36) | A-1, O-6, O-7 | P-6 | To do | [#17](https://github.com/jclerman/browl/issues/17) |
