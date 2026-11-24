@@ -5,7 +5,8 @@
 OWL-Browse (`browl`) hosts an OWL ontology as a browsable website. Every declared entity gets its own page, at a URL
 implied by its IRI.
 
-**Status:** early development. The design is in [`docs/DESIGN.md`](docs/DESIGN.md); the app is not usable yet.
+**Status:** usable, but short of v1. What's left is tracked in the implementation plan in
+[`docs/DESIGN.md`](docs/DESIGN.md#3-implementation-plan).
 
 ## Features (planned for v1)
 
