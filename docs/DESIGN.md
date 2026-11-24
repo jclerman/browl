@@ -967,9 +967,7 @@ name properties' ([P-42 findings](../research/P-42/README.md)).
   the common values too took 180 s and 1.6 GiB, about P-41's cost per row; counting them instead saves 6.0 M values'
   rows (each has 2–3: `ncbi_taxonomy` and `taxonomy`, `GC_ID:1`, `ID:1` and `1`). Its values query takes about
   2 minutes, against 50 s for the name values.
-- **The results page** lists the name-like properties that have values, or sub-properties that do, in walk order (Lane
-  order, above), each with its value count and its sub-properties', in two groups: "Names, IDs, and synonyms", those
-  searched by default, then "Other properties" (2.9, Search).
+- **The results page** offers the name-like properties as filters (2.9, Search).
 
 **Ranking** _(Q9, Q10)_, in order:
 
@@ -1754,7 +1752,7 @@ too (P-38), and the JSON API's (P-33).
   muted, then the label of the property the value is from, then the types, on one line where the screen is wide
   enough, rather than in a tooltip, which the keyboard and touch screens can't reach; on a narrow one, each hit's cells
   wrap as one block, the names on a line of their own. The autocomplete doesn't show the property.
-- **The results page** has the box, and filters (U-10): entity types as checkboxes, none checked meaning all; the
+- **The results page** has filters for the bar's box (U-10): entity types as checkboxes, none checked meaning all; the
   name-like properties with values, or with sub-properties that have some, as checkboxes (P-42), in walk order, each
   with its value count and its sub-properties', in two groups, "Names, IDs, and synonyms" (those searched by default)
   and "Other properties", whose names are muted so the first stand out, none checked meaning the first; and a choice of
@@ -1767,15 +1765,11 @@ too (P-38), and the JSON API's (P-33).
   IRIs), as an exact total would read every match. One box (P-42): the page has no box of its own. Its filters belong to
   the navigation bar's form (`form=`), so the bar's box searches with them, submitted with or without JS and in its
   suggestions (`hx-include`), and on the page it holds the page's query; a Search button by the filters submits the form
-  too. So the visitor gets the autocomplete with the filters, and never two boxes. Laid out (P-42): on a window at least
-  56rem wide and 32rem tall, the page has two rows: the headings, "Search" on the left and "Results" with its count on
-  the right, and under them the filters and a panel of the hits, shown with a prompt before any search. So the titles
-  come before the content, and the hits get the rest of the height. The filters and the hits each scroll within the
-  window, as an entity page fills it (U-30), so the filters stay in view while the results scroll. The property choices
-  flow into as many columns of at least 14rem as fit, each name wrapping beside its checkbox. The panel is focusable, so
-  the keyboard can scroll it, and the table's header stays at its top. Otherwise they stack and the page scrolls as one.
-  The bar links to the page, "Advanced search", beside the box, so its filters can be set before searching; the
-  autocomplete's "All results…" opens it too.
+  too. So the visitor gets the autocomplete with the filters, and never two boxes. On a large enough window, the
+  headings share a row, "Search" over the filters and "Results" over a panel of the hits, and the filters and the panel
+  each scroll within the window, as an entity page fills it (U-30), so the filters stay in view while the results
+  scroll; otherwise they stack and the page scrolls as one. The bar links to the page, "Advanced search", beside the
+  box, so its filters can be set before searching; the autocomplete's "All results…" opens it too.
 - **Input**: invalid parameters, and repeats of those 2.13 doesn't list as repeated, get the "not found" page, as tree
   pages do. A blank query finds nothing: an empty fragment, which closes the list, or the form alone.
 - **No server-side deadline** (from P-19's review): each query's cost is already bounded (§2.6, Bounds), and the
@@ -2072,7 +2066,7 @@ go into this document.
 | P-20 | Autocomplete UI (accessible combobox) with type and property filters | U-10, U-17 | P-19, P-14 | Done | [#32](https://github.com/jclerman/browl/issues/32) |
 | P-41 | Any-word matching: a row per later word start in `search_value`, in lanes walked after the whole-value ones, with the word's offset for marking; measure size and build time on NCBITaxon first (2.6) | U-19 | P-19, P-20 | Done | [#131](https://github.com/jclerman/browl/issues/131) |
 | P-42 | Every annotation property searchable: a bulk query of their literal values; each property name-like or prose, by built-in lists, the property hierarchy and value lengths; name-like values in lanes keyed by property, walked in an order chosen per query, the name properties and synonyms by default; entailment through the sub-property closure at query time; the results page lists the ontology's properties with counts, and its hits as a table (2.6; measured first, [P-42 findings](../research/P-42/README.md)) | U-47 | P-19, P-20 | Done | [#132](https://github.com/jclerman/browl/issues/132) |
-| P-43 | Sticky search filters: kept in the browser on request, used by the navigation bar's box, with a "Filtered" indicator that clears them; the results page's bar carries its filters (2.6, Proposed) | U-48 | P-20 | To do | [#133](https://github.com/jclerman/browl/issues/133) |
+| P-43 | Sticky search filters: kept in the browser on request, used by the navigation bar's box, with a "Filtered" indicator that clears them (2.6, Proposed) | U-48 | P-20 | To do | [#133](https://github.com/jclerman/browl/issues/133) |
 | P-44 | Admin search settings: name properties and their order, language ranking, properties left out, which are prose and which are searched by default, stored per ontology IRI over the environment's defaults; a settings page from the ontology's properties and languages; applied by pre-caching into a new file beside the served one (2.6, Proposed) | A-11, O-13 | P-22, P-42 | To do | [#134](https://github.com/jclerman/browl/issues/134) |
 | P-45 | Shared results pager: one pager model and macro for the Usage tab and the search results page, htmx optional; on the results page at the top, with "Page n of N", a form to go to any page, and the number of results counted up to `MAX_OFFSET + PAGE_SIZE + 1` IRIs, not by the autocomplete; measure the count's cost on NCBITaxon (2.6, 2.9) | U-10, U-17, U-26 | P-20, P-27, P-41 | To do | [#139](https://github.com/jclerman/browl/issues/139) |
 | P-46 | Prose search: an FTS5 index of the prose properties' values, ranked by BM25, searched when chosen; the results page shows its hits apart from name matches, with the matched words marked (2.6, Proposed) | U-50 | P-42 | To do | [#140](https://github.com/jclerman/browl/issues/140) |

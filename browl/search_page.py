@@ -141,7 +141,7 @@ class PropertyChoice:
 
     Attributes:
         iri: Its IRI.
-        label: Its display name, else its name in `NAME_PROPERTIES`, else its IRI, cut short.
+        label: Its display name, else its name in `NAME_PROPERTIES`, else its CURIE, else its IRI, cut short.
         values: How many values it has.
         sub_values: How many values its sub-properties have, which a search with entailed values reaches too.
         by_default: Whether a search that checks none searches it.

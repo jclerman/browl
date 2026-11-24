@@ -21,7 +21,7 @@
         <legend>Properties <small>(none checked: names, IDs, and synonyms)</small></legend>
         {% for group, title in ((properties | selectattr("by_default") | list, "Names, IDs, and synonyms"),
                                 (properties | rejectattr("by_default") | list, "Other properties")) if group %}
-        <fieldset class="property-group{% if not loop.first or not group[0].by_default %} other-properties{% endif %}">
+        <fieldset class="property-group{% if not group[0].by_default %} other-properties{% endif %}">
           <legend>{{ title }}</legend>
           <div class="property-choices">
             {% for choice in group %}

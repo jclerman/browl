@@ -100,16 +100,14 @@ code {
   text-decoration: underline;
 }
 
+/* The box, then the link to the search page. */
 .site-search {
   position: relative; /* the suggestions open under the box */
-  flex: 1 1 12rem;
-  max-width: 32rem;
-}
-
-.site-search:has(.search-page-link) {
   display: flex;
+  flex: 1 1 12rem;
   gap: calc(var(--space) / 2);
   align-items: center;
+  max-width: 32rem;
 }
 
 .search-page-link {
@@ -1024,10 +1022,6 @@ code {
       width: 100%;
       margin: 0 0 var(--space);
     }
-
-    .search-page .search-properties {
-      max-height: none;
-    }
   }
 }
 
@@ -1086,9 +1080,12 @@ code {
   display: block;
 }
 
-.search-properties {
-  max-height: 16rem;
-  overflow-y: auto;
+/* Stacked, the properties scroll in a box of their own; beside the results, the filters scroll as one. */
+@media not screen and (width >= 56rem) and (height >= 32rem) {
+  .search-properties {
+    max-height: 16rem;
+    overflow-y: auto;
+  }
 }
 
 .common-values {
@@ -1132,7 +1129,6 @@ code {
 }
 
 .hit-id {
-  min-width: 0;
   overflow-wrap: anywhere;
   color: var(--muted);
   font-size: 0.85em;

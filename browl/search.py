@@ -69,10 +69,11 @@ class SearchQuery:
         text: What the values, or their later words, start with; leading whitespace is ignored, and a query of only
             whitespace finds nothing.
         types: The entity types to find; None for all, and an empty set for none.
-        properties: The properties (IRIs) whose values to search; None for those searched by default (the name
-            properties and synonyms, `search_properties`), and an empty set for none. A prose property's values aren't
-            in this index, so it finds nothing.
-        order: The properties to walk first, in this order (§2.6, rule 3); the others come after, by display name.
+        properties: The properties (IRIs) whose values to search; None for those searched by default (names, IDs and
+            synonyms, `SearchProperty.by_default`), and an empty set for none. A prose property's values aren't in
+            this index, so it finds nothing.
+        order: The properties to walk first, in this order (§2.6, rule 3); then those searched by default, then the
+            rest, each by label (`SearchProperty.label`).
         entailed: Whether values entailed through a sub-property count too, or only direct ones: a chosen property's
             sub-properties' values, transitively, rank after its own (rule 5).
         limit: How many results to return.

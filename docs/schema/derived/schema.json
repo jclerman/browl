@@ -332,7 +332,7 @@
           "name": "by_default",
           "type": "INTEGER",
           "nullable": false,
-          "comment": "1 if a search that names no properties searches it: the name, label and synonym properties, and any other name-like one whose values are on fewer than browl.precache.values.NAME_REUSE entities each, on average."
+          "comment": "1 if a search that names no properties searches it: the name, label and synonym properties, any other name-like one whose values are on fewer than browl.precache.values.NAME_REUSE entities each, on average, and a super-property without values whose sub-properties with values all are."
         },
         {
           "name": "value_count",
