@@ -588,9 +588,10 @@ are documented in [`SCHEMA.md`](SCHEMA.md):
 | Table | Holds | Filled from |
 | --- | --- | --- |
 | `entity` | The ontology and every declared class and property: its IRI, type, URL path and fragment (2.3), display name and CURIE | The entity-list query (every declared class and property with its type; the ontology's IRI comes from the header query): 22–29 s on NCBITaxon, 3.03 M rows. The whole hook, which computes each batch's URLs and inserts it before reading the next, takes 25–26 s, and the table and its indexes 530–650 MiB (P-10) |
-| `name_value` | Name-property values, one row per direct and per RDFS-entailed property | The name values query, through a property path (below): 41–48 s on NCBITaxon, 3.56 M rows. The whole hook, which also sets each entity's CURIE and display name, takes about 85 s ([P-11 findings](../research/P-11/README.md)) |
+| `name_value` | Name-property values, for display names, one row per direct and per RDFS-entailed property | The name values query, through a property path (below): 41–48 s on NCBITaxon, 3.56 M rows. The whole hook, which also sets each entity's CURIE and display name, takes about 85 s ([P-11 findings](../research/P-11/README.md)) |
 | `edge` | Parent → child per hierarchy (classes; each property type), between equivalence-group representatives | The edges query (subclass, sub-property and equivalent-class triples): 20–21 s on NCBITaxon, 3.02 M rows. The whole hook, which also groups, counts and inserts `equiv_group` and `counts`, takes about 42 s and 0.9 GB, and `edge`, `counts` and their index 164 MiB; on Uberon and HPO, 0.5 s ([P-12 findings](../research/P-12/README.md)) |
-| `search_value`, `search_lane` | The search index (P-19): each name value that isn't empty once normalized, keyed in the order search ranks values, and each _lane_ of that order (the values of one entity type, property, language, direct or entailed, and whole value or word, which a query walks in turn) with its longest value ([2.6](#26-search)) | `name_value` and `entity`, in SQLite: 46 s on NCBITaxon, 828 MiB ([P-41 findings](../research/P-41/README.md)), replacing `name_value`'s index on `normalized` (100 MiB), which nothing else used ([P-19 findings](../research/P-19/README.md)) |
+| `annotation_value`, `search_property`, `sub_property` | Every string value of each annotation property, under the property it's asserted with; each property, name-like or prose, searched by default or not, with its value count; and each property's sub-properties, transitively ([2.6](#26-search), P-42) | The annotation values query and a sub-property path query: on NCBITaxon, 9.77 M values, about 2 minutes for the query ([P-42 findings](../research/P-42/README.md)), and 295 MiB, with a 114 MiB index by entity |
+| `search_value`, `search_lane` | The search index (P-19): each name-like value that isn't empty once normalized, keyed in the order search ranks values within a _lane_ (the values of one entity type, property, language, and whole value or word), and each lane with its longest value ([2.6](#26-search)) | `annotation_value` and `entity`, in SQLite: on NCBITaxon, about 3 minutes and 1.6 GiB for 9.7 M values (P-42), where its 3.03 M labels took 46 s and 828 MiB ([P-41 findings](../research/P-41/README.md)) |
 | `equiv_group` | Entity → group representative, for groups of more than one | Union-find over `owl:equivalentClass` between named classes, and over cycles of edges (below) |
 | `counts` | Per node: immediate children, distinct descendants | `edge`, in Python (below) |
 | `root` | Each hierarchy's roots, which the tree pages start from (P-18) | `edge`, in Python: found on demand, they'd take a scan of `counts` and a lookup in `edge` per node, 1–2 s on NCBITaxon |
@@ -829,19 +830,21 @@ more minutes of loading ([S-4 findings](../research/S-4/README.md)).
 A `SearchBackend` interface with methods for indexing during pre-caching and for queries. Only its module knows the
 engine. _(Q11, N-5)_
 
-**v1 implementation** (`browl.search.SqliteSearch`, P-19, P-41): a table in the derived database, `search_value`, filled
-by the search pre-caching hook from `name_value` (`browl.precache.search`). The design's first plan, a range scan
-(`normalized >= q AND normalized < q + '\U0010FFFF'`) over an index on `name_value.normalized`, then ranking and grouping
-the matches in SQL, took about 1 s on NCBITaxon for a one-letter query: "a" matches 252 K of its 3.0 M values, and
-ranking shorter values first means sorting them all, as no index is in that order. N-2's target is 100 ms. _(Q8)_
+**v1 implementation** (`browl.search.SqliteSearch`, P-19, P-41, P-42): a table in the derived database, `search_value`,
+filled by the search pre-caching hook (`browl.precache.search`) from the name-like values in `annotation_value`, which
+the annotation values hook fills (`browl.precache.values`; Every annotation property, below). The design's first plan, a
+range scan (`normalized >= q AND normalized < q + '\U0010FFFF'`) over an index on `name_value.normalized`, then ranking
+and grouping the matches in SQL, took about 1 s on NCBITaxon for a one-letter query: "a" matches 252 K of its 3.0 M
+values, and ranking shorter values first means sorting them all, as no index is in that order. N-2's target is 100 ms.
+_(Q8)_
 
-- **The table's key is the ranking's order:** (type, property rank, language rank, direct or entailed, word, length,
-  normalized value, value, entity, word start). Each (type, property rank, language rank, entailed, word) group is a
-  _lane_, listed with its longest value in `search_lane`. Ranks are positions in `NAME_PROPERTIES` and
-  `LANGUAGE_RANKING` as built, which the hook's build key covers; languages that rank alike (e.g. unlisted ones) share
-  a rank, so of an entity's value in two such languages one row is kept. A value that normalizes to nothing (only
-  whitespace or combining marks) isn't indexed, as no query matches it. Lengths and cuts are computed in Python, as
-  SQLite's `length()` stops at a NUL.
+- **The table's key is the ranking's order within a lane:** (type, property, language rank, word, length, normalized
+  value, value, entity, word start). Each (type, property, language rank, word) group is a _lane_, listed with its
+  longest value in `search_lane`. The property is its id in `search_property`, and a query orders the lanes (below).
+  Language ranks are by `LANGUAGE_RANKING` as built, which the hook's build key covers; languages that rank alike (e.g.
+  unlisted ones) share a rank, so of an entity's value in two such languages one row is kept. A value that normalizes to
+  nothing (only whitespace or combining marks) isn't indexed, as no query matches it. Lengths and cuts are computed in
+  Python, as SQLite's `length()` stops at a NUL.
 - **Any word** (U-19, P-41). Besides its row for the whole value, each value gets a _word row_ for each later word
   start: its key is the normalized value from that word on, and it stores the word's offset in the normalized value
   (`word_start`), so a hit can mark the word in the whole value, which it shows. A word starts where a non-alphanumeric
@@ -851,8 +854,8 @@ ranking shorter values first means sorting them all, as no index is in that orde
   between letters and digits isn't a word start: "2" doesn't find "H2O". Word rows are lanes of their own, walked after
   every whole-value lane (rule 2, below); within them the later rules apply, with the key's length (from the word on).
   - **Bounded per value:** only words within the first 1,000 normalized characters (`MAX_QUERY_CHARS`) get rows, each
-    keyed by at most 1,000 characters, as no query compares more, and holding the value's first 256 (`KEY_CHARS`); a
-    hit reads the rest from `name_value`. Otherwise a value's word rows would grow with the square of its length: a
+    keyed by at most 1,000 characters, as no query compares more, and holding the value's first 256 (`KEY_CHARS`); a hit
+    reads the rest from `annotation_value`. Otherwise a value's word rows would grow with the square of its length: a
     40,000-character label of one-letter words took 1.2 GB and 10 s (P-41's review). Now a value's rows hold at most
     about 630,000 characters, however long it is.
 - **The key holds at most 256 characters** (`KEY_CHARS`) of the normalized value and of the value, with the rest
@@ -865,9 +868,15 @@ ranking shorter values first means sorting them all, as no index is in that orde
   last, and, within each, the lengths upward from the query's (from the query's own, for a word lane, as a word row
   whose key is the query isn't an exact match): one index seek per lane and length, the lanes of one rank merged by value.
   It stops once it has enough IRIs, so it never sorts the matches. Each row's IRI comes from `entity`, so results are
-  grouped per IRI as they're read. Filters choose lanes: entity type, name property, and whether entailed values count.
+  grouped per IRI as they're read. Filters choose lanes: entity type, property, and whether entailed values count.
   A type filter is part of the key, not a residual filter: as one, annotation properties' matches of "a" took 1.8 s
   on NCBITaxon, scanning the classes'.
+- **Lane order is the query's** (P-42). A query gives the order to walk properties in (`SearchQuery.order`); the search
+  page gives the name properties, in `NAME_PROPERTIES` order, and the others follow by display name, case ignored, then
+  IRI. A chosen property's lanes take its place; with entailed values, so do its sub-properties' lanes, transitively
+  (`sub_property`), each after the property's own at the same language (rule 5). A lane reached through two chosen
+  properties takes the better place. So reordering the name properties needs no new index, only new display names, and
+  a query may give its own order (U-49).
 - **Bounds:** a query takes at most 100 results (`MAX_LIMIT`) and skips at most 1,000 (`MAX_OFFSET`), as deeper pages
   read more of the index, and its text is at most 1,000 characters (`MAX_QUERY_CHARS`). `SearchQuery` checks them,
   and that the text is valid Unicode (a JSON string can carry a lone surrogate), so every caller gets them; a page's
@@ -884,20 +893,67 @@ ranking shorter values first means sorting them all, as no index is in that orde
   but returns matches unranked, so a query sorts them all: 1.0 s for "a", and 1.7 s for "sp." even when asked only
   for word matches. A dedicated engine would rank by relevance, not by these rules, or index each word's suffix much
   as word rows do.
-- **Why at pre-caching:** the table adds 46 s to NCBITaxon's pre-caching of about 3¾ minutes, a few seconds on
-  smaller ontologies. Running pre-caching's hooks in parallel could hide most of it, as the search hook needs only the
-  names hook and works without Fuseki while the hierarchies and usage hooks wait on it; SQLite's one writer means it
-  would build its table in a file of its own, attached once done. Building it in the background once the generation
-  is ready, as the usage table is (2.5), would save those seconds but need its own file and that build's machinery,
-  and the range scan as a slower path meanwhile.
+- **Why at pre-caching:** the table added 46 s to NCBITaxon's pre-caching of about 3¾ minutes with labels alone, and
+  about 3 minutes with every name-like property (P-42), besides the values query's 2; a few seconds on smaller
+  ontologies. Running pre-caching's hooks in parallel could hide most of the index's build, as the search hook needs
+  only the annotation values hook and works without Fuseki while the hierarchies and usage hooks wait on it; SQLite's
+  one writer means it would build its table in a file of its own, attached once done. Building it in the background once
+  the generation is ready, as the usage table is (2.5), would save those seconds but need its own file and that build's
+  machinery, and the range scan as a slower path meanwhile.
+
+**Every annotation property** (U-47, P-42). Search covers every annotation property's string values, not only the
+name properties' ([P-42 findings](../research/P-42/README.md)).
+
+- **Values:** the annotation values hook (`browl.precache.values`) reads every literal value of each annotation property
+  on the ontology's entities, declared, built in (NCBITaxon doesn't declare `rdfs:label`) or a name property, with the
+  property it's asserted with, into `annotation_value`: every value, prose included, as P-46's full-text index reads
+  it there. Only strings and language-tagged strings are kept, filtered in the query, not dates, booleans or URIs; a
+  value on an IRI that isn't a declared entity's is left out. Name values stay in `name_value`, for display names.
+- **Names and prose.** Each property is either _name-like_ (labels, synonyms, IDs, cross-references) or _prose_
+  (definitions, comments, notes), in `search_property`, and each kind has its own index: name-like values the lane
+  index, prose a full-text index (P-46, below). In the lane index, prose made it 36–54× larger on HPO and Uberon, as a
+  long value gets a word row per word, and its ranking, shortest value first, says little about prose.
+- **Which is which** (`browl.precache.values.classify`): a name property is name-like; else a property in a built-in
+  prose list (`IAO_0000115`, `rdfs:comment`, `skos:definition`, `dc:description`, …) is prose; else one in the built-in
+  label and synonym list (`rdfs:label`, `skos:prefLabel`, `skos:altLabel`, `oboInOwl`'s synonyms, `IAO_0000118`, …)
+  or a sub-property of one of these is name-like; any other is prose if its median value has at least 8 words
+  (`PROSE_WORDS`). On HPO, Uberon and NCBITaxon, name-like properties have medians of at most 5 words and prose ones 8
+  to 46, and none is misplaced. P-44 lets an admin override it (A-11).
+- **Searched by default:** the name properties and the label and synonym list, with their sub-properties' values when
+  entailed ones count. They're kept in `search_property` even without values of their own, so an ontology whose labels
+  are all under a sub-property of `rdfs:label` is still searched. Other name-like properties, such as IDs and
+  cross-references (NCBITaxon's 3.1 M `hasDbXref` values, e.g. `GC_ID:1`), are searched when chosen.
+- **Entailment at query time:** each value is stored once, under the property it's asserted with, and "direct and
+  entailed" for a chosen property adds its sub-properties' lanes (Lane order, above). The sub-properties come from a
+  property path query (`rdfs:subPropertyOf+`), stored as their closure in `sub_property`, rather than from the
+  annotation-property hierarchy (`edge`): the path reaches each once however the properties cycle, where `edge` joins a
+  cycle into one node, and the search hook runs before the hierarchies hook.
+- **Measured** on an Apple M3 Pro (P-42), from the values the research fetched, 20 runs of 12 queries each:
+
+  | | HPO | Uberon | NCBITaxon |
+  | --- | --- | --- | --- |
+  | Lanes (whole + word) | 59 | 75 | 24 |
+  | `search_value`; with `rdfs:label` alone | 38 MiB; 11 | 40 MiB; 8 | 1.6 GiB; 828 MiB |
+  | Storing the values; the index | 0.4 s; 2.5 s | 0.3 s; 2.7 s | 29 s; 180 s |
+  | Default search, worst median (max) | 24 ms (77) | 26 ms (48) | 10 ms (39) |
+  | Every name-like property, worst median (max) | 39 ms (70) | 52 ms (71) | 9 ms (25) |
+
+  So N-2 holds. The lanes are fewer than in the research, as non-string values are left out. NCBITaxon's index grows
+  from 828 MiB and 46 s, as its added values are nearly all `hasDbXref` and `hasOBONamespace` (one value,
+  `ncbi_taxonomy`, on every class): 71 s to cut the 9.7 M values' keys in Python, and 114 s to sort them into the
+  table, about P-41's cost per row. Its values query takes about 2 minutes, against 50 s for the name values.
+- **The results page** lists the name-like properties that have values, name properties first, then the others by
+  display name, each with its value count, and marks those searched by default (2.9, Search).
 
 **Ranking** _(Q9, Q10)_, in order:
 
 1. Exact match before prefix match.
 2. A match from the start of the whole value before one from the start of a later word. _(U-19, P-41)_
-3. Position of the property in the configured name list.
+3. Position of the property in the query's walk: the name properties in their configured order, then the others by
+   display name (Lane order, above).
 4. Position of the language in the language ranking. Untagged values come last by default (O-5).
-5. A direct value before one entailed through a sub-property, as for display names (2.7). _(P-19)_
+5. A chosen property's own value before one entailed through its sub-property, as for display names (2.7).
+   _(P-19, P-42)_
 6. Shorter value, by the normalized value's length, from the word on for a word match.
 7. Alphabetical: by normalized value, so case and accents don't split the order, then by value (code point).
 
@@ -911,53 +967,14 @@ offset, for paging, and says whether more results follow.
 **Normalization:** Unicode NFKD, accents removed, case folded, leading whitespace removed. The same function is used
 at index and query time.
 
-**Proposed: wider search** (U-47–U-50, A-11, O-13; P-42–P-44, P-46). Not yet built; the rest of this section
-describes search as built (P-19, P-20, P-41).
+**Proposed: wider search** (U-48–U-50, A-11, O-13; P-43, P-44, P-46). Not yet built; the rest of this section
+describes search as built (P-19, P-20, P-41, P-42).
 
-- **Every annotation property** (U-47, P-42). A second bulk query reads every literal value of each annotation
-  property on the ontology's entities, declared or built in (NCBITaxon doesn't declare `rdfs:label`), with the
-  property it's asserted with, into `annotation_value`: every value, prose included, as P-46's full-text index
-  reads it there. Strings and language-tagged strings are kept, not dates, booleans or URIs. Name values stay in
-  `name_value`, for display names. Measured on HPO, Uberon and NCBITaxon
-  ([P-42 findings](../research/P-42/README.md)).
-  - **Names and prose.** Each property is either _name-like_ (labels, synonyms, IDs, cross-references) or _prose_
-    (definitions, comments, notes), and each kind has its own index: name-like values the lane index, prose a
-    full-text index (below). In the lane index, prose made it 36–54× larger on HPO and Uberon, as a long value gets a
-    word row per word, and its ranking, shortest value first, says little about prose.
-  - **Which is which:** a property in a built-in prose list (`IAO_0000115`, `rdfs:comment`, `skos:definition`,
-    `dc:description`, …) is prose; one in a built-in name list (the name properties, `skos:prefLabel`,
-    `skos:altLabel`, `oboInOwl`'s synonyms, `IAO_0000118`, …) or a sub-property of one is name-like; any other is
-    prose if its median value has at least 8 words (`PROSE_WORDS`). On the three ontologies, name-like properties have
-    medians of at most 5 words and prose ones 8 to 46, and none is misplaced. An admin can override it (A-11).
-  - **Searched by default:** the name properties and the synonym properties found as above. Other name-like
-    properties, such as IDs and cross-references (NCBITaxon's 3.1 M `hasDbXref` values, e.g. `GC_ID:1`), and prose
-    are searched when chosen. An admin can change the default set (A-11).
-  - **Keyed by property, not by rank.** A lane's property is an id, and the order lanes are walked in is decided per
-    query, in Python: the name properties in their order first, then the others, by display name. So reordering the
-    name properties needs no new index (only new display names, A-11), and a query may give its own order (U-49).
-  - **Entailment moves to the query.** "Direct and entailed" for a chosen property means its lanes, then the lanes of
-    its sub-properties, found in the annotation-property hierarchy (`edge`), so rule 5 holds. An entailed value is
-    then stored once, as itself, not once per name property above it.
-  - **Lanes, measured:** HPO has 70, Uberon 127 and NCBITaxon 36 (each with its word lane), not the 600 feared. A
-    query that matches few seeks each at every length, so one over every name-like property takes up to 30 ms on
-    HPO and 60 ms on Uberon, and one over the default properties up to 16 ms on Uberon, with its synonyms. With prose
-    in the lane index too, Uberon's 213 lanes took up to 806 ms. Reading small lanes whole halved that; an index
-    ordered by value, with each busy prefix's best values, made every query take under 11 ms, but cost 50–80% more
-    space and was slow past the values it keeps. Neither is adopted.
-  - **Cost:** without prose, Uberon's `search_value` is 48 MiB rather than 8 with `rdfs:label` alone, built in 2.4 s.
-    NCBITaxon's grows from 828 MiB to 1.7 GiB and its build from 49 s to 127 s, and its values query takes about
-    2 minutes, against 50 s for the name values. Its added values are nearly all `hasDbXref` and `hasOBONamespace`
-    (one value, `ncbi_taxonomy`, on every class).
-  - **The results page** lists the properties that have indexed values, name properties first, then the other
-    name-like ones, then prose, each with its value count (kept in `search_lane`, and for prose beside the full-text
-    index).
-  - **Showing hits:** the autocomplete shows them as now (2.9, Search), without the property. The results page shows
-    them as a table, one line per hit where the screen is wide enough: the matched value and the entity's name, its
-    CURIE, else IRI, muted, then the property the value is from, then the types, last as now.
 - **Prose** (U-50, P-46). An FTS5 table over the prose values, with external content, so it holds only its index:
   the `unicode61` tokenizer, accents removed, and prefix indexes of 1–3 characters. A query requires each of its
   words, as a prefix, in any order, and ranks values by BM25; each IRI is listed once, by its best value, with its
-  matched words marked (`highlight()`). The results page shows prose hits apart from name matches, after them.
+  matched words marked (`highlight()`). The results page lists the prose properties after the name-like ones, with
+  their value counts (`search_property`), and shows prose hits apart from name matches, after them.
   - **Phrases:** a quoted part of the query (`"bone marrow" lung`) is a phrase: its words whole, adjacent and in
     order. A quote left open runs to the end. browl builds the FTS5 query from the words it splits, as `unicode61`
     does, each quoted, so the visitor's text never reaches FTS5's syntax (`OR`, `NEAR`, column filters). Phrases need
@@ -1708,12 +1725,15 @@ too (P-38), and the JSON API's (P-33).
   they're looking at. The query's match is marked (`<mark>`) in whichever is shown: the shortest part of the value
   that normalizes to the query, from its start, or for a word match from the word's (§2.6). A word matched past the
   text shown (100 characters) is shown from that word on, after "…". Its types are in a column on the right; a punned
-  IRI lists each. The results page shows hits the same way, with each one's CURIE, else IRI, muted, between its name
-  and its types, on one line where the screen is wide enough, rather than in a tooltip, which the keyboard and touch
-  screens can't reach.
-- **The results page** has the box, and filters (U-10): entity types and name properties as checkboxes, none checked
-  meaning all, and a choice of all values or direct ones only. Name properties are labelled by display name, else as
-  `NAME_PROPERTIES` names them. It shows 50 hits a page, with Previous and Next links, as deep as search's
+  IRI lists each. The results page shows hits as a table (P-42): the value and name as above, then the CURIE, else IRI,
+  muted, then the label of the property the value is from, then the types, on one line where the screen is wide
+  enough, rather than in a tooltip, which the keyboard and touch screens can't reach; on a narrow one, each hit's cells
+  wrap as one block, the names on a line of their own. The autocomplete doesn't show the property.
+- **The results page** has the box, and filters (U-10): entity types as checkboxes, none checked meaning all; the
+  name-like properties with values as checkboxes (P-42), name properties first, each with its value count and those
+  searched by default marked "*", none checked meaning those; and a choice of all values or direct ones only. A
+  property is labelled by display name, else as `NAME_PROPERTIES` names it, else by IRI; a `property=` naming one the
+  page doesn't offer gets "not found". It shows 50 hits a page, with Previous and Next links, as deep as search's
   `MAX_OFFSET` allows. P-45 will page it as the Usage tab is paged, through one pager element both share: at the top,
   with "Page n of N" and a form to go to any page, and the number of results, counted up to the deepest page
   (1,051 IRIs), as an exact total would read every match.
@@ -1917,7 +1937,6 @@ flowchart LR
         P40["P-40 Shorter tree URLs"]
     end
     subgraph P5["Phase 5: Search, caching, auth"]
-        P42["P-42 All annotation properties"]
         P43["P-43 Sticky search filters"]
         P44["P-44 Admin search settings"]
         P45["P-45 Shared results pager"]
@@ -1939,8 +1958,7 @@ flowchart LR
 
     P17 & P38 --> P33
     P38 & P39 --> P25
-    P22 & P42 --> P44
-    P42 --> P46
+    P22 --> P44
     P22 --> P23
     P22 & P31 --> P36
     P31 --> P32
@@ -2014,7 +2032,7 @@ go into this document.
 | P-19 | `SearchBackend` interface and SQLite implementation; ranking | U-10, U-11, U-12, N-5 | P-11 | Done | [#26](https://github.com/jclerman/browl/issues/26) |
 | P-20 | Autocomplete UI (accessible combobox) with type and property filters | U-10, U-17 | P-19, P-14 | Done | [#32](https://github.com/jclerman/browl/issues/32) |
 | P-41 | Any-word matching: a row per later word start in `search_value`, in lanes walked after the whole-value ones, with the word's offset for marking; measure size and build time on NCBITaxon first (2.6) | U-19 | P-19, P-20 | Done | [#131](https://github.com/jclerman/browl/issues/131) |
-| P-42 | Every annotation property searchable: a bulk query of their literal values; each property name-like or prose, by built-in lists, the property hierarchy and value lengths; name-like values in lanes keyed by property, walked in an order chosen per query, the name properties and synonyms by default; entailment through the annotation-property hierarchy at query time; the results page lists the ontology's properties with counts (2.6, Proposed; measured first, [P-42 findings](../research/P-42/README.md)) | U-47 | P-19, P-20 | To do | [#132](https://github.com/jclerman/browl/issues/132) |
+| P-42 | Every annotation property searchable: a bulk query of their literal values; each property name-like or prose, by built-in lists, the property hierarchy and value lengths; name-like values in lanes keyed by property, walked in an order chosen per query, the name properties and synonyms by default; entailment through the sub-property closure at query time; the results page lists the ontology's properties with counts, and its hits as a table (2.6; measured first, [P-42 findings](../research/P-42/README.md)) | U-47 | P-19, P-20 | Done | [#132](https://github.com/jclerman/browl/issues/132) |
 | P-43 | Sticky search filters: kept in the browser on request, used by the navigation bar's box, with a "Filtered" indicator that clears them; the results page's bar carries its filters (2.6, Proposed) | U-48 | P-20 | To do | [#133](https://github.com/jclerman/browl/issues/133) |
 | P-44 | Admin search settings: name properties and their order, language ranking, properties left out, which are prose and which are searched by default, stored per ontology IRI over the environment's defaults; a settings page from the ontology's properties and languages; applied by pre-caching into a new file beside the served one (2.6, Proposed) | A-11, O-13 | P-22, P-42 | To do | [#134](https://github.com/jclerman/browl/issues/134) |
 | P-45 | Shared results pager: one pager model and macro for the Usage tab and the search results page, htmx optional; on the results page at the top, with "Page n of N", a form to go to any page, and the number of results counted up to `MAX_OFFSET + PAGE_SIZE + 1` IRIs, not by the autocomplete; measure the count's cost on NCBITaxon (2.6, 2.9) | U-10, U-17, U-26 | P-20, P-27, P-41 | To do | [#139](https://github.com/jclerman/browl/issues/139) |
