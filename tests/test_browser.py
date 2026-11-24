@@ -280,7 +280,7 @@ def status_server(live_server: Callable[[FastAPI], LiveServer], monkeypatch: pyt
 
 
 def test_status_polls_while_running(page: Page, status_server: LiveServer) -> None:
-    """Check that the status shows each stage without a reload while a job runs, then reloads once and stops polling."""
+    """Check that the status shows each stage without a reload while a job runs, then loads anew once and stops."""
     jobs = status_server.app.state.jobs
     reasoned, loaded = asyncio.Event(), asyncio.Event()
     jobs.register(Stage.REASONING, gate(reasoned))
@@ -295,9 +295,11 @@ def test_status_polls_while_running(page: Page, status_server: LiveServer) -> No
     status_server.call(release(reasoned))
     expect(current).to_have_text("loading")
     assert marked(page)
-    status_server.call(release(loaded))
-    wait_until(page, lambda: not marked(page), "the page to reload")
+    with page.expect_navigation():
+        status_server.call(release(loaded))
+    assert not marked(page)
     expect(current).to_have_text("ready")
+    assert page.url == f"{status_server.url}{STATUS}"
     polls: list[str] = []
     page.on("request", lambda request: polls.append(request.url))
     page.wait_for_timeout(POLL_S * 3 * 1000)
@@ -322,6 +324,39 @@ def test_header_shows_new_ontology(page: Page, status_server: LiveServer, path: 
     status_server.call(release(loaded))
     nav.get_by_role("link", name="New ontology").click()
     expect(page.locator("main h1")).to_have_text("New ontology")
+
+
+def test_refused_upload_page_loads_afresh(page: Page, status_server: LiveServer) -> None:
+    """Check that a refused upload's page, once the running job ends, is fetched afresh, not re-posted (#101).
+
+    Reloading the page would re-send the form, which a browser asks to confirm and, confirmed, starts another upload.
+    """
+    jobs = status_server.app.state.jobs
+    loaded = asyncio.Event()
+    jobs.register(Stage.LOADING, gate(loaded))
+    jobs.register(Stage.PRE_CACHING, derived_stage([], f"{EX}/new", title="New ontology"))
+    status_server.call(jobs.start())
+    page.goto(f"{status_server.url}{UPLOAD}")
+    page.set_input_files("#ontology", DATA / "routing.ttl")
+    with page.expect_response(lambda response: response.request.method == "POST") as response:
+        page.click("button[type=submit]")
+    assert response.value.status == 409
+    expect(page.get_by_role("alert")).to_have_text(re.compile("a load job is already running"))
+    dialogs: list[str] = []
+    page.on("dialog", lambda dialog: (dialogs.append(dialog.message), dialog.dismiss()))
+    navigations: list[tuple[str, str]] = []
+    page.on(
+        "request",
+        lambda request: navigations.append((request.method, request.url)) if request.is_navigation_request() else None,
+    )
+    with page.expect_navigation():
+        status_server.call(release(loaded))
+    nav = page.get_by_role("navigation", name="Site")
+    expect(nav.get_by_role("link", name="New ontology")).to_be_visible()
+    expect(page.get_by_role("alert")).to_have_count(0)
+    assert navigations == [("GET", f"{status_server.url}{UPLOAD}")]
+    assert dialogs == []
+    assert status_server.call(jobs.current()).generation == 1
 
 
 @NO_JS

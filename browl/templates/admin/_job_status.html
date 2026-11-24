@@ -1,7 +1,8 @@
 {# The load job's status (A-5, A-6). While a job runs, it polls its route and replaces itself; once the job ends, the
-   replacement has no trigger, so polling stops. #}
+   route sends the browser to a fresh GET of the page that embeds it, named by `page` (a key of STATUS_PAGES), whose
+   fragment has no trigger, so polling stops. #}
 <section id="job-status" class="job-status" aria-live="polite"
-  {%- if job.running %} hx-get="{{ url_for('job_status').path }}" hx-trigger="every {{ poll_s }}s" hx-swap="outerHTML"{% endif %}>
+  {%- if job.running %} hx-get="{{ url_for('job_status').path }}?page={{ page }}" hx-trigger="every {{ poll_s }}s" hx-swap="outerHTML"{% endif %}>
   {% if job.stage is none %}
   <p>No ontology has been loaded yet.</p>
   {% else %}

@@ -52,6 +52,7 @@ EXEMPT = [
 ]
 
 STATUS = "/_browl/admin/status"
+UPLOAD = "/_browl/admin/upload"
 HTMX = {"HX-Request": "true"}
 
 
@@ -244,7 +245,7 @@ def test_links_ignore_request_host(client: TestClient, app: FastAPI) -> None:
     for response in pages:
         assert "evil.example" not in response.text
     assert 'href="/_browl/static/browl.css"' in pages[0].text
-    assert 'hx-get="/_browl/admin/status"' in pages[2].text
+    assert 'hx-get="/_browl/admin/status?page=status"' in pages[2].text
 
 
 def test_static_css(client: TestClient) -> None:
@@ -269,7 +270,7 @@ def test_status_running(client: TestClient, app: FastAPI) -> None:
     html = fragment(client)
     assert "Load 1 is running, started" in html
     assert f'<time datetime="{started.isoformat()}">{started:%Y-%m-%d %H:%M:%S} UTC</time>' in html
-    assert 'hx-get="/_browl/admin/status" hx-trigger="every 2s" hx-swap="outerHTML"' in html
+    assert 'hx-get="/_browl/admin/status?page=status" hx-trigger="every 2s" hx-swap="outerHTML"' in html
     stages = re.findall(r'<li class="(\w+)"( aria-current="step")?>([\w-]+)', html)
     assert stages == [
         ("done", "", "uploading"),
@@ -305,25 +306,61 @@ def test_status_failed(client: TestClient, app: FastAPI) -> None:
     assert SECRET_REASON not in html
 
 
-def test_status_poll_running_no_refresh(client: TestClient, app: FastAPI) -> None:
-    """Check that a poll while a job runs swaps in the fragment, without reloading the page."""
+def test_status_poll_running_no_redirect(client: TestClient, app: FastAPI) -> None:
+    """Check that a poll while a job runs swaps in the fragment, without leaving the page."""
     start_job(client, app)
-    assert "HX-Refresh" not in client.get(STATUS, headers=HTMX).headers
+    headers = client.get(STATUS, headers=HTMX).headers
+    assert "HX-Redirect" not in headers
+    assert "HX-Refresh" not in headers
 
 
+@pytest.mark.parametrize(("embedder", "fragment_page"), [(STATUS, "status"), (UPLOAD, "upload")])
+def test_status_poll_names_page(client: TestClient, app: FastAPI, embedder: str, fragment_page: str) -> None:
+    """Check that the status fragment's poll names the page it's on, and a poll's fragment keeps naming it."""
+    start_job(client, app)
+    poll = f'hx-get="{STATUS}?page={fragment_page}"'
+    assert poll in client.get(embedder).text
+    assert poll in client.get(STATUS, params={"page": fragment_page}, headers=HTMX).text
+
+
+@pytest.mark.parametrize("forged", ["https://attacker.test/", "//attacker.test", "/_browl/admin/docs", "Upload"])
+def test_status_poll_unknown_page(client: TestClient, app: FastAPI, forged: str) -> None:
+    """Check that a poll naming no known page is treated as the status page's, and isn't echoed into the fragment."""
+    start_job(client, app)
+    html = client.get(STATUS, params={"page": forged}, headers=HTMX).text
+    assert f'hx-get="{STATUS}?page=status"' in html
+    assert "attacker" not in html
+
+
+@pytest.mark.parametrize(
+    ("page", "target"),
+    [(None, STATUS), ("status", STATUS), ("upload", UPLOAD), ("https://attacker.test/", STATUS), ("docs", STATUS)],
+)
 @pytest.mark.parametrize("reasoning", [None, SECRET_REASON])
-def test_status_poll_ended_refreshes(client: TestClient, app: FastAPI, reasoning: str | None) -> None:
-    """Check that a poll finding the job ended, ready or failed, reloads the page, so its header is current (#101)."""
+def test_status_poll_ended_redirects(
+    client: TestClient, app: FastAPI, reasoning: str | None, page: str | None, target: str
+) -> None:
+    """Check that a poll finding the job ended, ready or failed, sends htmx to a fresh GET of its page (#101).
+
+    The page is one the route knows, so the header becomes current without re-sending a refused upload's POST; any
+    other value goes to the status page.
+    """
     run_job(client, app, reasoning)
-    assert client.get(STATUS, headers=HTMX).headers["HX-Refresh"] == "true"
-
-
-def test_status_page_ended_no_refresh(client: TestClient, app: FastAPI) -> None:
-    """Check that the status page, loaded after the job ended, doesn't ask to reload, so it can't reload in a loop."""
-    run_job(client, app)
-    response = client.get(STATUS)
+    params = {} if page is None else {"page": page}
+    response = client.get(STATUS, params=params, headers=HTMX)
+    assert response.headers["HX-Redirect"] == target
+    assert response.headers["Cache-Control"] == "no-store"
     assert "HX-Refresh" not in response.headers
-    assert f'hx-get="{STATUS}"' not in response.text
+
+
+@pytest.mark.parametrize("path", [STATUS, f"{STATUS}?page=upload", UPLOAD])
+def test_status_page_ended_no_redirect(client: TestClient, app: FastAPI, path: str) -> None:
+    """Check that a page loaded after the job ended doesn't redirect or poll, so it can't reload in a loop."""
+    run_job(client, app)
+    response = client.get(path)
+    assert "HX-Redirect" not in response.headers
+    assert "HX-Refresh" not in response.headers
+    assert f'hx-get="{STATUS}' not in response.text
 
 
 def test_status_page(client: TestClient, app: FastAPI) -> None:
