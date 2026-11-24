@@ -230,16 +230,19 @@ comments:
   - table: search_property
     tableComment: >-
       The annotation properties search knows (DESIGN.md 2.6, Every annotation property): each one with values in
-      annotation_value, and each name, label and synonym property even without, so a default search reaches its
-      sub-properties' values. Each is name-like or prose (browl.precache.values.classify).
+      annotation_value; each name, label and synonym property even without, so a default search reaches its
+      sub-properties' values; and each super-property of one with values, so it can be chosen for them. Each is
+      name-like or prose (browl.precache.values.classify).
     columnComments:
-      id: The property's id, which annotation_value, search_value and search_lane use.
+      id: The property's id, which annotation_value, search_value, search_lane and common_value use.
       iri: Its IRI.
       prose: >-
         1 if it's prose (definitions, comments, notes), which the lane index leaves out; 0 if it's name-like (labels,
         synonyms, IDs, cross-references).
-      by_default: 1 if a search that names no properties searches it (the name properties and synonyms), else 0.
-      value_count: How many values it has in annotation_value.
+      by_default: >-
+        1 if a search that names no properties searches it: the name, label and synonym properties, and any other
+        name-like one whose values are on fewer than browl.precache.values.NAME_REUSE entities each, on average.
+      value_count: How many values it has in annotation_value; 0 for one listed only for its sub-properties.
   - table: sub_property
     tableComment: >-
       Each property's sub-properties, transitively (rdfs:subPropertyOf), among those in search_property, stored in key

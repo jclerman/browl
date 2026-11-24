@@ -10,6 +10,7 @@ import itertools
 import sqlite3
 from collections import Counter, defaultdict
 from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass
 
 from browl.names import name_property_iris
 from browl.precache.core import PreCacheContext, batched, hook
@@ -72,6 +73,10 @@ PROSE_WORDS = 8
 """A property not otherwise classified is prose if its median value has at least this many words. On HPO, Uberon and
 NCBITaxon, name-like properties have medians of at most 5 and prose ones 8 to 46 (research/P-42)."""
 
+NAME_REUSE = 2
+"""A name-like property is searched by default if its values are on fewer than this many entities each, on average:
+names, IDs and synonyms tell entities apart, while categories, sources, dates of change and creators repeat."""
+
 ANNOTATION_VALUES = """SELECT ?entity ?property ?value
 WHERE {{
   {{ VALUES ?property {{ {properties} }} }}
@@ -98,7 +103,7 @@ async def annotation_values(context: PreCacheContext) -> None:
 
     The values come from one bulk query (`ANNOTATION_VALUES`), over the imports too; a value on an IRI that isn't a
     declared entity's is left out, and one asserted with several properties is stored once for each, under the property
-    it's asserted with: entailment is search's, at query time. Each property with values is classified (`classify`).
+    it's asserted with: entailment is search's, at query time. Each property is classified (`classify`).
     """
     names = name_property_iris(context.job.settings)
     words: defaultdict[str, Counter[int]] = defaultdict(Counter)
@@ -117,37 +122,60 @@ async def annotation_values(context: PreCacheContext) -> None:
     await context.db.create_indexes("annotation_value")
 
 
+@dataclass(frozen=True)
+class Stats:
+    """A property's values, as `classify` weighs them.
+
+    Attributes:
+        words: How many values have each word count.
+        values: How many values it has, on declared entities.
+        unique: How many distinct values (lexical forms) those are.
+    """
+
+    words: Counter[int]
+    values: int
+    unique: int
+
+
 def classify(
-    names: Sequence[str], words: Mapping[str, Counter[int]], supers: Mapping[str, Collection[str]]
+    names: Sequence[str], stats: Mapping[str, Stats], supers: Mapping[str, Collection[str]]
 ) -> dict[str, tuple[bool, bool]]:
     """Return each property's kind, as (prose, searched by default), by DESIGN.md §2.6, Which is which.
 
-    Every property with values is classified, and so is every name, label and synonym property, with values or not, so a
-    default search reaches its sub-properties' values.
+    A property with values: a name property is name-like and searched by default; else a built-in prose property is
+    prose; else a built-in label or synonym property (`LABEL_PROPERTIES`) is name-like and searched by default; else a
+    sub-property of a name or label property is name-like; else a property is prose if its median value has at least
+    `PROSE_WORDS` words, and name-like if not. A name-like property is searched by default if its values are on fewer
+    than `NAME_REUSE` entities each, on average: so names, IDs and synonyms are, whatever the ontology calls them.
 
-    A name property is name-like and searched by default; else a built-in prose property is prose; else a built-in
-    label or synonym property (`LABEL_PROPERTIES`) is name-like and searched by default; else a sub-property of a name
-    property or of a label property is name-like; else a property is prose if its median value has at least
-    `PROSE_WORDS` words.
+    A property without values is classified too if it's a name, label or synonym property, so a default search reaches
+    its sub-properties' values, or a super-property of one with values, so it can be chosen for them: name-like unless
+    each of those is prose, and not searched by default, as its sub-properties are on their own.
 
     Args:
         names: The name properties' IRIs.
-        words: Each property's values' word counts, by property IRI: how many values have each count.
+        stats: Each property with values' statistics, by IRI.
         supers: Each property's super-properties, transitively, by IRI.
     """
     labels = {*names, *LABEL_PROPERTIES}
-    kinds = {}
-    for iri in dict.fromkeys([*names, *LABEL_PROPERTIES, *words]):
-        if iri in names:
+    kinds: dict[str, tuple[bool, bool]] = {}
+    for iri, found in stats.items():
+        if iri in labels:
             kinds[iri] = (False, True)
-        elif iri in PROSE_PROPERTIES:
+        elif iri in PROSE_PROPERTIES or (
+            not labels.intersection(supers.get(iri, ())) and median(found.words) >= PROSE_WORDS
+        ):
             kinds[iri] = (True, False)
-        elif iri in LABEL_PROPERTIES:
-            kinds[iri] = (False, True)
-        elif labels.intersection(supers.get(iri, ())):
-            kinds[iri] = (False, False)
         else:
-            kinds[iri] = (median(words[iri]) >= PROSE_WORDS, False)
+            kinds[iri] = (False, found.values < NAME_REUSE * found.unique)
+    ancestors: defaultdict[str, list[bool]] = defaultdict(list)
+    for iri, (prose, _) in list(kinds.items()):
+        for ancestor in supers.get(iri, ()):
+            ancestors[ancestor].append(prose)
+    for iri in labels:
+        kinds.setdefault(iri, (False, True))
+    for iri, proses in ancestors.items():
+        kinds.setdefault(iri, (iri in PROSE_PROPERTIES or all(proses), False))
     return kinds
 
 
@@ -209,16 +237,21 @@ def _stage_sub_properties(
 def fill_staged(names: Sequence[str], words: Mapping[str, Counter[int]], connection: sqlite3.Connection) -> None:
     """Fill the tables from the staged rows: values by entity id, once for each type an IRI is declared with (punning).
 
-    A property is kept only if it has values on declared entities, or is searched by default: a default search reaches
-    its sub-properties' values even if it has none.
+    A property is kept if it has values on declared entities, is searched by default (a default search reaches its
+    sub-properties' values even if it has none), or is a super-property of one with values (`classify`).
+
+    Args:
+        names: The name properties' IRIs.
+        words: Each property's values' word counts, by IRI, as staged.
+        connection: The derived database, with the staging tables filled.
     """
     supers: defaultdict[str, set[str]] = defaultdict(set)
     for sub, prop in connection.execute("SELECT sub, property FROM sub_staging"):
         supers[sub].add(prop)
-    kinds = classify(names, words, supers)
+    every = dict.fromkeys([*words, *names, *LABEL_PROPERTIES, *(a for sub in words for a in supers.get(sub, ()))])
     connection.executemany(
-        "INSERT INTO search_property (iri, prose, by_default, value_count) VALUES (?, ?, ?, 0)",
-        [(iri, prose, by_default) for iri, (prose, by_default) in sorted(kinds.items())],
+        "INSERT INTO search_property (iri, prose, by_default, value_count) VALUES (?, 0, 0, 0)",
+        [(iri,) for iri in sorted(every)],
     )
     connection.execute(
         "INSERT INTO annotation_value (entity, property, value, language)"
@@ -226,9 +259,19 @@ def fill_staged(names: Sequence[str], words: Mapping[str, Counter[int]], connect
         " FROM value_staging AS s JOIN entity ON entity.iri = s.iri JOIN search_property AS p ON p.iri = s.property"
         " GROUP BY entity.id, p.id, s.value, s.language ORDER BY entity.id"
     )
-    counts = connection.execute("SELECT property, count(*) FROM annotation_value GROUP BY property").fetchall()
-    connection.executemany("UPDATE search_property SET value_count = ? WHERE id = ?", [(n, p) for p, n in counts])
-    connection.execute("DELETE FROM search_property WHERE value_count = 0 AND NOT by_default")
+    stats = {
+        iri: Stats(words[iri], values, unique)
+        for iri, values, unique in connection.execute(
+            "SELECT p.iri, count(*), count(DISTINCT v.value) FROM annotation_value AS v"
+            " JOIN search_property AS p ON p.id = v.property GROUP BY v.property"
+        )
+    }
+    kinds = classify(names, stats, supers)
+    connection.executemany(
+        "UPDATE search_property SET prose = ?, by_default = ?, value_count = ? WHERE iri = ?",
+        [(prose, default, stats[iri].values if iri in stats else 0, iri) for iri, (prose, default) in kinds.items()],
+    )
+    connection.executemany("DELETE FROM search_property WHERE iri = ?", [(iri,) for iri in every if iri not in kinds])
     connection.execute(
         "INSERT OR IGNORE INTO sub_property (property, sub)"
         " SELECT p.id, s.id FROM sub_staging JOIN search_property AS p ON p.iri = sub_staging.property"

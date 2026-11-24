@@ -872,11 +872,11 @@ _(Q8)_
   A type filter is part of the key, not a residual filter: as one, annotation properties' matches of "a" took 1.8 s
   on NCBITaxon, scanning the classes'.
 - **Lane order is the query's** (P-42). A query gives the order to walk properties in (`SearchQuery.order`); the search
-  page gives the name properties, in `NAME_PROPERTIES` order, and the others follow by display name, case ignored, then
-  IRI. A chosen property's lanes take its place; with entailed values, so do its sub-properties' lanes, transitively
-  (`sub_property`), each after the property's own at the same language (rule 5). A lane reached through two chosen
-  properties takes the better place. So reordering the name properties needs no new index, only new display names, and
-  a query may give its own order (U-49).
+  page gives the name properties, in `NAME_PROPERTIES` order; then come the others searched by default, then the rest,
+  each group by label (display name, else CURIE, else IRI), case ignored, then IRI. A chosen property's lanes take its
+  place; with entailed values, so do its sub-properties' lanes, transitively (`sub_property`), each after the property's
+  own at the same language (rule 5). A lane reached through two chosen properties takes the better place. So reordering
+  the name properties needs no new index, only new display names, and a query may give its own order (U-49).
 - **Bounds:** a query takes at most 100 results (`MAX_LIMIT`) and skips at most 1,000 (`MAX_OFFSET`), as deeper pages
   read more of the index, and its text is at most 1,000 characters (`MAX_QUERY_CHARS`). `SearchQuery` checks them,
   and that the text is valid Unicode (a JSON string can carry a lone surrogate), so every caller gets them; a page's
@@ -919,10 +919,21 @@ name properties' ([P-42 findings](../research/P-42/README.md)).
   or a sub-property of one of these is name-like; any other is prose if its median value has at least 8 words
   (`PROSE_WORDS`). On HPO, Uberon and NCBITaxon, name-like properties have medians of at most 5 words and prose ones 8
   to 46, and none is misplaced. P-44 lets an admin override it (A-11).
-- **Searched by default:** the name properties and the label and synonym list, with their sub-properties' values when
-  entailed ones count. They're kept in `search_property` even without values of their own, so an ontology whose labels
-  are all under a sub-property of `rdfs:label` is still searched. Other name-like properties, such as IDs and
-  cross-references (NCBITaxon's 3.1 M `hasDbXref` values, e.g. `PMID:7857801`), are searched when chosen.
+- **Searched by default: names, IDs and synonyms.** The name properties and the label and synonym list, and any other
+  name-like property whose values are on fewer than 2 entities each, on average (`NAME_REUSE`): a value that names or
+  identifies one entity, whatever the ontology calls the property. So RadLex's `Acronym`, `Misspelling`,
+  `Unsanctioned_Term` and `RadLexID`, which no list names, are searched by default, as are OBO ontologies' `id`,
+  `hasAlternativeId` and (on HPO and Uberon) `hasDbXref`; properties whose values repeat aren't: sources, creators,
+  versions of change, OBO namespaces (RadLex's `Source` 11 entities a value, `created_by` 47–72), nor NCBITaxon's
+  `hasDbXref` (165, as its genetic codes are on 3.0 M classes). The others are searched when chosen. Default properties
+  are kept in `search_property` even without values of their own, so an ontology whose labels are all under a
+  sub-property of `rdfs:label` is still searched. Measured cost: default search's worst median rose from 24 to 39 ms
+  on HPO (17 properties) and from 26 to 52 ms on Uberon (21), with one run of 20 at 182 ms; N-2 holds. A comment can
+  be short and unique enough to pass (RadLex's `Comment`, 1.92 entities a value); P-44 lets an admin move it.
+- **Super-properties are listed too.** A property with no values of its own, but with sub-properties that have some
+  (RadLex's `mapping_term`), is kept in `search_property`, name-like unless all of those are prose, and not searched by
+  default, as its sub-properties are on their own; choosing it searches them, with entailed values. The results page
+  counts its sub-properties' values beside its own.
 - **Common values are counted, not listed.** A name-like value on more than 10% of the ontology's entities
   (`COMMON_SHARE`), and on at least 1,000 (`COMMON_MIN`), tells no entities apart, so it gets no rows in the lane
   index. `common_value` holds it once, with how many entities of each type have it and how many that type has. A query
@@ -954,15 +965,16 @@ name properties' ([P-42 findings](../research/P-42/README.md)).
   the common values too took 180 s and 1.6 GiB, about P-41's cost per row; counting them instead saves 6.0 M values'
   rows (each has 2–3: `ncbi_taxonomy` and `taxonomy`, `GC_ID:1`, `ID:1` and `1`). Its values query takes about
   2 minutes, against 50 s for the name values.
-- **The results page** lists the name-like properties that have values, name properties first, then the others by
-  display name, each with its value count, and marks those searched by default (2.9, Search).
+- **The results page** lists the name-like properties that have values, or sub-properties that do, in walk order (Lane
+  order, above), each with its value count and its sub-properties', and marks those searched by default (2.9,
+  Search).
 
 **Ranking** _(Q9, Q10)_, in order:
 
 1. Exact match before prefix match.
 2. A match from the start of the whole value before one from the start of a later word. _(U-19, P-41)_
-3. Position of the property in the query's walk: the name properties in their configured order, then the others by
-   display name (Lane order, above).
+3. Position of the property in the query's walk: the name properties in their configured order, then the others
+   searched by default, then the rest (Lane order, above).
 4. Position of the language in the language ranking. Untagged values come last by default (O-5).
 5. A chosen property's own value before one entailed through its sub-property, as for display names (2.7).
    _(P-19, P-42)_
@@ -1742,9 +1754,10 @@ too (P-38), and the JSON API's (P-33).
   enough, rather than in a tooltip, which the keyboard and touch screens can't reach; on a narrow one, each hit's cells
   wrap as one block, the names on a line of their own. The autocomplete doesn't show the property.
 - **The results page** has the box, and filters (U-10): entity types as checkboxes, none checked meaning all; the
-  name-like properties with values as checkboxes (P-42), name properties first, each with its value count and those
-  searched by default marked "*", none checked meaning those; and a choice of all values or direct ones only. A
-  property is labelled by display name, else as `NAME_PROPERTIES` names it, else by IRI; a `property=` naming one the
+  name-like properties with values, or with sub-properties that have some, as checkboxes (P-42), in walk order, each
+  with its value count and its sub-properties', and those searched by default marked "*", none checked meaning those;
+  and a choice of all values or direct ones only. A property is labelled by display name, else as `NAME_PROPERTIES`
+  names it, else by CURIE, else by IRI; a `property=` naming one the
   page doesn't offer gets "not found". Above the hits, the first page lists the common values that match (§2.6), each
   with its property and its count and share of each type, "too many to list"; the autocomplete doesn't. It shows 50
   hits a page, with Previous and Next links, as deep as search's `MAX_OFFSET` allows. P-45 will page it as the Usage

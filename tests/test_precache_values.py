@@ -21,6 +21,7 @@ from browl.precache.values import (
     LABEL_PROPERTIES,
     OBO_IN_OWL,
     PROSE_WORDS,
+    Stats,
     annotation_values,
     classify,
 )
@@ -42,32 +43,48 @@ XREF = f"{OBO_IN_OWL}hasDbXref"
 DEFINITION = f"{IAO}0000115"
 
 
-def counts(*words: int) -> Counter[int]:
-    """Return a histogram of values' word counts."""
-    return Counter(words)
+def stats(*words: int, values: int = 1, unique: int = 1) -> Stats:
+    """Return a property's statistics: its values' word counts, and how many values and distinct ones it has."""
+    return Stats(Counter(words), values, unique)
 
 
 @pytest.mark.parametrize(
-    ("iri", "words", "supers", "kind"),
+    ("iri", "found", "supers", "kind"),
     [
-        (DEFINITION, counts(1), {}, (True, False)),  # in the prose list, however short
-        (COMMENT, counts(1), {}, (True, False)),
-        (SYNONYM, counts(20), {}, (False, True)),  # in the label list, however long
-        (f"{EX}sub", counts(20), {f"{EX}sub": {f"{EX}mid", LABEL}}, (False, False)),  # under a label property
-        (f"{EX}short", counts(PROSE_WORDS - 1, PROSE_WORDS - 1, 30), {}, (False, False)),
-        (f"{EX}long", counts(1, PROSE_WORDS, PROSE_WORDS), {}, (True, False)),
-        (f"{EX}even", counts(PROSE_WORDS - 1, PROSE_WORDS + 1), {}, (True, False)),  # median 8
+        (DEFINITION, stats(1), {}, (True, False)),  # in the prose list, however short
+        (COMMENT, stats(1), {}, (True, False)),
+        (SYNONYM, stats(20, values=10), {}, (False, True)),  # in the label list, however long or repeated
+        (f"{EX}sub", stats(20), {f"{EX}sub": {f"{EX}mid", LABEL}}, (False, True)),  # under a label property
+        (f"{EX}short", stats(PROSE_WORDS - 1, PROSE_WORDS - 1, 30), {}, (False, True)),
+        (f"{EX}long", stats(1, PROSE_WORDS, PROSE_WORDS), {}, (True, False)),
+        (f"{EX}even", stats(PROSE_WORDS - 1, PROSE_WORDS + 1), {}, (True, False)),  # median 8
+        (f"{EX}id", stats(1, values=1000, unique=1000), {}, (False, True)),  # each value on one entity
+        (f"{EX}xref", stats(1, values=1999, unique=1000), {}, (False, True)),  # on just under 2, on average
+        (f"{EX}source", stats(1, values=2000, unique=1000), {}, (False, False)),  # on 2
+        (f"{EX}namespace", stats(1, values=3_000_000, unique=1), {}, (False, False)),
     ],
-    ids=["prose list", "comment", "label list", "sub-property", "median short", "median long", "median of two"],
+    ids=[
+        "prose list",
+        "comment",
+        "label list",
+        "sub-property",
+        "median short",
+        "median long",
+        "median of two",
+        "unique",
+        "nearly unique",
+        "repeated",
+        "one value",
+    ],
 )
-def test_classify(iri: str, words: Counter[int], supers: dict[str, set[str]], kind: tuple[bool, bool]) -> None:
-    """Check a property's kind, (prose, searched by default), by the lists, the hierarchy, then the median rule."""
-    assert classify([LABEL], {iri: words}, supers)[iri] == kind
+def test_classify(iri: str, found: Stats, supers: dict[str, set[str]], kind: tuple[bool, bool]) -> None:
+    """Check a property's kind, (prose, searched by default): the lists, the hierarchy, words, then reuse."""
+    assert classify([LABEL], {iri: found}, supers)[iri] == kind
 
 
 def test_classify_name_property_first() -> None:
     """Check that a name property is name-like and searched by default, even if it's in the prose list."""
-    assert classify([DEFINITION], {DEFINITION: counts(30)}, {})[DEFINITION] == (False, True)
+    assert classify([DEFINITION], {DEFINITION: stats(30, values=5)}, {})[DEFINITION] == (False, True)
 
 
 def test_classify_defaults_without_values() -> None:
@@ -78,6 +95,17 @@ def test_classify_defaults_without_values() -> None:
     kinds = classify([f"{EX}name"], {}, {})
     assert set(kinds) == {f"{EX}name", *LABEL_PROPERTIES}
     assert set(kinds.values()) == {(False, True)}
+
+
+def test_classify_ancestors() -> None:
+    """Check that a super-property of one with values is classified, name-like unless all of those are prose."""
+    supers = {f"{EX}a": {f"{EX}names", f"{EX}any"}, f"{EX}b": {f"{EX}notes", f"{EX}any"}}
+    kinds = classify([LABEL], {f"{EX}a": stats(1), f"{EX}b": stats(30)}, supers)
+    assert {iri: kinds[iri] for iri in (f"{EX}names", f"{EX}notes", f"{EX}any")} == {
+        f"{EX}names": (False, False),
+        f"{EX}notes": (True, False),
+        f"{EX}any": (False, False),
+    }
 
 
 @pytest.fixture
@@ -137,6 +165,12 @@ async def test_values_on_real_fuseki(built: tuple[Settings, int]) -> None:
             (heart, f"{EX}deepLabel", "pump", None),
             (heart, f"{EX}loopA", "loop", None),
             (heart, f"{EX}typed", "typed", None),
+            (heart, f"{EX}acronym", "HT", None),
+            (heart, f"{EX}source", "Atlas", None),
+            (f"{EX}Lung", LABEL, "lung", "en"),
+            (f"{EX}Lung", f"{EX}source", "Atlas", None),
+            (f"{EX}Liver", LABEL, "liver", "en"),
+            (f"{EX}Liver", f"{EX}source", "Atlas", None),
         ]
     )
 
@@ -156,20 +190,31 @@ async def test_properties_on_real_fuseki(built: tuple[Settings, int]) -> None:
             " JOIN search_property AS s ON s.id = sub_property.sub"
         ).fetchall()
     assert properties == {
-        LABEL: (False, True, 2),
+        LABEL: (False, True, 4),
         COMMENT: (True, False, 1),
         SYNONYM: (False, True, 1),
-        XREF: (False, False, 1),
+        XREF: (False, True, 1),  # each value on one entity
         DEFINITION: (True, False, 1),
         f"{EX}note": (True, False, 1),
-        f"{EX}code": (False, False, 1),
-        f"{EX}myLabel": (False, False, 1),
-        f"{EX}deepLabel": (False, False, 1),
-        f"{EX}loopA": (False, False, 1),
-        f"{EX}typed": (False, False, 1),
+        f"{EX}code": (False, True, 1),
+        f"{EX}myLabel": (False, True, 1),
+        f"{EX}deepLabel": (False, True, 1),
+        f"{EX}loopA": (False, True, 1),
+        f"{EX}typed": (False, True, 1),
+        f"{EX}acronym": (False, True, 1),
+        f"{EX}source": (False, False, 3),  # one value on 3 entities
+        f"{EX}mappingTerm": (False, False, 0),  # no values, but a sub-property with some
+        f"{EX}loopB": (False, False, 0),  # likewise, in a cycle with it
     } | {iri: (False, True, 0) for iri in LABEL_PROPERTIES if iri not in (LABEL, SYNONYM)}
     assert sorted(subs) == sorted(
-        [(LABEL, f"{EX}myLabel"), (LABEL, f"{EX}deepLabel"), (f"{EX}myLabel", f"{EX}deepLabel")]
+        [
+            (LABEL, f"{EX}myLabel"),
+            (LABEL, f"{EX}deepLabel"),
+            (f"{EX}myLabel", f"{EX}deepLabel"),
+            (f"{EX}mappingTerm", f"{EX}acronym"),
+            (f"{EX}loopA", f"{EX}loopB"),
+            (f"{EX}loopB", f"{EX}loopA"),
+        ]
     )
 
 
@@ -180,10 +225,12 @@ async def test_properties_on_real_fuseki(built: tuple[Settings, int]) -> None:
         ("cardi", {}, [SYNONYM]),
         ("tick", {}, [f"{EX}myLabel"]),  # entailed through a sub-property
         ("pum", {}, [f"{EX}deepLabel"]),  # and through its sub-property
-        ("pum", {"entailed": False}, []),
+        ("pum", {"properties": frozenset({LABEL}), "entailed": False}, []),
         ("pum", {"properties": frozenset({f"{EX}myLabel"})}, [f"{EX}deepLabel"]),
-        ("fma", {}, []),  # not searched by default
-        ("fma", {"properties": frozenset({XREF})}, [XREF]),
+        ("fma", {}, [XREF]),  # an ID, searched by default
+        ("atlas", {}, []),  # repeated, so not searched by default
+        ("atlas", {"properties": frozenset({f"{EX}source"})}, [f"{EX}source"] * 3),
+        ("ht", {"properties": frozenset({f"{EX}mappingTerm"})}, [f"{EX}acronym"]),  # through a super-property
         ("hollow", {}, []),  # prose isn't in this index
         ("hollow", {"properties": frozenset({DEFINITION})}, []),
         ("nobody", {}, []),
@@ -200,11 +247,21 @@ async def test_search_on_real_fuseki(
 
 
 async def test_walk_order(built: tuple[Settings, int]) -> None:
-    """Check that the properties in a query's order come first, in it, then the others by name, else IRI (rule 3)."""
+    """Check the walk (rule 3): the query's order first, in it, then the defaults, then the others, by label.
+
+    Without the names hook, the properties have no display names or CURIEs, so their labels are their IRIs.
+    """
     settings, generation = built
     with closing(connect(settings, generation, HOOKS_USED)) as connection:
-        walked = [found.iri for found in search_properties(connection, [SYNONYM, LABEL, SYNONYM, f"{EX}none"])]
+        walked = search_properties(connection, [SYNONYM, LABEL, SYNONYM, f"{EX}none"])
         best = [search(connection, SearchQuery("c", order=order)).hits[0].value for order in ((SYNONYM,), (LABEL,))]
-    others = sorted(set(walked) - {SYNONYM, LABEL}, key=lambda iri: (iri.casefold(), iri))
-    assert walked == [SYNONYM, LABEL, *others]
+    rest = [found for found in walked if found.iri not in (SYNONYM, LABEL)]
+
+    def by_label(group: list[str]) -> list[str]:
+        return sorted(group, key=lambda iri: (iri.casefold(), iri))
+
+    defaults = by_label([found.iri for found in rest if found.by_default])
+    others = by_label([found.iri for found in rest if not found.by_default])
+    assert [found.iri for found in walked] == [SYNONYM, LABEL, *defaults, *others]
+    assert defaults and others
     assert best == ["cardium", "cœur"]  # the heart's best value is by the order given

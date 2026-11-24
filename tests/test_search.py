@@ -1,5 +1,6 @@
 """Tests for search (P-19): the search hook's index and `SqliteSearch`'s ranking, filters and paging."""
 
+import sqlite3
 from collections.abc import Sequence
 from contextlib import closing
 from pathlib import Path
@@ -8,7 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from browl import search as search_module
-from browl.derived import DerivedReader, EntityType
+from browl.derived import SCHEMA, DerivedReader, EntityType
 from browl.names import name_property_iris
 from browl.precache.core import Hook
 from browl.precache.entities import entities
@@ -26,6 +27,7 @@ from browl.search import (
     SearchResults,
     SqliteSearch,
     search,
+    search_properties,
     word_starts,
 )
 from browl.settings import Settings
@@ -275,7 +277,8 @@ async def test_word_filters(data_dir: Path) -> None:
     await build(settings, values, kinds)
     assert found(settings, "cell") == ["label", "prop", "entailed", "pref"]
     assert found(settings, "cell", properties=frozenset({f"{SKOS}prefLabel"})) == ["pref"]
-    assert found(settings, "cell", entailed=False) == ["label", "prop", "pref"]
+    names = frozenset({RDFS_LABEL, f"{SKOS}prefLabel"})
+    assert found(settings, "cell", properties=names, entailed=False) == ["label", "prop", "pref"]
     assert found(settings, "cell", types=frozenset({EntityType.ANNOTATION_PROPERTY})) == ["prop"]
 
 
@@ -523,8 +526,12 @@ async def test_filters(data_dir: Path) -> None:
     assert found(settings, "k") == ["class", "property", "entailed", "pref"]
     assert found(settings, "k", types=frozenset({EntityType.DATA_PROPERTY})) == ["property"]
     assert found(settings, "k", properties=frozenset({f"{SKOS}prefLabel"})) == ["pref"]
-    assert found(settings, "k", entailed=False) == ["class", "property", "pref"]
-    assert found(settings, "k", types=frozenset({EntityType.CLASS}), entailed=False) == ["class", "pref"]
+    names = frozenset({RDFS_LABEL, f"{SKOS}prefLabel"})
+    assert found(settings, "k", properties=names, entailed=False) == ["class", "property", "pref"]
+    assert found(settings, "k", types=frozenset({EntityType.CLASS}), properties=names, entailed=False) == [
+        "class",
+        "pref",
+    ]
     assert found(settings, "k", types=frozenset({EntityType.DATA_PROPERTY}), properties=frozenset({RDFS_LABEL})) == [
         "property"
     ]
@@ -668,3 +675,36 @@ async def test_common_value_found(
     assert [(common.value, common.exact) for common in results.common] == expected
     assert all(common.counts == ((EntityType.CLASS, 15, 20),) for common in results.common)
     assert all(hit.value != "GC_ID:1" for hit in results.hits)
+
+
+def test_property_labels() -> None:
+    """Check a property's label: its display name, else its CURIE by the longest namespace, else its IRI.
+
+    And that a property's count of its sub-properties' values is transitive, as `sub_property` is.
+    """
+    connection = sqlite3.connect(":memory:")
+    connection.executescript(SCHEMA)
+    connection.executemany(
+        "INSERT INTO prefix VALUES (?, ?)", [("owl", "http://www.w3.org/2002/07/owl#"), ("ex", EX), ("exa", f"{EX}a/")]
+    )
+    connection.execute(
+        "INSERT INTO entity (iri, type, path, display_name) VALUES (?, 'annotation_property', '', ?)",
+        (f"{EX}named", "a name"),
+    )
+    rows = [
+        (1, "http://www.w3.org/2002/07/owl#versionInfo", 1),
+        (2, f"{EX}named", 0),
+        (3, f"{EX}a/sub", 5),
+        (4, f"{EX}a/subsub", 7),
+        (5, "urn:x", 2),
+    ]
+    connection.executemany("INSERT INTO search_property VALUES (?, ?, 0, 0, ?)", rows)
+    connection.executemany("INSERT INTO sub_property VALUES (?, ?)", [(2, 3), (2, 4), (3, 4)])
+    found = {p.iri: (p.label, p.sub_values) for p in search_properties(connection)}
+    assert found == {
+        "http://www.w3.org/2002/07/owl#versionInfo": ("owl:versionInfo", 0),
+        f"{EX}named": ("a name", 12),
+        f"{EX}a/sub": ("exa:sub", 7),
+        f"{EX}a/subsub": ("exa:subsub", 0),
+        "urn:x": ("urn:x", 0),
+    }

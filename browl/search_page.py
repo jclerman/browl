@@ -143,6 +143,7 @@ class PropertyChoice:
         iri: Its IRI.
         label: Its display name, else its name in `NAME_PROPERTIES`, else its IRI, cut short.
         values: How many values it has.
+        sub_values: How many values its sub-properties have, which a search with entailed values reaches too.
         by_default: Whether a search that checks none searches it.
         checked: Whether the query names it.
     """
@@ -150,6 +151,7 @@ class PropertyChoice:
     iri: str
     label: str
     values: int
+    sub_values: int
     by_default: bool
     checked: bool
 
@@ -297,17 +299,19 @@ def shown_hits(
 
 
 def property_label(found: SearchProperty, names: Mapping[str, str]) -> str:
-    """Return how a property is labeled: its display name, else its name in `NAME_PROPERTIES`, else its IRI, cut short.
+    """Return how a property is labeled, cut short.
+
+    Its display name, else its name in `NAME_PROPERTIES`, else its CURIE, else its IRI.
 
     Args:
         found: The property.
         names: The name properties, by IRI, each with its name in `NAME_PROPERTIES` (`name_properties`).
     """
-    return cut_name(found.name or names.get(found.iri) or found.iri)
+    return cut_name(found.name or names.get(found.iri) or found.label)
 
 
 def _choices(connection: sqlite3.Connection, names: Mapping[str, str], chosen: Sequence[str]) -> list[PropertyChoice]:
-    """Return the properties the results page offers: the name-like ones with values, in walk order.
+    """Return the properties the results page offers: the name-like ones with values, or sub-properties with values.
 
     Args:
         connection: The derived database.
@@ -316,9 +320,16 @@ def _choices(connection: sqlite3.Connection, names: Mapping[str, str], chosen: S
         chosen: The IRIs of those the query names.
     """
     return [
-        PropertyChoice(found.iri, property_label(found, names), found.values, found.by_default, found.iri in chosen)
+        PropertyChoice(
+            found.iri,
+            property_label(found, names),
+            found.values,
+            found.sub_values,
+            found.by_default,
+            found.iri in chosen,
+        )
         for found in search_properties(connection, list(names))
-        if found.values and not found.prose
+        if (found.values or found.sub_values) and not found.prose
     ]
 
 

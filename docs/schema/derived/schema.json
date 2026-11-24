@@ -308,13 +308,13 @@
     {
       "name": "search_property",
       "type": "table",
-      "comment": "The annotation properties search knows (DESIGN.md 2.6, Every annotation property): each one with values in annotation_value, and each name, label and synonym property even without, so a default search reaches its sub-properties' values. Each is name-like or prose (browl.precache.values.classify).",
+      "comment": "The annotation properties search knows (DESIGN.md 2.6, Every annotation property): each one with values in annotation_value; each name, label and synonym property even without, so a default search reaches its sub-properties' values; and each super-property of one with values, so it can be chosen for them. Each is name-like or prose (browl.precache.values.classify).",
       "columns": [
         {
           "name": "id",
           "type": "INTEGER",
           "nullable": true,
-          "comment": "The property's id, which annotation_value, search_value and search_lane use."
+          "comment": "The property's id, which annotation_value, search_value, search_lane and common_value use."
         },
         {
           "name": "iri",
@@ -332,13 +332,13 @@
           "name": "by_default",
           "type": "INTEGER",
           "nullable": false,
-          "comment": "1 if a search that names no properties searches it (the name properties and synonyms), else 0."
+          "comment": "1 if a search that names no properties searches it: the name, label and synonym properties, and any other name-like one whose values are on fewer than browl.precache.values.NAME_REUSE entities each, on average."
         },
         {
           "name": "value_count",
           "type": "INTEGER",
           "nullable": false,
-          "comment": "How many values it has in annotation_value."
+          "comment": "How many values it has in annotation_value; 0 for one listed only for its sub-properties."
         }
       ],
       "indexes": [

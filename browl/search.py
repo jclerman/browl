@@ -119,16 +119,27 @@ class SearchProperty:
     Attributes:
         iri: Its IRI.
         name: Its display name; None if it isn't a declared entity (e.g. an undeclared built-in, `rdfs:label`).
+        curie: Its CURIE, from the longest namespace in the `prefix` table that covers it; None if none does.
         prose: Whether it's prose, rather than name-like: prose isn't in the lane index.
         by_default: Whether a query searches it when it names no properties.
-        values: How many values it has, on declared entities; a property searched by default is listed even with none.
+        values: How many values it has, on declared entities; a property searched by default, or with sub-properties
+            that have values, is listed even with none.
+        sub_values: How many values its sub-properties have, transitively, which a search of it with entailed values
+            also reaches.
     """
 
     iri: str
     name: str | None
+    curie: str | None
     prose: bool
     by_default: bool
     values: int
+    sub_values: int
+
+    @property
+    def label(self) -> str:
+        """Return its display name, else its CURIE, else its IRI."""
+        return self.name or self.curie or self.iri
 
 
 @dataclass(frozen=True)
@@ -467,25 +478,43 @@ def _with_value(connection: sqlite3.Connection, match: _Match) -> _Match:
 
 
 def search_properties(connection: sqlite3.Connection, order: Sequence[str] = ()) -> list[SearchProperty]:
-    """Return the properties with values, in a query's walk order (`SearchQuery.order`).
+    """Return the properties search knows, in a query's walk order (`SearchQuery.order`).
 
-    Those in the order come first, in it; the others after, by display name, case ignored, then IRI.
+    Those in the order come first, in it; then those searched by default; then the others; each group by label
+    (`SearchProperty.label`), case ignored, then IRI.
     """
     return [found for _, found in _properties(connection, order)]
 
 
 def _properties(connection: sqlite3.Connection, order: Sequence[str]) -> list[tuple[int, SearchProperty]]:
-    """Return the properties with values, with their ids, in walk order (`search_properties`)."""
+    """Return the properties search knows, with their ids, in walk order (`search_properties`)."""
+    prefixes = sorted(connection.execute("SELECT prefix, namespace FROM prefix"), key=lambda row: -len(row[1]))
+    subs = dict(
+        connection.execute(
+            "SELECT s.property, sum(p.value_count) FROM sub_property AS s JOIN search_property AS p ON p.id = s.sub"
+            " GROUP BY s.property"
+        ).fetchall()
+    )
+
+    def curie(iri: str) -> str | None:
+        for prefix, namespace in prefixes:
+            if iri.startswith(namespace) and len(iri) > len(namespace):
+                return f"{prefix}:{iri[len(namespace) :]}"
+        return None
+
     rows = connection.execute(
         "SELECT id, iri, (SELECT display_name FROM entity WHERE entity.iri = p.iri ORDER BY type LIMIT 1),"
         " prose, by_default, value_count FROM search_property AS p"
     )
-    found = [(row[0], SearchProperty(row[1], row[2], bool(row[3]), bool(row[4]), row[5])) for row in rows]
+    found = [
+        (id_, SearchProperty(iri, name, curie(iri), bool(prose), bool(default), count, subs.get(id_, 0)))
+        for id_, iri, name, prose, default, count in rows
+    ]
     first = {iri: n for n, iri in enumerate(dict.fromkeys(order))}
 
-    def place(item: tuple[int, SearchProperty]) -> tuple[int, str, str]:
+    def place(item: tuple[int, SearchProperty]) -> tuple[int, bool, str, str]:
         found = item[1]
-        return first.get(found.iri, len(first)), (found.name or found.iri).casefold(), found.iri
+        return first.get(found.iri, len(first)), not found.by_default, found.label.casefold(), found.iri
 
     return sorted(found, key=place)
 

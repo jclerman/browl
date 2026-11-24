@@ -23,10 +23,15 @@ ex:Heart a owl:Class ;
     ex:deepLabel "pump" ;
     ex:loopA "loop" ;
     ex:typed "typed"^^xsd:string ;
+    ex:acronym "HT" ;
+    ex:source "Atlas" ;
     dcterms:date "2020-01-01T00:00:00"^^xsd:dateTime ;
     owl:deprecated true ;
     rdfs:seeAlso "http://example.org/"^^xsd:anyURI ;
     rdfs:seeAlso ex:Other .
+
+ex:Lung a owl:Class ; rdfs:label "lung"@en ; ex:source "Atlas" .
+ex:Liver a owl:Class ; rdfs:label "liver"@en ; ex:source "Atlas" .
 
 ex:Undeclared rdfs:label "nobody" .
 
@@ -37,6 +42,9 @@ dcterms:date a owl:AnnotationProperty .
 ex:note a owl:AnnotationProperty .
 ex:code a owl:AnnotationProperty .
 ex:typed a owl:AnnotationProperty .
+ex:source a owl:AnnotationProperty .
+ex:mappingTerm a owl:AnnotationProperty .
+ex:acronym a owl:AnnotationProperty ; rdfs:subPropertyOf ex:mappingTerm .
 ex:myLabel a owl:AnnotationProperty ; rdfs:subPropertyOf rdfs:label .
 ex:deepLabel a owl:AnnotationProperty ; rdfs:subPropertyOf ex:myLabel .
 ex:loopA a owl:AnnotationProperty ; rdfs:subPropertyOf ex:loopB .

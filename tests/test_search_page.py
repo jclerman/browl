@@ -26,6 +26,7 @@ SYNONYM = "http://www.geneontology.org/formats/oboInOwl#hasExactSynonym"
 XREF = "http://www.geneontology.org/formats/oboInOwl#hasDbXref"
 DEFINITION = "http://purl.obolibrary.org/obo/IAO_0000115"
 SUB_LABEL = f"{EX}subLabel"
+SOURCE = f"{EX}source"
 SEARCH = "/_browl/search"
 MANY = PAGE_SIZE + 5
 """How many classes named "item …" there are: more than a page."""
@@ -51,6 +52,7 @@ def search_stage() -> object:
         (SYNONYM, EntityType.ANNOTATION_PROPERTY),
         (SUB_LABEL, EntityType.ANNOTATION_PROPERTY),
         (XREF, EntityType.ANNOTATION_PROPERTY),
+        (SOURCE, EntityType.ANNOTATION_PROPERTY),
     ]
     entities += [(ex(f"item{n}"), EntityType.CLASS) for n in range(MANY)]
     values: list[tuple[str, str, str, str | None]] = [
@@ -69,6 +71,8 @@ def search_stage() -> object:
         (XREF, LABEL, "database cross reference", "en"),
     ]
     values += [(ex(f"item{n}"), LABEL, f"item {n:03}", "en") for n in range(MANY)]
+    values += [(ex(f"item{n}"), SOURCE, "RadLex", None) for n in range(3)]  # repeated, so not searched by default
+    values.append((SOURCE, LABEL, "source", "en"))
     names: dict[str, tuple[str | None, str | None]] = {
         ex("heart"): ("heart muscle", "ex:heart"),
         ex("myoblast"): ("Myoblast", None),
@@ -79,6 +83,7 @@ def search_stage() -> object:
         SYNONYM: ("has exact synonym", None),
         SUB_LABEL: ("sub-label", None),
         XREF: ("database cross reference", None),
+        SOURCE: ("source", None),
     }
     names |= {ex(f"item{n}"): (f"item {n:03}", None) for n in range(MANY)}
     return derived_stage(entities, names=names, annotation_values=values, sub_properties=[(SUB_LABEL, LABEL)])
@@ -342,35 +347,35 @@ def test_property_filter(client: TestClient) -> None:
 
 def test_entailed_filter(client: TestClient) -> None:
     """Check that "Direct only" leaves out values entailed through a sub-property (U-10)."""
-    assert [hit.name for hit in results(client, [("q", "oth")]).hits] == ["other thing"]
-    assert results(client, [("q", "oth"), ("values", "direct")]).hits == []
+    assert [hit.name for hit in results(client, [("q", "oth"), ("property", LABEL)]).hits] == ["other thing"]
+    assert results(client, [("q", "oth"), ("property", LABEL), ("values", "direct")]).hits == []
 
 
 def test_property_choices(client: TestClient) -> None:
     """Check that the page offers the name-like properties with values, name properties first, with their counts.
 
-    The others follow by display name; those searched by default are marked; prose isn't offered (U-47).
+    Then those searched by default, marked, then the others, each by display name; prose isn't offered (U-47). A
+    property's count says how many values its sub-properties add.
     """
     text = client.get(SEARCH, params={"q": "a"}).text
     offered = re.findall(r'name="property" value="([^"]+)"', text)
-    assert offered == [LABEL, SYNONYM, XREF, SUB_LABEL]
-    counts = re.findall(r'<small class="note">\(([\d,]+)\)</small>', text)
-    assert counts == [str(MANY + 9), "2", "1", "1"]  # the punned IRI's label counts once per type
-    assert re.findall(r"<bdi>([^<]+)</bdi>( \*)?\s*<small", text) == [
-        ("rdfs:label", " *"),
-        ("has exact synonym", " *"),
-        ("database cross reference", ""),
-        ("sub-label", ""),
+    assert offered == [LABEL, SYNONYM, XREF, SUB_LABEL, SOURCE]
+    shown = re.findall(r"<bdi>([^<]+)</bdi>( \*)?\s*<small class=\"note\">\(([^)]*)\)</small>", text)
+    assert shown == [
+        ("rdfs:label", " *", f"{MANY + 10:,}, and 1 in sub-properties"),  # the punned IRI's label counts per type
+        ("has exact synonym", " *", "2"),
+        ("database cross reference", " *", "1"),  # its values are on one entity each
+        ("sub-label", " *", "1"),
+        ("source", "", "3"),  # its value is on 3
     ]
 
 
 def test_default_properties(client: TestClient) -> None:
-    """Check that a search with no property checked covers the name properties and synonyms only (U-47)."""
-    assert results(client, [("q", "fma")]).hits == []
-    assert [hit.property for hit in results(client, [("q", "fma"), ("property", XREF)]).hits] == [
-        "database cross reference"
-    ]
-    assert suggest(client, "fma").hits == []
+    """Check that a search with no property checked covers the names, IDs and synonyms, not repeated values (U-47)."""
+    assert [hit.property for hit in results(client, [("q", "fma")]).hits] == ["database cross reference"]
+    assert results(client, [("q", "radlex")]).hits == []
+    assert suggest(client, "radlex").hits == []
+    assert [hit.property for hit in results(client, [("q", "radlex"), ("property", SOURCE)]).hits] == ["source"] * 3
 
 
 def test_prose_not_searchable(client: TestClient) -> None:
