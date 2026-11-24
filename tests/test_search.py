@@ -593,6 +593,81 @@ async def test_backend(data_dir: Path) -> None:
     assert [hit.value for hit in results.hits] == ["apple"]
 
 
+async def test_backend_reads_fixed_once(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that `SqliteSearch` reads what every query reads alike once per generation, for queries and properties."""
+    settings = make_settings()
+    await build(settings, [("x", LABEL, LABEL, '"apple"@en')])
+    reads = []
+    read = search_module._Fixed.read
+    monkeypatch.setattr(search_module._Fixed, "read", lambda connection: reads.append(1) or read(connection))
+    reader = DerivedReader(settings.data_dir, build_keys(settings, HOOKS_USED))
+    backend = SqliteSearch(reader)
+    try:
+        first = await backend.search(1, SearchQuery("app"))
+        second = await backend.search(1, SearchQuery("ap"))
+        properties = await backend.properties(1, [RDFS_LABEL])
+    finally:
+        reader.close()
+    assert len(reads) == 1
+    assert [hit.value for hit in (*first.hits, *second.hits)] == ["apple", "apple"]
+    assert properties[0].iri == RDFS_LABEL
+
+
+async def test_blank_query_reads_nothing(data_dir: Path) -> None:
+    """Check that a blank query returns before reading the database."""
+    settings = make_settings()
+    await build(settings, [("x", LABEL, LABEL, '"apple"@en')])
+    statements: list[str] = []
+    with closing(connect(settings, 1, HOOKS_USED)) as connection:
+        connection.set_trace_callback(statements.append)
+        results = search(connection, SearchQuery("  "))
+    assert results == SearchResults((), more=False)
+    assert statements == []
+
+
+class CountingCursor(sqlite3.Cursor):
+    """A cursor that counts how many such cursors are open, and the most at once."""
+
+    open = 0
+    most = 0
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        """Count it open."""
+        super().__init__(connection)
+        CountingCursor.open += 1
+        CountingCursor.most = max(CountingCursor.most, CountingCursor.open)
+
+    def close(self) -> None:
+        """Count it closed."""
+        CountingCursor.open -= 1
+        super().close()
+
+
+class CountingConnection(sqlite3.Connection):
+    """A connection whose reads of `search_value` are on `CountingCursor`s."""
+
+    def execute(self, sql: str, parameters: object = (), /) -> sqlite3.Cursor:  # type: ignore[override]
+        """Execute, on a counting cursor if it reads `search_value`."""
+        cursor = self.cursor(CountingCursor) if "FROM search_value" in sql else self.cursor()
+        return cursor.execute(sql, parameters)  # type: ignore[arg-type]
+
+
+async def test_cursors_closed_per_length(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a query that seeks many lengths closes each length's cursors once it's read them (P-42's review)."""
+    settings = make_settings()
+    values = [(f"c{n}", LABEL, LABEL, f'"q{"x" * (n * 10)}"@en') for n in range(20)]
+    await build(settings, values, [(f"c{n}", "Class" if n % 2 else "AnnotationProperty") for n in range(20)])
+    monkeypatch.setattr(CountingCursor, "open", 0)
+    monkeypatch.setattr(CountingCursor, "most", 0)
+    with closing(connect(settings, 1, HOOKS_USED)) as plain:
+        path = plain.execute("PRAGMA database_list").fetchone()[2]
+    with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True, factory=CountingConnection)) as connection:
+        assert not search(connection, query(settings, "qz")).hits  # seeks each length of both types' lanes
+        assert CountingCursor.most == 2  # one tier's lanes, at one length
+        assert search(connection, query(settings, "q", limit=3)).hits  # stops part-way through a length
+    assert CountingCursor.open == 0
+
+
 @pytest.mark.parametrize(
     "fields",
     [
@@ -738,7 +813,8 @@ async def test_id_in_two_languages_searched_by_default(data_dir: Path) -> None:
 def test_property_labels() -> None:
     """Check a property's label: its display name, else its entity's CURIE, else its own if undeclared, else its IRI.
 
-    And that a property's count of its sub-properties' values is transitive, as `sub_property` is.
+    And that a property's count of its sub-properties' values is transitive, as `sub_property` is, and leaves out
+    prose ones', which a search of it doesn't reach.
     """
     connection = sqlite3.connect(":memory:")
     connection.executescript(SCHEMA)
@@ -754,7 +830,8 @@ def test_property_labels() -> None:
         (5, "urn:x", 2, None),
     ]
     connection.executemany("INSERT INTO search_property VALUES (?, ?, 0, 0, ?, ?)", rows)
-    connection.executemany("INSERT INTO sub_property VALUES (?, ?)", [(2, 3), (2, 4), (3, 4)])
+    connection.execute("INSERT INTO search_property VALUES (6, ?, 1, 0, 9, NULL)", (f"{EX}note",))  # prose
+    connection.executemany("INSERT INTO sub_property VALUES (?, ?)", [(2, 3), (2, 4), (3, 4), (2, 6)])
     found = {p.iri: (p.label, p.sub_values) for p in search_properties(connection)}
     assert found == {
         "http://www.w3.org/2002/07/owl#versionInfo": ("owl:versionInfo", 0),
@@ -762,4 +839,5 @@ def test_property_labels() -> None:
         f"{EX}a/sub": ("chosen:sub", 7),  # the entity's, as the names hook chose it
         f"{EX}a/subsub": ("exa:subsub", 0),
         "urn:x": ("urn:x", 0),
+        f"{EX}note": (f"{EX}note", 0),
     }

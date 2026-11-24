@@ -38,7 +38,6 @@ from browl.search import (
     SearchProperty,
     SearchQuery,
     SearchResults,
-    search_properties,
 )
 from browl.settings import Settings
 from browl.tabs import with_query
@@ -85,7 +84,8 @@ class SearchRequest:
         text: The query's text, as given.
         types: The entity types to find, in `EntityType`'s order; empty for all.
         properties: The properties to search, by IRI, each once, sorted; empty for those searched by default. Once
-            checked against the served ontology's (`_choices`), in their walk order (`browl.search.search_properties`).
+            checked against the served ontology's (`_choices`), in their walk order
+            (`browl.search.SearchBackend.properties`).
         direct: Whether only direct values count.
         offset: How many results come before those shown.
         suggest: Whether it asks for the autocomplete fragment.
@@ -310,13 +310,14 @@ def property_label(found: SearchProperty, names: Mapping[str, str]) -> str:
     return cut_name(found.name or names.get(found.iri) or found.label)
 
 
-def _choices(connection: sqlite3.Connection, names: Mapping[str, str], chosen: Sequence[str]) -> list[PropertyChoice]:
+def _choices(
+    properties: Sequence[SearchProperty], names: Mapping[str, str], chosen: Sequence[str]
+) -> list[PropertyChoice]:
     """Return the properties the results page offers: the name-like ones with values, or sub-properties with values.
 
     Args:
-        connection: The derived database.
-        names: The name properties, by IRI, each with its name in `NAME_PROPERTIES` (`name_properties`), which walk
-            first.
+        properties: The properties search knows, in walk order, the name properties first.
+        names: The name properties, by IRI, each with its name in `NAME_PROPERTIES` (`name_properties`).
         chosen: The IRIs of those the query names.
     """
     return [
@@ -328,7 +329,7 @@ def _choices(connection: sqlite3.Connection, names: Mapping[str, str], chosen: S
             found.by_default,
             found.iri in chosen,
         )
-        for found in search_properties(connection, list(names))
+        for found in properties
         if (found.values or found.sub_values) and not found.prose
     ]
 
@@ -411,15 +412,14 @@ async def search_page(request: Request) -> Response:
         return templates.TemplateResponse(request, "search_suggestions.html", {"blank": True}, headers=PANEL_HEADERS)
     state = await request.app.state.jobs.current()
     generation = ready_generation(state)
-    named = asked.properties
-    choices = await read_derived(request, lambda connection: _choices(connection, names, named), state)
+    backend: SearchBackend = request.app.state.search
+    choices = _choices(await backend.properties(generation, list(names)), names, asked.properties)
     offered = [choice.iri for choice in choices]
     if not set(asked.properties) <= set(offered):
         return not_found(request)
     asked = replace(asked, properties=tuple(iri for iri in offered if iri in asked.properties))
     results = SearchResults((), more=False)  # the page's form alone
     if normalized:
-        backend: SearchBackend = request.app.state.search
         results = await backend.search(generation, query)
     prefix = settings.reserved_prefix
     root = link_root(request.scope)

@@ -7,8 +7,8 @@ import heapq
 import itertools
 import sqlite3
 from abc import ABC, abstractmethod
-from collections.abc import Iterator, Sequence
-from contextlib import ExitStack
+from collections.abc import Generator, Iterable, Iterator, Sequence
+from contextlib import ExitStack, closing
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, NamedTuple
 
@@ -200,9 +200,26 @@ class SearchBackend(ABC):
             NotCurrentError: The generation's derived database isn't current.
         """
 
+    @abstractmethod
+    async def properties(self, generation: int, order: Sequence[str] = ()) -> list[SearchProperty]:
+        """Return the properties search knows in a generation, in a query's walk order (`SearchQuery.order`).
+
+        Raises:
+            NotCurrentError: The generation's derived database isn't current.
+        """
+
 
 class SqliteSearch(SearchBackend):
-    """Search over the derived database's `search_value` table, keyed in ranking order (DESIGN.md §2.6)."""
+    """Search over the derived database's `search_value` table, keyed in ranking order (DESIGN.md §2.6).
+
+    What every query reads alike (`_Fixed`) is read once per generation and kept for the newest: a generation's
+    derived database never changes once it's current, and only a current one is read.
+    """
+
+    def __init__(self, reader: DerivedReader) -> None:
+        """Read through the reader, with nothing kept yet."""
+        super().__init__(reader)
+        self._fixed: tuple[int, _Fixed] | None = None
 
     @staticmethod
     async def index(context: "PreCacheContext") -> None:
@@ -212,7 +229,24 @@ class SqliteSearch(SearchBackend):
 
     async def search(self, generation: int, query: SearchQuery) -> SearchResults:
         """Return a page of a query's results in a generation (`search`)."""
-        return await self.reader.read(generation, lambda connection: search(connection, query))
+        return await self.reader.read(
+            generation, lambda connection: search(connection, query, self._fixed_of(generation, connection))
+        )
+
+    async def properties(self, generation: int, order: Sequence[str] = ()) -> list[SearchProperty]:
+        """Return the properties search knows in a generation, in walk order (`search_properties`)."""
+        fixed = await self.reader.read(generation, lambda connection: self._fixed_of(generation, connection))
+        return [found for _, found in _walk(fixed.properties, order)]
+
+    def _fixed_of(self, generation: int, connection: sqlite3.Connection) -> "_Fixed":
+        """Return what every query reads alike in a generation, kept from an earlier read if it was of the newest."""
+        kept = self._fixed
+        if kept is not None and kept[0] == generation:
+            return kept[1]
+        fixed = _Fixed.read(connection)
+        if kept is None or kept[0] < generation:
+            self._fixed = (generation, fixed)
+        return fixed
 
 
 BACKEND: type[SearchBackend] = SqliteSearch
@@ -398,7 +432,7 @@ _MATCHES = (
 )
 
 
-def search(connection: sqlite3.Connection, query: SearchQuery) -> SearchResults:
+def search(connection: sqlite3.Connection, query: SearchQuery, fixed: "_Fixed | None" = None) -> SearchResults:
     """Return a page of a query's results, ranked by §2.6, one per IRI with its best-matching value.
 
     Values rank by §2.6's rules, a word match as the normalized value from its word on. Values longer than `KEY_CHARS`
@@ -408,49 +442,55 @@ def search(connection: sqlite3.Connection, query: SearchQuery) -> SearchResults:
     Args:
         connection: A connection to the derived database.
         query: The query.
+        fixed: What every query reads alike in the database, if it's been read (`_Fixed`); else it's read.
     """
     text = normalize(query.text)
-    lanes, places, iris = _lanes(connection, query)
     if not text:
         return SearchResults((), more=False)
-    common = _common(connection, query, text, places, iris) if query.offset == 0 else ()
+    if fixed is None:
+        fixed = _Fixed.read(connection)
+    lanes, places, iris = _lanes(fixed, query)
+    common = _common(fixed, query, text, places, iris) if query.offset == 0 else ()
     if not lanes:
         return SearchResults((), more=False, common=common)
     wanted = query.offset + query.limit + 1  # one more, to tell whether there are more
     best: dict[str, tuple[_Match, bool]] = {}
 
-    def take(matches: Iterator[_Match], exact: bool) -> bool:
-        """Keep each new IRI's first match; return whether there are enough."""
-        for match in matches:
-            if match.iri not in best:
-                best[match.iri] = (match, exact)
-                if len(best) >= wanted:
-                    return True
+    def take(matches: Generator[_Match], exact: bool) -> bool:
+        """Keep each new IRI's first match; return whether there are enough.
+
+        The matches are closed when it returns, so the cursors of a length left part-read are closed then.
+        """
+        with closing(matches):
+            for match in matches:
+                if match.iri not in best:
+                    best[match.iri] = (match, exact)
+                    if len(best) >= wanted:
+                        return True
         return False
 
     tiers = [list(group) for _, group in itertools.groupby(lanes, key=_Lane.tier)]
     key_length = min(len(text), KEY_CHARS)
-    with ExitStack() as cursors:
 
-        def matches(tier: list[_Lane], length: int) -> Iterator[_Match]:
-            return _tier_matches(connection, cursors, tier, text[:KEY_CHARS], length)
+    def matches(tier: list[_Lane], length: int) -> Iterator[_Match]:
+        return _tier_matches(connection, tier, text[:KEY_CHARS], length)
 
-        whole = [tier for tier in tiers if not tier[0].word]
-        exact_matches = (match for tier in whole for match in matches(tier, key_length) if match.normalized == text)
-        if not take(exact_matches, exact=True):
-            for tier in tiers:
-                # A word row whose key is the query itself isn't an exact match, as the value is longer.
-                word = tier[0].word
-                first = len(text) if word else len(text) + 1
-                lengths = range(min(first, KEY_CHARS), max(lane.max_length for lane in tier) + 1)
-                prefix_matches = (
-                    match
-                    for length in lengths
-                    for match in matches(tier, length)
-                    if match.normalized.startswith(text) and (word or match.normalized != text)
-                )
-                if take(prefix_matches, exact=False):
-                    break
+    whole = [tier for tier in tiers if not tier[0].word]
+    exact_matches = (match for tier in whole for match in matches(tier, key_length) if match.normalized == text)
+    if not take(exact_matches, exact=True):
+        for tier in tiers:
+            # A word row whose key is the query itself isn't an exact match, as the value is longer.
+            word = tier[0].word
+            first = len(text) if word else len(text) + 1
+            lengths = range(min(first, KEY_CHARS), max(lane.max_length for lane in tier) + 1)
+            prefix_matches = (
+                match
+                for length in lengths
+                for match in matches(tier, length)
+                if match.normalized.startswith(text) and (word or match.normalized != text)
+            )
+            if take(prefix_matches, exact=False):
+                break
     found = [
         (_with_value(connection, match) if match.lane.word and len(match.value) == KEY_CHARS else match, exact)
         for match, exact in list(best.values())[query.offset : query.offset + query.limit]
@@ -479,52 +519,86 @@ def _with_value(connection: sqlite3.Connection, match: _Match) -> _Match:
     return match  # not reached: the row was built from such a value
 
 
+@dataclass(frozen=True)
+class _Fixed:
+    """What every query reads alike of a derived database, which never changes once built.
+
+    Attributes:
+        properties: The properties search knows, with their ids, in no order.
+        subs: Each property's sub-properties' ids, transitively, by id (`sub_property`).
+        lanes: Every lane, as (type, property id, language rank, word, longest length) (`search_lane`).
+        common: Every common value, as (property id, value, type, normalized value, entities, entities of the type)
+            (`common_value`).
+    """
+
+    properties: tuple[tuple[int, SearchProperty], ...]
+    subs: dict[int, tuple[int, ...]]
+    lanes: tuple[tuple[str, int, int, int, int], ...]
+    common: tuple[tuple[int, str, str, str, int, int], ...]
+
+    @classmethod
+    def read(cls, connection: sqlite3.Connection) -> "_Fixed":
+        """Read it from the database.
+
+        A property's count of its sub-properties' values counts only name-like ones', which a search of it reaches.
+        """
+        sub_values = dict(
+            connection.execute(
+                "SELECT s.property, sum(p.value_count) FROM sub_property AS s JOIN search_property AS p ON p.id = s.sub"
+                " WHERE NOT p.prose GROUP BY s.property"
+            ).fetchall()
+        )
+        rows = connection.execute(
+            "SELECT p.id, p.iri, e.display_name, coalesce(e.curie, p.curie), p.prose, p.by_default, p.value_count"
+            " FROM search_property AS p"
+            " LEFT JOIN entity AS e ON e.id = (SELECT id FROM entity WHERE entity.iri = p.iri ORDER BY type LIMIT 1)"
+        )
+        properties = tuple(
+            (id_, SearchProperty(iri, name, curie, bool(prose), bool(default), count, sub_values.get(id_, 0)))
+            for id_, iri, name, curie, prose, default, count in rows
+        )
+        subs: dict[int, list[int]] = {}
+        for property_id, sub in connection.execute("SELECT property, sub FROM sub_property"):
+            subs.setdefault(property_id, []).append(sub)
+        return cls(
+            properties,
+            {property_id: tuple(found) for property_id, found in subs.items()},
+            tuple(connection.execute("SELECT type, property, language_rank, word, max_length FROM search_lane")),
+            tuple(connection.execute("SELECT property, value, type, normalized, entities, of_type FROM common_value")),
+        )
+
+
 def search_properties(connection: sqlite3.Connection, order: Sequence[str] = ()) -> list[SearchProperty]:
     """Return the properties search knows, in a query's walk order (`SearchQuery.order`).
 
     Those in the order come first, in it; then those searched by default; then the others; each group by label
     (`SearchProperty.label`), case ignored, then IRI.
     """
-    return [found for _, found in _properties(connection, order)]
+    return [found for _, found in _walk(_Fixed.read(connection).properties, order)]
 
 
-def _properties(connection: sqlite3.Connection, order: Sequence[str]) -> list[tuple[int, SearchProperty]]:
-    """Return the properties search knows, with their ids, in walk order (`search_properties`)."""
-    subs = dict(
-        connection.execute(
-            "SELECT s.property, sum(p.value_count) FROM sub_property AS s JOIN search_property AS p ON p.id = s.sub"
-            " GROUP BY s.property"
-        ).fetchall()
-    )
-    rows = connection.execute(
-        "SELECT p.id, p.iri, e.display_name, coalesce(e.curie, p.curie), p.prose, p.by_default, p.value_count"
-        " FROM search_property AS p"
-        " LEFT JOIN entity AS e ON e.id = (SELECT id FROM entity WHERE entity.iri = p.iri ORDER BY type LIMIT 1)"
-    )
-    found = [
-        (id_, SearchProperty(iri, name, curie, bool(prose), bool(default), count, subs.get(id_, 0)))
-        for id_, iri, name, curie, prose, default, count in rows
-    ]
+def _walk(properties: Iterable[tuple[int, SearchProperty]], order: Sequence[str]) -> list[tuple[int, SearchProperty]]:
+    """Return properties, with their ids, in walk order (`search_properties`)."""
     first = {iri: n for n, iri in enumerate(dict.fromkeys(order))}
 
     def place(item: tuple[int, SearchProperty]) -> tuple[int, bool, str, str]:
         found = item[1]
         return first.get(found.iri, len(first)), not found.by_default, found.label.casefold(), found.iri
 
-    return sorted(found, key=place)
+    return sorted(properties, key=place)
 
 
 type _Places = dict[int, tuple[int, bool]]
 """Each property a query searches, by id, with its place in the walk: its rank, and whether it's entailed."""
 
 
-def _lanes(connection: sqlite3.Connection, query: SearchQuery) -> tuple[list[_Lane], _Places, dict[int, str]]:
+def _lanes(fixed: _Fixed, query: SearchQuery) -> tuple[list[_Lane], _Places, dict[int, str]]:
     """Return the lanes the query's filters allow, in tier order, and the properties it searches, with their IRIs.
 
     Each chosen property's lanes take its place in the walk; with entailed values, so do its sub-properties' lanes,
     after its own (rule 5). A lane reached through several chosen properties takes its best place.
     """
-    properties = _properties(connection, query.order)
+    properties = _walk(fixed.properties, query.order)
     ids = {found.iri: id_ for id_, found in properties}
     iris = {id_: found.iri for id_, found in properties}
     rank = {id_: n for n, (id_, _) in enumerate(properties)}
@@ -533,23 +607,20 @@ def _lanes(connection: sqlite3.Connection, query: SearchQuery) -> tuple[list[_La
     else:
         chosen = [ids[iri] for iri in query.properties if iri in ids]
     places = {id_: (rank[id_], False) for id_ in chosen}
-    if query.entailed and chosen:
-        marks = ", ".join("?" * len(chosen))
-        rows = connection.execute(f"SELECT property, sub FROM sub_property WHERE property IN ({marks})", chosen)
-        for chosen_id, sub in rows:
-            places[sub] = min(places.get(sub, (rank[chosen_id], True)), (rank[chosen_id], True))
+    if query.entailed:
+        for chosen_id in chosen:
+            for sub in fixed.subs.get(chosen_id, ()):
+                places[sub] = min(places.get(sub, (rank[chosen_id], True)), (rank[chosen_id], True))
     lanes = [
         _Lane(EntityType(kind), property_id, language_rank, bool(word), max_length, iris[property_id], *place)
-        for kind, property_id, language_rank, word, max_length in connection.execute(
-            "SELECT type, property, language_rank, word, max_length FROM search_lane"
-        )
+        for kind, property_id, language_rank, word, max_length in fixed.lanes
         if (place := places.get(property_id)) is not None and (query.types is None or kind in query.types)
     ]
     return sorted(lanes, key=lambda lane: (*lane.tier(), lane.type)), places, iris
 
 
 def _common(
-    connection: sqlite3.Connection, query: SearchQuery, text: str, places: _Places, iris: dict[int, str]
+    fixed: _Fixed, query: SearchQuery, text: str, places: _Places, iris: dict[int, str]
 ) -> tuple[CommonValue, ...]:
     """Return the common values that match a normalized query, of the properties and types it searches.
 
@@ -558,9 +629,7 @@ def _common(
     """
     found: dict[tuple[int, str], list[tuple[EntityType, int, int]]] = {}
     keys: dict[tuple[int, str], str] = {}
-    for property_id, value, kind, normalized, entities, of_type in connection.execute(
-        "SELECT property, value, type, normalized, entities, of_type FROM common_value"
-    ):
+    for property_id, value, kind, normalized, entities, of_type in fixed.common:
         if property_id not in places or (query.types is not None and kind not in query.types):
             continue
         starts = [0, *word_starts(normalized[:MAX_QUERY_CHARS])]
@@ -583,24 +652,23 @@ def _common(
     )
 
 
-def _tier_matches(
-    connection: sqlite3.Connection, cursors: ExitStack, tier: list[_Lane], key: str, length: int
-) -> Iterator[_Match]:
+def _tier_matches(connection: sqlite3.Connection, tier: list[_Lane], key: str, length: int) -> Generator[_Match]:
     """Yield a tier's values of a key length whose key starts with the key, merging its lanes' in rank order.
 
-    Each lane's rows are read as they're needed; its cursor is closed when `cursors` is. Equal keys keep their lanes'
-    order, by type, as `heapq.merge` is stable.
+    Each lane's rows are read as they're needed; its cursor is closed once they're all read, or the generator is
+    closed. Equal keys keep their lanes' order, by type, as `heapq.merge` is stable.
     """
-    lanes = []
-    for lane in tier:
-        if length <= lane.max_length:
-            cursor = connection.execute(
-                _MATCHES,
-                (lane.type, lane.property, lane.language_rank, lane.word, length, key, key + LAST_CHAR),
-            )
-            cursors.callback(cursor.close)
-            lanes.append(_rows(cursor, lane))
-    return heapq.merge(*lanes, key=lambda match: (match.normalized[:KEY_CHARS], match.value[:KEY_CHARS]))
+    with ExitStack() as cursors:
+        lanes = []
+        for lane in tier:
+            if length <= lane.max_length:
+                cursor = connection.execute(
+                    _MATCHES,
+                    (lane.type, lane.property, lane.language_rank, lane.word, length, key, key + LAST_CHAR),
+                )
+                cursors.callback(cursor.close)
+                lanes.append(_rows(cursor, lane))
+        yield from heapq.merge(*lanes, key=lambda match: (match.normalized[:KEY_CHARS], match.value[:KEY_CHARS]))
 
 
 def _rows(cursor: sqlite3.Cursor, lane: _Lane) -> Iterator[_Match]:
