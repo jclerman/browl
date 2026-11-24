@@ -106,6 +106,18 @@ code {
   max-width: 32rem;
 }
 
+.site-search:has(.search-page-link) {
+  display: flex;
+  gap: calc(var(--space) / 2);
+  align-items: center;
+}
+
+.search-page-link {
+  flex: none;
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
 .site-search input {
   box-sizing: border-box;
   width: 100%;
@@ -915,6 +927,64 @@ code {
 
 .search-page {
   max-width: 60rem;
+}
+
+/* A wide, tall enough window: the form in a column on the left and the results in a panel on the right, each
+   scrolling within the window, so the filters stay in view (DESIGN.md §2.9, Search). Otherwise they stack. */
+@supports selector(:has(a)) {
+  @media screen and (width >= 56rem) and (height >= 32rem) {
+    body:has(.search-page) {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      height: 100vh;
+      height: 100dvh;
+    }
+
+    body:has(.search-page) .content {
+      display: grid;
+      grid-template-rows: minmax(0, 1fr);
+      min-height: 0;
+      padding-bottom: 0;
+    }
+
+    .search-page {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr);
+      gap: 0 calc(var(--space) * 2);
+      max-width: none;
+      min-height: 0;
+    }
+
+    .search-page h1 {
+      grid-column: 1 / -1;
+    }
+
+    .search-form,
+    .search-results {
+      min-height: 0;
+      padding-bottom: var(--space);
+      overflow-y: auto;
+    }
+
+    .search-results h2 {
+      margin-top: 0;
+    }
+
+    .search-results thead th {
+      position: sticky;
+      top: 0;
+      background: var(--bg);
+    }
+
+    .search-filters {
+      flex-direction: column;
+    }
+
+    .search-properties {
+      max-height: none;
+    }
+  }
 }
 
 .search-query input {

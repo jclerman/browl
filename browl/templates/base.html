@@ -40,6 +40,8 @@
                hx-target="#site-search-list" hx-swap="innerHTML" hx-sync="this:replace">
         <ul id="site-search-list" class="search-list" role="listbox" aria-label="Suggestions" hidden></ul>
         <span id="site-search-status" class="visually-hidden" role="status"></span>
+        {# The full results page, with its filters, without having to search first. #}
+        <a class="search-page-link" href="{{ frame.search }}">Advanced search</a>
       </form>
       {# A menu on narrow screens; on wide ones the stylesheet shows its links in the bar, and hides its button. #}
       <details class="site-menu">

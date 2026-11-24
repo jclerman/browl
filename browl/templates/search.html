@@ -35,7 +35,8 @@
     </div>
   </form>
   {% if not blank %}
-  <section class="search-results" aria-labelledby="results-heading">
+  {# On a wide window, a panel that scrolls beside the form; focusable, so the keyboard can scroll it. #}
+  <section class="search-results" aria-labelledby="results-heading" tabindex="0">
     <h2 id="results-heading">Results</h2>
     {% if common %}
     <ul class="common-values">

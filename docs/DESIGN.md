@@ -1757,12 +1757,17 @@ too (P-38), and the JSON API's (P-33).
   name-like properties with values, or with sub-properties that have some, as checkboxes (P-42), in walk order, each
   with its value count and its sub-properties', and those searched by default marked "*", none checked meaning those;
   and a choice of all values or direct ones only. A property is labelled by display name, else as `NAME_PROPERTIES`
-  names it, else by CURIE, else by IRI; a `property=` naming one the
-  page doesn't offer gets "not found". Above the hits, the first page lists the common values that match (§2.6), each
-  with its property and its count and share of each type, "too many to list"; the autocomplete doesn't. It shows 50
-  hits a page, with Previous and Next links, as deep as search's `MAX_OFFSET` allows. P-45 will page it as the Usage
-  tab is paged, through one pager element both share: at the top, with "Page n of N" and a form to go to any page, and
-  the number of results, counted up to the deepest page (1,051 IRIs), as an exact total would read every match.
+  names it, else by CURIE, else by IRI; a `property=` naming one the page doesn't offer gets "not found". Above the
+  hits, the first page lists the common values that match (§2.6), each with its property and its count and share of each
+  type, "too many to list"; the autocomplete doesn't. It shows 50 hits a page, with Previous and Next links, as deep as
+  search's `MAX_OFFSET` allows. P-45 will page it as the Usage tab is paged, through one pager element both share: at
+  the top, with "Page n of N" and a form to go to any page, and the number of results, counted up to the deepest page
+  (1,051 IRIs), as an exact total would read every match. Laid out (P-42): on a window at least 56rem wide and 32rem
+  tall, the form is a column on the left and the results a panel on the right, each scrolling within the window, as an
+  entity page fills it (U-30), so the filters stay in view while the results scroll; the panel is focusable, so the
+  keyboard can scroll it, and the table's header stays at its top. Otherwise they stack and the page scrolls as one. The
+  bar links to the page, "Advanced search", beside the box, so its filters can be set before searching; the
+  autocomplete's "All results…" opens it too.
 - **Input**: invalid parameters, and repeats of those 2.13 doesn't list as repeated, get the "not found" page, as tree
   pages do. A blank query finds nothing: an empty fragment, which closes the list, or the form alone.
 - **No server-side deadline** (from P-19's review): each query's cost is already bounded (§2.6, Bounds), and the

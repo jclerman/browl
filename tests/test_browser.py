@@ -2534,3 +2534,39 @@ def test_search_no_matches(page: Page, searchable: LiveServer) -> None:
     expect(box).to_have_attribute("aria-activedescendant", "search-option-all")
     page.get_by_role("option", name="No matches").hover()
     expect(box).to_have_attribute("aria-activedescendant", "search-option-all")
+
+
+def test_search_page_side_by_side(page: Page, searchable: LiveServer) -> None:
+    """Check that on a wide window the results scroll in a panel beside the form, which stays in view."""
+    page.set_viewport_size({"width": 1200, "height": 600})
+    page.goto(f"{searchable.url}/_browl/search?q=item")
+    form, results = page.locator(".search-form").bounding_box(), page.locator(".search-results").bounding_box()
+    assert form is not None and results is not None
+    assert results["x"] >= form["x"] + form["width"]  # beside it, not under it
+    panel = page.locator(".search-results")
+    assert panel.evaluate("e => e.scrollHeight > e.clientHeight")
+    panel.evaluate("e => e.scrollTop = e.scrollHeight")
+    assert page.evaluate("window.scrollY") == 0  # the page itself doesn't scroll
+    expect(page.locator("#search-text")).to_be_in_viewport()
+    expect(page.get_by_role("link", name="Next")).to_be_in_viewport()
+
+
+def test_search_page_stacked_when_narrow(page: Page, searchable: LiveServer) -> None:
+    """Check that on a narrow window the results come under the form, and the page scrolls as one."""
+    page.set_viewport_size({"width": 400, "height": 700})
+    page.goto(f"{searchable.url}/_browl/search?q=item")
+    form, results = page.locator(".search-form").bounding_box(), page.locator(".search-results").bounding_box()
+    assert form is not None and results is not None
+    assert results["y"] >= form["y"] + form["height"]
+
+
+def test_advanced_search_link(page: Page, searchable: LiveServer) -> None:
+    """Check that the bar links to the full search page, beside the box, on wide and narrow windows."""
+    for width in (1200, 400):
+        page.set_viewport_size({"width": width, "height": 700})
+        page.goto(searchable.url + "/_browl/tree/classes")
+        link = page.locator(".site-bar").get_by_role("link", name="Advanced search")
+        expect(link).to_be_visible()
+        link.click()
+        expect(page).to_have_url(f"{searchable.url}/_browl/search")
+        expect(page.locator("#search-text")).to_be_visible()
