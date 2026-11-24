@@ -1,5 +1,7 @@
 """Admin routes, under `/{RESERVED_PREFIX}/admin` (DESIGN.md §2.13). Authentication isn't enforced yet (P-22)."""
 
+from urllib.parse import urlsplit
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.openapi.docs import get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -12,9 +14,6 @@ from browl.upload import FORMATS, StorageError, UploadError, receive_upload
 STATUS_POLL_S = 2
 """How often the status fragment polls itself while a job runs."""
 
-STATUS_PAGES = {"status": "job_status", "upload": "upload_page"}
-"""The pages that embed the status fragment, by the name its polls send as `page`, each to its route's name."""
-
 SWAGGER_UI_URL = "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.35.0"
 """Swagger UI for the API docs, pinned to an exact version: an accepted exception to the no-CDN rule (§2.13)."""
 
@@ -22,32 +21,35 @@ router = APIRouter(prefix="/admin")
 
 
 @router.get("/status", response_class=HTMLResponse)
-async def job_status(request: Request, page: str = "status") -> HTMLResponse:
+async def job_status(request: Request) -> HTMLResponse:
     """Show the load job's stage, start time, and failed stage and reason (A-5, A-6).
 
-    An htmx request gets just the status fragment, which the upload page embeds; while a job runs, the fragment polls
-    this route and replaces itself. Any other request gets the fragment in a page, which, while a job runs, polls the
-    same way, or refreshes itself when JavaScript is off.
-
-    A poll that finds the job no longer running sends htmx to a fresh GET of the page it's on (`HX-Redirect`), so the
-    rest of it, e.g. the header's ontology name and link, shows the new generation (#101). Reloading instead would
-    re-send the POST of a refused upload's page. The poll names that page as `page`, a key of `STATUS_PAGES`; any
-    other value means the status page, so the redirect can't leave the admin pages. Only a page showing a running job
-    polls, so such a poll is the one that saw the job end; the new page shows the ended job, and doesn't poll.
+    An htmx request gets just the status fragment, which polls this route while a job runs; any other request gets a
+    page. A poll that finds the job ended gets `HX-Redirect` to a fresh GET of its page, so the header shows the new
+    ontology (#101); a reload would re-send a refused upload's POST. Only a running job's fragment polls, so no loop.
     """
     htmx = request.headers.get("HX-Request") == "true"
-    if not htmx or page not in STATUS_PAGES:
-        page = "status"
     job = await request.app.state.jobs.current()
     headers = {"Cache-Control": "no-store"}
     if htmx and not job.running:
-        headers["HX-Redirect"] = request.url_for(STATUS_PAGES[page]).path
+        headers["HX-Redirect"] = _polling_page(request)
     return templates.TemplateResponse(
         request,
         "admin/_job_status.html" if htmx else "admin/status.html",
-        {"job": job, "stages": list(Stage), "poll_s": STATUS_POLL_S, "page": page},
+        {"job": job, "stages": list(Stage), "poll_s": STATUS_POLL_S},
         headers=headers,
     )
+
+
+def _polling_page(request: Request) -> str:
+    """Return the path of the admin page an htmx poll came from (`HX-Current-URL`), or else the status page's.
+
+    Only the path is compared, so another origin's URL with the upload page's path passes; that's harmless, as the
+    result is always one of the two pages' own paths.
+    """
+    status_path = request.url_for("job_status").path
+    current = urlsplit(request.headers.get("HX-Current-URL", "")).path
+    return current if current in {status_path, request.url_for("upload_page").path} else status_path
 
 
 REASONER_LABELS = {Reasoner.NONE: "None", Reasoner.ELK: "ELK", Reasoner.HERMIT: "HermiT"}
@@ -62,7 +64,6 @@ async def _upload_page(request: Request, error: str | None = None, status_code: 
             "job": await request.app.state.jobs.current(),
             "stages": list(Stage),
             "poll_s": STATUS_POLL_S,
-            "page": "upload",
             "reasoners": list(REASONER_LABELS.items()),
             "accept": ",".join(sorted(FORMATS)),
             "error": error,
