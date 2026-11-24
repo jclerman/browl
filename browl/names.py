@@ -146,30 +146,48 @@ def best_values(values: Iterable[Literal], ranking: Sequence[str]) -> list[str]:
 
 
 @contextmanager
-def rank_tables(
-    connection: sqlite3.Connection, properties: Sequence[str], ranking: Sequence[str], table: str = "name_value"
-) -> Iterator[None]:
-    """Create temporary tables of values' ranks for the duration, for display names and search.
+def rank_tables(connection: sqlite3.Connection, properties: Sequence[str], ranking: Sequence[str]) -> Iterator[None]:
+    """Create temporary tables of name values' ranks for the duration, for display names.
 
-    `property_rank (property, rank)` gives each name property's position, and `language_rank (language, rank)` each
-    language tag in the table its rank by `language_rank`, as dense integers from 0: tags that rank alike share one.
+    `property_rank (property, rank)` gives each name property's position, and `language_rank` each language tag in
+    `name_value` its rank (`language_ranks`).
 
     Args:
-        connection: A connection to the derived database, with the table filled.
+        connection: A connection to the derived database, with `name_value` filled.
         properties: The name properties' IRIs, best first (`name_property_iris`).
         ranking: The language ranking, lowercased (`Settings.language_ranking`).
-        table: The table whose values' languages to rank, with a `language` column: `name_value` or
-            `annotation_value`.
     """
-    tags = [row[0] for row in connection.execute(f"SELECT DISTINCT language FROM {table}")]
-    ranks = {tag: language_rank(tag, ranking) for tag in tags}
-    dense = {rank: n for n, rank in enumerate(sorted(set(ranks.values())))}
+    tags = [row[0] for row in connection.execute("SELECT DISTINCT language FROM name_value")]
     connection.execute("CREATE TEMP TABLE property_rank (property TEXT PRIMARY KEY, rank INTEGER NOT NULL)")
     connection.executemany("INSERT INTO property_rank VALUES (?, ?)", [(iri, n) for n, iri in enumerate(properties)])
+    try:
+        with language_ranks(connection, tags, ranking):
+            yield
+    finally:
+        connection.execute("DROP TABLE property_rank")
+
+
+@contextmanager
+def language_ranks(
+    connection: sqlite3.Connection, tags: Iterable[str | None], ranking: Sequence[str]
+) -> Iterator[None]:
+    """Create a temporary table of language tags' ranks for the duration, for display names and search.
+
+    `language_rank (language, rank)` gives each tag its rank by `language_rank`, as dense integers from 0: tags that
+    rank alike share one.
+
+    Args:
+        connection: A connection to the derived database.
+        tags: The language tags to rank; None for untagged values.
+        ranking: The language ranking, lowercased (`Settings.language_ranking`).
+    """
+    ranks = {tag: language_rank(tag, ranking) for tag in tags}
+    dense = {rank: n for n, rank in enumerate(sorted(set(ranks.values())))}
     connection.execute("CREATE TEMP TABLE language_rank (language TEXT, rank INTEGER NOT NULL)")
-    connection.executemany("INSERT INTO language_rank VALUES (?, ?)", [(tag, dense[ranks[tag]]) for tag in tags])
+    connection.executemany(
+        "INSERT INTO language_rank VALUES (?, ?)", [(tag, dense[rank]) for tag, rank in ranks.items()]
+    )
     try:
         yield
     finally:
-        connection.execute("DROP TABLE property_rank")
         connection.execute("DROP TABLE language_rank")

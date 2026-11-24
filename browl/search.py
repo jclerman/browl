@@ -16,7 +16,7 @@ from pydantic import AfterValidator, Field
 from pydantic.dataclasses import dataclass as validated_dataclass
 
 from browl.derived import DerivedReader, EntityType
-from browl.names import LAST_CHAR, normalize, rank_tables
+from browl.names import LAST_CHAR, language_ranks, normalize
 
 if TYPE_CHECKING:
     from browl.precache.core import PreCacheContext
@@ -296,7 +296,11 @@ def fill_index(connection: sqlite3.Connection, ranking: Sequence[str]) -> None:
             "  (SELECT 1 FROM common_value AS c WHERE c.property = v.property AND c.value = v.value)"
         )
         connection.executemany("INSERT INTO search_key VALUES (?, ?, ?, ?, ?, ?, ?, ?)", _keys(values))
-        with rank_tables(connection, (), ranking, "annotation_value"):
+        tags = connection.execute(
+            "SELECT DISTINCT language FROM annotation_value"
+            " WHERE property IN (SELECT id FROM search_property WHERE NOT prose)"
+        ).fetchall()
+        with language_ranks(connection, [tag for (tag,) in tags], ranking):
             # Grouping by the key keeps one row of an entity's value in languages that rank alike, the first tag's.
             connection.execute(
                 "INSERT INTO search_value"

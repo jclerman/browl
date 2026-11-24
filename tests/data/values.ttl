@@ -6,8 +6,8 @@
 @prefix oboInOwl: <http://www.geneontology.org/formats/oboInOwl#> .
 @prefix dcterms: <http://purl.org/dc/terms/> .
 
-# The annotation values hook's test data (tests/test_precache_values.py). rdfs:label and rdfs:comment are built in, so
-# not declared.
+# The annotation values hook's test data (tests/test_precache_values.py). rdfs:label and rdfs:comment are built in:
+# rdfs:comment isn't declared, and rdfs:label is, as an ontology may declare a built-in property.
 
 <http://example.org/values> a owl:Ontology ;
     rdfs:comment "An ontology for testing which annotation values are stored and how." .
@@ -33,8 +33,9 @@ ex:Heart a owl:Class ;
 ex:Lung a owl:Class ; rdfs:label "lung"@en ; ex:source "Atlas" .
 ex:Liver a owl:Class ; rdfs:label "liver"@en ; ex:source "Atlas" .
 
-ex:Undeclared rdfs:label "nobody" .
+ex:Undeclared rdfs:label "nobody" ; ex:orphan "nobody's" .
 
+rdfs:label a owl:AnnotationProperty .
 oboInOwl:hasExactSynonym a owl:AnnotationProperty .
 oboInOwl:hasDbXref a owl:AnnotationProperty .
 obo:IAO_0000115 a owl:AnnotationProperty .
@@ -49,3 +50,7 @@ ex:myLabel a owl:AnnotationProperty ; rdfs:subPropertyOf rdfs:label .
 ex:deepLabel a owl:AnnotationProperty ; rdfs:subPropertyOf ex:myLabel .
 ex:loopA a owl:AnnotationProperty ; rdfs:subPropertyOf ex:loopB .
 ex:loopB a owl:AnnotationProperty ; rdfs:subPropertyOf ex:loopA .
+ex:orphan a owl:AnnotationProperty ; rdfs:subPropertyOf ex:orphanSuper .  # values only on an undeclared IRI
+ex:orphanSuper a owl:AnnotationProperty .
+ex:partOf a owl:ObjectProperty .
+ex:subPartOf a owl:ObjectProperty ; rdfs:subPropertyOf ex:partOf .  # not an annotation property's hierarchy

@@ -12,7 +12,7 @@ import pytest
 from browl.jobs import JobContext
 from browl.jobtypes import Reasoner
 from browl.loading import dataset_name
-from browl.precache.core import Hook
+from browl.precache.core import PREFIXES, Hook
 from browl.precache.entities import entities
 from browl.precache.search import search as search_hook
 from browl.precache.stage import pre_caching_stage
@@ -24,6 +24,7 @@ from browl.precache.values import (
     Stats,
     annotation_values,
     classify,
+    queries,
 )
 from browl.prefixes import read_prefixes
 from browl.rdf import RDFS
@@ -120,9 +121,8 @@ def test_classify_ancestors() -> None:
 
 
 @pytest.fixture
-async def built(fuseki_url: str, data_dir: Path) -> AsyncIterator[tuple[Settings, int]]:
-    """Pre-cache `values.ttl` on a real Fuseki, `rdfs:label` the name property; yield the settings and generation."""
-    settings = make_settings()
+async def dataset(fuseki_url: str, data_dir: Path) -> AsyncIterator[tuple[httpx2.AsyncClient, str, int]]:
+    """Load `values.ttl` into a dataset of a real Fuseki; yield the client, the dataset's name and its generation."""
     generation = 900_000 + uuid.uuid4().int % 100_000
     name = dataset_name(generation)
     async with httpx2.AsyncClient(base_url=fuseki_url, timeout=60) as http:
@@ -131,24 +131,58 @@ async def built(fuseki_url: str, data_dir: Path) -> AsyncIterator[tuple[Settings
             content = (DATA / "values.ttl").read_bytes()
             response = await http.post(f"/{name}/data", content=content, headers={"Content-Type": "text/turtle"})
             response.raise_for_status()
-            context = JobContext(
-                generation,
-                settings,
-                Reasoner.NONE,
-                upload=DATA / "values.ttl",
-                prefixes=read_prefixes(DATA / "values.ttl"),
-            )
-            await pre_caching_stage(context, http, hooks=HOOKS_USED)
+            yield http, name, generation
         finally:
             await http.delete(f"/$/datasets/{name}")
-    yield settings, generation
+
+
+@pytest.fixture
+async def built(dataset: tuple[httpx2.AsyncClient, str, int]) -> tuple[Settings, int]:
+    """Pre-cache `values.ttl` on a real Fuseki, `rdfs:label` the name property; return the settings and generation."""
+    http, _, generation = dataset
+    settings = make_settings()
+    context = JobContext(
+        generation,
+        settings,
+        Reasoner.NONE,
+        upload=DATA / "values.ttl",
+        prefixes=read_prefixes(DATA / "values.ttl"),
+    )
+    await pre_caching_stage(context, http, hooks=HOOKS_USED)
+    return settings, generation
+
+
+async def select(http: httpx2.AsyncClient, name: str, query: str) -> list[tuple[str, ...]]:
+    """Return a SELECT query's rows, each value as its lexical form or IRI."""
+    response = await http.post(
+        f"/{name}/query", data={"query": PREFIXES + query}, headers={"Accept": "application/sparql-results+json"}
+    )
+    response.raise_for_status()
+    result = response.json()
+    names = result["head"]["vars"]
+    return [tuple(row[var]["value"] for var in names) for row in result["results"]["bindings"]]
+
+
+async def test_queries_on_real_fuseki(dataset: tuple[httpx2.AsyncClient, str, int]) -> None:
+    """Check the hook's queries: a property both listed and declared (`rdfs:label`) comes once.
+
+    And only annotation properties' sub-properties are read, not object properties'.
+    """
+    http, name, _ = dataset
+    values, subs = queries([LABEL])
+    rows = await select(http, name, values)
+    assert len(rows) == len(set(rows))
+    assert (f"{EX}Heart", LABEL, "heart") in rows
+    pairs = await select(http, name, subs)
+    assert (f"{EX}deepLabel", LABEL) in pairs
+    assert all(sub != f"{EX}subPartOf" for sub, _ in pairs)
 
 
 async def test_values_on_real_fuseki(built: tuple[Settings, int]) -> None:
     """Check the stored values: strings and language-tagged strings on declared entities, under the property asserted.
 
-    Dates, booleans, URIs and IRIs aren't stored, nor values on undeclared IRIs; the built-in `rdfs:label` and
-    `rdfs:comment` are read though undeclared, each value once.
+    Dates, booleans, URIs and IRIs aren't stored, nor values on undeclared IRIs; the built-in `rdfs:comment` is read
+    though undeclared, and `rdfs:label`, both built in and declared, each value once.
     """
     settings, generation = built
     with closing(connect(settings, generation, HOOKS_USED)) as connection:
@@ -200,6 +234,7 @@ async def test_properties_on_real_fuseki(built: tuple[Settings, int]) -> None:
             "SELECT p.iri, s.iri FROM sub_property JOIN search_property AS p ON p.id = sub_property.property"
             " JOIN search_property AS s ON s.id = sub_property.sub"
         ).fetchall()
+    # Not ex:orphan, with values only on an undeclared IRI, nor so its super-property.
     assert properties == {
         LABEL: (False, True, 4),
         COMMENT: (True, False, 1),
@@ -242,6 +277,7 @@ async def test_properties_on_real_fuseki(built: tuple[Settings, int]) -> None:
         ("atlas", {}, []),  # repeated, so not searched by default
         ("atlas", {"properties": frozenset({f"{EX}source"})}, [f"{EX}source"] * 3),
         ("ht", {"properties": frozenset({f"{EX}mappingTerm"})}, [f"{EX}acronym"]),  # through a super-property
+        ("loo", {"properties": frozenset({f"{EX}loopB"})}, [f"{EX}loopA"]),  # through a cycle
         ("hollow", {}, []),  # prose isn't in this index
         ("hollow", {"properties": frozenset({DEFINITION})}, []),
         ("nobody", {}, []),

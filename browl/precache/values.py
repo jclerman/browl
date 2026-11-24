@@ -78,24 +78,28 @@ NAME_REUSE = 2
 names, IDs and synonyms tell entities apart, while categories, sources, dates of change and creators repeat. An entity
 is an `entity` row, so a punned IRI counts once per type, and a value is its lexical form, whatever its language."""
 
+PROPERTIES = """{{ VALUES ?{var} {{ {properties} }} FILTER NOT EXISTS {{ ?{var} rdf:type owl:AnnotationProperty }} }}
+  UNION {{ ?{var} rdf:type owl:AnnotationProperty }}"""
+"""A query's pattern for `?{var}` to be each declared annotation property, and each built-in or name property
+(`{properties}`: their IRIs, in `<>`) that isn't declared, so a property both listed and declared comes once."""
+
 ANNOTATION_VALUES = """SELECT ?entity ?property ?value
 WHERE {{
-  {{ VALUES ?property {{ {properties} }} }}
-  UNION {{ ?property rdf:type owl:AnnotationProperty }}
+  {properties}
   ?entity ?property ?value .
   FILTER (isIRI(?entity) && isLiteral(?value) && (lang(?value) != "" || datatype(?value) = <{string}>))
 }}"""
-"""Every string or language-tagged value, on an IRI, of each declared annotation property and of the built-in and name
-properties (`{properties}`: their IRIs, in `<>`). A property both listed and declared comes twice; `fill_staged`
-keeps each value once."""
+"""Every string or language-tagged value, on an IRI, of each annotation property (`{properties}`: `PROPERTIES`)."""
 
 SUB_PROPERTIES = """SELECT ?sub ?property
-WHERE {
+WHERE {{
+  {properties}
   ?sub rdfs:subPropertyOf+ ?property .
   FILTER (isIRI(?sub) && isIRI(?property) && ?sub != ?property)
-}"""
-"""Every property's sub-properties, transitively, through a property path, which reaches each once however they
-cycle."""
+}}"""
+"""Each annotation property's super-properties (`{properties}`: `PROPERTIES`), transitively, through a property path,
+which reaches each once however they cycle. Only annotation properties', so object properties' hierarchies, whose
+closure can be large, aren't read."""
 
 
 @hook("name_properties", "extra_prefixes")
@@ -109,12 +113,12 @@ async def annotation_values(context: PreCacheContext) -> None:
     names = name_property_iris(context.job.settings)
     words: defaultdict[str, Counter[int]] = defaultdict(Counter)
     await context.db.run(create_staging)
-    listed = " ".join(f"<{iri}>" for iri in dict.fromkeys([*BUILT_IN, *names]))
-    async with context.bulk_select(ANNOTATION_VALUES.format(properties=listed, string=XSD_STRING)) as stream:
+    values, subs = queries(names)
+    async with context.bulk_select(values) as stream:
         columns = tuple(stream.variables.index(name) for name in ("entity", "property", "value"))
         async for batch in batched(stream):
             await context.db.run(functools.partial(_stage, batch, columns, words))
-    async with context.bulk_select(SUB_PROPERTIES) as stream:
+    async with context.bulk_select(subs) as stream:
         columns = tuple(stream.variables.index(name) for name in ("sub", "property"))
         async for batch in batched(stream):
             await context.db.run(functools.partial(_stage_sub_properties, batch, columns))
@@ -124,12 +128,26 @@ async def annotation_values(context: PreCacheContext) -> None:
     await context.db.create_indexes("annotation_value")
 
 
+def queries(names: Sequence[str]) -> tuple[str, str]:
+    """Return the hook's queries, the values (`ANNOTATION_VALUES`) and the sub-properties (`SUB_PROPERTIES`).
+
+    Args:
+        names: The name properties' IRIs.
+    """
+    listed = " ".join(f"<{iri}>" for iri in dict.fromkeys([*BUILT_IN, *names]))
+    values = PROPERTIES.format(var="property", properties=listed)
+    return (
+        ANNOTATION_VALUES.format(properties=values, string=XSD_STRING),
+        SUB_PROPERTIES.format(properties=PROPERTIES.format(var="sub", properties=listed)),
+    )
+
+
 @dataclass(frozen=True)
 class Stats:
     """A property's values, as `classify` weighs them.
 
     Attributes:
-        words: How many values have each word count.
+        words: How many values have each word count, as fetched: on IRIs that aren't declared entities' too.
         values: How many values it has, on declared entities.
         unique: How many distinct values (lexical forms) those are.
         uses: How many (entity, lexical form) pairs those are: a value in two languages on one entity is one use.
@@ -253,7 +271,7 @@ def fill_staged(
 
     Args:
         names: The name properties' IRIs.
-        words: Each property's values' word counts, by IRI, as staged.
+        words: Each property's values' word counts, by IRI, as staged (`Stats.words`).
         prefixes: The CURIE prefixes, in the order an IRI takes them (`browl.names.curie_prefixes`).
         connection: The derived database, with the staging tables filled.
     """
@@ -265,6 +283,7 @@ def fill_staged(
         "INSERT INTO search_property (iri, prose, by_default, value_count) VALUES (?, 0, 0, 0)",
         [(iri,) for iri in sorted(every)],
     )
+    # Grouped, as two triples can stage one row: their language tags differ only in case, or by a base direction.
     connection.execute(
         "INSERT INTO annotation_value (entity, property, value, language)"
         " SELECT entity.id, p.id, s.value, s.language"

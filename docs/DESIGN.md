@@ -950,9 +950,9 @@ name properties' ([P-42 findings](../research/P-42/README.md)).
   ontology's values all listed.
 - **Entailment at query time:** each value is stored once, under the property it's asserted with, and "direct and
   entailed" for a chosen property adds its sub-properties' lanes (Lane order, above). The sub-properties come from a
-  property path query (`rdfs:subPropertyOf+`), stored as their closure in `sub_property`, rather than from the
-  annotation-property hierarchy (`edge`): the path reaches each once however the properties cycle, where `edge` joins a
-  cycle into one node, and the search hook runs before the hierarchies hook.
+  property path query (`rdfs:subPropertyOf+`, from each annotation property), stored as their closure in `sub_property`,
+  rather than from the annotation-property hierarchy (`edge`): the path reaches each once however the properties cycle,
+  where `edge` joins a cycle into one node, and the search hook runs before the hierarchies hook.
 - **Measured** on an Apple M3 Pro (P-42), from the values the research fetched, 20 runs of 12 queries each:
 
   | | HPO | Uberon | NCBITaxon |
