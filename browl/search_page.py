@@ -447,6 +447,7 @@ async def search_page(request: Request) -> Response:
     context = {
         "noindex": True,
         "text": asked.text,
+        "search_text": asked.text,  # the navigation bar's box
         "blank": not normalized,
         "hits": hits,
         "common": shown_common(results.common, labels),

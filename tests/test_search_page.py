@@ -314,11 +314,14 @@ def test_fragment_reads_no_ids(client: TestClient, monkeypatch: pytest.MonkeyPat
 
 
 def test_blank_page_shows_form(client: TestClient) -> None:
-    """Check that the results page with no query shows its form, and no results."""
+    """Check that the results page with no query shows its filters, and the results' panel with a prompt, no hits."""
     response = client.get(SEARCH)
     assert response.status_code == 200
-    assert 'name="q"' in response.text
-    assert "Results" not in response.text
+    assert 'name="property"' in response.text
+    assert '<h2 id="results-heading">Results</h2>' in response.text
+    assert "Type what to search for in the search box" in response.text
+    assert Hits(response.text).hits == []
+    assert "No matches." not in response.text
 
 
 def test_page_shows_hits_with_ids(client: TestClient) -> None:
@@ -621,3 +624,15 @@ def test_common_value_note(monkeypatch: pytest.MonkeyPatch) -> None:
     assert [hit.term or hit.name for hit in Hits(response.text).hits] == ["GC_ID:11"]
     assert "common-values" not in default.text
     assert "No matches." in default.text
+
+
+def test_page_filters_belong_to_the_bar(client: TestClient) -> None:
+    """Check that the search page's one box is the bar's, holding its query, and that its filters belong to its form."""
+    text = client.get(SEARCH, params=[("q", "myo"), ("property", LABEL)]).text
+    assert 'id="search-text"' not in text
+    assert re.search(r'<input id="site-search-box"[^>]*value="myo"', text)
+    inputs = re.findall(r'<input type="(?:checkbox|radio)" name="(\w+)"[^>]*>', text)
+    assert inputs and all(
+        'form="site-search"' in tag for tag in re.findall(r'<input type="(?:checkbox|radio)"[^>]*>', text)
+    )
+    assert '<button type="submit" form="site-search">Search</button>' in text

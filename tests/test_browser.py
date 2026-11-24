@@ -2423,7 +2423,7 @@ def test_search_enter_without_option_opens_results(page: Page, searchable: LiveS
     box = typed(page, searchable, "myo")
     expect(page.get_by_role("option")).to_have_count(3)
     box.press("Enter")
-    expect(page).to_have_url(f"{searchable.url}/_browl/search?q=myo")
+    expect(page).to_have_url(f"{searchable.url}/_browl/search?q=myo&values=all")  # with the page's filters
     expect(page.locator(".hits .hit")).to_have_count(2)
 
 
@@ -2457,7 +2457,7 @@ def test_search_without_javascript(page: Page, searchable: LiveServer) -> None:
     box = page.locator("#site-search-box")
     box.fill("myo")
     box.press("Enter")
-    expect(page).to_have_url(f"{searchable.url}/_browl/search?q=myo")
+    expect(page).to_have_url(f"{searchable.url}/_browl/search?q=myo&values=all")  # with the page's filters
     expect(page.locator(".hits .hit")).to_have_count(2)
 
 
@@ -2537,21 +2537,35 @@ def test_search_no_matches(page: Page, searchable: LiveServer) -> None:
 
 
 def test_search_page_side_by_side(page: Page, searchable: LiveServer) -> None:
-    """Check that on a wide window the results scroll in a panel beside the filters, under the query box."""
+    """Check that on a wide window the results scroll in a panel beside the filters, which stay in view."""
     page.set_viewport_size({"width": 1200, "height": 600})
     page.goto(f"{searchable.url}/_browl/search?q=item")
     form, results = page.locator(".search-form").bounding_box(), page.locator(".search-results").bounding_box()
     assert form is not None and results is not None
     assert results["x"] >= form["x"] + form["width"]  # beside it, not under it
-    heading, box = page.locator("h1").bounding_box(), page.locator("#search-text").bounding_box()
-    assert heading is not None and box is not None
-    assert box["x"] >= results["x"] and box["y"] < heading["y"] + heading["height"]  # over the results, by the heading
-    panel = page.locator(".search-results")
+    panel = page.locator(".results-body")
     assert panel.evaluate("e => e.scrollHeight > e.clientHeight")
     panel.evaluate("e => e.scrollTop = e.scrollHeight")
     assert page.evaluate("window.scrollY") == 0  # the page itself doesn't scroll
-    expect(page.locator("#search-text")).to_be_in_viewport()
+    heading, title = page.locator("#results-heading").bounding_box(), page.locator("h1").bounding_box()
+    assert heading is not None and title is not None
+    assert abs((heading["y"] + heading["height"]) - (title["y"] + title["height"])) < title["height"] / 2  # one row
+    expect(page.locator("#results-heading")).to_be_in_viewport()  # it doesn't scroll with the hits
+    expect(page.locator("input[name=type]").first).to_be_in_viewport()
     expect(page.get_by_role("link", name="Next")).to_be_in_viewport()
+
+
+@pytest.mark.parametrize("query", ["?q=item", ""], ids=["results", "blank"])
+def test_search_page_filters_left(page: Page, searchable: LiveServer, query: str) -> None:
+    """Check that on a wide window the filters are on the left and the results' panel on the right, query or not."""
+    page.set_viewport_size({"width": 1200, "height": 600})
+    page.goto(f"{searchable.url}/_browl/search{query}")
+    form, results = page.locator(".search-form").bounding_box(), page.locator(".search-results").bounding_box()
+    heading = page.locator("h1").bounding_box()
+    assert form is not None and results is not None and heading is not None
+    assert form["x"] == heading["x"] and form["y"] > heading["y"]
+    assert results["x"] >= form["x"] + form["width"]
+    expect(page.get_by_role("heading", name="Results")).to_be_visible()
 
 
 def test_search_page_stacked_when_narrow(page: Page, searchable: LiveServer) -> None:
@@ -2572,4 +2586,20 @@ def test_advanced_search_link(page: Page, searchable: LiveServer) -> None:
         expect(link).to_be_visible()
         link.click()
         expect(page).to_have_url(f"{searchable.url}/_browl/search")
-        expect(page.locator("#search-text")).to_be_visible()
+        expect(page.get_by_role("heading", name="Search")).to_be_visible()
+
+
+def test_search_page_filters_the_box(page: Page, searchable: LiveServer) -> None:
+    """Check that on the search page the bar's box searches with the page's filters: its suggestions, and Enter."""
+    box = typed(page, searchable, "myo")
+    expect(page.get_by_role("option")).to_have_count(3)  # Myoblast, the heart (by its synonym), all results
+    page.locator(f"input[name=property][value='{SYNONYM}']").check()
+    box.fill("my")
+    box.fill("myo")
+    expect(page.get_by_role("option")).to_have_count(2)  # the heart, all results
+    box.press("Escape")
+    box.focus()
+    box.press("Enter")
+    expect(page).to_have_url(re.compile(r"[?&]property=" + re.escape(urllib.parse.quote(SYNONYM, safe=""))))
+    expect(search_box(page)).to_have_value("myo")  # the page's query, in the box
+    expect(page.locator(f"input[name=property][value='{SYNONYM}']")).to_be_checked()

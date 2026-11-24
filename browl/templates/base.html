@@ -32,9 +32,11 @@
       </span>
       {% endif %}
       {# The search box (U-10, U-17; DESIGN.md §2.9, Search; `static/search.js`). #}
-      <form class="site-search" action="{{ frame.search }}" method="get" role="search">
+      {# On the search page, the page's filters belong to this form, and the box holds the page's query. #}
+      <form id="site-search" class="site-search" action="{{ frame.search }}" method="get" role="search">
         <label for="site-search-box" class="visually-hidden">Search the ontology</label>
         <input id="site-search-box" type="search" name="q" placeholder="Search" maxlength="{{ frame.max_query_chars }}"
+               value="{{ search_text | default('') }}" hx-include="[form='site-search']"
                autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false"
                aria-controls="site-search-list" hx-get="{{ frame.suggest }}" hx-trigger="input changed delay:150ms"
                hx-target="#site-search-list" hx-swap="innerHTML" hx-sync="this:replace">

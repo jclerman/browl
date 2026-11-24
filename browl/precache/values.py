@@ -150,7 +150,7 @@ def classify(
 
     A property without values is classified too if it's a name, label or synonym property, so a default search reaches
     its sub-properties' values, or a super-property of one with values, so it can be chosen for them: name-like unless
-    each of those is prose, and not searched by default, as its sub-properties are on their own.
+    each of those is prose, and searched by default if each of those is, so choosing it adds none that isn't.
 
     Args:
         names: The name properties' IRIs.
@@ -168,14 +168,15 @@ def classify(
             kinds[iri] = (True, False)
         else:
             kinds[iri] = (False, found.values < NAME_REUSE * found.unique)
-    ancestors: defaultdict[str, list[bool]] = defaultdict(list)
-    for iri, (prose, _) in list(kinds.items()):
+    ancestors: defaultdict[str, list[tuple[bool, bool]]] = defaultdict(list)
+    for iri, kind in list(kinds.items()):
         for ancestor in supers.get(iri, ()):
-            ancestors[ancestor].append(prose)
+            ancestors[ancestor].append(kind)
     for iri in labels:
         kinds.setdefault(iri, (False, True))
-    for iri, proses in ancestors.items():
-        kinds.setdefault(iri, (iri in PROSE_PROPERTIES or all(proses), False))
+    for iri, below in ancestors.items():
+        prose = iri in PROSE_PROPERTIES or all(sub_prose for sub_prose, _ in below)
+        kinds.setdefault(iri, (prose, not prose and all(default for _, default in below)))
     return kinds
 
 

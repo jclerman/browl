@@ -931,40 +931,33 @@ name properties' ([P-42 findings](../research/P-42/README.md)).
   on HPO (17 properties) and from 26 to 52 ms on Uberon (21), with one run of 20 at 182 ms; N-2 holds. A comment can
   be short and unique enough to pass (RadLex's `Comment`, 1.92 entities a value); P-44 lets an admin move it.
 - **Super-properties are listed too.** A property with no values of its own, but with sub-properties that have some
-  (RadLex's `mapping_term`), is kept in `search_property`, name-like unless all of those are prose, and not searched by
-  default, as its sub-properties are on their own; choosing it searches them, with entailed values. The results page
-  counts its sub-properties' values beside its own.
-- **Common values are counted, not listed.** A name-like value on more than 10% of the ontology's entities
-  (`COMMON_SHARE`), and on at least 1,000 (`COMMON_MIN`), tells no entities apart, so it gets no rows in the lane
-  index. `common_value` holds it once, with how many entities of each type have it and how many that type has. A query
-  matches it as it matches indexed values, by the start of the value or of a later word, with the same property and
-  type filters, and the results page says so above the hits, on the first page: "`GC_ID:1` (database cross-reference)
-  is on 2,291,619 classes (76%): too many to list". So the visitor learns the value is there without paging through
-  millions of entities. The rule is by value, not property: of NCBITaxon's `hasDbXref` values, `GC_ID:1` and
-  `GC_ID:11` (genetic codes, 98% of its 3.1 M values) are common, while its 18.6 K cross-references, such as
+  (RadLex's `mapping_term`), is kept in `search_property`, name-like unless all of those are prose, and searched by
+  default if all of those are (RadLex's `mapping_term`, over its synonyms, acronyms and misspellings), so choosing it
+  never adds one that isn't; choosing it searches them, with entailed values. The results page counts its
+  sub-properties' values beside its own. - **Common values are counted, not listed.** A name-like value on more than 10%
+  of the ontology's entities (`COMMON_SHARE`), and on at least 1,000 (`COMMON_MIN`), tells no entities apart, so it gets
+  no rows in the lane index. `common_value` holds it once, with how many entities of each type have it and how many that
+  type has. A query matches it as it matches indexed values, by the start of the value or of a later word, with the same
+  property and type filters, and the results page says so above the hits, on the first page: "`GC_ID:1` (database
+  cross-reference) is on 2,291,619 classes (76%): too many to list". So the visitor learns the value is there without
+  paging through millions of entities. The rule is by value, not property: of NCBITaxon's `hasDbXref` values, `GC_ID:1`
+  and `GC_ID:11` (genetic codes, 98% of its 3.1 M values) are common, while its 18.6 K cross-references, such as
   `PMID:7857801` on 4,521 taxa, are indexed. On NCBITaxon the common values are those two and `ncbi_taxonomy`
   (`hasOBONamespace`, on every class): 6.0 M of its 9.7 M values. HPO and Uberon have none; their most frequent
-  name-like value is on 641 entities. A share rather than a count scales with the ontology; the minimum keeps a
-  small ontology's values all listed.
-- **Entailment at query time:** each value is stored once, under the property it's asserted with, and "direct and
-  entailed" for a chosen property adds its sub-properties' lanes (Lane order, above). The sub-properties come from a
-  property path query (`rdfs:subPropertyOf+`), stored as their closure in `sub_property`, rather than from the
-  annotation-property hierarchy (`edge`): the path reaches each once however the properties cycle, where `edge` joins a
-  cycle into one node, and the search hook runs before the hierarchies hook.
-- **Measured** on an Apple M3 Pro (P-42), from the values the research fetched, 20 runs of 12 queries each:
-
-  | | HPO | Uberon | NCBITaxon |
-  | --- | --- | --- | --- |
-  | Lanes (whole + word) | 59 | 75 | 24 |
-  | `search_value`; with `rdfs:label` alone | 38 MiB; 11 | 40 MiB; 8 | 957 MiB; 828 MiB |
-  | Storing the values; the index | 0.4 s; 2.5 s | 0.3 s; 2.7 s | 32 s; 107 s |
-  | Default search, worst median (max) | 24 ms (77) | 26 ms (48) | 9 ms (25) |
-  | Every name-like property, worst median (max) | 39 ms (70) | 52 ms (71) | 16 ms (52) |
-
-  So N-2 holds. The lanes are fewer than in the research, as non-string values are left out. On NCBITaxon, indexing
-  the common values too took 180 s and 1.6 GiB, about P-41's cost per row; counting them instead saves 6.0 M values'
-  rows (each has 2–3: `ncbi_taxonomy` and `taxonomy`, `GC_ID:1`, `ID:1` and `1`). Its values query takes about
-  2 minutes, against 50 s for the name values.
+  name-like value is on 641 entities. A share rather than a count scales with the ontology; the minimum keeps a small
+  ontology's values all listed. - **Entailment at query time:** each value is stored once, under the property it's
+  asserted with, and "direct and entailed" for a chosen property adds its sub-properties' lanes (Lane order, above). The
+  sub-properties come from a property path query (`rdfs:subPropertyOf+`), stored as their closure in `sub_property`,
+  rather than from the annotation-property hierarchy (`edge`): the path reaches each once however the properties cycle,
+  where `edge` joins a cycle into one node, and the search hook runs before the hierarchies hook. - **Measured** on an
+  Apple M3 Pro (P-42), from the values the research fetched, 20 runs of 12 queries each: | | HPO | Uberon | NCBITaxon |
+  | --- | --- | --- | --- | | Lanes (whole + word) | 59 | 75 | 24 | | `search_value`; with `rdfs:label` alone | 38 MiB;
+  11 | 40 MiB; 8 | 957 MiB; 828 MiB | | Storing the values; the index | 0.4 s; 2.5 s | 0.3 s; 2.7 s | 32 s; 107 s | |
+  Default search, worst median (max) | 24 ms (77) | 26 ms (48) | 9 ms (25) | | Every name-like property, worst median
+  (max) | 39 ms (70) | 52 ms (71) | 16 ms (52) | So N-2 holds. The lanes are fewer than in the research, as non-string
+  values are left out. On NCBITaxon, indexing the common values too took 180 s and 1.6 GiB, about P-41's cost per row;
+  counting them instead saves 6.0 M values' rows (each has 2–3: `ncbi_taxonomy` and `taxonomy`, `GC_ID:1`, `ID:1` and
+  `1`). Its values query takes about 2 minutes, against 50 s for the name values.
 - **The results page** lists the name-like properties that have values, or sub-properties that do, in walk order (Lane
   order, above), each with its value count and its sub-properties', and marks those searched by default (2.9,
   Search).
@@ -1010,14 +1003,13 @@ describes search as built (P-19, P-20, P-41, P-42).
     match a whole word rather than a prefix.
   - **Why not the lanes:** besides their size, prose wants words in any order, ranked by relevance, as full-text
     engines do; FTS5 was too slow for names only because §2.6's ranking made each query sort every match (P-41).
-- **Sticky filters** (U-48, P-43). The results page has a button, "Use these filters in the search box", which makes
-  its filters the box's; using filters on the results page doesn't by itself, so a one-off search never narrows the
-  box unnoticed. They then apply to the box's suggestions, and to the results page opened from the box; a results
-  page's own URL always keeps its own filters. `static/search.js`
-  keeps them in the browser's storage and adds them to the box's requests and its form; the bar shows "Filtered", with
-  a control that clears them. URLs stay the same for every visitor, so the page cache (2.10) is unaffected, and
-  without JS the box searches with the defaults. On the results page itself, the bar's form carries the page's filters
-  as hidden fields, JS or not.
+- **Sticky filters** (U-48, P-43). The results page has a button, "Use these filters in the search box", which makes its
+  filters the box's; using filters on the results page doesn't by itself, so a one-off search never narrows the box
+  unnoticed. They then apply to the box's suggestions, and to the results page opened from the box; a results page's own
+  URL always keeps its own filters. `static/search.js` keeps them in the browser's storage and adds them to the box's
+  requests and its form; the bar shows "Filtered", with a control that clears them. URLs stay the same for every
+  visitor, so the page cache (2.10) is unaffected, and without JS the box searches with the defaults. On the results
+  page itself, the page's filters already belong to the bar's form (P-42, 2.9), JS or not.
 - **Admin search settings** (A-11, O-13, P-44).
   - **Stored** in the persistent database, by ontology IRI: the name properties in order, the language ranking, and
     the properties search leaves out. Keeping them for later uploads of the same IRI is wanted but optional. Where
@@ -1762,14 +1754,18 @@ too (P-38), and the JSON API's (P-33).
   type, "too many to list"; the autocomplete doesn't. It shows 50 hits a page, with Previous and Next links, as deep as
   search's `MAX_OFFSET` allows. P-45 will page it as the Usage tab is paged, through one pager element both share: at
   the top, with "Page n of N" and a form to go to any page, and the number of results, counted up to the deepest page
-  (1,051 IRIs), as an exact total would read every match. Laid out (P-42): on a window at least 56rem wide and 32rem
-  tall, the heading and the filters form a column on the left, and the query box and the results a column on the right,
-  the results in a panel; the filters and the results each scroll within the window, as an entity page fills it (U-30),
-  so the filters and the box stay in view while the results scroll. The box belongs to the filters' form (`form=`), so
-  it submits them, without JS. The property choices flow into as many columns of at least 14rem as fit, each name
-  wrapping beside its checkbox. The panel is focusable, so the keyboard can scroll it, and the table's header stays at
-  its top. Otherwise they stack and the page scrolls as one. The bar links to the page, "Advanced search", beside the
-  box, so its filters can be set before searching; the autocomplete's "All results…" opens it too.
+  (1,051 IRIs), as an exact total would read every match. One box (P-42): the page has no box of its own. Its filters
+  belong to the navigation bar's form (`form=`), so the bar's box searches with them, submitted with or without JS and
+  in its suggestions (`hx-include`), and on the page it holds the page's query; a Search button by the filters submits
+  the form too. So the visitor gets the autocomplete with the filters, and never two boxes. Laid out (P-42): on a window
+  at least 56rem wide and 32rem tall, the page has two rows: the headings, "Search" on the left and "Results" with its
+  count on the right, and under them the filters and a panel of the hits, shown with a prompt before any search. So the
+  titles come before the content, and the hits get the rest of the height. The filters and the hits each scroll within
+  the window, as an entity page fills it (U-30), so the filters stay in view while the results scroll. The property
+  choices flow into as many columns of at least 14rem as fit, each name wrapping beside its checkbox. The panel is
+  focusable, so the keyboard can scroll it, and the table's header stays at its top. Otherwise they stack and the page
+  scrolls as one. The bar links to the page, "Advanced search", beside the box, so its filters can be set before
+  searching; the autocomplete's "All results…" opens it too.
 - **Input**: invalid parameters, and repeats of those 2.13 doesn't list as repeated, get the "not found" page, as tree
   pages do. A blank query finds nothing: an empty fragment, which closes the list, or the form alone.
 - **No server-side deadline** (from P-19's review): each query's cost is already bounded (§2.6, Bounds), and the

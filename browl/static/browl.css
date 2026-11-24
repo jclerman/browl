@@ -258,6 +258,11 @@ code {
   padding: var(--space);
 }
 
+/* A page's title starts at the content's padding, without the browser's margin above it, as an entity page's does. */
+.content h1 {
+  margin-top: 0;
+}
+
 .stages .done {
   color: var(--muted);
 }
@@ -957,39 +962,49 @@ code {
       min-height: 0;
     }
 
-    /* The heading over the form, and the query over the results. */
-    .search-head {
-      display: contents;
+    /* The heading over the filters; the results beside both. */
+    .search-page h1 {
+      grid-row: 1;
+      grid-column: 1;
     }
 
-    .search-query label {
-      white-space: nowrap;
+    .search-form {
+      grid-row: 2;
+      grid-column: 1;
     }
 
-    .search-query {
-      display: flex;
-      gap: calc(var(--space) / 2);
-      align-items: baseline;
-    }
-
-    .search-query input {
-      flex: 0 1 30rem;
-    }
-
-    .search-form,
+    /* The results span both rows, sharing them (subgrid): the heading and count in the heading's row, the body a
+       panel under them, beside the filters. */
     .search-results {
+      display: grid;
+      grid-row: 1 / -1;
+      grid-column: 2;
+      grid-template-rows: subgrid;
       align-self: stretch;
+      min-height: 0;
+    }
+
+    .results-head {
+      display: flex;
+      gap: var(--space);
+      align-items: baseline;
+      align-self: baseline;
+    }
+
+    .results-head h2 {
+      margin-block: 0;
+    }
+
+    .results-head .note {
+      margin: 0;
     }
 
     .search-form,
-    .search-results {
+    .results-body {
+      align-self: stretch;
       min-height: 0;
       padding-bottom: var(--space);
       overflow-y: auto;
-    }
-
-    .search-results h2 {
-      margin-top: 0;
     }
 
     .search-results thead th {
@@ -1006,14 +1021,6 @@ code {
       max-height: none;
     }
   }
-}
-
-.search-query {
-  margin: var(--space) 0;
-}
-
-.search-query input {
-  width: min(30rem, 100%);
 }
 
 /* The property choices flow into as many columns as fit, each at least 14rem. */

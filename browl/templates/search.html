@@ -4,30 +4,24 @@
 {% block content %}
 {# The full results page, with type and property filters (U-10; `browl.search_page`). #}
 <div class="search-page">
-  {# The heading and the query share a row on a wide window. The query's input and button belong to the form below
-     (`form=`), so Enter and the button submit them with the filters, without JS. #}
-  <div class="search-head">
-    <h1>Search</h1>
-    <div class="search-query" role="search" aria-label="Full search">
-      <label for="search-text">Search for</label>
-      <input id="search-text" type="search" name="q" value="{{ text }}" maxlength="{{ max_query_chars }}"
-             autocomplete="off" spellcheck="false" form="search-form">
-      <button type="submit" form="search-form">Search</button>
-    </div>
-  </div>
-  <form id="search-form" class="search-form" action="{{ action }}" method="get" aria-label="Search filters">
+  <h1>Search</h1>
+  {# The filters belong to the navigation bar's search form (`form=`), so its box searches with them: submitted, with
+     or without JS, and in its suggestions (`hx-include`). One box, with the autocomplete, rather than two. #}
+  <div class="search-form" role="group" aria-labelledby="filters-heading">
+    <p id="filters-heading" class="note">Filters for the search box above. Press Enter in it, or:
+      <button type="submit" form="site-search">Search</button></p>
     <div class="search-filters">
       <fieldset>
         <legend>Entity types <small>(none checked: all)</small></legend>
         {% for value, label, checked in types %}
-        <label><input type="checkbox" name="type" value="{{ value }}"{% if checked %} checked{% endif %}> {{ label }}</label>
+        <label><input type="checkbox" name="type" value="{{ value }}" form="site-search"{% if checked %} checked{% endif %}> {{ label }}</label>
         {% endfor %}
       </fieldset>
       <fieldset class="search-properties">
         <legend>Properties <small>(none checked: those marked *, the names, IDs and synonyms)</small></legend>
         <div class="property-choices">
           {% for choice in properties %}
-          <label><input type="checkbox" name="property" value="{{ choice.iri }}"{% if choice.checked %} checked{% endif %}>
+          <label><input type="checkbox" name="property" value="{{ choice.iri }}" form="site-search"{% if choice.checked %} checked{% endif %}>
             <span><bdi>{{ choice.label }}</bdi>{% if choice.by_default %} *{% endif %}
             <small class="note">({{ "{:,}".format(choice.values) }}{% if choice.sub_values %}, and {{ "{:,}".format(choice.sub_values) }} in sub-properties{% endif %})</small></span></label>
           {% endfor %}
@@ -35,15 +29,24 @@
       </fieldset>
       <fieldset>
         <legend>Values</legend>
-        <label><input type="radio" name="values" value="all"{% if not direct %} checked{% endif %}> Direct, and entailed through sub-properties</label>
-        <label><input type="radio" name="values" value="direct"{% if direct %} checked{% endif %}> Direct only</label>
+        <label><input type="radio" name="values" value="all" form="site-search"{% if not direct %} checked{% endif %}> Direct, and entailed through sub-properties</label>
+        <label><input type="radio" name="values" value="direct" form="site-search"{% if direct %} checked{% endif %}> Direct only</label>
       </fieldset>
     </div>
-  </form>
-  {% if not blank %}
-  {# On a wide window, a panel that scrolls beside the form; focusable, so the keyboard can scroll it. #}
-  <section class="search-results" aria-labelledby="results-heading" tabindex="0">
-    <h2 id="results-heading">Results</h2>
+  </div>
+  {# On a wide window, its heading shares the page heading's row, and its body is a panel under it, beside the
+     filters, that scrolls; focusable, so the keyboard can scroll it. #}
+  <section class="search-results" aria-labelledby="results-heading">
+    <div class="results-head">
+      <h2 id="results-heading">Results</h2>
+      {% if hits %}
+      <p class="note">Showing {{ "{:,}".format(offset + 1) }}–{{ "{:,}".format(offset + hits | length) }}</p>
+      {% endif %}
+    </div>
+    <div class="results-body" tabindex="0" aria-labelledby="results-heading">
+    {% if blank %}
+    <p class="note">Type what to search for in the search box at the top of the page.</p>
+    {% else %}
     {% if common %}
     <ul class="common-values">
       {% for found in common %}
@@ -53,7 +56,6 @@
     </ul>
     {% endif %}
     {% if hits %}
-    <p class="note">Showing {{ "{:,}".format(offset + 1) }}–{{ "{:,}".format(offset + hits | length) }}</p>
     <table class="hits">
       <thead>
         <tr><th scope="col">Match</th><th scope="col">ID</th><th scope="col">Property</th><th scope="col">Types</th></tr>
@@ -78,7 +80,8 @@
       {% if next is not none %}<a href="{{ next }}" rel="next nofollow">Next</a>{% endif %}
     </nav>
     {% endif %}
+    {% endif %}
+    </div>
   </section>
-  {% endif %}
 </div>
 {% endblock %}

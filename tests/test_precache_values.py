@@ -98,13 +98,19 @@ def test_classify_defaults_without_values() -> None:
 
 
 def test_classify_ancestors() -> None:
-    """Check that a super-property of one with values is classified, name-like unless all of those are prose."""
-    supers = {f"{EX}a": {f"{EX}names", f"{EX}any"}, f"{EX}b": {f"{EX}notes", f"{EX}any"}}
-    kinds = classify([LABEL], {f"{EX}a": stats(1), f"{EX}b": stats(30)}, supers)
-    assert {iri: kinds[iri] for iri in (f"{EX}names", f"{EX}notes", f"{EX}any")} == {
-        f"{EX}names": (False, False),
+    """Check a super-property of ones with values: name-like unless all are prose, a default if all are defaults."""
+    supers = {
+        f"{EX}a": {f"{EX}names", f"{EX}any", f"{EX}mixed"},
+        f"{EX}b": {f"{EX}notes", f"{EX}any"},
+        f"{EX}c": {f"{EX}mixed"},
+    }
+    found = {f"{EX}a": stats(1), f"{EX}b": stats(30), f"{EX}c": stats(1, values=10, unique=1)}
+    kinds = classify([LABEL], found, supers)
+    assert {iri: kinds[iri] for iri in (f"{EX}names", f"{EX}notes", f"{EX}any", f"{EX}mixed")} == {
+        f"{EX}names": (False, True),  # only a, a default
         f"{EX}notes": (True, False),
-        f"{EX}any": (False, False),
+        f"{EX}any": (False, False),  # b is prose
+        f"{EX}mixed": (False, False),  # c repeats its value
     }
 
 
@@ -203,8 +209,8 @@ async def test_properties_on_real_fuseki(built: tuple[Settings, int]) -> None:
         f"{EX}typed": (False, True, 1),
         f"{EX}acronym": (False, True, 1),
         f"{EX}source": (False, False, 3),  # one value on 3 entities
-        f"{EX}mappingTerm": (False, False, 0),  # no values, but a sub-property with some
-        f"{EX}loopB": (False, False, 0),  # likewise, in a cycle with it
+        f"{EX}mappingTerm": (False, True, 0),  # no values, but a sub-property with some, a default
+        f"{EX}loopB": (False, True, 0),  # likewise, in a cycle with it
     } | {iri: (False, True, 0) for iri in LABEL_PROPERTIES if iri not in (LABEL, SYNONYM)}
     assert sorted(subs) == sorted(
         [
