@@ -14,7 +14,7 @@ import pytest
 import rdflib
 from fastapi import FastAPI
 from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import FloatRect, Locator, Page, Route, expect
+from playwright.sync_api import FloatRect, Locator, Page, Request, Route, expect
 from rdflib.namespace import OWL, RDF
 
 import browl.admin
@@ -326,37 +326,47 @@ def test_header_shows_new_ontology(page: Page, status_server: LiveServer, path: 
     expect(page.locator("main h1")).to_have_text("New ontology")
 
 
-def test_refused_upload_page_loads_afresh(page: Page, status_server: LiveServer) -> None:
-    """Check that a refused upload's page, once the running job ends, is fetched afresh, not re-posted (#101).
+def refuse_upload(page: Page, server: LiveServer) -> tuple[asyncio.Event, list[tuple[str, str]]]:
+    """Submit the upload form, loaded before a job started, while that job runs, so it's refused (409).
 
-    Reloading the page would re-send the form, which a browser asks to confirm and, confirmed, starts another upload.
+    Returns:
+        The gate that lets the job end, and a list that records the page's navigations from then on, as (method, URL).
     """
-    jobs = status_server.app.state.jobs
+    jobs = server.app.state.jobs
     loaded = asyncio.Event()
     jobs.register(Stage.LOADING, gate(loaded))
     jobs.register(Stage.PRE_CACHING, derived_stage([], f"{EX}/new", title="New ontology"))
-    status_server.call(jobs.start())
-    page.goto(f"{status_server.url}{UPLOAD}")
+    page.goto(f"{server.url}{UPLOAD}")
+    server.call(jobs.start())
     page.set_input_files("#ontology", DATA / "routing.ttl")
     with page.expect_response(lambda response: response.request.method == "POST") as response:
         page.click("button[type=submit]")
     assert response.value.status == 409
     expect(page.get_by_role("alert")).to_have_text(re.compile("a load job is already running"))
-    dialogs: list[str] = []
-    page.on("dialog", lambda dialog: (dialogs.append(dialog.message), dialog.dismiss()))
     navigations: list[tuple[str, str]] = []
-    page.on(
-        "request",
-        lambda request: navigations.append((request.method, request.url)) if request.is_navigation_request() else None,
-    )
+
+    def record(request: Request) -> None:
+        if request.is_navigation_request():
+            navigations.append((request.method, request.url))
+
+    page.on("request", record)
+    return loaded, navigations
+
+
+def test_refused_upload_page_loads_afresh(page: Page, status_server: LiveServer) -> None:
+    """Check that a refused upload's page, once the running job ends, is fetched afresh, not re-posted (#101).
+
+    Reloading the page would re-send the form, which starts another upload (headless Chromium re-posts without asking).
+    """
+    loaded, navigations = refuse_upload(page, status_server)
     with page.expect_navigation():
         status_server.call(release(loaded))
     nav = page.get_by_role("navigation", name="Site")
     expect(nav.get_by_role("link", name="New ontology")).to_be_visible()
     expect(page.get_by_role("alert")).to_have_count(0)
+    page.wait_for_timeout(POLL_S * 3 * 1000)
     assert navigations == [("GET", f"{status_server.url}{UPLOAD}")]
-    assert dialogs == []
-    assert status_server.call(jobs.current()).generation == 1
+    assert status_server.call(status_server.app.state.jobs.current()).generation == 1
 
 
 @NO_JS

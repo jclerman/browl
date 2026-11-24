@@ -288,6 +288,14 @@ code {
   padding: calc(var(--space) / 2) var(--space);
 }
 
+/* Groups the form's controls so they can be disabled together while a job runs; not shown as a box. */
+.upload .upload-controls {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-inline-size: 0;
+}
+
 .upload fieldset label {
   margin-right: var(--space);
 }
