@@ -1488,8 +1488,15 @@ as the whole language tag, so the Manchester rendering shows such a literal as w
   doesn't stop a `javascript:` IRI in an `href`.
 - **The Annotations panel**, as an entity's (above): the ontology IRI's annotation triples, by the same query, so
   `owl:imports` and `owl:versionIRI`, which aren't annotations, aren't in it. Its failure fails only the panel.
+- **A Prefixes panel:** the `prefix` table, which the site's CURIEs use (built in, the ontology file's own, then
+  `EXTRA_PREFIXES`; [2.7](#27-display-names)), by name, case-insensitively, the namespaces as text. At most 1,000
+  (`MAX_PREFIXES`), then how many more, as a file may declare many.
 - **An Imports panel:** every import, direct and indirect, with what imports it, and its triple count, or "not loaded"
   in red.
+
+**Layout:** in windows at least 64rem wide, the panels go two by two: Ontology and Annotations, then Prefixes and
+Imports, Ontology first since it always has something to show; narrower ones stack them in that order. As each panel is
+then at most about half the window, its values wrap at its edge rather than at the measure.
 
 The job state's triple counts and imports are the latest job's, so they're shown only when it's the ready generation's
 job; a page served just as a new job starts leaves them out rather than show the new job's. The page's data is a

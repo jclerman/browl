@@ -310,6 +310,48 @@ code {
   max-width: var(--measure);
 }
 
+/* The panels: one above the other, else two by two, the ontology's metadata first, as it always has some. A row's
+   panels are as tall as its taller one. A panel's values wrap at its edge, not at the measure: two side by side are
+   about as wide as the measure each. */
+
+.home-panels {
+  display: grid;
+  grid-template-areas: "ontology" "annotations" "prefixes" "imports";
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space);
+}
+
+.home-panels .panel + .panel {
+  margin-top: 0; /* the grid's gap spaces them */
+}
+
+.home-panels .frame dd {
+  max-width: none;
+}
+
+.home-panels .ontology {
+  grid-area: ontology;
+}
+
+.home-panels .annotations {
+  grid-area: annotations;
+}
+
+.home-panels .prefixes {
+  grid-area: prefixes;
+}
+
+.home-panels .imports {
+  grid-area: imports;
+}
+
+@media (min-width: 64rem) {
+  .home-panels {
+    grid-template-areas: "ontology annotations" "prefixes imports";
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
 /* An entity page (DESIGN.md §2.9): named grid areas, its columns set here alone, so a hierarchy column can be added
    later; the window-filling frame, below, sets the rows. */
 

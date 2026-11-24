@@ -1,8 +1,8 @@
 """The ontology's home page (U-1, DESIGN.md §2.8, The home page).
 
-Its metadata from the derived database's `meta` row; its entity counts from `type_count`; its triple counts and
-imports, the dropped ones with why, from the job state (P-8); and its annotations from Fuseki, as an entity page's
-annotations panel reads them (`browl.overview.read_annotations`).
+Its metadata from the derived database's `meta` row, its entity counts from `type_count` and its prefixes from
+`prefix`; its triple counts and imports, the dropped ones with why, from the job state (P-8); and its annotations from
+Fuseki, as an entity page's annotations panel reads them (`browl.overview.read_annotations`).
 """
 
 import sqlite3
@@ -22,6 +22,9 @@ from browl.pages import link_root, read_derived
 from browl.settings import Settings
 from browl.usages import ready_store
 
+MAX_PREFIXES = 1_000
+"""The most prefixes the page lists; an ontology file may declare many more, and the page says how many."""
+
 
 class Home(BaseModel):
     """The home page's data.
@@ -29,6 +32,8 @@ class Home(BaseModel):
     Attributes:
         meta: The ontology's IRIs, title, version info, reasoner and load time.
         entity_counts: How many entities have each type, the ontology's own left out; a type with none has no key.
+        prefixes: The prefixes the site's CURIEs use, name → namespace, by name: the first `MAX_PREFIXES` of them.
+        prefix_count: How many prefixes there are in all.
         triples: How many triples the ontology holds, without its imports; None if unknown.
         imports: The ontology's imports, direct and indirect, each loaded, with its triple count, or dropped, with why;
             None if unknown.
@@ -40,6 +45,8 @@ class Home(BaseModel):
 
     meta: Meta
     entity_counts: dict[EntityType, int]
+    prefixes: dict[str, str]
+    prefix_count: int
     triples: int | None
     imports: tuple[ImportResult, ...] | None
     annotations: AnnotationsPanel
@@ -83,10 +90,16 @@ async def read_home(request: Request, state: JobState, meta: Meta) -> Home:
     settings: Settings = request.app.state.settings
     prefix, root = settings.reserved_prefix, link_root(request.scope)
 
-    def read(connection: sqlite3.Connection) -> tuple[dict[EntityType, int], dict[str, EntityLink]]:
-        return read_type_counts(connection), read_entity_links(connection, mentioned, prefix, root)
+    def read(
+        connection: sqlite3.Connection,
+    ) -> tuple[dict[EntityType, int], tuple[dict[str, str], int], dict[str, EntityLink]]:
+        return (
+            read_type_counts(connection),
+            _read_prefixes(connection),
+            read_entity_links(connection, mentioned, prefix, root),
+        )
 
-    counts, links = await read_derived(request, read, state)
+    counts, (prefixes, prefix_count), links = await read_derived(request, read, state)
     counts.pop(EntityType.ONTOLOGY, None)
     groups = None
     if annotations is not None:
@@ -99,8 +112,22 @@ async def read_home(request: Request, state: JobState, meta: Meta) -> Home:
     return Home(
         meta=meta,
         entity_counts=counts,
+        prefixes=prefixes,
+        prefix_count=prefix_count,
         triples=state.triples if current else None,
         imports=state.imports if current else None,
         annotations=AnnotationsPanel(groups=groups, too_many=too_many),
         links=links,
     )
+
+
+def _read_prefixes(connection: sqlite3.Connection) -> tuple[dict[str, str], int]:
+    """Return the first `MAX_PREFIXES` prefixes of the `prefix` table, by name, and how many it holds in all."""
+    rows = connection.execute(
+        "SELECT prefix, namespace FROM prefix ORDER BY prefix COLLATE NOCASE, prefix LIMIT ?", (MAX_PREFIXES,)
+    )
+    prefixes = dict(rows.fetchall())
+    count = len(prefixes)
+    if count == MAX_PREFIXES:
+        count = connection.execute("SELECT count(*) FROM prefix").fetchone()[0]
+    return prefixes, count

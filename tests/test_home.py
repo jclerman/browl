@@ -60,6 +60,18 @@ def ready(app: FastAPI, client: TestClient, title: str | None = "The <Onto>", ve
     client.portal.call(app.state.jobs.wait)
 
 
+def _with_prefixes(stage: StageFunction, prefixes: dict[str, str]) -> StageFunction:
+    """Return the stage with these prefixes in the `prefix` table after it runs, as the names hook would write them."""
+
+    async def changed(context: JobContext) -> None:
+        await stage(context)
+        path = derived_path(context.settings.data_dir, context.generation)
+        with contextlib.closing(sqlite3.connect(path)) as connection, connection:
+            connection.executemany("INSERT INTO prefix VALUES (?, ?)", prefixes.items())
+
+    return changed
+
+
 def _with_meta(stage: StageFunction, **changes: object) -> StageFunction:
     """Return the stage with the `meta` row changed after it runs."""
 
@@ -213,7 +225,7 @@ def test_imports(annotations: list[str], client: TestClient, monkeypatch: pytest
     """Check that the dropped imports are in a red warning, with why and what imports them, and the triple counts."""
     with_state(client, monkeypatch, triples=500, imports=IMPORTS)
     text = client.get("/onto").text
-    warning = text[text.index('<section class="import-warning"') : text.index('<section class="panel"')]
+    warning = text[text.index('<section class="import-warning"') : text.index('<div class="home-panels">')]
     assert "2 of the ontology's 4 imports couldn't be\n    loaded" in warning
     assert "what they declare" in warning
     assert '<code dir="ltr">file:///etc/passwd</code>:\n      only http and https imports are fetched' in warning
@@ -299,3 +311,31 @@ def test_annotations_from_fuseki(fuseki_url: str, monkeypatch: pytest.MonkeyPatc
         '<code dir="ltr">owl:versionInfo</code>',
         '<code dir="ltr">rdfs:comment</code>',
     ]
+
+
+PREFIXES = {"obo": "http://purl.obolibrary.org/obo/", "": f"{ONTOLOGY}#", "RID": "http://radlex.org/RID/", "x": "<x>"}
+
+
+@pytest.mark.parametrize("most", [10, 2])
+def test_prefixes(annotations: list[str], app: FastAPI, monkeypatch: pytest.MonkeyPatch, most: int) -> None:
+    """Check that the prefixes are listed by name, case-insensitively, at most `MAX_PREFIXES`, saying how many more."""
+    monkeypatch.setattr(browl.home, "MAX_PREFIXES", most)
+    with TestClient(app) as client:
+        app.state.jobs.register(Stage.PRE_CACHING, _with_prefixes(derived_stage(ENTITIES, ONTOLOGY, "O"), PREFIXES))
+        client.portal.call(app.state.jobs.start)
+        client.portal.call(app.state.jobs.wait)
+        text = client.get("/onto").text
+    panel = text[text.index('<h2 id="prefixes-heading">') :].split("</section>")[0]
+    names = ['<code dir="ltr">:</code>', '<code dir="ltr">obo:</code>', '<code dir="ltr">RID:</code>']
+    names.append('<code dir="ltr">x:</code>')
+    assert re.findall(r"<dt>(.*?)</dt>", panel) == names[:most]
+    assert ('<p class="note">And 2 more.</p>' in panel) == (most == 2)
+    if most > 2:
+        assert '<dd><code dir="ltr">&lt;x&gt;</code></dd>' in panel
+
+
+def test_no_prefixes(annotations: list[str], client: TestClient) -> None:
+    """Check that the Prefixes panel says so when there are none."""
+    text = client.get("/onto").text
+    panel = text[text.index('<h2 id="prefixes-heading">') :].split("</section>")[0]
+    assert '<p class="note">None.</p>' in panel

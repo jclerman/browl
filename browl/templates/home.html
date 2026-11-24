@@ -5,8 +5,8 @@
 {# The ontology is the page's subject, so its title isn't repeated. #}
 {% block title_suffix %} · {{ frame.site_name }}{% endblock %}
 {% block content %}
-{# The home page (U-1, `browl.home.Home`): the dropped imports' warning first, then the ontology's metadata, its
-   annotations and its imports, in the Overview tab's panels. #}
+{# The home page (U-1, `browl.home.Home`): the dropped imports' warning first, then, in the Overview tab's panels, the
+   ontology's metadata and its annotations, then its prefixes and its imports: two by two in wide windows. #}
 {% set meta = home.meta %}
 {% set dropped = home.dropped_imports %}
 <div class="home-page">
@@ -26,7 +26,8 @@
   </ul>
 </section>
 {% endif %}
-<section class="panel" tabindex="0" aria-labelledby="ontology-heading">
+<div class="home-panels">
+<section class="ontology panel" tabindex="0" aria-labelledby="ontology-heading">
   <h2 id="ontology-heading">Ontology</h2>
   <dl class="frame">
     <dt>IRI</dt>
@@ -56,8 +57,24 @@
   </dl>
 </section>
 {{ annotation_list(home.annotations, home.links) }}
+<section class="prefixes panel" tabindex="0" aria-labelledby="prefixes-heading">
+  <h2 id="prefixes-heading">Prefixes</h2>
+  {% if not home.prefixes %}
+  <p class="note">None.</p>
+  {% else %}
+  <dl class="frame">
+    {% for prefix, namespace in home.prefixes.items() %}
+    <dt><code dir="ltr">{{ prefix }}:</code></dt>
+    <dd><code dir="ltr">{{ namespace | bidi_encoded | cut_text(MAX_IRI_CHARS) }}</code></dd>
+    {% endfor %}
+  </dl>
+  {% if home.prefix_count > home.prefixes | length %}
+  <p class="note">And {{ "{:,}".format(home.prefix_count - home.prefixes | length) }} more.</p>
+  {% endif %}
+  {% endif %}
+</section>
 {% if home.imports is not none %}
-<section class="panel" tabindex="0" aria-labelledby="imports-heading">
+<section class="imports panel" tabindex="0" aria-labelledby="imports-heading">
   <h2 id="imports-heading">Imports</h2>
   {% if not home.imports %}
   <p class="note">None.</p>
@@ -74,5 +91,6 @@
   {% endif %}
 </section>
 {% endif %}
+</div>
 </div>
 {% endblock %}
