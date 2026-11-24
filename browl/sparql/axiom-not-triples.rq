@@ -1,0 +1,40 @@
+# The triples `axiom-triples.rq` counts that aren't axioms whatever their predicate, counted the same way
+# (browl.precache.axiom_counts):
+# - every triple of a node of a type whose triples aren't axioms, though some have an annotation property as predicate:
+#   an ontology (its header: owl:imports, its own annotations), a SWRL variable, a reified axiom or annotation
+#   (owl:Axiom, owl:Annotation), and the node of an n-ary or negative axiom or a SWRL rule, which `axiom-adjustments.rq`
+#   counts once, and which holds its axiom's annotations;
+# - the rdf:type triple of a class expression or data range (`_:x rdf:type owl:Class`), not a declaration;
+# - a blank owl:inverseOf triple, an inverse property expression, not an InverseObjectProperties axiom.
+# Each is found from its type or its predicate, not by testing every subject for isBlank. Run on the default graph
+# alone; the prologue (browl.precache.core.PREFIXES) is added when it's run.
+SELECT ?predicate ?class (COUNT(*) AS ?count)
+WHERE {
+  {
+    VALUES ?type {
+      owl:Ontology <http://www.w3.org/2003/11/swrl#Variable> owl:Axiom owl:Annotation owl:AllDisjointClasses
+      owl:AllDisjointProperties owl:AllDifferent owl:NegativePropertyAssertion <http://www.w3.org/2003/11/swrl#Imp>
+    }
+    ?s rdf:type ?type .
+    ?s ?predicate ?o
+  }
+  UNION
+  {
+    # One each, so each node's type counts once: a datatype restriction has owl:withRestrictions too.
+    VALUES ?link {
+      owl:unionOf owl:intersectionOf owl:complementOf owl:oneOf owl:onDatatype owl:datatypeComplementOf
+    }
+    ?s ?link ?member .
+    ?s rdf:type ?o
+    FILTER isBlank(?s)
+    BIND (rdf:type AS ?predicate)
+  }
+  UNION
+  {
+    ?s owl:inverseOf ?o
+    FILTER isBlank(?s)
+    BIND (owl:inverseOf AS ?predicate)
+  }
+  BIND (IF(?predicate = rdf:type && isIRI(?o), ?o, ?unbound) AS ?class)
+}
+GROUP BY ?predicate ?class

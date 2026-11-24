@@ -1,17 +1,18 @@
 """The ontology's home page (U-1, DESIGN.md §2.8, The home page).
 
-Its metadata from the derived database's `meta` row, its entity counts from `type_count` and its prefixes from
-`prefix`; its triple counts and imports, the dropped ones with why, from the job state (P-8); and its annotations from
-Fuseki, as an entity page's annotations panel reads them (`browl.overview.read_annotations`).
+Its metadata from the derived database's `meta` row, its entity and axiom counts from `type_count` and `axiom_count`,
+and its prefixes from `prefix`; its triple counts and imports, the dropped ones with why, from the job state (P-8); and
+its annotations from Fuseki, as an entity page's annotations panel reads them (`browl.overview.read_annotations`).
 """
 
 import sqlite3
+from typing import NamedTuple
 
 from fastapi import Request
 from pydantic import BaseModel, ConfigDict
 
 from browl.annotations import IRIValue, group_annotations
-from browl.derived import EntityType, Meta, read_type_counts
+from browl.derived import AxiomKind, EntityType, Meta, read_axiom_counts, read_type_counts
 from browl.jobs import JobState
 from browl.jobtypes import ImportResult
 from browl.links import EntityLink, read_entity_links
@@ -26,12 +27,23 @@ MAX_PREFIXES = 1_000
 """The most prefixes the page lists; an ontology file may declare many more, and the page says how many."""
 
 
+class _Derived(NamedTuple):
+    """What the home page reads from the derived database (`Home`'s fields of the same names)."""
+
+    entity_counts: dict[EntityType, int]
+    axiom_counts: dict[AxiomKind, int]
+    prefixes: dict[str, str]
+    prefix_count: int
+    links: dict[str, EntityLink]
+
+
 class Home(BaseModel):
     """The home page's data.
 
     Attributes:
         meta: The ontology's IRIs, title, version info, reasoner and load time.
         entity_counts: How many entities have each type, the ontology's own left out; a type with none has no key.
+        axiom_counts: How many of the ontology's own axioms, without its imports, there are of each kind.
         prefixes: The prefixes the site's CURIEs use, name → namespace, by name: the first `MAX_PREFIXES` of them.
         prefix_count: How many prefixes there are in all.
         triples: How many triples the ontology holds, without its imports; None if unknown.
@@ -45,6 +57,7 @@ class Home(BaseModel):
 
     meta: Meta
     entity_counts: dict[EntityType, int]
+    axiom_counts: dict[AxiomKind, int]
     prefixes: dict[str, str]
     prefix_count: int
     triples: int | None
@@ -90,16 +103,15 @@ async def read_home(request: Request, state: JobState, meta: Meta) -> Home:
     settings: Settings = request.app.state.settings
     prefix, root = settings.reserved_prefix, link_root(request.scope)
 
-    def read(
-        connection: sqlite3.Connection,
-    ) -> tuple[dict[EntityType, int], tuple[dict[str, str], int], dict[str, EntityLink]]:
-        return (
+    def read(connection: sqlite3.Connection) -> _Derived:
+        return _Derived(
             read_type_counts(connection),
-            _read_prefixes(connection),
+            read_axiom_counts(connection),
+            *_read_prefixes(connection),
             read_entity_links(connection, mentioned, prefix, root),
         )
 
-    counts, (prefixes, prefix_count), links = await read_derived(request, read, state)
+    counts, axioms, prefixes, prefix_count, links = await read_derived(request, read, state)
     counts.pop(EntityType.ONTOLOGY, None)
     groups = None
     if annotations is not None:
@@ -112,6 +124,7 @@ async def read_home(request: Request, state: JobState, meta: Meta) -> Home:
     return Home(
         meta=meta,
         entity_counts=counts,
+        axiom_counts=axioms,
         prefixes=prefixes,
         prefix_count=prefix_count,
         triples=state.triples if current else None,

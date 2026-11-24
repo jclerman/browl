@@ -277,6 +277,11 @@ def answer(query: str) -> str:
         return NAME_RESULT
     if "?child ?relation" in query:
         return EDGE_RESULT
+    # The axiom counts' queries (browl.precache.axiom_counts): none.
+    for columns in ("?predicate ?class ?count", "?kind ?count", "?property ?type"):
+        if f"SELECT {columns.replace(' ?count', ' (COUNT(*) AS ?count)')}" in query:
+            names = columns.split()
+            return "\t".join([*names, f"?{END_VARIABLE}"]) + "\n" + "\t" * len(names) + "true\n"
     return ONTOLOGY_RESULT
 
 

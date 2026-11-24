@@ -60,14 +60,14 @@ def ready(app: FastAPI, client: TestClient, title: str | None = "The <Onto>", ve
     client.portal.call(app.state.jobs.wait)
 
 
-def _with_prefixes(stage: StageFunction, prefixes: dict[str, str]) -> StageFunction:
-    """Return the stage with these prefixes in the `prefix` table after it runs, as the names hook would write them."""
+def _with_rows(stage: StageFunction, table: str, rows: dict[str, object]) -> StageFunction:
+    """Return the stage with these (key, value) rows in a two-column table after it runs, as a hook would write them."""
 
     async def changed(context: JobContext) -> None:
         await stage(context)
         path = derived_path(context.settings.data_dir, context.generation)
         with contextlib.closing(sqlite3.connect(path)) as connection, connection:
-            connection.executemany("INSERT INTO prefix VALUES (?, ?)", prefixes.items())
+            connection.executemany(f"INSERT INTO {table} VALUES (?, ?)", rows.items())
 
     return changed
 
@@ -321,7 +321,9 @@ def test_prefixes(annotations: list[str], app: FastAPI, monkeypatch: pytest.Monk
     """Check that the prefixes are listed by name, case-insensitively, at most `MAX_PREFIXES`, saying how many more."""
     monkeypatch.setattr(browl.home, "MAX_PREFIXES", most)
     with TestClient(app) as client:
-        app.state.jobs.register(Stage.PRE_CACHING, _with_prefixes(derived_stage(ENTITIES, ONTOLOGY, "O"), PREFIXES))
+        app.state.jobs.register(
+            Stage.PRE_CACHING, _with_rows(derived_stage(ENTITIES, ONTOLOGY, "O"), "prefix", PREFIXES)
+        )
         client.portal.call(app.state.jobs.start)
         client.portal.call(app.state.jobs.wait)
         text = client.get("/onto").text
@@ -339,3 +341,30 @@ def test_no_prefixes(annotations: list[str], client: TestClient) -> None:
     text = client.get("/onto").text
     panel = text[text.index('<h2 id="prefixes-heading">') :].split("</section>")[0]
     assert '<p class="note">None.</p>' in panel
+
+
+@pytest.mark.parametrize("other", [0, 2])
+def test_axioms(annotations: list[str], app: FastAPI, other: int) -> None:
+    """Check that the axiom counts are shown, with their total, and datatype definitions only if there are any."""
+    counts = {"logical": 1_234, "declaration": 56, "annotation": 7, "other": other}
+    with TestClient(app) as client:
+        app.state.jobs.register(
+            Stage.PRE_CACHING, _with_rows(derived_stage(ENTITIES, ONTOLOGY, "O"), "axiom_count", counts)
+        )
+        client.portal.call(app.state.jobs.start)
+        client.portal.call(app.state.jobs.wait)
+        text = client.get("/onto").text
+    lines = [line.strip() for line in text[text.index("<dt>Axioms</dt>") :].splitlines()[:6]]
+    assert lines[:5] == [
+        "<dt>Axioms</dt>",
+        f"<dd>Total: {1_297 + other:,}</dd>",
+        "<dd>Logical: 1,234</dd>",
+        "<dd>Declarations: 56</dd>",
+        "<dd>Annotation: 7</dd>",
+    ]
+    assert ("Datatype definitions: 2" in text) == bool(other)
+
+
+def test_no_axiom_counts(annotations: list[str], client: TestClient) -> None:
+    """Check that a derived database without axiom counts shows no Axioms row, rather than zeros."""
+    assert "<dt>Axioms</dt>" not in client.get("/onto").text

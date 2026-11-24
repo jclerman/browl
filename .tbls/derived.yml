@@ -303,3 +303,11 @@ comments:
     columnComments:
       type: The entity type, as in entity.type.
       count: How many entities have it.
+  - table: axiom_count
+    tableComment: >-
+      How many of the ontology's own axioms, without its imports, there are of each kind, for the home page (U-1),
+      counted from its triples by OWL 2's mapping to RDF (browl.precache.axiom_counts).
+    columnComments:
+      kind: "The kind: logical, declaration, annotation (assertions and annotation property axioms) or other (datatype
+        definitions)."
+      count: How many axioms there are of it.

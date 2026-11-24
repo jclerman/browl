@@ -42,6 +42,7 @@ from browl.jobtypes import ImportResult, Reasoner, StageError
 from browl.loading import dataset_name
 from browl.pages import RETRY_AFTER_S, read_derived
 from browl.precache import header, stage
+from browl.precache.axiom_counts import axiom_counts
 from browl.precache.core import Hook, PreCacheContext, batched, has_loaded_imports, hook
 from browl.precache.entities import entities
 from browl.precache.header import OntologyHeader, ontology_header
@@ -779,7 +780,7 @@ def test_restart_rebuilds(settings: Settings, prepare: Callable[[Settings], obje
         state = app.state.jobs.state
         assert (state.generation, state.stage, state.ready_generation, state.started_at) == (2, Stage.READY, 2, STARTED)
         assert client.get("/probe").json() == 2
-    queries = 1 + sum(hook is not search for hook in HOOKS)  # the header's, then each hook's but search's
+    queries = 1 + sum({search: 0, axiom_counts: 4}.get(hook, 1) for hook in HOOKS)  # the header's, then the hooks'
     assert fuseki.requests == ["/$/ping", *[f"/{dataset_name(2)}/sparql"] * queries]
     assert derived_files(settings) == ["2.sqlite3"]
     with closing(connect(settings, 2)) as connection:

@@ -1160,6 +1160,56 @@
         }
       ],
       "def": "CREATE TABLE type_count (\n    type TEXT PRIMARY KEY,\n    count INTEGER NOT NULL\n) WITHOUT ROWID"
+    },
+    {
+      "name": "axiom_count",
+      "type": "table",
+      "comment": "How many of the ontology's own axioms, without its imports, there are of each kind, for the home page (U-1), counted from its triples by OWL 2's mapping to RDF (browl.precache.axiom_counts).",
+      "columns": [
+        {
+          "name": "kind",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "The kind: logical, declaration, annotation (assertions and annotation property axioms) or other (datatype definitions)."
+        },
+        {
+          "name": "count",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "How many axioms there are of it."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "sqlite_autoindex_axiom_count_1",
+          "def": "PRIMARY KEY (kind)",
+          "table": "axiom_count",
+          "columns": [
+            "kind"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "kind",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (kind)",
+          "table": "axiom_count",
+          "columns": [
+            "kind"
+          ]
+        },
+        {
+          "name": "sqlite_autoindex_axiom_count_1",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (kind)",
+          "table": "axiom_count",
+          "columns": [
+            "kind"
+          ]
+        }
+      ],
+      "def": "CREATE TABLE axiom_count (\n    kind TEXT PRIMARY KEY,\n    count INTEGER NOT NULL\n) WITHOUT ROWID"
     }
   ],
   "relations": [

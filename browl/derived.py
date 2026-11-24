@@ -150,6 +150,10 @@ CREATE TABLE type_count (
     type TEXT PRIMARY KEY,
     count INTEGER NOT NULL
 ) WITHOUT ROWID;
+CREATE TABLE axiom_count (
+    kind TEXT PRIMARY KEY,
+    count INTEGER NOT NULL
+) WITHOUT ROWID;
 """
 """The tables (§2.5). Entities are referred to by `entity.id`, a dense integer (e.g. for descendant bitmaps); an IRI
 declared with several types (punning) has a row for each. The `build_key` table and its columns, and `meta.generation`,
@@ -211,6 +215,22 @@ class EntityType(StrEnum):
 
 PROPERTY_TYPES = frozenset({EntityType.OBJECT_PROPERTY, EntityType.DATA_PROPERTY, EntityType.ANNOTATION_PROPERTY})
 """The entity types that are properties."""
+
+
+class AxiomKind(StrEnum):
+    """A kind of axiom the home page counts, as `axiom_count.kind` stores it (`browl.precache.axiom_counts`).
+
+    Attributes:
+        LOGICAL: A logical axiom: a class, property or individual axiom, a key, or a SWRL rule.
+        DECLARATION: A declaration.
+        ANNOTATION: An annotation assertion, or an annotation property's sub-property, domain or range.
+        OTHER: A datatype definition.
+    """
+
+    LOGICAL = "logical"
+    DECLARATION = "declaration"
+    ANNOTATION = "annotation"
+    OTHER = "other"
 
 
 class UsageRootKind(StrEnum):
@@ -482,6 +502,11 @@ def is_current(data_dir: Path, generation: int, keys: Mapping[str, str]) -> bool
 def read_type_counts(connection: sqlite3.Connection) -> dict[EntityType, int]:
     """Return how many entities have each type (the `type_count` table); a type with none has no key."""
     return {EntityType(kind): count for kind, count in connection.execute("SELECT type, count FROM type_count")}
+
+
+def read_axiom_counts(connection: sqlite3.Connection) -> dict[AxiomKind, int]:
+    """Return how many of the ontology's own axioms there are of each kind (the `axiom_count` table)."""
+    return {AxiomKind(kind): count for kind, count in connection.execute("SELECT kind, count FROM axiom_count")}
 
 
 def read_meta(connection: sqlite3.Connection) -> Meta:

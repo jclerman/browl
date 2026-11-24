@@ -47,6 +47,18 @@
     {% for tree in trees %}
     <dd><a href="{{ frame.trees[loop.index0][0] }}">{{ tree.label }}</a>: {{ "{:,}".format(home.entity_counts.get(tree.hierarchy, 0)) }}</dd>
     {% endfor %}
+    {# The ontology's own, without its imports' (`browl.precache.axiom_counts`). #}
+    {% set axioms = home.axiom_counts %}
+    {% if axioms %}
+    <dt>Axioms</dt>
+    <dd>Total: {{ "{:,}".format(axioms.values() | sum) }}</dd>
+    <dd>Logical: {{ "{:,}".format(axioms.get("logical", 0)) }}</dd>
+    <dd>Declarations: {{ "{:,}".format(axioms.get("declaration", 0)) }}</dd>
+    <dd>Annotation: {{ "{:,}".format(axioms.get("annotation", 0)) }}</dd>
+    {% if axioms.get("other", 0) %}
+    <dd>Datatype definitions: {{ "{:,}".format(axioms.get("other")) }}</dd>
+    {% endif %}
+    {% endif %}
     {% if home.triples is not none %}
     <dt>Triples</dt>
     <dd>{{ "{:,}".format(home.triples) }} in the ontology</dd>

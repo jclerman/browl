@@ -597,6 +597,7 @@ are documented in [`SCHEMA.md`](SCHEMA.md):
 | `usage_root`, `usage_ref`, `usage_blank` | The blank-node owner map (P-27): each blank-node root that's a usage, with its kind, owner, predicate and store label; the entities each is a usage of; per entity, its triples with a blank subject | One bulk query over the blank nodes, found by their types and predicates (`owner-map.rq`, `browl.precache.owner_map`): 5–7 s on Uberon and HPO; on NCBITaxon 26 s, 2.69 M rows ([S-7 findings](../research/S-7/README.md)). The whole hook takes 9 s on Uberon, and 34–49 s on NCBITaxon, where it grows the process by 0.33 GB; NCBITaxon's tables are 78 MiB (P-27a) |
 | `hash_prefix` | Distinct URL paths that have hash entities under them | `entity` |
 | `type_count` | How many entities have each type, for the home page (U-1); a punned IRI counts once per type | `entity`, by one `GROUP BY` at the end of the entities hook (P-17): counted per view, it'd scan NCBITaxon's 3 M rows |
+| `axiom_count` | How many of the ontology's own axioms there are of each kind: logical, declaration, annotation, other (datatype definitions), for the home page (U-1) | Four aggregate queries on the default graph (`browl.precache.axiom_counts`, P-17; [2.8](#28-entity-pages), The axiom count): 15 s on NCBITaxon |
 | `prefix` | CURIE prefix → namespace | The built-in ones, overridden by the ontology file's own, overridden by `EXTRA_PREFIXES` ([2.7](#27-display-names)) |
 | `meta` | Ontology IRI, version IRI, title, `owl:versionInfo`, reasoner used, load time (the job's start), generation number | The ontology header query (below) and the job |
 | `build_key` | Component → build key (below) | `browl.precache.keys` |
@@ -1482,10 +1483,11 @@ as the whole language tag, so the Manchester rendering shows such a literal as w
   (the job state's `ImportResult.reason`, P-8). It comes first, so it's seen before anything it affects.
 - **An Ontology panel:** the ontology IRI; the version IRI, else `owl:versionInfo` (`Meta.version`); the reasoner applied
   ("None" if none); the load time; the entities of each type, each linked to its tree page, from `type_count`
-  ([2.5](#25-derived-data-pre-caching)); and the triples loaded, the ontology's own (the default graph) and its loaded
-  imports' together, from the job state. An IRI is a link only if it's `http` or `https` and short enough to show
-  whole, as an annotation's IRI value is (`links.html`'s `web_iri`): the upload's IRIs are unchecked, and autoescaping
-  doesn't stop a `javascript:` IRI in an `href`.
+  ([2.5](#25-derived-data-pre-caching)); the ontology's own axioms, in all and as logical axioms, declarations,
+  annotation axioms and any datatype definitions, from `axiom_count` (below); and the triples loaded, the ontology's
+  own (the default graph) and its loaded imports' together, from the job state. An IRI is a link only if it's `http`
+  or `https` and short enough to show whole, as an annotation's IRI value is (`links.html`'s `web_iri`): the upload's
+  IRIs are unchecked, and autoescaping doesn't stop a `javascript:` IRI in an `href`.
 - **The Annotations panel**, as an entity's (above): the ontology IRI's annotation triples, by the same query, so
   `owl:imports` and `owl:versionIRI`, which aren't annotations, aren't in it. Its failure fails only the panel.
 - **A Prefixes panel:** the `prefix` table, which the site's CURIEs use (built in, the ontology file's own, then
@@ -1493,6 +1495,25 @@ as the whole language tag, so the Manchester rendering shows such a literal as w
   (`MAX_PREFIXES`), then how many more, as a file may declare many.
 - **An Imports panel:** every import, direct and indirect, with what imports it, and its triple count, or "not loaded"
   in red.
+
+**The axiom count** _(P-17, `browl.precache.axiom_counts`)_: the triples give a sense of size, but of the RDF, not of
+the OWL, so the page counts axioms too. They're counted from the ontology's own triples by OWL 2's mapping to RDF, not
+by the OWLAPI: the count is of what the ontology says, defined by the spec rather than by one parser, and no step loads
+the whole ontology into the OWLAPI for it (only a reasoning run does). Each triple is one axiom or none, by its
+predicate and, for `rdf:type`, its class: a declaration, a characteristic, a class assertion, a logical predicate
+(`rdfs:subClassOf`, `owl:equivalentClass`, …), an annotation assertion, told from a property assertion as the
+annotations panel tells them, or a property assertion. Not axioms: the vocabulary's other triples (lists,
+restrictions' parts, `rdfs:Class` typing), and every triple of the ontology's header, a SWRL variable, a reified axiom
+or annotation, and a node that is an axiom of its own (`owl:AllDisjointClasses`, a negative property assertion, a
+SWRL rule), which counts once instead; nor a class expression's `rdf:type`, nor an inverse property expression. A
+symmetric axiom stated both ways (`A owl:equivalentClass B` and `B owl:equivalentClass A`) counts once, as the OWLAPI
+counts it. An annotation property's sub-property, domain and range axioms are annotation axioms, and a datatype's
+`owl:equivalentClass` a datatype definition, neither logical. The counts match the OWLAPI's, kind by kind, on
+`tests/data/axioms.ofn`, which has every kind of OWL 2 axiom, and on anonymous individuals' assertions. Where they'd
+differ is where the OWLAPI's parser guesses or recovers: a malformed construct, or a property whose kind only its use
+shows. Four aggregate queries, on the default graph; none tests every subject for `isIRI` or `isBlank`, which decodes
+it: 30 s more on NCBITaxon's 24 M triples. They take 15 s on NCBITaxon (11.5 s counting every triple by predicate),
+under 2 s on Uberon and 1 s on RadLex. The imports' axioms aren't counted.
 
 **Layout:** in windows at least 64rem wide, the panels go two by two: Ontology and Annotations, then Prefixes and
 Imports, Ontology first since it always has something to show; narrower ones stack them in that order. As each panel is

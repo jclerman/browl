@@ -1,0 +1,51 @@
+# The counts that correct `axiom-triples.rq`'s for its axiom count (browl.precache.axiom_counts), by ?kind:
+# - "annotation_property": an annotation property's sub-property, domain and range triples, annotation axioms, not
+#   logical ones as they'd be for an object or data property;
+# - "datatype_definition": a datatype's owl:equivalentClass triples, datatype definitions, not logical axioms;
+# - "symmetric": pairs of IRIs a symmetric predicate links both ways, one axiom stated twice;
+# - "node": the axioms that are a node of their own, typed: n-ary disjointness and difference, negative property
+#   assertions and SWRL rules, one axiom each, whose triples `axiom-not-triples.rq` leaves out. (Other axioms with a
+#   blank subject, such as general class axioms, are one triple each, which `axiom-triples.rq` counts.)
+# Run on the default graph alone; the prologue (browl.precache.core.PREFIXES) is added when it's run.
+SELECT ?kind (COUNT(*) AS ?count)
+WHERE {
+  {
+    VALUES ?predicate { rdfs:subPropertyOf rdfs:domain rdfs:range }
+    ?s rdf:type owl:AnnotationProperty .
+    FILTER isIRI(?s)
+    ?s ?predicate ?o
+    FILTER NOT EXISTS {
+      VALUES ?logical { owl:ObjectProperty owl:DatatypeProperty }
+      ?s rdf:type ?logical
+    }
+    BIND ("annotation_property" AS ?kind)
+  }
+  UNION
+  {
+    ?s rdf:type rdfs:Datatype .
+    FILTER isIRI(?s)
+    ?s owl:equivalentClass ?o
+    BIND ("datatype_definition" AS ?kind)
+  }
+  UNION
+  {
+    VALUES ?predicate {
+      owl:equivalentClass owl:disjointWith owl:sameAs owl:differentFrom owl:equivalentProperty owl:propertyDisjointWith
+      owl:inverseOf
+    }
+    ?s ?predicate ?o .
+    ?o ?predicate ?s
+    FILTER (isIRI(?s) && isIRI(?o) && STR(?s) < STR(?o))
+    BIND ("symmetric" AS ?kind)
+  }
+  UNION
+  {
+    VALUES ?type {
+      owl:AllDisjointClasses owl:AllDisjointProperties owl:AllDifferent owl:NegativePropertyAssertion
+      <http://www.w3.org/2003/11/swrl#Imp>
+    }
+    ?s rdf:type ?type
+    BIND ("node" AS ?kind)
+  }
+}
+GROUP BY ?kind
