@@ -382,6 +382,8 @@ def test_property_choices(client: TestClient) -> None:
         "Other properties": [("source", "3")],  # its value is on 3
     }
     assert "*" not in "".join(body for _, body in groups)
+    classes = re.findall(r'<fieldset class="property-group([^"]*)">\s*<legend>([^<]+)</legend>', text)
+    assert classes == [("", "Names, IDs, and synonyms"), (" other-properties", "Other properties")]  # muted
 
 
 def test_default_properties(client: TestClient) -> None:
@@ -520,6 +522,7 @@ def test_paging_stops_at_max_offset(client: TestClient, monkeypatch: pytest.Monk
         [("q", "a"), ("suggest", "1"), ("suggest", "1")],
         [("q", "a"), ("type", "individual")],
         [("q", "a"), ("property", f"{EX}notAName")],
+        [("q", "a"), ("property", "http://www.w3.org/2004/02/skos/core#prefLabel")],  # a default, but without values
         [("q", "a"), ("values", "some")],
         [("q", "a"), ("offset", "0")],
         [("q", "a"), ("offset", "01")],
@@ -623,18 +626,47 @@ def test_common_value_note(monkeypatch: pytest.MonkeyPatch) -> None:
     entities = [(ex(f"c{n}"), EntityType.CLASS) for n in range(20)]
     values = [(ex(f"c{n}"), LABEL, f"class {n}", None) for n in range(20)]
     values += [(ex(f"c{n}"), XREF, "GC_ID:1", None) for n in range(15)]
-    values.append((ex("c19"), XREF, "GC_ID:11", None))
+    values.append((ex("c19"), XREF, "GC_ID:2", None))
     with loaded(make_app(), derived_stage(entities, annotation_values=values)) as client:
         response = client.get(SEARCH, params=[("q", "gc_id"), ("property", XREF)])
         default = client.get(SEARCH, params=[("q", "gc_id")])
+        only_common = client.get(SEARCH, params=[("q", "gc_id:1"), ("property", XREF)])
+        later = client.get(SEARCH, params=[("q", "gc_id"), ("property", XREF), ("offset", "50")])
     assert response.status_code == 200
     notes = re.findall(r'<ul class="common-values">(.*?)</ul>', response.text, re.DOTALL)
     assert [" ".join(re.sub("<[^>]+>", "", note).split()) for note in notes] == [
         f"GC_ID:1 ({XREF}) is on 15 classes (75%): too many to list."  # undeclared, so labelled by IRI
     ]
-    assert [hit.term or hit.name for hit in Hits(response.text).hits] == ["GC_ID:11"]
+    assert [hit.term or hit.name for hit in Hits(response.text).hits] == ["GC_ID:2"]
     assert "common-values" not in default.text
     assert "No matches." in default.text
+    assert "common-values" in only_common.text and "No matches." not in only_common.text  # it's found, if not listed
+    assert "common-values" not in later.text  # with the first page only
+
+
+def test_super_property_choice() -> None:
+    """Check that a property with no values, but a sub-property with some, is offered, with its sub-property's count."""
+    mapping, acronym = ex("mappingTerm"), ex("acronym")
+    entities = [(ex("heart"), EntityType.CLASS), (mapping, EntityType.ANNOTATION_PROPERTY)]
+    entities.append((acronym, EntityType.ANNOTATION_PROPERTY))
+    values = [(ex("heart"), LABEL, "heart", "en"), (ex("heart"), acronym, "HT", None)]
+    values += [(mapping, LABEL, "mapping term", "en"), (acronym, LABEL, "acronym", "en")]
+    names: dict[str, tuple[str | None, str | None]] = {mapping: ("mapping term", None), acronym: ("acronym", None)}
+    stage = derived_stage(entities, names=names, annotation_values=values, sub_properties=[(acronym, mapping)])
+    with loaded(make_app(), stage) as client:
+        text = client.get(SEARCH, params=[("q", "ht"), ("property", mapping)]).text
+    assert re.search(r"<bdi>mapping term</bdi>\s*<small class=\"note\">\(0, and 1 in sub-properties\)</small>", text)
+    assert re.search(rf'value="{re.escape(mapping)}" form="site-search" checked', text)
+    assert [hit.property for hit in Hits(text).hits] == ["acronym"]
+
+
+@pytest.mark.parametrize("text", ['say "hi"', "a<b>&c"])
+def test_query_kept_in_box(client: TestClient, text: str) -> None:
+    """Check that the page's query comes back in the box as typed, escaped."""
+    page = client.get(SEARCH, params={"q": text}).text
+    match = re.search(r'<input id="site-search-box"[^>]*value="([^"]*)"', page, re.DOTALL)
+    assert match is not None
+    assert html.unescape(match.group(1)) == text
 
 
 def test_page_filters_belong_to_the_bar(client: TestClient) -> None:

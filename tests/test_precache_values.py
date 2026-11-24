@@ -62,6 +62,9 @@ def stats(*words: int, values: int = 1, unique: int = 1, uses: int | None = None
         (f"{EX}short", stats(PROSE_WORDS - 1, PROSE_WORDS - 1, 30), {}, (False, True)),
         (f"{EX}long", stats(1, PROSE_WORDS, PROSE_WORDS), {}, (True, False)),
         (f"{EX}even", stats(PROSE_WORDS - 1, PROSE_WORDS + 1), {}, (True, False)),  # median 8
+        (f"{EX}half", stats(PROSE_WORDS - 1, PROSE_WORDS), {}, (False, True)),  # median 7.5
+        (DEFINITION, stats(1), {DEFINITION: {LABEL}}, (True, False)),  # the prose list, though under a label
+        (f"{EX}repeats", stats(1, values=10), {f"{EX}repeats": {LABEL}}, (False, False)),  # a label's, but repeated
         (f"{EX}id", stats(1, values=1000, unique=1000), {}, (False, True)),  # each value on one entity
         (f"{EX}xref", stats(1, values=1999, unique=1000), {}, (False, True)),  # on just under 2, on average
         (f"{EX}source", stats(1, values=2000, unique=1000), {}, (False, False)),  # on 2
@@ -76,6 +79,9 @@ def stats(*words: int, values: int = 1, unique: int = 1, uses: int | None = None
         "median short",
         "median long",
         "median of two",
+        "median of 7.5",
+        "prose list under a label",
+        "repeated label sub-property",
         "unique",
         "nearly unique",
         "repeated",
@@ -101,6 +107,12 @@ def test_classify_defaults_without_values() -> None:
     kinds = classify([f"{EX}name"], {}, {})
     assert set(kinds) == {f"{EX}name", *LABEL_PROPERTIES}
     assert set(kinds.values()) == {(False, True)}
+
+
+def test_classify_prose_list_ancestor() -> None:
+    """Check that a super-property in the prose list is prose, whatever its sub-properties."""
+    kinds = classify([LABEL], {f"{EX}a": stats(1)}, {f"{EX}a": {DEFINITION}})
+    assert (kinds[f"{EX}a"], kinds[DEFINITION]) == ((False, True), (True, False))
 
 
 def test_classify_ancestors() -> None:

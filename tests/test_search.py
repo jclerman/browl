@@ -810,6 +810,68 @@ async def test_id_in_two_languages_searched_by_default(data_dir: Path) -> None:
     assert found(settings, "id:1") == ["c1"]
 
 
+async def test_common_value_types(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check a common value's counts on several types: in `EntityType` order, and only those the filter allows."""
+    monkeypatch.setattr(search_module, "COMMON_MIN", 5)
+    settings = make_settings()
+    kinds = [(f"c{n}", "Class") for n in range(10)] + [(f"p{n}", "AnnotationProperty") for n in range(10)]
+    values = [(name, LABEL, LABEL, f'"{name}"@en') for name, _ in kinds]
+    values += [(name, XREF, XREF, '"GC"') for name in [*(f"c{n}" for n in range(8)), *(f"p{n}" for n in range(4))]]
+    await build(settings, values, kinds)
+    xref = frozenset({XREF_IRI})
+    both = find(settings, "gc", properties=xref).common
+    classes = find(settings, "gc", properties=xref, types=frozenset({EntityType.CLASS})).common
+    assert [found.counts for found in both] == [((EntityType.CLASS, 8, 10), (EntityType.ANNOTATION_PROPERTY, 4, 10))]
+    assert [found.counts for found in classes] == [((EntityType.CLASS, 8, 10),)]
+
+
+async def test_common_value_entailed(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a common value is found through a chosen super-property, with entailed values only."""
+    monkeypatch.setattr(search_module, "COMMON_MIN", 5)
+    settings = make_settings()
+    above = f"<{EX}above>"
+    values = [(f"c{n}", LABEL, LABEL, f'"class {n}"@en') for n in range(20)]
+    values += [(f"c{n}", above, XREF, '"GC"') for n in range(15)]  # XREF, a sub-property of above
+    await build(settings, values)
+    chosen = frozenset({f"{EX}above"})
+    assert [found.value for found in find(settings, "gc", properties=chosen).common] == ["GC"]
+    assert find(settings, "gc", properties=chosen, entailed=False).common == ()
+
+
+async def test_common_exact_first(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that an exact common match comes before one from a later word, though it sorts after."""
+    monkeypatch.setattr(search_module, "COMMON_MIN", 5)
+    settings = make_settings()
+    values = [(f"c{n}", LABEL, LABEL, f'"class {n}"@en') for n in range(20)]
+    values += [(f"c{n}", XREF, XREF, '"GC"') for n in range(10)]
+    values += [(f"c{n}", XREF, XREF, '"AB GC"') for n in range(10, 20)]
+    await build(settings, values)
+    found = find(settings, "gc", properties=frozenset({XREF_IRI})).common
+    assert [(common.value, common.exact) for common in found] == [("GC", True), ("AB GC", False)]
+
+
+async def test_long_word_match_value(data_dir: Path) -> None:
+    """Check that a word match on a long value shows the value it was in, of two that share their first characters."""
+    settings = make_settings()
+    start = "a" * KEY_CHARS
+    other, matched = f"{start} bar foo two", f"{start} foo one"  # sorted so, so the first must be passed over
+    await build(settings, [("x", LABEL, LABEL, f'"{other}"@en'), ("x", LABEL, LABEL, f'"{matched}"@en')])
+    hits = find(settings, "foo o").hits
+    assert [(hit.value, hit.word_start) for hit in hits] == [(matched, KEY_CHARS + 1)]
+
+
+async def test_entailed_lane_better_place(data_dir: Path) -> None:
+    """Check that a default property also reached as a name property's sub-property takes the better place.
+
+    Its own place, by its IRI, is after the synonym's; under `rdfs:label`, before it.
+    """
+    settings = make_settings()
+    sub = "<http://zz.example/sub>"
+    synonym = "<http://www.geneontology.org/formats/oboInOwl#hasExactSynonym>"
+    await build(settings, [("a", synonym, synonym, '"fooa"'), ("b", LABEL, sub, '"foob"')])
+    assert found(settings, "foo") == ["b", "a"]
+
+
 def test_property_labels() -> None:
     """Check a property's label: its display name, else its entity's CURIE, else its own if undeclared, else its IRI.
 

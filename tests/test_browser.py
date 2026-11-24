@@ -2427,6 +2427,16 @@ def test_search_enter_without_option_opens_results(page: Page, searchable: LiveS
     expect(page.locator(".hits .hit")).to_have_count(2)
 
 
+def test_search_enter_elsewhere_sends_only_query(page: Page, searchable: LiveServer) -> None:
+    """Check that Enter in the box on a page other than the search page sends the query alone, with no filters."""
+    page.goto(searchable.url + "/_browl/tree/classes")
+    box = search_box(page)
+    box.fill("myo")
+    expect(page.get_by_role("option")).to_have_count(3)
+    box.press("Enter")
+    expect(page).to_have_url(f"{searchable.url}/_browl/search?q=myo")
+
+
 def test_search_all_results_option(page: Page, searchable: LiveServer) -> None:
     """Check that "All results…" opens the full results page for the query."""
     typed(page, searchable, "he")
@@ -2575,6 +2585,10 @@ def test_search_page_stacked_when_narrow(page: Page, searchable: LiveServer) -> 
     form, results = page.locator(".search-form").bounding_box(), page.locator(".search-results").bounding_box()
     assert form is not None and results is not None
     assert results["y"] >= form["y"] + form["height"]
+    properties = page.locator(".search-properties")
+    expect(properties).to_have_css("max-height", "256px")  # a box of its own; beside the results, the filters scroll
+    page.set_viewport_size({"width": 1200, "height": 700})
+    expect(properties).to_have_css("max-height", "none")
 
 
 def test_advanced_search_link(page: Page, searchable: LiveServer) -> None:
