@@ -305,6 +305,27 @@ def test_status_failed(client: TestClient, app: FastAPI) -> None:
     assert SECRET_REASON not in html
 
 
+def test_status_poll_running_no_refresh(client: TestClient, app: FastAPI) -> None:
+    """Check that a poll while a job runs swaps in the fragment, without reloading the page."""
+    start_job(client, app)
+    assert "HX-Refresh" not in client.get(STATUS, headers=HTMX).headers
+
+
+@pytest.mark.parametrize("reasoning", [None, SECRET_REASON])
+def test_status_poll_ended_refreshes(client: TestClient, app: FastAPI, reasoning: str | None) -> None:
+    """Check that a poll finding the job ended, ready or failed, reloads the page, so its header is current (#101)."""
+    run_job(client, app, reasoning)
+    assert client.get(STATUS, headers=HTMX).headers["HX-Refresh"] == "true"
+
+
+def test_status_page_ended_no_refresh(client: TestClient, app: FastAPI) -> None:
+    """Check that the status page, loaded after the job ended, doesn't ask to reload, so it can't reload in a loop."""
+    run_job(client, app)
+    response = client.get(STATUS)
+    assert "HX-Refresh" not in response.headers
+    assert f'hx-get="{STATUS}"' not in response.text
+
+
 def test_status_page(client: TestClient, app: FastAPI) -> None:
     """Check that a request not from htmx gets the status in a page, which refreshes without JS while a job runs."""
     refresh = '<noscript><meta http-equiv="refresh" content="2"></noscript>'

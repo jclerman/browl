@@ -280,7 +280,7 @@ def status_server(live_server: Callable[[FastAPI], LiveServer], monkeypatch: pyt
 
 
 def test_status_polls_while_running(page: Page, status_server: LiveServer) -> None:
-    """Check that, while a job runs, the status shows each stage without a page reload, and stops polling at the end."""
+    """Check that the status shows each stage without a reload while a job runs, then reloads once and stops polling."""
     jobs = status_server.app.state.jobs
     reasoned, loaded = asyncio.Event(), asyncio.Event()
     jobs.register(Stage.REASONING, gate(reasoned))
@@ -294,14 +294,34 @@ def test_status_polls_while_running(page: Page, status_server: LiveServer) -> No
     mark(page)
     status_server.call(release(reasoned))
     expect(current).to_have_text("loading")
-    status_server.call(release(loaded))
-    expect(current).to_have_text("ready")
     assert marked(page)
+    status_server.call(release(loaded))
+    wait_until(page, lambda: not marked(page), "the page to reload")
+    expect(current).to_have_text("ready")
     polls: list[str] = []
     page.on("request", lambda request: polls.append(request.url))
     page.wait_for_timeout(POLL_S * 3 * 1000)
     assert polls == []
     assert violations(page) == []  # htmx works under the Content-Security-Policy
+
+
+@pytest.mark.parametrize("path", [STATUS, UPLOAD])
+def test_header_shows_new_ontology(page: Page, status_server: LiveServer, path: str) -> None:
+    """Check that, once a load ends, the status and upload pages' header names and links the new ontology (#101)."""
+    jobs = status_server.app.state.jobs
+    jobs.register(Stage.PRE_CACHING, derived_stage([], f"{EX}/old", title="Old ontology"))
+    status_server.call(jobs.start())
+    status_server.call(jobs.wait())
+    loaded = asyncio.Event()
+    jobs.register(Stage.LOADING, gate(loaded))
+    jobs.register(Stage.PRE_CACHING, derived_stage([], f"{EX}/new", title="New ontology"))
+    status_server.call(jobs.start())
+    page.goto(f"{status_server.url}{path}")
+    nav = page.get_by_role("navigation", name="Site")
+    expect(nav.get_by_role("link", name="Old ontology")).to_be_visible()
+    status_server.call(release(loaded))
+    nav.get_by_role("link", name="New ontology").click()
+    expect(page.locator("main h1")).to_have_text("New ontology")
 
 
 @NO_JS

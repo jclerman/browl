@@ -25,13 +25,21 @@ async def job_status(request: Request) -> HTMLResponse:
     An htmx request gets just the status fragment, which the upload page embeds; while a job runs, the fragment polls
     this route and replaces itself. Any other request gets the fragment in a page, which, while a job runs, polls the
     same way, or refreshes itself when JavaScript is off.
+
+    A poll that finds the job no longer running tells htmx to reload the whole page (`HX-Refresh`), so the rest of it,
+    e.g. the header's ontology name and link, shows the new generation (#101). Only a page showing a running job
+    polls, so such a poll is the one that saw the job end; the reloaded page shows the ended job, and doesn't poll.
     """
-    template = "admin/_job_status.html" if request.headers.get("HX-Request") == "true" else "admin/status.html"
+    htmx = request.headers.get("HX-Request") == "true"
+    job = await request.app.state.jobs.current()
+    headers = {"Cache-Control": "no-store"}
+    if htmx and not job.running:
+        headers["HX-Refresh"] = "true"
     return templates.TemplateResponse(
         request,
-        template,
-        {"job": await request.app.state.jobs.current(), "stages": list(Stage), "poll_s": STATUS_POLL_S},
-        headers={"Cache-Control": "no-store"},
+        "admin/_job_status.html" if htmx else "admin/status.html",
+        {"job": job, "stages": list(Stage), "poll_s": STATUS_POLL_S},
+        headers=headers,
     )
 
 
