@@ -418,7 +418,11 @@ def test_navigation_bar_wide(page: Page, server: LiveServer) -> None:
     for label in TREES:
         expect(nav.get_by_role("link", name=label)).to_be_visible()
     expect(nav.locator("summary")).to_be_hidden()
-    nav.get_by_role("link", name=f"browl · {TITLE}").click()
+    sign_in = box(nav.get_by_role("link", name="Sign in"))
+    credit = box(nav.get_by_role("link", name="hosted with browl"))
+    assert credit["y"] >= sign_in["y"] + sign_in["height"]  # under it, both at the bar's end
+    assert abs(credit["x"] + credit["width"] - sign_in["x"] - sign_in["width"]) < 2
+    nav.get_by_role("link", name=TITLE).click()
     expect(page.locator("main h1")).to_have_text(TITLE)
 
 
@@ -480,7 +484,10 @@ def test_hash_script_refuses_non_html(page: Page, server: LiveServer, content_ty
 
 
 def test_narrow_bar_one_row(page: Page, server: LiveServer) -> None:
-    """Check that, on a narrow screen, the name, Sign in and the menu button share a row, and the menu opens below."""
+    """Check that, on a narrow screen, the name, Sign in (over the credit) and the menu button share a row.
+
+    The menu opens below them.
+    """
     page.set_viewport_size(NARROW)
     page.goto(f"{server.url}/example.org/thing")
     bar, name, button = page.locator(".site-bar"), page.locator(".site-name"), page.locator(".site-menu summary")
@@ -488,7 +495,7 @@ def test_narrow_bar_one_row(page: Page, server: LiveServer) -> None:
     expect(sign_in).to_be_visible()
     height = box(bar)["height"]
     middle = box(name)["y"] + box(name)["height"] / 2
-    for each in (button, sign_in):
+    for each in (button, page.locator(".site-end")):
         assert abs(middle - box(each)["y"] - box(each)["height"] / 2) < 2
     main_y = box(page.locator("main"))["y"]
     button.click()
@@ -840,7 +847,9 @@ def test_tabs_look(page: Page, server: LiveServer, scheme: str) -> None:
     bar = page.locator(".site-bar").evaluate(style)
     assert tablist[0] == "rgba(0, 0, 0, 0)" != bar[0]  # the page's background shows through
     assert selected[2] == "3px"
-    assert selected[1] == page.evaluate("getComputedStyle(document.querySelector('.brand')).color")  # the accent
+    assert selected[1] == page.locator(".site-menu a").first.evaluate(  # the accent
+        "(link) => { link.style.color = 'var(--accent)'; return getComputedStyle(link).color; }"
+    )
     assert other[1] == "rgba(0, 0, 0, 0)"
     assert selected[3] != other[3]
 
@@ -2056,7 +2065,7 @@ def test_tree_keyboard(page: Page, trees: LiveServer) -> None:
     Only one item is in the Tab sequence, and the toggles are in none.
     """
     page.goto(f"{trees.url}/_browl/tree/classes")
-    page.locator(".sign-in").focus()  # the last stop before the tree
+    page.locator(".hosted-with").focus()  # the last stop before the tree
     page.keyboard.press("Tab")
     expect(tree_item(page, "Free")).to_be_focused()
     requests = record_fragments(page)
@@ -2131,7 +2140,7 @@ def test_tree_close_moves_roving_item(page: Page, trees: LiveServer) -> None:
     expect(tree_item(page, "Left")).to_be_hidden()
     expect(tree_item(page, "Top")).to_have_attribute("tabindex", "0")
     expect(page.locator('[role="tree"] [tabindex="0"]')).to_have_count(1)
-    page.locator(".sign-in").focus()
+    page.locator(".hosted-with").focus()  # the last stop before the tree
     page.keyboard.press("Tab")
     expect(tree_item(page, "Top")).to_be_focused()
 

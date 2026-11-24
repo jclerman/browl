@@ -4,12 +4,13 @@ browl's visual identity is three hand-written SVGs, with no raster images or ext
 
 - [`browl/static/browl-logo.svg`](../../browl/static/browl-logo.svg), the **logo**: an owl on a branch, with a class
   tree for breast feathers. The app uses it as its favicon, and it suits any logo-sized spot.
-- [`browl-wordmark.svg`](browl-wordmark.svg), the **wordmark**: the name, with "owl" drawn into it. It heads the
-  README.
+- [`browl/static/browl-wordmark.svg`](../../browl/static/browl-wordmark.svg), the **wordmark**: the name, with "owl"
+  drawn into it. It heads the README, and credits browl in the app's navigation bar ("hosted with browl").
 - [`browl-tree.svg`](browl-tree.svg), the **tree illustration**: the owl as one entry in a class tree, for other
   documents.
 
-The logo lives with the app's static files because the app serves it. The other two are for documents only.
+The logo and the wordmark live with the app's static files because the app serves them. The tree illustration is for
+documents only.
 
 ## Motivation
 
@@ -60,7 +61,7 @@ looks muddy in browser tabs.
 
 ## Wordmark
 
-`browl-wordmark.svg` spells "browl" in simple geometric strokes, with "owl" drawn into it:
+The wordmark spells "browl" in simple geometric strokes, with "owl" drawn into it:
 
 - The **o** is an owl eye: a shaded amber iris, a dark pupil and a white glint, lit like the logo's eyes.
 - The **w** is shaded like the logo's folded wings, lighter at the top.
@@ -68,7 +69,8 @@ looks muddy in browser tabs.
   makes the ontology reference: a small graph, and the "brow" in br‑owl.
 
 It is drawn with paths rather than a font, so it looks the same everywhere. Its brow line is thin and disappears at
-small sizes, so it is meant for landing pages such as the README, not for icons.
+small sizes, so it is not meant for icons. In the navigation bar it appears at about 18px high, where the letters,
+the eye and the brow all still read, if faintly; the credit is meant to be quiet.
 
 ## Tree illustration
 

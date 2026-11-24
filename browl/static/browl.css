@@ -100,10 +100,6 @@ code {
   text-decoration: underline;
 }
 
-.brand {
-  color: var(--accent);
-}
-
 .site-search {
   position: relative; /* the suggestions open under the box */
   flex: 1 1 12rem;
@@ -145,21 +141,51 @@ code {
   list-style: none;
 }
 
-.sign-in {
+/* At the bar's end: sign-in, and under it browl's credit, small and muted beside the ontology's name. */
+.site-end {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-end;
   margin-inline-start: auto;
+}
+
+.site-end > a {
+  padding: 0;
+}
+
+.sign-in {
   font-size: 0.875rem;
 }
 
-/* Narrow screens: the name, the sign-in link and the menu button share the top row, the search box gets its own, and
-   the menu opens as a panel under its button. */
+.hosted-with {
+  display: flex;
+  gap: 0.3em;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-decoration: none;
+}
+
+.hosted-with:hover,
+.hosted-with:focus-visible {
+  text-decoration: underline;
+}
+
+.hosted-with img {
+  width: auto;
+  height: 1.125rem;
+}
+
+/* Narrow screens: the name, sign-in with the credit under it, and the menu button share the top row, the search box
+   gets its own, and the menu opens as a panel under its button. */
 @media (width < 48rem) {
   .site-name {
     flex: 1 1 0;
   }
 
-  .sign-in {
+  .site-end {
     order: 1;
-    margin-inline-start: 0;
   }
 
   .site-menu {

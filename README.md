@@ -1,6 +1,6 @@
 # OWL-Browse
 
-![browl](docs/icon/browl-wordmark.svg)
+![browl](browl/static/browl-wordmark.svg)
 
 OWL-Browse (`browl`) hosts an OWL ontology as a browsable website. Every declared entity gets its own page, at a URL
 implied by its IRI.

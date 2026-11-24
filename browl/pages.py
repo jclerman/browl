@@ -68,6 +68,9 @@ one is shown cut short, and not given."""
 SITE_NAME = "browl"
 """browl's name, which page titles end with when the ontology has no title."""
 
+PROJECT_URL = "https://github.com/jclerman/browl"
+"""Where the navigation bar's "hosted with browl" credit links: the repository, until browl has a documentation site."""
+
 TREES = (
     TreePage("classes", "Classes", EntityType.CLASS),
     TreePage("object-properties", "Object properties", EntityType.OBJECT_PROPERTY),
@@ -231,6 +234,7 @@ def frame_context(request: Request) -> dict[str, object]:
             "is_admin": getattr(request.state, "is_admin", False) is True,
             "title_end": isolate(link.title) if link.title is not None else SITE_NAME,
             "site_name": SITE_NAME,
+            "project": PROJECT_URL,
         }
     }
 
