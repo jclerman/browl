@@ -2537,12 +2537,15 @@ def test_search_no_matches(page: Page, searchable: LiveServer) -> None:
 
 
 def test_search_page_side_by_side(page: Page, searchable: LiveServer) -> None:
-    """Check that on a wide window the results scroll in a panel beside the form, which stays in view."""
+    """Check that on a wide window the results scroll in a panel beside the filters, under the query box."""
     page.set_viewport_size({"width": 1200, "height": 600})
     page.goto(f"{searchable.url}/_browl/search?q=item")
     form, results = page.locator(".search-form").bounding_box(), page.locator(".search-results").bounding_box()
     assert form is not None and results is not None
     assert results["x"] >= form["x"] + form["width"]  # beside it, not under it
+    heading, box = page.locator("h1").bounding_box(), page.locator("#search-text").bounding_box()
+    assert heading is not None and box is not None
+    assert box["x"] >= results["x"] and box["y"] < heading["y"] + heading["height"]  # over the results, by the heading
     panel = page.locator(".search-results")
     assert panel.evaluate("e => e.scrollHeight > e.clientHeight")
     panel.evaluate("e => e.scrollTop = e.scrollHeight")

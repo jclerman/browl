@@ -950,14 +950,35 @@ code {
     .search-page {
       display: grid;
       grid-template-rows: auto minmax(0, 1fr);
-      grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr);
+      grid-template-columns: minmax(20rem, 34rem) minmax(0, 1fr);
       gap: 0 calc(var(--space) * 2);
+      align-items: baseline;
       max-width: none;
       min-height: 0;
     }
 
-    .search-page h1 {
-      grid-column: 1 / -1;
+    /* The heading over the form, and the query over the results. */
+    .search-head {
+      display: contents;
+    }
+
+    .search-query label {
+      white-space: nowrap;
+    }
+
+    .search-query {
+      display: flex;
+      gap: calc(var(--space) / 2);
+      align-items: baseline;
+    }
+
+    .search-query input {
+      flex: 0 1 30rem;
+    }
+
+    .search-form,
+    .search-results {
+      align-self: stretch;
     }
 
     .search-form,
@@ -981,14 +1002,37 @@ code {
       flex-direction: column;
     }
 
-    .search-properties {
+    .search-page .search-properties {
       max-height: none;
     }
   }
 }
 
+.search-query {
+  margin: var(--space) 0;
+}
+
 .search-query input {
   width: min(30rem, 100%);
+}
+
+/* The property choices flow into as many columns as fit, each at least 14rem. */
+.property-choices {
+  column-width: 14rem;
+  column-gap: var(--space);
+}
+
+/* Each choice's text wraps beside its checkbox, a long name breaking anywhere rather than under the box. */
+.search-filters .property-choices label {
+  display: flex;
+  gap: 0.3em;
+  align-items: baseline;
+  break-inside: avoid;
+}
+
+.property-choices label > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .search-filters {

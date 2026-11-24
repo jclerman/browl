@@ -1763,11 +1763,13 @@ too (P-38), and the JSON API's (P-33).
   search's `MAX_OFFSET` allows. P-45 will page it as the Usage tab is paged, through one pager element both share: at
   the top, with "Page n of N" and a form to go to any page, and the number of results, counted up to the deepest page
   (1,051 IRIs), as an exact total would read every match. Laid out (P-42): on a window at least 56rem wide and 32rem
-  tall, the form is a column on the left and the results a panel on the right, each scrolling within the window, as an
-  entity page fills it (U-30), so the filters stay in view while the results scroll; the panel is focusable, so the
-  keyboard can scroll it, and the table's header stays at its top. Otherwise they stack and the page scrolls as one. The
-  bar links to the page, "Advanced search", beside the box, so its filters can be set before searching; the
-  autocomplete's "All results…" opens it too.
+  tall, the heading and the filters form a column on the left, and the query box and the results a column on the right,
+  the results in a panel; the filters and the results each scroll within the window, as an entity page fills it (U-30),
+  so the filters and the box stay in view while the results scroll. The box belongs to the filters' form (`form=`), so
+  it submits them, without JS. The property choices flow into as many columns of at least 14rem as fit, each name
+  wrapping beside its checkbox. The panel is focusable, so the keyboard can scroll it, and the table's header stays at
+  its top. Otherwise they stack and the page scrolls as one. The bar links to the page, "Advanced search", beside the
+  box, so its filters can be set before searching; the autocomplete's "All results…" opens it too.
 - **Input**: invalid parameters, and repeats of those 2.13 doesn't list as repeated, get the "not found" page, as tree
   pages do. A blank query finds nothing: an empty fragment, which closes the list, or the form alone.
 - **No server-side deadline** (from P-19's review): each query's cost is already bounded (§2.6, Bounds), and the
