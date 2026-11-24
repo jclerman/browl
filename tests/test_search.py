@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from browl import search as search_module
 from browl.derived import DerivedReader, EntityType
 from browl.names import name_property_iris
 from browl.precache.core import Hook
@@ -607,3 +608,63 @@ def test_query_filters_frozen() -> None:
     """Check that a query's filters are frozensets, whatever collection they're given as."""
     query = SearchQuery("x", types=[EntityType.CLASS], properties=(RDFS_LABEL,))
     assert (query.types, query.properties) == (frozenset({EntityType.CLASS}), frozenset({RDFS_LABEL}))
+
+
+XREF = "<http://www.geneontology.org/formats/oboInOwl#hasDbXref>"
+XREF_IRI = XREF.strip("<>")
+
+
+async def build_common(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Build 20 classes, each labelled, 15 with the cross-reference `GC_ID:1` and one with `PMID:1`.
+
+    With `COMMON_MIN` 5, `GC_ID:1` is common: on more than 10% of the 21 entities (with the ontology), and at least 5.
+    """
+    monkeypatch.setattr(search_module, "COMMON_MIN", 5)
+    values = [(f"c{n}", LABEL, LABEL, f'"class {n}"@en') for n in range(20)]
+    values += [(f"c{n}", XREF, XREF, '"GC_ID:1"') for n in range(15)]
+    values.append(("c19", XREF, XREF, '"PMID:1"'))
+    await build(settings, values)
+
+
+async def test_common_value_counted(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a common value gets no index rows, only its counts by type; a rarer one is indexed (§2.6)."""
+    settings = make_settings()
+    await build_common(settings, monkeypatch)
+    with closing(connect(settings, 1, HOOKS_USED)) as connection:
+        common = connection.execute(
+            "SELECT p.iri, value, type, normalized, entities, of_type FROM common_value"
+            " JOIN search_property AS p ON p.id = common_value.property"
+        ).fetchall()
+        rows = connection.execute("SELECT count(*) FROM search_value WHERE value = 'GC_ID:1'").fetchone()[0]
+    assert common == [(XREF_IRI, "GC_ID:1", "class", "gc_id:1", 15, 20)]
+    assert rows == 0
+    assert found(settings, "pmid", properties=frozenset({XREF_IRI})) == ["c19"]
+
+
+@pytest.mark.parametrize(
+    ("text", "filters", "expected"),
+    [
+        ("gc", {"properties": frozenset({XREF_IRI})}, [("GC_ID:1", False)]),
+        ("GC_ID:1", {"properties": frozenset({XREF_IRI})}, [("GC_ID:1", True)]),
+        ("id", {"properties": frozenset({XREF_IRI})}, [("GC_ID:1", False)]),  # from a later word
+        ("d", {"properties": frozenset({XREF_IRI})}, []),  # not inside a word
+        ("gc", {}, []),  # not searched by default
+        ("gc", {"properties": frozenset({XREF_IRI}), "types": frozenset({EntityType.OBJECT_PROPERTY})}, []),
+        ("gc", {"properties": frozenset({XREF_IRI}), "offset": 10}, []),  # with the first page only
+    ],
+    ids=["prefix", "exact", "word", "inside", "default", "type", "later page"],
+)
+async def test_common_value_found(
+    data_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    text: str,
+    filters: dict[str, object],
+    expected: list[tuple[str, bool]],
+) -> None:
+    """Check that a query finds a common value as indexed values match, with its counts, never as hits."""
+    settings = make_settings()
+    await build_common(settings, monkeypatch)
+    results = find(settings, text, **filters)
+    assert [(common.value, common.exact) for common in results.common] == expected
+    assert all(common.counts == ((EntityType.CLASS, 15, 20),) for common in results.common)
+    assert all(hit.value != "GC_ID:1" for hit in results.hits)

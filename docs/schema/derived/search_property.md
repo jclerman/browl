@@ -21,13 +21,13 @@ CREATE TABLE search_property (
 
 ## Columns
 
-| Name        | Type    | Default | Nullable | Children                                                                                                                              | Parents | Comment                                                                                                                                         |
-| ----------- | ------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| id          | INTEGER |         | true     | [annotation_value](annotation_value.md) [sub_property](sub_property.md) [search_value](search_value.md) [search_lane](search_lane.md) |         | The property's id, which annotation_value, search_value and search_lane use.                                                                    |
-| iri         | TEXT    |         | false    |                                                                                                                                       |         | Its IRI.                                                                                                                                        |
-| prose       | INTEGER |         | false    |                                                                                                                                       |         | 1 if it's prose (definitions, comments, notes), which the lane index leaves out; 0 if it's name-like (labels, synonyms, IDs, cross-references). |
-| by_default  | INTEGER |         | false    |                                                                                                                                       |         | 1 if a search that names no properties searches it (the name properties and synonyms), else 0.                                                  |
-| value_count | INTEGER |         | false    |                                                                                                                                       |         | How many values it has in annotation_value.                                                                                                     |
+| Name        | Type    | Default | Nullable | Children                                                                                                                                                              | Parents | Comment                                                                                                                                         |
+| ----------- | ------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| id          | INTEGER |         | true     | [annotation_value](annotation_value.md) [sub_property](sub_property.md) [search_value](search_value.md) [common_value](common_value.md) [search_lane](search_lane.md) |         | The property's id, which annotation_value, search_value and search_lane use.                                                                    |
+| iri         | TEXT    |         | false    |                                                                                                                                                                       |         | Its IRI.                                                                                                                                        |
+| prose       | INTEGER |         | false    |                                                                                                                                                                       |         | 1 if it's prose (definitions, comments, notes), which the lane index leaves out; 0 if it's name-like (labels, synonyms, IDs, cross-references). |
+| by_default  | INTEGER |         | false    |                                                                                                                                                                       |         | 1 if a search that names no properties searches it (the name properties and synonyms), else 0.                                                  |
+| value_count | INTEGER |         | false    |                                                                                                                                                                       |         | How many values it has in annotation_value.                                                                                                     |
 
 ## Constraints
 
@@ -50,6 +50,7 @@ erDiagram
 "sub_property" }o--|| "search_property" : "sub_property.property references search_property.id"
 "sub_property" }o--|| "search_property" : "sub_property.sub references search_property.id"
 "search_value" }o--|| "search_property" : "search_value.property references search_property.id"
+"common_value" }o--|| "search_property" : "common_value.property references search_property.id"
 "search_lane" }o--|| "search_property" : "search_lane.property references search_property.id"
 
 "search_property" {
@@ -82,6 +83,14 @@ erDiagram
   TEXT value_rest
   TEXT language
   INTEGER word_start PK
+}
+"common_value" {
+  INTEGER property PK
+  TEXT value PK
+  TEXT type PK
+  TEXT normalized
+  INTEGER entities
+  INTEGER of_type
 }
 "search_lane" {
   TEXT type PK

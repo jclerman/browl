@@ -725,6 +725,102 @@
       "def": "CREATE TABLE search_lane (\n    type TEXT NOT NULL,\n    property INTEGER NOT NULL,\n    language_rank INTEGER NOT NULL,\n    word INTEGER NOT NULL,\n    max_length INTEGER NOT NULL,\n    PRIMARY KEY (type, property, language_rank, word)\n) WITHOUT ROWID"
     },
     {
+      "name": "common_value",
+      "type": "table",
+      "comment": "The common name-like values (browl.search.COMMON_SHARE): each on more than that share of the ontology's entities, and on at least browl.search.COMMON_MIN, so too common to tell entities apart. They get no search_value rows, only these counts, one row per entity type they're on, which the results page shows instead of listing the entities; stored in key order.",
+      "columns": [
+        {
+          "name": "property",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "The property it's asserted with (search_property.id)."
+        },
+        {
+          "name": "value",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "The value's lexical form, in any language."
+        },
+        {
+          "name": "type",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "An entity type it's on (entity.type)."
+        },
+        {
+          "name": "normalized",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "The value normalized for search (browl.names.normalize), which a query matches as search_value's keys."
+        },
+        {
+          "name": "entities",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "How many entities of that type have it."
+        },
+        {
+          "name": "of_type",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "How many entities that type has, for the share."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "sqlite_autoindex_common_value_1",
+          "def": "PRIMARY KEY (property, value, type)",
+          "table": "common_value",
+          "columns": [
+            "property",
+            "value",
+            "type"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "property",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (property)",
+          "table": "common_value",
+          "columns": [
+            "property"
+          ]
+        },
+        {
+          "name": "value",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (value)",
+          "table": "common_value",
+          "columns": [
+            "value"
+          ]
+        },
+        {
+          "name": "type",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (type)",
+          "table": "common_value",
+          "columns": [
+            "type"
+          ]
+        },
+        {
+          "name": "sqlite_autoindex_common_value_1",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (property, value, type)",
+          "table": "common_value",
+          "columns": [
+            "property",
+            "value",
+            "type"
+          ]
+        }
+      ],
+      "def": "CREATE TABLE common_value (\n    property INTEGER NOT NULL,\n    value TEXT NOT NULL,\n    type TEXT NOT NULL,\n    normalized TEXT NOT NULL,\n    entities INTEGER NOT NULL,\n    of_type INTEGER NOT NULL,\n    PRIMARY KEY (property, value, type)\n) WITHOUT ROWID"
+    },
+    {
       "name": "edge",
       "type": "table",
       "comment": "The hierarchies' named direct parent-child edges, between equivalence-group representatives, stored in key order.",
@@ -1440,6 +1536,20 @@
       ],
       "parent_cardinality": "exactly_one",
       "def": "search_value.property references search_property.id",
+      "virtual": true
+    },
+    {
+      "table": "common_value",
+      "columns": [
+        "property"
+      ],
+      "cardinality": "zero_or_more",
+      "parent_table": "search_property",
+      "parent_columns": [
+        "id"
+      ],
+      "parent_cardinality": "exactly_one",
+      "def": "common_value.property references search_property.id",
       "virtual": true
     },
     {

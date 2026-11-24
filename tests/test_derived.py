@@ -77,6 +77,14 @@ COLUMNS = {
     "prefix": [("prefix", "TEXT", 1, 1), ("namespace", "TEXT", 1, 0)],
     "type_count": [("type", "TEXT", 1, 1), ("count", "INTEGER", 1, 0)],
     "axiom_count": [("kind", "TEXT", 1, 1), ("count", "INTEGER", 1, 0)],
+    "common_value": [
+        ("property", "INTEGER", 1, 1),
+        ("value", "TEXT", 1, 2),
+        ("type", "TEXT", 1, 3),
+        ("normalized", "TEXT", 1, 0),
+        ("entities", "INTEGER", 1, 0),
+        ("of_type", "INTEGER", 1, 0),
+    ],
     "search_lane": [
         ("type", "TEXT", 1, 1),
         ("property", "INTEGER", 1, 2),

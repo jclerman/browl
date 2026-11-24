@@ -10,7 +10,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from browl import search_page
+from browl import search, search_page
 from browl.derived import EntityType, NotCurrentError
 from browl.pages import MAX_NAME_CHARS
 from browl.search import MAX_OFFSET, MAX_QUERY_CHARS
@@ -596,3 +596,23 @@ def test_value_offset(value: str, offset: int, start: int) -> None:
 def test_split(text: str, query: str, word_start: int, split: tuple[str, str, str]) -> None:
     """Check how a hit's text is split around its match, from the match's normalized offset."""
     assert _split(text, query, word_start) == Marked(*split)
+
+
+def test_common_value_note(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that the results page counts a common value in a note above the hits, rather than listing its entities."""
+    monkeypatch.setattr(search, "COMMON_MIN", 5)
+    entities = [(ex(f"c{n}"), EntityType.CLASS) for n in range(20)]
+    values = [(ex(f"c{n}"), LABEL, f"class {n}", None) for n in range(20)]
+    values += [(ex(f"c{n}"), XREF, "GC_ID:1", None) for n in range(15)]
+    values.append((ex("c19"), XREF, "GC_ID:11", None))
+    with loaded(make_app(), derived_stage(entities, annotation_values=values)) as client:
+        response = client.get(SEARCH, params=[("q", "gc_id"), ("property", XREF)])
+        default = client.get(SEARCH, params=[("q", "gc_id")])
+    assert response.status_code == 200
+    notes = re.findall(r'<ul class="common-values">(.*?)</ul>', response.text, re.DOTALL)
+    assert [" ".join(re.sub("<[^>]+>", "", note).split()) for note in notes] == [
+        f"GC_ID:1 ({XREF}) is on 15 classes (75%): too many to list."  # undeclared, so labelled by IRI
+    ]
+    assert [hit.term or hit.name for hit in Hits(response.text).hits] == ["GC_ID:11"]
+    assert "common-values" not in default.text
+    assert "No matches." in default.text

@@ -591,7 +591,7 @@ are documented in [`SCHEMA.md`](SCHEMA.md):
 | `name_value` | Name-property values, for display names, one row per direct and per RDFS-entailed property | The name values query, through a property path (below): 41–48 s on NCBITaxon, 3.56 M rows. The whole hook, which also sets each entity's CURIE and display name, takes about 85 s ([P-11 findings](../research/P-11/README.md)) |
 | `edge` | Parent → child per hierarchy (classes; each property type), between equivalence-group representatives | The edges query (subclass, sub-property and equivalent-class triples): 20–21 s on NCBITaxon, 3.02 M rows. The whole hook, which also groups, counts and inserts `equiv_group` and `counts`, takes about 42 s and 0.9 GB, and `edge`, `counts` and their index 164 MiB; on Uberon and HPO, 0.5 s ([P-12 findings](../research/P-12/README.md)) |
 | `annotation_value`, `search_property`, `sub_property` | Every string value of each annotation property, under the property it's asserted with; each property, name-like or prose, searched by default or not, with its value count; and each property's sub-properties, transitively ([2.6](#26-search), P-42) | The annotation values query and a sub-property path query: on NCBITaxon, 9.77 M values, about 2 minutes for the query ([P-42 findings](../research/P-42/README.md)), and 295 MiB, with a 114 MiB index by entity |
-| `search_value`, `search_lane` | The search index (P-19): each name-like value that isn't empty once normalized, keyed in the order search ranks values within a _lane_ (the values of one entity type, property, language, and whole value or word), and each lane with its longest value ([2.6](#26-search)) | `annotation_value` and `entity`, in SQLite: on NCBITaxon, about 3 minutes and 1.6 GiB for 9.7 M values (P-42), where its 3.03 M labels took 46 s and 828 MiB ([P-41 findings](../research/P-41/README.md)) |
+| `search_value`, `search_lane`, `common_value` | The search index (P-19): each name-like value that isn't empty once normalized, keyed in the order search ranks values within a _lane_ (the values of one entity type, property, language, and whole value or word), and each lane with its longest value; and the values too common to list, counted by type ([2.6](#26-search)) | `annotation_value` and `entity`, in SQLite: on NCBITaxon, 107 s and 957 MiB for its 3.7 M values that aren't common (P-42), where its 3.03 M labels took 46 s and 828 MiB ([P-41 findings](../research/P-41/README.md)) |
 | `equiv_group` | Entity → group representative, for groups of more than one | Union-find over `owl:equivalentClass` between named classes, and over cycles of edges (below) |
 | `counts` | Per node: immediate children, distinct descendants | `edge`, in Python (below) |
 | `root` | Each hierarchy's roots, which the tree pages start from (P-18) | `edge`, in Python: found on demand, they'd take a scan of `counts` and a lookup in `edge` per node, 1–2 s on NCBITaxon |
@@ -894,7 +894,7 @@ _(Q8)_
   for word matches. A dedicated engine would rank by relevance, not by these rules, or index each word's suffix much
   as word rows do.
 - **Why at pre-caching:** the table added 46 s to NCBITaxon's pre-caching of about 3¾ minutes with labels alone, and
-  about 3 minutes with every name-like property (P-42), besides the values query's 2; a few seconds on smaller
+  about 2 minutes with every name-like property (P-42), besides the values query's 2; a few seconds on smaller
   ontologies. Running pre-caching's hooks in parallel could hide most of the index's build, as the search hook needs
   only the annotation values hook and works without Fuseki while the hierarchies and usage hooks wait on it; SQLite's
   one writer means it would build its table in a file of its own, attached once done. Building it in the background once
@@ -922,7 +922,19 @@ name properties' ([P-42 findings](../research/P-42/README.md)).
 - **Searched by default:** the name properties and the label and synonym list, with their sub-properties' values when
   entailed ones count. They're kept in `search_property` even without values of their own, so an ontology whose labels
   are all under a sub-property of `rdfs:label` is still searched. Other name-like properties, such as IDs and
-  cross-references (NCBITaxon's 3.1 M `hasDbXref` values, e.g. `GC_ID:1`), are searched when chosen.
+  cross-references (NCBITaxon's 3.1 M `hasDbXref` values, e.g. `PMID:7857801`), are searched when chosen.
+- **Common values are counted, not listed.** A name-like value on more than 10% of the ontology's entities
+  (`COMMON_SHARE`), and on at least 1,000 (`COMMON_MIN`), tells no entities apart, so it gets no rows in the lane
+  index. `common_value` holds it once, with how many entities of each type have it and how many that type has. A query
+  matches it as it matches indexed values, by the start of the value or of a later word, with the same property and
+  type filters, and the results page says so above the hits, on the first page: "`GC_ID:1` (database cross-reference)
+  is on 2,291,619 classes (76%): too many to list". So the visitor learns the value is there without paging through
+  millions of entities. The rule is by value, not property: of NCBITaxon's `hasDbXref` values, `GC_ID:1` and
+  `GC_ID:11` (genetic codes, 98% of its 3.1 M values) are common, while its 18.6 K cross-references, such as
+  `PMID:7857801` on 4,521 taxa, are indexed. On NCBITaxon the common values are those two and `ncbi_taxonomy`
+  (`hasOBONamespace`, on every class): 6.0 M of its 9.7 M values. HPO and Uberon have none; their most frequent
+  name-like value is on 641 entities. A share rather than a count scales with the ontology; the minimum keeps a
+  small ontology's values all listed.
 - **Entailment at query time:** each value is stored once, under the property it's asserted with, and "direct and
   entailed" for a chosen property adds its sub-properties' lanes (Lane order, above). The sub-properties come from a
   property path query (`rdfs:subPropertyOf+`), stored as their closure in `sub_property`, rather than from the
@@ -933,15 +945,15 @@ name properties' ([P-42 findings](../research/P-42/README.md)).
   | | HPO | Uberon | NCBITaxon |
   | --- | --- | --- | --- |
   | Lanes (whole + word) | 59 | 75 | 24 |
-  | `search_value`; with `rdfs:label` alone | 38 MiB; 11 | 40 MiB; 8 | 1.6 GiB; 828 MiB |
-  | Storing the values; the index | 0.4 s; 2.5 s | 0.3 s; 2.7 s | 29 s; 180 s |
-  | Default search, worst median (max) | 24 ms (77) | 26 ms (48) | 10 ms (39) |
-  | Every name-like property, worst median (max) | 39 ms (70) | 52 ms (71) | 9 ms (25) |
+  | `search_value`; with `rdfs:label` alone | 38 MiB; 11 | 40 MiB; 8 | 957 MiB; 828 MiB |
+  | Storing the values; the index | 0.4 s; 2.5 s | 0.3 s; 2.7 s | 32 s; 107 s |
+  | Default search, worst median (max) | 24 ms (77) | 26 ms (48) | 9 ms (25) |
+  | Every name-like property, worst median (max) | 39 ms (70) | 52 ms (71) | 16 ms (52) |
 
-  So N-2 holds. The lanes are fewer than in the research, as non-string values are left out. NCBITaxon's index grows
-  from 828 MiB and 46 s, as its added values are nearly all `hasDbXref` and `hasOBONamespace` (one value,
-  `ncbi_taxonomy`, on every class): 71 s to cut the 9.7 M values' keys in Python, and 114 s to sort them into the
-  table, about P-41's cost per row. Its values query takes about 2 minutes, against 50 s for the name values.
+  So N-2 holds. The lanes are fewer than in the research, as non-string values are left out. On NCBITaxon, indexing
+  the common values too took 180 s and 1.6 GiB, about P-41's cost per row; counting them instead saves 6.0 M values'
+  rows (each has 2–3: `ncbi_taxonomy` and `taxonomy`, `GC_ID:1`, `ID:1` and `1`). Its values query takes about
+  2 minutes, against 50 s for the name values.
 - **The results page** lists the name-like properties that have values, name properties first, then the others by
   display name, each with its value count, and marks those searched by default (2.9, Search).
 
@@ -1733,10 +1745,11 @@ too (P-38), and the JSON API's (P-33).
   name-like properties with values as checkboxes (P-42), name properties first, each with its value count and those
   searched by default marked "*", none checked meaning those; and a choice of all values or direct ones only. A
   property is labelled by display name, else as `NAME_PROPERTIES` names it, else by IRI; a `property=` naming one the
-  page doesn't offer gets "not found". It shows 50 hits a page, with Previous and Next links, as deep as search's
-  `MAX_OFFSET` allows. P-45 will page it as the Usage tab is paged, through one pager element both share: at the top,
-  with "Page n of N" and a form to go to any page, and the number of results, counted up to the deepest page
-  (1,051 IRIs), as an exact total would read every match.
+  page doesn't offer gets "not found". Above the hits, the first page lists the common values that match (§2.6), each
+  with its property and its count and share of each type, "too many to list"; the autocomplete doesn't. It shows 50
+  hits a page, with Previous and Next links, as deep as search's `MAX_OFFSET` allows. P-45 will page it as the Usage
+  tab is paged, through one pager element both share: at the top, with "Page n of N" and a form to go to any page, and
+  the number of results, counted up to the deepest page (1,051 IRIs), as an exact total would read every match.
 - **Input**: invalid parameters, and repeats of those 2.13 doesn't list as repeated, get the "not found" page, as tree
   pages do. A blank query finds nothing: an empty fragment, which closes the list, or the form alone.
 - **No server-side deadline** (from P-19's review): each query's cost is already bounded (§2.6, Bounds), and the

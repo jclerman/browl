@@ -941,6 +941,14 @@ code {
   overflow-y: auto;
 }
 
+.common-values {
+  padding-left: 1.5em;
+}
+
+.common-value {
+  font-style: italic;
+}
+
 /* A table, one line per hit; on a narrow screen, each hit's cells wrap as one block. */
 .hits {
   border-collapse: collapse;

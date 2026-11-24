@@ -74,6 +74,13 @@ relations:
     def: search_value.property references search_property.id
     cardinality: zero_or_more
     parentCardinality: exactly_one
+  - table: common_value
+    columns: [property]
+    parentTable: search_property
+    parentColumns: [id]
+    def: common_value.property references search_property.id
+    cardinality: zero_or_more
+    parentCardinality: exactly_one
   - table: search_lane
     columns: [property]
     parentTable: search_property
@@ -288,6 +295,19 @@ comments:
       language_rank: The languages' rank (search_value.language_rank).
       word: 0 for whole values' rows, 1 for word rows (search_value.word).
       max_length: The lane's longest search_value.length, so at most KEY_CHARS.
+  - table: common_value
+    tableComment: >-
+      The common name-like values (browl.search.COMMON_SHARE): each on more than that share of the ontology's entities,
+      and on at least browl.search.COMMON_MIN, so too common to tell entities apart. They get no search_value rows,
+      only these counts, one row per entity type they're on, which the results page shows instead of listing the
+      entities; stored in key order.
+    columnComments:
+      property: The property it's asserted with (search_property.id).
+      value: The value's lexical form, in any language.
+      type: An entity type it's on (entity.type).
+      normalized: The value normalized for search (browl.names.normalize), which a query matches as search_value's keys.
+      entities: How many entities of that type have it.
+      of_type: How many entities that type has, for the share.
   - table: edge
     tableComment: >-
       The hierarchies' named direct parent-child edges, between equivalence-group representatives, stored in key

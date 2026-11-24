@@ -33,6 +33,13 @@ MAX_OFFSET = 1000
 MAX_QUERY_CHARS = 1000
 """The longest query text."""
 
+COMMON_SHARE = 0.1
+"""A name-like value on more than this share of the ontology's entities, and on at least `COMMON_MIN`, is _common_: too
+common to tell entities apart, so it isn't indexed by entity, only counted (`common_value`)."""
+
+COMMON_MIN = 1000
+"""The fewest entities a common value is on, so a small ontology's values are always indexed."""
+
 KEY_CHARS = 256
 """How many characters of a normalized value, and of the value, the index's key holds. A query seeks each lane at each
 length up to this, at most, however long its values are; longer values rank among themselves by these characters."""
@@ -125,16 +132,36 @@ class SearchProperty:
 
 
 @dataclass(frozen=True)
+class CommonValue:
+    """A common value that matches a query: on too many entities to list them, so only counted (§2.6, Common values).
+
+    Attributes:
+        value: The value, as written.
+        property: The IRI of the property it's asserted with.
+        counts: For each entity type it's on that the query's filter allows, in `EntityType` order: the type, how many
+            entities of that type have it, and how many entities that type has.
+        exact: Whether the value is the whole query, rather than a prefix match.
+    """
+
+    value: str
+    property: str
+    counts: tuple[tuple[EntityType, int, int], ...]
+    exact: bool
+
+
+@dataclass(frozen=True)
 class SearchResults:
     """A page of a search's results, best first.
 
     Attributes:
         hits: The results.
         more: Whether there are more after them.
+        common: The common values that match, best first, which no hit lists: given with the first page only.
     """
 
     hits: tuple[SearchHit, ...]
     more: bool
+    common: tuple[CommonValue, ...] = ()
 
 
 class SearchBackend(ABC):
@@ -206,8 +233,10 @@ def fill_index(connection: sqlite3.Connection, ranking: Sequence[str]) -> None:
 
     Each value gets a row for the whole value, and a word row for each later word start (`_keys`), in its property's
     lanes. A value that normalizes to nothing (e.g. only whitespace or combining marks) is left out, as no query
-    matches it. Of an entity's values that differ only in language tags that rank alike, one is kept.
+    matches it. Of an entity's values that differ only in language tags that rank alike, one is kept. A common value
+    (`COMMON_SHARE`) gets no rows, only its counts in `common_value` (`_fill_common`).
     """
+    _fill_common(connection)
     # Keys are cut in Python, in one pass: SQLite's length() and substr() stop at a NUL, which a literal may hold, and
     # calling Python functions from SQL for each row took about 10 s longer on NCBITaxon (research/P-41).
     connection.execute(
@@ -217,7 +246,8 @@ def fill_index(connection: sqlite3.Connection, ranking: Sequence[str]) -> None:
     try:
         values = connection.execute(
             "SELECT v.rowid, v.value FROM annotation_value AS v JOIN search_property AS p ON p.id = v.property"
-            " WHERE NOT p.prose"
+            " WHERE NOT p.prose AND NOT EXISTS"
+            "  (SELECT 1 FROM common_value AS c WHERE c.property = v.property AND c.value = v.value)"
         )
         connection.executemany("INSERT INTO search_key VALUES (?, ?, ?, ?, ?, ?, ?, ?)", _keys(values))
         with rank_tables(connection, (), ranking, "annotation_value"):
@@ -237,6 +267,38 @@ def fill_index(connection: sqlite3.Connection, ranking: Sequence[str]) -> None:
             )
     finally:
         connection.execute("DROP TABLE search_key")
+
+
+def _fill_common(connection: sqlite3.Connection) -> None:
+    """Fill `common_value` with the common name-like values: each with, per entity type, its entities and the type's.
+
+    A value is counted across languages, by its lexical form. Found by one pass over the name-like values, grouped,
+    then one more over those of the few properties with a common value, joined to `entity` for the types.
+    """
+    total = connection.execute("SELECT count(*) FROM entity").fetchone()[0]
+    least = max(COMMON_MIN, int(total * COMMON_SHARE) + 1)
+    common = connection.execute(
+        "SELECT v.property, v.value FROM annotation_value AS v JOIN search_property AS p ON p.id = v.property"
+        " WHERE NOT p.prose GROUP BY v.property, v.value HAVING count(*) >= ?",
+        (least,),
+    ).fetchall()
+    if not common:
+        return
+    of_type = dict(connection.execute("SELECT type, count(*) FROM entity GROUP BY type").fetchall())
+    connection.execute("CREATE TEMP TABLE common_key (property INTEGER NOT NULL, value TEXT NOT NULL)")
+    try:
+        connection.executemany("INSERT INTO common_key VALUES (?, ?)", common)
+        rows = connection.execute(
+            "SELECT v.property, v.value, entity.type, count(DISTINCT v.entity) FROM annotation_value AS v"
+            " JOIN common_key AS k ON k.property = v.property AND k.value = v.value"
+            " JOIN entity ON entity.id = v.entity GROUP BY 1, 2, 3"
+        ).fetchall()
+    finally:
+        connection.execute("DROP TABLE common_key")
+    connection.executemany(
+        "INSERT INTO common_value VALUES (?, ?, ?, ?, ?, ?)",
+        sorted((p, value, kind, normalize(value), n, of_type[kind]) for p, value, kind, n in rows),
+    )
 
 
 type _Key = tuple[int, bool, int, str, str, str | None, str | None, int]
@@ -335,9 +397,12 @@ def search(connection: sqlite3.Connection, query: SearchQuery) -> SearchResults:
         query: The query.
     """
     text = normalize(query.text)
-    lanes = _lanes(connection, query)
-    if not text or not lanes:
+    lanes, places, iris = _lanes(connection, query)
+    if not text:
         return SearchResults((), more=False)
+    common = _common(connection, query, text, places, iris) if query.offset == 0 else ()
+    if not lanes:
+        return SearchResults((), more=False, common=common)
     wanted = query.offset + query.limit + 1  # one more, to tell whether there are more
     best: dict[str, tuple[_Match, bool]] = {}
 
@@ -382,7 +447,7 @@ def search(connection: sqlite3.Connection, query: SearchQuery) -> SearchResults:
         SearchHit(match.iri, types[match.iri], match.value, match.lane.iri, match.language, exact, match.word_start)
         for match, exact in found
     )
-    return SearchResults(hits, more=len(best) >= wanted)
+    return SearchResults(hits, more=len(best) >= wanted, common=common)
 
 
 def _with_value(connection: sqlite3.Connection, match: _Match) -> _Match:
@@ -425,8 +490,12 @@ def _properties(connection: sqlite3.Connection, order: Sequence[str]) -> list[tu
     return sorted(found, key=place)
 
 
-def _lanes(connection: sqlite3.Connection, query: SearchQuery) -> list[_Lane]:
-    """Return the lanes the query's filters allow, in tier order.
+type _Places = dict[int, tuple[int, bool]]
+"""Each property a query searches, by id, with its place in the walk: its rank, and whether it's entailed."""
+
+
+def _lanes(connection: sqlite3.Connection, query: SearchQuery) -> tuple[list[_Lane], _Places, dict[int, str]]:
+    """Return the lanes the query's filters allow, in tier order, and the properties it searches, with their IRIs.
 
     Each chosen property's lanes take its place in the walk; with entailed values, so do its sub-properties' lanes,
     after its own (rule 5). A lane reached through several chosen properties takes its best place.
@@ -452,7 +521,42 @@ def _lanes(connection: sqlite3.Connection, query: SearchQuery) -> list[_Lane]:
         )
         if (place := places.get(property_id)) is not None and (query.types is None or kind in query.types)
     ]
-    return sorted(lanes, key=lambda lane: (*lane.tier(), lane.type))
+    return sorted(lanes, key=lambda lane: (*lane.tier(), lane.type)), places, iris
+
+
+def _common(
+    connection: sqlite3.Connection, query: SearchQuery, text: str, places: _Places, iris: dict[int, str]
+) -> tuple[CommonValue, ...]:
+    """Return the common values that match a normalized query, of the properties and types it searches.
+
+    They match as indexed values do, from the start of the value or of a later word, and rank exact first, then by the
+    property's place, then by normalized value and value.
+    """
+    found: dict[tuple[int, str], list[tuple[EntityType, int, int]]] = {}
+    keys: dict[tuple[int, str], str] = {}
+    for property_id, value, kind, normalized, entities, of_type in connection.execute(
+        "SELECT property, value, type, normalized, entities, of_type FROM common_value"
+    ):
+        if property_id not in places or (query.types is not None and kind not in query.types):
+            continue
+        starts = [0, *word_starts(normalized[:MAX_QUERY_CHARS])]
+        if any(normalized.startswith(text, start) for start in starts):
+            found.setdefault((property_id, value), []).append((EntityType(kind), entities, of_type))
+            keys[property_id, value] = normalized
+    order = list(EntityType)
+
+    def rank(key: tuple[int, str]) -> tuple[bool, tuple[int, bool], str, str]:
+        return keys[key] != text, places[key[0]], keys[key], key[1]
+
+    return tuple(
+        CommonValue(
+            value,
+            iris[property_id],
+            tuple(sorted(found[property_id, value], key=lambda count: order.index(count[0]))),
+            keys[property_id, value] == text,
+        )
+        for property_id, value in sorted(found, key=rank)
+    )
 
 
 def _tier_matches(

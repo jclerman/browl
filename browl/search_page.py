@@ -32,6 +32,7 @@ from browl.search import (
     MAX_OFFSET,
     MAX_QUERY_CHARS,
     SEARCH_LIMIT,
+    CommonValue,
     SearchBackend,
     SearchHit,
     SearchProperty,
@@ -62,6 +63,15 @@ PAGE_SIZE = 50
 
 _VALUES = ("all", "direct")
 """What `values=` may give."""
+
+TYPE_PLURALS = {
+    EntityType.ONTOLOGY: "ontologies",
+    EntityType.CLASS: "classes",
+    EntityType.OBJECT_PROPERTY: "object properties",
+    EntityType.DATA_PROPERTY: "data properties",
+    EntityType.ANNOTATION_PROPERTY: "annotation properties",
+}
+"""Each entity type's name for a count of them, as the results page's common values show it."""
 
 router = APIRouter()
 """The search route, under the reserved prefix."""
@@ -312,6 +322,44 @@ def _choices(connection: sqlite3.Connection, names: Mapping[str, str], chosen: S
     ]
 
 
+@dataclass(frozen=True)
+class ShownCommon:
+    """A common value as the results page shows it: counted, as it's on too many entities to list (DESIGN.md §2.6).
+
+    Attributes:
+        value: The value, cut short.
+        property: The label of the property it's asserted with.
+        counts: How many entities of each type have it, and their share of that type, e.g. "2,291,619 classes (76%)".
+    """
+
+    value: str
+    property: str
+    counts: str
+
+
+def share(part: int, whole: int) -> str:
+    """Return a share as a whole percentage, or "<1%" for a share that rounds to none.
+
+    Examples:
+        >>> share(2_291_619, 3_025_059), share(3, 1000)
+        ('76%', '<1%')
+    """
+    percent = round(100 * part / whole)
+    return f"{percent}%" if percent else "<1%"
+
+
+def shown_common(common: Sequence[CommonValue], labels: Mapping[str, str]) -> list[ShownCommon]:
+    """Return how the results page shows common values, each property by its label (`property_label`)."""
+    return [
+        ShownCommon(
+            cut_name(found.value),
+            labels.get(found.property, cut_name(found.property)),
+            " and ".join(f"{n:,} {TYPE_PLURALS[kind]} ({share(n, of)})" for kind, n, of in found.counts),
+        )
+        for found in common
+    ]
+
+
 def _params(asked: SearchRequest, offset: int = 0) -> list[tuple[str, str]]:
     """Return a search URL's parameters for the same query and filters, from an offset."""
     params = [(QUERY_PARAM, asked.text)]
@@ -390,6 +438,7 @@ async def search_page(request: Request) -> Response:
         "text": asked.text,
         "blank": not normalized,
         "hits": hits,
+        "common": shown_common(results.common, labels),
         "offset": asked.offset,
         "previous": previous,
         "next": next_,

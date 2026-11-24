@@ -114,6 +114,15 @@ CREATE TABLE search_lane (
     max_length INTEGER NOT NULL,
     PRIMARY KEY (type, property, language_rank, word)
 ) WITHOUT ROWID;
+CREATE TABLE common_value (
+    property INTEGER NOT NULL,
+    value TEXT NOT NULL,
+    type TEXT NOT NULL,
+    normalized TEXT NOT NULL,
+    entities INTEGER NOT NULL,
+    of_type INTEGER NOT NULL,
+    PRIMARY KEY (property, value, type)
+) WITHOUT ROWID;
 CREATE TABLE edge (
     hierarchy TEXT NOT NULL,
     parent INTEGER NOT NULL,

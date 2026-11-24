@@ -37,6 +37,14 @@
   {% if not blank %}
   <section class="search-results" aria-labelledby="results-heading">
     <h2 id="results-heading">Results</h2>
+    {% if common %}
+    <ul class="common-values">
+      {% for found in common %}
+      <li><bdi class="common-value">{{ found.value }}</bdi> <span class="note">(<bdi>{{ found.property }}</bdi>)</span>
+        is on {{ found.counts }}: too many to list.</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
     {% if hits %}
     <p class="note">Showing {{ "{:,}".format(offset + 1) }}–{{ "{:,}".format(offset + hits | length) }}</p>
     <table class="hits">
@@ -54,7 +62,7 @@
         {% endfor %}
       </tbody>
     </table>
-    {% else %}
+    {% elif not common %}
     <p class="note">{% if offset %}No more results.{% else %}No matches.{% endif %}</p>
     {% endif %}
     {% if previous is not none or next is not none %}
