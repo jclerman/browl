@@ -69,6 +69,8 @@ COLUMNS = {
         ("direct", "INTEGER", 1, 0),
     ],
     "prefix": [("prefix", "TEXT", 1, 1), ("namespace", "TEXT", 1, 0)],
+    "type_count": [("type", "TEXT", 1, 1), ("count", "INTEGER", 1, 0)],
+    "axiom_count": [("kind", "TEXT", 1, 1), ("count", "INTEGER", 1, 0)],
     "search_lane": [
         ("type", "TEXT", 1, 1),
         ("property_rank", "INTEGER", 1, 2),
@@ -112,6 +114,7 @@ INDEXES = {
     "name_value_entity",
     "edge_child",
     "equiv_group_representative",
+    "prefix_name",
 }
 
 
@@ -212,21 +215,6 @@ def test_meta_without_iris(tmp_path: Path) -> None:
         pass
     with closing(connect(tmp_path, 1, KEYS)) as connection:
         assert read_meta(connection) == plain
-
-
-@pytest.mark.parametrize(
-    ("version_iri", "version_info", "expected"),
-    [
-        ("http://example.org/onto/1.0", "1.0-dev", "http://example.org/onto/1.0"),
-        (None, "4.4-dev", "4.4-dev"),
-        (None, None, None),
-    ],
-    ids=["version-iri", "version-info", "neither"],
-)
-def test_meta_version(version_iri: str | None, version_info: str | None, expected: str | None) -> None:
-    """The version shown is the version IRI, else the version info."""
-    when = datetime(2026, 1, 1, tzinfo=UTC)
-    assert Meta(1, Reasoner.NONE, when, version_iri=version_iri, version_info=version_info).version == expected
 
 
 def test_build_commits_after_block_commits(tmp_path: Path) -> None:

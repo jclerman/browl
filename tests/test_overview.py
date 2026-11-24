@@ -443,7 +443,7 @@ def test_panels_read_concurrently(client: TestClient, monkeypatch: pytest.Monkey
             await annotations_started.wait()
         return [], False
 
-    monkeypatch.setattr(browl.overview, "_read_annotations", read_annotations)
+    monkeypatch.setattr(browl.overview, "read_annotations", read_annotations)
     monkeypatch.setattr(browl.overview, "_read_axioms", read_axioms)
     page = client.get("/_browl/hash", params=PANEL)
     assert page.status_code == 200
@@ -468,7 +468,7 @@ def test_unexpected_error_cancels_other(client: TestClient, monkeypatch: pytest.
         await started.wait()
         raise RuntimeError("unexpected")
 
-    monkeypatch.setattr(browl.overview, "_read_annotations", read_annotations)
+    monkeypatch.setattr(browl.overview, "read_annotations", read_annotations)
     monkeypatch.setattr(browl.overview, "_read_axioms", read_axioms)
     with pytest.raises(RuntimeError, match="unexpected"):
         client.get("/_browl/hash", params=PANEL)

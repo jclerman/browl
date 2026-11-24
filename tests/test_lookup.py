@@ -663,7 +663,7 @@ def test_home_title_without_frame(app: FastAPI, monkeypatch: pytest.MonkeyPatch)
         run(client, app)
         text = client.get("/onto").text
     assert f"<title>{ONTO_TITLE} · browl</title>" in text
-    assert "None" not in text
+    assert "<bdi>None</bdi>" not in text
 
 
 def test_disambiguation_names(app: FastAPI) -> None:

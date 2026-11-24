@@ -6,7 +6,7 @@ lookup gives the links for both.
 
 import logging
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from fastapi import Request
 from pydantic import BaseModel, ConfigDict
@@ -127,15 +127,11 @@ async def read_overview(request: Request, state: JobState, iri: str) -> Overview
     generation, clause = ready_store(state)
     dataset = dataset_name(generation)
     async with task_group() as group:
-        annotations_task = group.create_task(_read_annotations(request, dataset, iri, clause))
+        annotations_task = group.create_task(read_annotations(request, dataset, iri, clause))
         axioms_task = group.create_task(_read_axioms(request, dataset, iri, clause))
     annotations, too_many_annotations = annotations_task.result()
     axioms, too_many_axioms = axioms_task.result()
-    mentioned = [each for axiom in axioms or () for each in axiom.iris()]
-    for property_, value in annotations or ():
-        mentioned.append(property_)
-        if isinstance(value, IRIValue):
-            mentioned.append(value.iri)
+    mentioned = [each for axiom in axioms or () for each in axiom.iris()] + annotation_iris(annotations)
     settings: Settings = request.app.state.settings
     prefix = settings.reserved_prefix
     root = link_root(request.scope)
@@ -151,22 +147,14 @@ async def read_overview(request: Request, state: JobState, iri: str) -> Overview
         return links, frame_groups(axioms, iri, equivalents, lambda each: shown_name(each, links)), more
 
     links, axiom_groups, more_equivalents = await read_derived(request, read_links, state)
-    groups = None
-    if annotations is not None:
-        groups = group_annotations(
-            annotations,
-            name_property_iris(settings),
-            lambda each: shown_name(each, links),
-            settings.language_ranking,
-        )
     return Overview(
-        annotations=AnnotationsPanel(groups=groups, too_many=too_many_annotations),
+        annotations=annotations_panel(annotations, too_many_annotations, links, settings),
         axioms=AxiomsPanel(groups=axiom_groups, too_many=too_many_axioms, more_equivalents=more_equivalents),
         links=links,
     )
 
 
-async def _read_annotations(
+async def read_annotations(
     request: Request, dataset: str, iri: str, clause: str
 ) -> tuple[list[tuple[IRI, AnnotationValue]] | None, bool]:
     """Return an entity's annotations (`browl.annotations.fetch_annotations`), and whether they're too many.
@@ -181,6 +169,31 @@ async def _read_annotations(
     except (SparqlError, RDFSyntaxError):
         logger.exception("Couldn't show the annotations of %s", logged_iri(iri))
         return None, False
+
+
+def annotation_iris(annotations: Sequence[tuple[IRI, AnnotationValue]] | None) -> list[str]:
+    """Return the IRIs annotations mention, their properties' and IRI values, for their links."""
+    mentioned: list[str] = []
+    for property_, value in annotations or ():
+        mentioned.append(property_)
+        if isinstance(value, IRIValue):
+            mentioned.append(value.iri)
+    return mentioned
+
+
+def annotations_panel(
+    annotations: Sequence[tuple[IRI, AnnotationValue]] | None,
+    too_many: bool,
+    links: Mapping[str, EntityLink],
+    settings: Settings,
+) -> AnnotationsPanel:
+    """Return the annotations panel for annotations `read_annotations` read, with their IRIs' links."""
+    groups = None
+    if annotations is not None:
+        groups = group_annotations(
+            annotations, name_property_iris(settings), lambda each: shown_name(each, links), settings.language_ranking
+        )
+    return AnnotationsPanel(groups=groups, too_many=too_many)
 
 
 async def _read_axioms(request: Request, dataset: str, iri: str, clause: str) -> tuple[list[AnyAxiom] | None, bool]:

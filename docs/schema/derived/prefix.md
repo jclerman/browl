@@ -32,9 +32,10 @@ CREATE TABLE prefix (
 
 ## Indexes
 
-| Name                      | Definition           |
-| ------------------------- | -------------------- |
-| sqlite_autoindex_prefix_1 | PRIMARY KEY (prefix) |
+| Name                      | Definition                                                         |
+| ------------------------- | ------------------------------------------------------------------ |
+| prefix_name               | CREATE INDEX prefix_name ON prefix (prefix COLLATE NOCASE, prefix) |
+| sqlite_autoindex_prefix_1 | PRIMARY KEY (prefix)                                               |
 
 ## Relations
 

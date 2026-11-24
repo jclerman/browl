@@ -32,7 +32,7 @@ from browl.loading import dataset_name
 from browl.names import name_property_iris, normalize
 from browl.precache import hierarchies
 from browl.precache.core import Hook
-from browl.precache.entities import Reserved, fill_hash_prefix, insert_entities
+from browl.precache.entities import Reserved, fill_hash_prefix, fill_type_count, insert_entities
 from browl.precache.keys import build_keys
 from browl.precache.stage import HOOKS, pre_cache
 from browl.rdf import RDF, RDFS
@@ -263,6 +263,15 @@ SCAN_RESULT = (
 """The usage table's scan (`usage-scan.rq`): x SubClassOf A, x's label, and a blank subject's triple naming A."""
 
 
+AXIOM_COUNT_QUERIES = {
+    "SELECT ?predicate ?class (COUNT(*) AS ?count)": ("?predicate", "?class", "?count"),
+    "SELECT ?kind (COUNT(*) AS ?count)": ("?kind", "?count"),
+    "SELECT ?s (COUNT(*) AS ?count)": ("?s", "?count"),
+    "SELECT ?property ?type": ("?property", "?type"),
+}
+"""The axiom counts' queries' SELECT clauses, and their columns."""
+
+
 def answer(query: str) -> str:
     """Return a stubbed Fuseki's answer: the entities', names', edges', owner map's, usage scan's, else the header's."""
     if "?subject ?predicate ?object" in query:
@@ -277,6 +286,10 @@ def answer(query: str) -> str:
         return NAME_RESULT
     if "?child ?relation" in query:
         return EDGE_RESULT
+    # The axiom counts' queries (browl.precache.axiom_counts), by their SELECT clause: none.
+    for select, names in AXIOM_COUNT_QUERIES.items():
+        if select in query:
+            return "\t".join([*names, f"?{END_VARIABLE}"]) + "\n" + "\t" * len(names) + "true\n"
     return ONTOLOGY_RESULT
 
 
@@ -351,6 +364,7 @@ def derived_stage(
         with derived.build(settings.data_dir, meta, build_keys(settings, HOOKS)) as connection:
             insert_entities(rows, mapper, Reserved(), connection)
             fill_hash_prefix(connection)
+            fill_type_count(connection)
             set_names(connection, names or {})
             for group in equivalence_groups:
                 connection.executemany(

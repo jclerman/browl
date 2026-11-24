@@ -21,6 +21,7 @@ from browl.fuseki import FusekiClient, SparqlError, ping
 from browl.jobs import JobContext
 from browl.jobtypes import StageError
 from browl.loading import dataset_name, read_upload_prefixes
+from browl.precache.axiom_counts import axiom_counts
 from browl.precache.core import DerivedWriter, Hook, PreCacheContext
 from browl.precache.entities import entities
 from browl.precache.header import header_meta
@@ -41,7 +42,7 @@ FUSEKI_RETRY_S = (0.5, 5.0)
 INTERRUPT_CHECK_STEPS = 10_000
 """How many SQLite virtual machine steps an interruptible build's statements take between checks for an interrupt."""
 
-HOOKS: tuple[Hook, ...] = (entities, names, search, hierarchies, owner_map)
+HOOKS: tuple[Hook, ...] = (entities, names, search, hierarchies, owner_map, axiom_counts)
 """The hooks the app runs, in order: a hook may read tables an earlier one filled.
 
 A hook creates the indexes of each table it fills once it's done (`DerivedWriter.create_indexes`), so later hooks can

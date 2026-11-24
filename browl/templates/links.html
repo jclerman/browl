@@ -20,3 +20,11 @@
 {%- if link is not none and link.href is not none %}<bdi>{{ link.name }}</bdi>
 {%- else %}<bdi dir="ltr">{{ shown_name(iri, links, text) | bidi_encoded | cut_text(MAX_IRI_CHARS) }}</bdi>{% endif -%}
 {%- endmacro %}
+
+{# An IRI with no page here: an `http` or `https` one as a link to itself (DESIGN.md §2.9), without a referrer, unless
+   it's too long to show whole, as a cut one could hide where it goes; any other as text, cut short if long. Either
+   way its bidirectional-text controls are encoded. #}
+{% macro web_iri(iri) -%}
+{%- if iri is web_iri and iri | length <= MAX_IRI_CHARS %}<a href="{{ iri }}" rel="nofollow noreferrer"><code dir="ltr">{{ iri | bidi_encoded }}</code></a>
+{%- else %}<code dir="ltr">{{ iri | bidi_encoded | cut_text(MAX_IRI_CHARS) }}</code>{% endif -%}
+{%- endmacro %}

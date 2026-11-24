@@ -1,0 +1,13 @@
+# Every property's declared types and characteristics, from the ontology and its imports, so the axiom count
+# (browl.precache.axiom_counts) can tell an annotation assertion from a property assertion as the annotations panel
+# does (entity-annotations.rq). The prologue (browl.precache.core.PREFIXES) and the dataset clause are added when it's
+# run.
+SELECT ?property ?type
+WHERE {
+  VALUES ?type {
+    owl:ObjectProperty owl:DatatypeProperty owl:AnnotationProperty owl:FunctionalProperty owl:InverseFunctionalProperty
+    owl:TransitiveProperty owl:SymmetricProperty owl:AsymmetricProperty owl:ReflexiveProperty owl:IrreflexiveProperty
+  }
+  ?property rdf:type ?type .
+  FILTER isIRI(?property)
+}

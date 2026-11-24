@@ -1,0 +1,17 @@
+# The ontology's triples, for its axiom count (browl.precache.axiom_counts, DESIGN.md §2.5): counted by ?predicate
+# alone (?class unbound), and the rdf:type triples again by their IRI ?class. Under OWL's RDF mapping each triple is
+# one axiom, or none (browl.precache.axiom_counts sorts them), less those `axiom-not-triples.rq` counts; the rdf:type
+# triples whose object is a class expression are the difference. No filter on the subject or the predicate: one decodes
+# every subject, 30 s more on NCBITaxon's 24 M triples, the other 15 s more. Run on the default graph alone, the
+# ontology without its imports; the prologue (browl.precache.core.PREFIXES) is added when it's run.
+SELECT ?predicate ?class (COUNT(*) AS ?count)
+WHERE {
+  { ?s ?predicate ?o }
+  UNION
+  {
+    ?s rdf:type ?class
+    FILTER isIRI(?class)
+    BIND (rdf:type AS ?predicate)
+  }
+}
+GROUP BY ?predicate ?class

@@ -208,6 +208,11 @@ def read_offset(value: str | None) -> int | None:
     return int(value) if _OFFSET.fullmatch(value) else None
 
 
+def tree_href(request: Request, tree: TreePage) -> str:
+    """Return the `href` of a hierarchy's tree page."""
+    return href(request, f"/{request.app.state.settings.reserved_prefix}/tree/{tree.slug}")
+
+
 def frame_context(request: Request) -> dict[str, object]:
     """Return what the base template's frame needs: the navigation bar's links, the title's end, and the user's role.
 
@@ -223,9 +228,7 @@ def frame_context(request: Request) -> dict[str, object]:
         "frame": {
             "name": link.name,
             "home": None if link.path is None else href(request, link.path, link.fragment),
-            "trees": [
-                (href(request, f"{reserved}/tree/{tree.slug}"), tree.label, tree.slug == current) for tree in TREES
-            ],
+            "trees": [(tree_href(request, tree), tree.label, tree.slug == current) for tree in TREES],
             "current_tree": next((tree.label for tree in TREES if tree.slug == current), None),
             "search": href(request, f"{reserved}/{SEARCH_PATH}"),
             "suggest": href(request, f"{reserved}/{SEARCH_PATH}?{SUGGEST_PARAM}=1"),

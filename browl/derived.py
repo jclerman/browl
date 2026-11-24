@@ -146,6 +146,14 @@ CREATE TABLE prefix (
     prefix TEXT PRIMARY KEY,
     namespace TEXT NOT NULL
 ) WITHOUT ROWID;
+CREATE TABLE type_count (
+    type TEXT PRIMARY KEY,
+    count INTEGER NOT NULL
+) WITHOUT ROWID;
+CREATE TABLE axiom_count (
+    kind TEXT PRIMARY KEY,
+    count INTEGER NOT NULL
+) WITHOUT ROWID;
 """
 """The tables (§2.5). Entities are referred to by `entity.id`, a dense integer (e.g. for descendant bitmaps); an IRI
 declared with several types (punning) has a row for each. The `build_key` table and its columns, and `meta.generation`,
@@ -159,6 +167,8 @@ INDEXES: dict[str, tuple[str, ...]] = {
     "name_value": ("CREATE INDEX name_value_entity ON name_value (entity)",),
     "edge": ("CREATE INDEX edge_child ON edge (hierarchy, child)",),
     "equiv_group": ("CREATE INDEX equiv_group_representative ON equiv_group (representative)",),
+    # The home page's order (`browl.home`), so it reads the first prefixes rather than sorting them all per view.
+    "prefix": ("CREATE INDEX prefix_name ON prefix (prefix COLLATE NOCASE, prefix)",),
 }
 """Each table's secondary indexes, created once the table is filled, which is faster than keeping them up to date
 (`create_indexes`)."""
@@ -189,11 +199,6 @@ class Meta:
     title: str | None = None
     version_info: str | None = None
 
-    @property
-    def version(self) -> str | None:
-        """Return the version to show: the version IRI if there is one, else the version info, else None."""
-        return self.version_iri if self.version_iri is not None else self.version_info
-
 
 class EntityType(StrEnum):
     """An entity's type, as `entity.type` stores it."""
@@ -207,6 +212,22 @@ class EntityType(StrEnum):
 
 PROPERTY_TYPES = frozenset({EntityType.OBJECT_PROPERTY, EntityType.DATA_PROPERTY, EntityType.ANNOTATION_PROPERTY})
 """The entity types that are properties."""
+
+
+class AxiomKind(StrEnum):
+    """A kind of axiom the home page counts, as `axiom_count.kind` stores it (`browl.precache.axiom_counts`).
+
+    Attributes:
+        LOGICAL: A logical axiom: a class, property or individual axiom, a key, or a SWRL rule.
+        DECLARATION: A declaration.
+        ANNOTATION: An annotation assertion, or an annotation property's sub-property, domain or range.
+        DATATYPE_DEFINITION: A datatype definition.
+    """
+
+    LOGICAL = "logical"
+    DECLARATION = "declaration"
+    ANNOTATION = "annotation"
+    DATATYPE_DEFINITION = "datatype_definition"
 
 
 class UsageRootKind(StrEnum):
@@ -473,6 +494,16 @@ def is_current(data_dir: Path, generation: int, keys: Mapping[str, str]) -> bool
         return False
     connection.close()
     return True
+
+
+def read_type_counts(connection: sqlite3.Connection) -> dict[EntityType, int]:
+    """Return how many entities have each type (the `type_count` table); a type with none has no key."""
+    return {EntityType(kind): count for kind, count in connection.execute("SELECT type, count FROM type_count")}
+
+
+def read_axiom_counts(connection: sqlite3.Connection) -> dict[AxiomKind, int]:
+    """Return how many of the ontology's own axioms there are of each kind (the `axiom_count` table)."""
+    return {AxiomKind(kind): count for kind, count in connection.execute("SELECT kind, count FROM axiom_count")}
 
 
 def read_meta(connection: sqlite3.Connection) -> Meta:

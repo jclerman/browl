@@ -596,6 +596,8 @@ are documented in [`SCHEMA.md`](SCHEMA.md):
 | `root` | Each hierarchy's roots, which the tree pages start from (P-18) | `edge`, in Python: found on demand, they'd take a scan of `counts` and a lookup in `edge` per node, 1–2 s on NCBITaxon |
 | `usage_root`, `usage_ref`, `usage_blank` | The blank-node owner map (P-27): each blank-node root that's a usage, with its kind, owner, predicate and store label; the entities each is a usage of; per entity, its triples with a blank subject | One bulk query over the blank nodes, found by their types and predicates (`owner-map.rq`, `browl.precache.owner_map`): 5–7 s on Uberon and HPO; on NCBITaxon 26 s, 2.69 M rows ([S-7 findings](../research/S-7/README.md)). The whole hook takes 9 s on Uberon, and 34–49 s on NCBITaxon, where it grows the process by 0.33 GB; NCBITaxon's tables are 78 MiB (P-27a) |
 | `hash_prefix` | Distinct URL paths that have hash entities under them | `entity` |
+| `type_count` | How many entities have each type, for the home page (U-1); a punned IRI counts once per type | `entity`, by one `GROUP BY` at the end of the entities hook (P-17): counted per view, it'd scan NCBITaxon's 3 M rows |
+| `axiom_count` | How many of the ontology's own axioms there are of each kind: logical, declaration, annotation, datatype definition, for the home page (U-1) | Four aggregate queries on the default graph, and one listing property types across the ontology and its imports (`browl.precache.axiom_counts`, P-17; [2.8](#28-entity-pages), The axiom count): 15 s on NCBITaxon |
 | `prefix` | CURIE prefix → namespace | The built-in ones, overridden by the ontology file's own, overridden by `EXTRA_PREFIXES` ([2.7](#27-display-names)) |
 | `meta` | Ontology IRI, version IRI, title, `owl:versionInfo`, reasoner used, load time (the job's start), generation number | The ontology header query (below) and the job |
 | `build_key` | Component → build key (below) | `browl.precache.keys` |
@@ -664,7 +666,7 @@ The same query reads that ontology's title and `owl:versionInfo`, literals only.
 value among `dcterms:title`, `dc:title`, then `NAME_PROPERTIES`, chosen by language ranking ([2.7](#27-display-names))
 then lexical order, with a warning if several tie; a blank value (only spaces, tabs and line breaks) isn't one; without
 one, pages show the IRI. Several `owl:versionInfo` values are chosen the same way, with a warning. The version shown is
-the version IRI, else the version info (`Meta.version`). The rest of the ontology's annotations aren't stored: the home
+the version IRI, else the version info. The rest of the ontology's annotations aren't stored: the home
 page (P-17) queries Fuseki for them.
 
 An earlier design had a `usage` table in the derived database, because the OWLAPI can't find annotation assertions
@@ -1473,6 +1475,59 @@ browl's Fuseki client checks every IRI it reads (2.14).
 **Base directions** (RDF 1.2's `"…"@ar--rtl`): Fuseki stores and returns them, and browl's Fuseki client reads them as
 `rdf:dirLangString` literals. The OWLAPI 4.5 predates RDF 1.2: its N-Triples parser accepts them but reads `ar--rtl`
 as the whole language tag, so the Manchester rendering shows such a literal as written (P-4).
+
+**The home page** _(P-17, `browl.home`)_: the page at the ontology IRI's URL (U-2), without tabs. Under its title:
+
+- **A warning, in red and boxed, if any import couldn't be loaded:** how many of how many, that the site leaves out what
+  they declare though the ontology still lists them, and each one's IRI, what imports it if it's indirect, and why
+  (the first line of the job state's `ImportResult.reason`, P-8, cut short; the rest, such as a parser's output, is
+  for the status page). It comes first, so it's seen before anything it affects.
+- **An Ontology panel:** the ontology IRI; the version IRI, else `owl:versionInfo`; the reasoner applied
+  ("None" if none); the load time; the entities of each type, each linked to its tree page, from `type_count`
+  ([2.5](#25-derived-data-pre-caching)); the ontology's own axioms, in all and as logical axioms, declarations,
+  annotation axioms and any datatype definitions, from `axiom_count` (below); and the triples loaded, the ontology's
+  own (the default graph) and its loaded imports' together, from the job state. An IRI is a link only if it's `http`
+  or `https` and short enough to show whole, as an annotation's IRI value is (`links.html`'s `web_iri`): the upload's
+  IRIs are unchecked, and autoescaping doesn't stop a `javascript:` IRI in an `href`.
+- **The Annotations panel**, as an entity's (above): the ontology IRI's annotation triples, by the same query, so
+  `owl:imports` and `owl:versionIRI`, which aren't annotations, aren't in it. Its failure fails only the panel.
+- **A Prefixes panel:** the `prefix` table, which the site's CURIEs use (built in, the ontology file's own, then
+  `EXTRA_PREFIXES`; [2.7](#27-display-names)), by name, case-insensitively, the namespaces as text. At most 1,000
+  (`MAX_PREFIXES`), then how many more, as a file may declare many; an index in that order (`prefix_name`) lets a
+  view read just those.
+- **An Imports panel:** every import, direct and indirect, with what imports it, and its triple count, or "not loaded"
+  in red.
+
+**The axiom count** _(P-17, `browl.precache.axiom_counts`)_: the triples give a sense of size, but of the RDF, not of
+the OWL, so the page counts axioms too. They're counted from the ontology's own triples by OWL 2's mapping to RDF, not
+by the OWLAPI: the count is of what the ontology says, defined by the spec rather than by one parser, and no step loads
+the whole ontology into the OWLAPI for it (only a reasoning run does). Each triple is one axiom or none, by its
+predicate and, for `rdf:type`, its class: a declaration, a characteristic, a class assertion, a logical predicate
+(`rdfs:subClassOf`, `owl:equivalentClass`, …), an annotation assertion, told from a property assertion as the
+annotations panel tells them, or a property assertion. Not axioms: the vocabulary's other triples (lists,
+restrictions' parts, `rdfs:Class` typing), and every triple of the ontology's header, a SWRL variable, a reified axiom
+or annotation, and a node that is an axiom of its own (`owl:AllDisjointClasses`, a negative property assertion, a
+SWRL rule), which counts once instead; nor a class expression's `rdf:type`, nor an inverse property expression. A
+symmetric axiom stated both ways (`A owl:equivalentClass B` and `B owl:equivalentClass A`) counts once, as the OWLAPI
+counts it. An annotation property's sub-property, domain and range axioms are annotation axioms, and a datatype's
+`owl:equivalentClass` a datatype definition (each way, as the OWLAPI counts it), neither logical. A property's kind
+comes from its declarations in the ontology and its imports, as the OWLAPI reads them. The counts match the OWLAPI's,
+kind by kind, on `tests/data/axioms.ofn`, which has every kind of OWL 2 axiom, and on anonymous individuals' assertions.
+Where they'd differ is where the OWLAPI's parser guesses or recovers: a malformed construct, or a property whose kind
+only its use shows; a kind that would come out negative is logged and shown as none. Four aggregate queries on the
+default graph, and one listing property types across the ontology and its imports; none tests every subject for
+`isIRI` or `isBlank`, which decodes it: 30 s more on NCBITaxon's 24 M triples. They take 15 s on NCBITaxon (11.5 s
+counting every triple by predicate), under 2 s on Uberon and 1 s on RadLex. The imports' axioms aren't counted. The
+count is of the ontology as served: after a reasoning run, the inferred axioms it materialized are counted, and
+the superclass shortcuts it removed aren't.
+
+**Layout:** in windows at least 64rem wide, the panels go two by two: Ontology and Annotations, then Prefixes and
+Imports, Ontology first since it always has something to show; narrower ones stack them in that order. As each panel is
+then at most about half the window, its values wrap at its edge rather than at the measure.
+
+The job state's triple counts and imports are the latest job's, so they're shown only when it's the ready generation's
+job; a page served just as a new job starts leaves them out rather than show the new job's. The page's data is a
+`Home`, built apart from its HTML for the JSON API (P-33).
 
 ### 2.9 Page layout
 

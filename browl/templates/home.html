@@ -1,10 +1,112 @@
 {% extends "base.html" %}
+{% from "annotations.html" import annotation_list %}
+{% from "links.html" import web_iri %}
 {% block title %}{{ name | isolate }}{% endblock %}
 {# The ontology is the page's subject, so its title isn't repeated. #}
 {% block title_suffix %} · {{ frame.site_name }}{% endblock %}
+{# An import's IRI, and what imports it if it's indirect. #}
+{% macro import_iri(result) -%}
+{{ web_iri(result.iri) }}
+{%- if result.imported_by is not none %} (imported by {{ web_iri(result.imported_by) }}){% endif %}
+{%- endmacro %}
 {% block content %}
-{# A placeholder until P-17. #}
+{# The home page (U-1, `browl.home.Home`): the dropped imports' warning first, then, in the Overview tab's panels, the
+   ontology's metadata and its annotations, then its prefixes and its imports: two by two in wide windows. #}
+{% set meta = home.meta %}
+{% set dropped = home.dropped_imports %}
+<div class="home-page">
 <h1><bdi>{{ name }}</bdi></h1>
-<p><code dir="ltr">{{ meta.ontology_iri }}</code></p>
-{% if meta.version %}<p>Version: <code dir="ltr">{{ meta.version }}</code></p>{% endif %}
+{% if dropped %}
+<section class="import-warning" aria-labelledby="import-warning-heading">
+  <h2 id="import-warning-heading">{{ dropped | length }} of the ontology's {{ home.imports | length }} imports couldn't be
+    loaded</h2>
+  <p>This site leaves out what {{ "it declares" if dropped | length == 1 else "they declare" }}, though the ontology
+    still lists {{ "it" if dropped | length == 1 else "them" }} among its imports.</p>
+  <ul>
+    {% for result in dropped %}
+    {# The reason's first line: the rest, such as a parser's output, is for the status page. #}
+    <li>{{ import_iri(result) }}:
+      <bdi>{{ (result.reason or "").partition("\n")[0] | cut_text(MAX_LITERAL_CHARS) }}</bdi></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+<div class="home-panels">
+<section class="ontology panel" tabindex="0" aria-labelledby="ontology-heading">
+  <h2 id="ontology-heading">Ontology</h2>
+  <dl class="frame">
+    <dt>IRI</dt>
+    <dd>{{ web_iri(meta.ontology_iri) }}</dd>
+    {% if meta.version_iri is not none %}
+    <dt>Version IRI</dt>
+    <dd>{{ web_iri(meta.version_iri) }}</dd>
+    {% elif meta.version_info is not none %}
+    <dt>Version</dt>
+    <dd><bdi class="value">{{ meta.version_info | cut_text(MAX_LITERAL_CHARS) }}</bdi></dd>
+    {% endif %}
+    <dt>Reasoner</dt>
+    <dd>{{ reasoners[meta.reasoner] }}</dd>
+    <dt>Loaded</dt>
+    <dd><time datetime="{{ meta.loaded_at.isoformat() }}">{{ meta.loaded_at.strftime("%Y-%m-%d %H:%M UTC") }}</time></dd>
+    <dt>Entities</dt>
+    {% for url, tree in trees %}
+    <dd><a href="{{ url }}">{{ tree.label }}</a>: {{ "{:,}".format(home.entity_counts.get(tree.hierarchy, 0)) }}</dd>
+    {% endfor %}
+    {# The ontology's own, as served: inferred axioms too if a reasoner ran (`browl.precache.axiom_counts`). #}
+    {% set axioms = home.axiom_counts %}
+    {% if axioms %}
+    <dt>Axioms</dt>
+    <dd>Total: {{ "{:,}".format(axioms.values() | sum) }}</dd>
+    <dd>Logical: {{ "{:,}".format(axioms.get("logical", 0)) }}</dd>
+    <dd>Declarations: {{ "{:,}".format(axioms.get("declaration", 0)) }}</dd>
+    <dd>Annotation: {{ "{:,}".format(axioms.get("annotation", 0)) }}</dd>
+    {% if axioms.get("datatype_definition", 0) %}
+    <dd>Datatype definitions: {{ "{:,}".format(axioms.get("datatype_definition")) }}</dd>
+    {% endif %}
+    {% endif %}
+    {% if home.triples is not none %}
+    <dt>Triples</dt>
+    <dd>{{ "{:,}".format(home.triples) }} in the ontology</dd>
+    {% if home.import_triples is not none %}
+    <dd>{{ "{:,}".format(home.import_triples) }} in its imports</dd>
+    {% endif %}
+    {% endif %}
+  </dl>
+</section>
+{{ annotation_list(home.annotations, home.links) }}
+<section class="prefixes panel" tabindex="0" aria-labelledby="prefixes-heading">
+  <h2 id="prefixes-heading">Prefixes</h2>
+  {% if not home.prefixes %}
+  <p class="note">None.</p>
+  {% else %}
+  <dl class="frame">
+    {% for prefix, namespace in home.prefixes.items() %}
+    <dt><code dir="ltr">{{ prefix | cut_text(MAX_IRI_CHARS) }}:</code></dt>
+    <dd><code dir="ltr">{{ namespace | bidi_encoded | cut_text(MAX_IRI_CHARS) }}</code></dd>
+    {% endfor %}
+  </dl>
+  {% if home.prefix_count > home.prefixes | length %}
+  <p class="note">And {{ "{:,}".format(home.prefix_count - home.prefixes | length) }} more.</p>
+  {% endif %}
+  {% endif %}
+</section>
+{% if home.imports is not none %}
+<section class="imports panel" tabindex="0" aria-labelledby="imports-heading">
+  <h2 id="imports-heading">Imports</h2>
+  {% if not home.imports %}
+  <p class="note">None.</p>
+  {% else %}
+  <ul>
+    {% for result in home.imports %}
+    <li{% if result.dropped %} class="failure"{% endif %}>{{ import_iri(result) }}:
+      {% if result.dropped %}not loaded
+      {%- elif result.triples is not none %}{{ "{:,}".format(result.triples) }} triples
+      {%- else %}loaded{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endif %}
+</div>
+</div>
 {% endblock %}
