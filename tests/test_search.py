@@ -23,6 +23,7 @@ from browl.search import (
     SearchResults,
     SqliteSearch,
     search,
+    word_starts,
 )
 from browl.settings import Settings
 from tests.helpers import LABEL, ONTOLOGY_RESULT, connect, fuseki, job, make_settings
@@ -81,6 +82,179 @@ def indexed(settings: Settings) -> list[tuple[object, ...]]:
         return [(str(iri).removeprefix(EX), *rest) for iri, *rest in rows]
 
 
+@pytest.mark.parametrize(
+    ("normalized", "starts"),
+    [
+        ("t-cell", [2]),
+        ("1,3-dimethylbutane", [2, 4]),
+        ("red blood cell", [4, 10]),
+        ("h2o", []),  # a change between letters and digits isn't a word start
+        ("abc123 def", [7]),
+        ("cafe-creme", [5]),
+        ("\u03b1-actin", [2]),  # non-Latin letters (here alpha) are alphanumeric
+        ("белок клетки", [6]),
+        ("細胞 核", [3]),
+        ("(r)-lactate", [1, 4]),  # the value's own start isn't listed, but a word after punctuation there is
+        ("a  b", [3]),  # a run of separators starts one word
+        ("x--", []),
+        ("_x", [1]),  # an underscore isn't alphanumeric
+        ("", []),
+    ],
+)
+def test_word_starts(normalized: str, starts: list[int]) -> None:
+    """Check where a normalized value's later words start (§2.6, Any word)."""
+    assert word_starts(normalized) == starts
+
+
+@pytest.mark.parametrize(
+    ("value", "query", "found"),
+    [
+        ("T-cell", "cell", True),
+        ("1,3-dimethylbutane", "dimethyl", True),
+        ("1,3-dimethylbutane", "3-dim", True),
+        ("H2O", "2", False),
+        ("H2O", "o", False),
+        ("naïve T-cell", "cell", True),
+        ("Ångström unit", "ngstrom", False),  # accents never split a word
+        ("Ångström unit", "unit", True),
+        ("Café crème", "creme", True),  # an accent in the word is ignored too
+        ("\u03b1-Actin", "actin", True),
+        ("белок Клетки", "клет", True),
+        ("red blood cell", "blood cell", True),  # from a word on, across later words
+        ("red blood cell", "lood", False),
+        ("red blood cell", "  cell", True),  # the query's leading whitespace is ignored
+    ],
+)
+async def test_word_match(data_dir: Path, value: str, query: str, found: bool) -> None:
+    """Check that a query matches the start of a later word, and nowhere else inside a value (U-19)."""
+    settings = make_settings()
+    await build(settings, [("x", LABEL, LABEL, f'"{value}"@en')])
+    assert [hit.value for hit in find(settings, query).hits] == ([value] if found else [])
+
+
+async def test_whole_value_before_word(data_dir: Path) -> None:
+    """Check that matches from a whole value's start rank before word matches (rule 2), which rank by the later rules.
+
+    A whole value's match ranks first even under a later name property, in a worse language, or longer.
+    """
+    settings = make_settings(NAME_PROPERTIES=["rdfs:label", "skos:prefLabel"], LANGUAGE_RANKING=["en"])
+    await build(
+        settings,
+        [
+            ("word_long", LABEL, LABEL, '"B-cell lymphoma"@en'),
+            ("word_exact", LABEL, LABEL, '"T-cell"@en'),
+            ("word_pref", PREF_LABEL, PREF_LABEL, '"A-cel"@en'),
+            ("whole", PREF_LABEL, PREF_LABEL, '"cellular component of something"@fr'),
+        ],
+    )
+    results = find(settings, "cel")
+    assert [(hit.iri.removeprefix(EX), hit.exact, hit.word_start) for hit in results.hits] == [
+        ("whole", False, 0),
+        ("word_exact", False, 2),  # rdfs:label, then shorter from the word on
+        ("word_long", False, 2),
+        ("word_pref", False, 2),  # skos:prefLabel
+    ]
+
+
+async def test_word_match_once_per_iri(data_dir: Path) -> None:
+    """Check that an IRI whose values match from the start and from a word is one hit, with its best match."""
+    settings = make_settings()
+    await build(settings, [("x", LABEL, LABEL, '"cell"@en'), ("x", LABEL, LABEL, '"T-cell cell"@en')])
+    results = find(settings, "cell")
+    assert [(hit.value, hit.exact, hit.word_start) for hit in results.hits] == [("cell", True, 0)]
+    assert not results.more
+
+
+async def test_word_rows(data_dir: Path) -> None:
+    """Check the index's rows of a value: the whole value's, then one per later word start, keyed from it."""
+    settings = make_settings()
+    await build(settings, [("x", LABEL, LABEL, '"Red  Blood-Cell"@en')])
+    with closing(connect(settings, 1, HOOKS_USED)) as connection:
+        rows = connection.execute(
+            "SELECT word, length, normalized, value, word_start FROM search_value ORDER BY word, word_start"
+        ).fetchall()
+        lanes = connection.execute("SELECT word, max_length FROM search_lane ORDER BY word").fetchall()
+    assert rows == [
+        (0, 15, "red  blood-cell", "Red  Blood-Cell", 0),
+        (1, 10, "blood-cell", "Red  Blood-Cell", 5),
+        (1, 4, "cell", "Red  Blood-Cell", 11),
+    ]
+    assert lanes == [(0, 15), (1, 10)]
+
+
+async def test_word_rows_bounded(data_dir: Path) -> None:
+    """Check that a long value of many words stores a bounded amount in its word rows.
+
+    Only words within its first `MAX_QUERY_CHARS` normalized characters get rows, each keyed by at most that many, with
+    at most `KEY_CHARS` characters of the value.
+    """
+    settings = make_settings()
+    value = " ".join(f"w{n:04}" for n in range(2_000))  # 11,999 characters; a word every 6
+    await build(settings, [("x", LABEL, LABEL, f'"{value}"@en')])
+    with closing(connect(settings, 1, HOOKS_USED)) as connection:
+        rows, stored = connection.execute(
+            "SELECT count(*), sum(length(normalized) + length(coalesce(normalized_rest, ''))"
+            " + length(value) + length(coalesce(value_rest, ''))) FROM search_value WHERE word = 1"
+        ).fetchone()
+    assert rows == len(range(6, MAX_QUERY_CHARS, 6))
+    assert stored <= rows * (MAX_QUERY_CHARS + KEY_CHARS)  # unbounded, about 18 M characters
+    assert [hit.word_start for hit in find(settings, "w0100 w0101").hits] == [600]
+    assert find(settings, "w0500").hits == ()  # at 3,000, past the bound
+
+
+async def test_long_word_match(data_dir: Path) -> None:
+    """Check that queries longer than `KEY_CHARS` match word rows, and that a hit has the whole value.
+
+    The value's word rows share their first `KEY_CHARS` characters of key from many word starts on, and each is kept.
+    """
+    settings = make_settings()
+    repeated = "x-" * 300 + "end"
+    await build(settings, [("rep", LABEL, LABEL, f'"{repeated}"@en'), ("pre", LABEL, LABEL, f'"pre {"y" * 300}"@en')])
+    assert [(hit.value, hit.word_start) for hit in find(settings, "x-" * 140 + "end").hits] == [(repeated, 320)]
+    assert [(hit.value, hit.word_start) for hit in find(settings, "y" * 290).hits] == [(f"pre {'y' * 300}", 4)]
+
+
+async def test_word_paging(data_dir: Path) -> None:
+    """Check that paging runs on from whole-value matches into word matches, and `more` says when it ends."""
+    settings = make_settings()
+    whole = [(f"w{n}", LABEL, LABEL, f'"cel{n}"@en') for n in range(3)]
+    words = [(f"x{n}", LABEL, LABEL, f'"a cel{n}"@en') for n in range(3)]
+    await build(settings, whole + words)
+    pages = [find(settings, "cel", limit=2, offset=offset) for offset in (0, 2, 4)]
+    assert [[hit.value for hit in page.hits] for page in pages] == [
+        ["cel0", "cel1"],
+        ["cel2", "a cel0"],
+        ["a cel1", "a cel2"],
+    ]
+    assert [page.more for page in pages] == [True, True, False]
+
+
+async def test_word_filters(data_dir: Path) -> None:
+    """Check that the property, type and entailment filters choose word lanes as they do whole-value ones."""
+    settings = make_settings(NAME_PROPERTIES=["rdfs:label", "skos:prefLabel"])
+    values = [
+        ("label", LABEL, LABEL, '"a cell"@en'),
+        ("pref", PREF_LABEL, PREF_LABEL, '"b cell"@en'),
+        ("entailed", LABEL, SUB, '"c cell"@en'),
+        ("prop", LABEL, LABEL, '"d cell"@en'),
+    ]
+    kinds = [("label", "Class"), ("pref", "Class"), ("entailed", "Class"), ("prop", "AnnotationProperty")]
+    await build(settings, values, kinds)
+    assert found(settings, "cell") == ["label", "prop", "entailed", "pref"]
+    assert found(settings, "cell", properties=frozenset({f"{SKOS}prefLabel"})) == ["pref"]
+    assert found(settings, "cell", entailed=False) == ["label", "prop", "pref"]
+    assert found(settings, "cell", types=frozenset({EntityType.ANNOTATION_PROPERTY})) == ["prop"]
+
+
+async def test_word_rows_one_per_language_rank(data_dir: Path) -> None:
+    """Check that a value in two languages that rank alike gets one word row, as it gets one whole-value row."""
+    settings = make_settings(LANGUAGE_RANKING=["en"])
+    await build(settings, [("x", LABEL, LABEL, '"T-cell"@de'), ("x", LABEL, LABEL, '"T-cell"@fr')])
+    with closing(connect(settings, 1, HOOKS_USED)) as connection:
+        rows = connection.execute("SELECT word, language FROM search_value ORDER BY word").fetchall()
+    assert rows == [(0, "de"), (1, "de")]
+
+
 async def test_exact_match_first(data_dir: Path) -> None:
     """Check that an exact match ranks first, even under a later name property and a worse language (rule 1)."""
     settings = make_settings(NAME_PROPERTIES=["rdfs:label", "skos:prefLabel"])
@@ -90,14 +264,14 @@ async def test_exact_match_first(data_dir: Path) -> None:
 
 
 async def test_property_position(data_dir: Path) -> None:
-    """Check that a value of an earlier name property ranks first, even if it's longer (rule 2)."""
+    """Check that a value of an earlier name property ranks first, even if it's longer (rule 3)."""
     settings = make_settings(NAME_PROPERTIES=["skos:prefLabel", "rdfs:label"])
     await build(settings, [("label", LABEL, LABEL, '"cat"@en'), ("pref", PREF_LABEL, PREF_LABEL, '"catalogue"@en')])
     assert found(settings, "ca") == ["pref", "label"]
 
 
 async def test_language_position(data_dir: Path) -> None:
-    """Check that values rank by language: listed first, then unlisted, then untagged (rule 3, O-5)."""
+    """Check that values rank by language: listed first, then unlisted, then untagged (rule 4, O-5)."""
     settings = make_settings(LANGUAGE_RANKING=["fr", "en"])
     values = [
         ("untagged", LABEL, LABEL, '"do"'),
@@ -125,14 +299,14 @@ async def test_direct_first(data_dir: Path) -> None:
 
 
 async def test_shorter_first(data_dir: Path) -> None:
-    """Check that a shorter value ranks first (rule 5), by the normalized value's length."""
+    """Check that a shorter value ranks first (rule 6), by the normalized value's length."""
     settings = make_settings()
     await build(settings, [("longer", LABEL, LABEL, '"abcd"@en'), ("shorter", LABEL, LABEL, '"abc"@en')])
     assert found(settings, "ab") == ["shorter", "longer"]
 
 
 async def test_alphabetical(data_dir: Path) -> None:
-    """Check that values of a length rank by normalized value, then by value (rule 6), across entity types."""
+    """Check that values of a length rank by normalized value, then by value (rule 7), across entity types."""
     settings = make_settings()
     values = [
         ("anu", LABEL, LABEL, '"anu"@en'),
@@ -164,7 +338,7 @@ async def test_alphabetical_across_lanes(data_dir: Path) -> None:
     ids=["property before language", "language before direct", "property before direct"],
 )
 async def test_rule_order(data_dir: Path, values: list[Value], expected: list[str]) -> None:
-    """Check that the rules after exact match apply in order: property, then language, then direct (rules 2-4)."""
+    """Check that the rules after exact match apply in order: property, then language, then direct (rules 3-5)."""
     settings = make_settings(NAME_PROPERTIES=["rdfs:label", "skos:prefLabel"], LANGUAGE_RANKING=["en"])
     await build(settings, values)
     assert found(settings, "c") == expected
@@ -223,6 +397,14 @@ async def test_long_values_bound_the_walk(data_dir: Path) -> None:
     assert seeks(settings, "a") <= KEY_CHARS
 
 
+async def test_long_word_values_bound_the_walk(data_dir: Path) -> None:
+    """Check that a long value with word starts makes a query seek at most `KEY_CHARS` lengths a lane, word ones too."""
+    settings = make_settings()
+    await build(settings, [("long", LABEL, LABEL, f'"b x{"x" * 10_000}"@en'), ("short", LABEL, LABEL, '"ab"@en')])
+    assert found(settings, "a") == ["short"]
+    assert seeks(settings, "a") <= 2 * KEY_CHARS  # a whole-value lane and a word lane
+
+
 async def test_nul_counted(data_dir: Path) -> None:
     """Check that a value's length counts the characters after a NUL, which SQLite's length() wouldn't."""
     settings = make_settings()
@@ -247,10 +429,13 @@ async def test_case_and_accents(data_dir: Path, value: str, query: str) -> None:
 
 
 async def test_matches_start_of_value(data_dir: Path) -> None:
-    """Check that a query matches only the start of a whole value, and that leading whitespace is ignored."""
+    """Check that a query matches the start of a whole value or of a word, and that leading whitespace is ignored."""
     settings = make_settings()
     await build(settings, [("x", LABEL, LABEL, '"red blood cell"@en'), ("y", LABEL, LABEL, '" \\nHomo sapiens"@en')])
-    assert found(settings, "blood") == []
+    assert found(settings, "lood") == []
+    assert [(hit.value, hit.exact, hit.word_start) for hit in find(settings, "blood").hits] == [
+        ("red blood cell", False, 4)
+    ]
     assert found(settings, "  red b") == ["x"]
     assert found(settings, "red blood cells") == []
     assert [(hit.value, hit.exact) for hit in find(settings, " homo sapiens").hits] == [(" \nHomo sapiens", True)]

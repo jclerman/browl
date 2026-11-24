@@ -85,6 +85,7 @@ erDiagram
   INTEGER property_rank PK
   INTEGER language_rank PK
   INTEGER entailed PK
+  INTEGER word PK
   INTEGER length PK
   TEXT normalized PK
   TEXT value PK
@@ -92,6 +93,7 @@ erDiagram
   TEXT normalized_rest
   TEXT value_rest
   TEXT language
+  INTEGER word_start PK
 }
 "edge" {
   TEXT hierarchy PK

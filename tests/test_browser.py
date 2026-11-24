@@ -2320,7 +2320,7 @@ def stub_entity_pages(page: Page, server: LiveServer) -> None:
 
 def search_box(page: Page) -> Locator:
     """Return the navigation bar's search box."""
-    return page.get_by_role("combobox", name="Search names")
+    return page.get_by_role("combobox", name="Search the ontology")
 
 
 def typed(page: Page, server: LiveServer, text: str) -> Locator:
@@ -2517,7 +2517,7 @@ def test_search_retyped_after_clearing(page: Page, searchable: LiveServer) -> No
 
 def test_search_no_matches(page: Page, searchable: LiveServer) -> None:
     """Check that "No matches" is announced, and that the keys skip it, as a disabled option."""
-    box = typed(page, searchable, "zzz")
+    box = typed(page, searchable, "qqq")
     expect(page.locator("#site-search-status")).to_have_text("No matches")
     box.press("ArrowDown")
     expect(box).to_have_attribute("aria-activedescendant", "search-option-all")

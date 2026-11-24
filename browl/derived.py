@@ -78,6 +78,7 @@ CREATE TABLE search_value (
     property_rank INTEGER NOT NULL,
     language_rank INTEGER NOT NULL,
     entailed INTEGER NOT NULL,
+    word INTEGER NOT NULL,
     length INTEGER NOT NULL,
     normalized TEXT NOT NULL,
     value TEXT NOT NULL,
@@ -85,16 +86,18 @@ CREATE TABLE search_value (
     normalized_rest TEXT,
     value_rest TEXT,
     language TEXT,
-    PRIMARY KEY (type, property_rank, language_rank, entailed, length, normalized, value, entity)
+    word_start INTEGER NOT NULL,
+    PRIMARY KEY (type, property_rank, language_rank, entailed, word, length, normalized, value, entity, word_start)
 ) WITHOUT ROWID;
 CREATE TABLE search_lane (
     type TEXT NOT NULL,
     property_rank INTEGER NOT NULL,
     language_rank INTEGER NOT NULL,
     entailed INTEGER NOT NULL,
+    word INTEGER NOT NULL,
     max_length INTEGER NOT NULL,
     property TEXT NOT NULL,
-    PRIMARY KEY (type, property_rank, language_rank, entailed)
+    PRIMARY KEY (type, property_rank, language_rank, entailed, word)
 ) WITHOUT ROWID;
 CREATE TABLE edge (
     hierarchy TEXT NOT NULL,

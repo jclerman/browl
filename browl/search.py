@@ -53,10 +53,14 @@ def _encodable(text: str) -> str:
 
 @validated_dataclass(frozen=True)
 class SearchQuery:
-    """A search (U-10): name values that start with the text, ignoring case and accents (U-11).
+    """A search (U-10): name values whose start or a word's matches the text (U-19), ignoring case and accents (U-11).
+
+    A word starts after a character that isn't a letter or digit (`word_starts`),
+    within a value's first `MAX_QUERY_CHARS` normalized characters.
 
     Attributes:
-        text: What the values start with; leading whitespace is ignored, and a query of only whitespace finds nothing.
+        text: What the values, or their later words, start with; leading whitespace is ignored, and a query of only
+            whitespace finds nothing.
         types: The entity types to find; None for all, and an empty set for none.
         properties: The name properties (IRIs) whose values to search; None for all, and an empty set for none.
         entailed: Whether values entailed through a sub-property count too, or only direct ones.
@@ -82,7 +86,9 @@ class SearchHit:
         value: Its best-matching name value, as written.
         property: That value's name property's IRI.
         language: That value's language tag, lowercased; None if it has none.
-        exact: Whether the value is the whole query, rather than starting with it.
+        exact: Whether the value is the whole query, rather than a prefix match.
+        word_start: Where in the normalized value (`browl.names.normalize`) the match starts: 0 if the value starts with
+            the query, else the start of the later word that does (`word_starts`).
     """
 
     iri: str
@@ -91,6 +97,7 @@ class SearchHit:
     property: str
     language: str | None
     exact: bool
+    word_start: int
 
 
 @dataclass(frozen=True)
@@ -155,35 +162,97 @@ BACKEND: type[SearchBackend] = SqliteSearch
 """The search engine in use, whose `index` pre-caching calls."""
 
 
+def word_starts(normalized: str) -> list[int]:
+    """Return where a normalized value's later words start: each alphanumeric character after one that isn't (§2.6).
+
+    Alphanumeric is `str.isalnum`, Unicode's letters and numbers, so a change between letters and digits isn't a word
+    start. The value's own start isn't listed, as its row for the whole value covers it.
+
+    Examples:
+        >>> word_starts("t-cell")
+        [2]
+        >>> word_starts("1,3-dimethylbutane")
+        [2, 4]
+        >>> word_starts("h2o")
+        []
+    """
+    return [
+        index
+        for index in range(1, len(normalized))
+        if normalized[index].isalnum() and not normalized[index - 1].isalnum()
+    ]
+
+
 def fill_index(connection: sqlite3.Connection, properties: Sequence[str], ranking: Sequence[str]) -> None:
-    """Fill the index from `name_value`, ranking values by the name properties' IRIs and the language ranking."""
-    # Lengths and cuts are Python's: SQLite's length() and substr() stop at a NUL, which a literal may hold.
-    connection.create_function("key_length", 1, lambda text: min(len(text), KEY_CHARS), deterministic=True)
-    connection.create_function("key_head", 1, lambda text: text[:KEY_CHARS], deterministic=True)
-    connection.create_function("key_rest", 1, lambda text: text[KEY_CHARS:] or None, deterministic=True)
-    with rank_tables(connection, properties, ranking):
-        # Grouping by the key keeps one row of an entity's value in languages that rank alike, the first tag's.
-        connection.execute(
-            "INSERT INTO search_value"
-            " SELECT entity.type, p.rank, l.rank, 1 - nv.direct, key_length(nv.normalized), key_head(nv.normalized),"
-            "  key_head(nv.value), nv.entity, key_rest(nv.normalized), key_rest(nv.value), min(nv.language)"
-            " FROM name_value AS nv JOIN entity ON entity.id = nv.entity"
-            " JOIN property_rank AS p USING (property) JOIN language_rank AS l ON l.language IS nv.language"
-            " WHERE nv.normalized <> ''"
-            " GROUP BY 1, 2, 3, 4, 5, 6, 7, 8"
-            " ORDER BY 1, 2, 3, 4, 5, 6, 7, 8"
-        )
-        connection.execute(
-            "INSERT INTO search_lane"
-            " SELECT type, property_rank, language_rank, entailed, max(length), p.property"
-            " FROM search_value JOIN property_rank AS p ON p.rank = property_rank"
-            " GROUP BY type, property_rank, language_rank, entailed"
-        )
+    """Fill the index from `name_value`, ranking values by the name properties' IRIs and the language ranking.
+
+    Each value gets a row for the whole value, and a word row for each later word start (`_keys`).
+    """
+    # Keys are cut in Python, in one pass: SQLite's length() and substr() stop at a NUL, which a literal may hold, and
+    # calling Python functions from SQL for each row took about 10 s longer on NCBITaxon (research/P-41).
+    connection.execute(
+        "CREATE TEMP TABLE search_key (source INTEGER NOT NULL, word INTEGER NOT NULL, length INTEGER NOT NULL,"
+        " key TEXT NOT NULL, value TEXT NOT NULL, key_rest TEXT, value_rest TEXT, word_start INTEGER NOT NULL)"
+    )
+    try:
+        values = connection.execute("SELECT rowid, normalized, value FROM name_value WHERE normalized <> ''")
+        connection.executemany("INSERT INTO search_key VALUES (?, ?, ?, ?, ?, ?, ?, ?)", _keys(values))
+        with rank_tables(connection, properties, ranking):
+            # Grouping by the key keeps one row of an entity's value in languages that rank alike, the first tag's.
+            connection.execute(
+                "INSERT INTO search_value"
+                " SELECT entity.type, p.rank, l.rank, 1 - nv.direct, k.word, k.length, k.key, k.value, nv.entity,"
+                "  min(k.key_rest), min(k.value_rest), min(nv.language), k.word_start"
+                " FROM search_key AS k JOIN name_value AS nv ON nv.rowid = k.source"
+                " JOIN entity ON entity.id = nv.entity"
+                " JOIN property_rank AS p USING (property) JOIN language_rank AS l ON l.language IS nv.language"
+                " GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 13"
+                " ORDER BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 13"
+            )
+            connection.execute(
+                "INSERT INTO search_lane"
+                " SELECT type, property_rank, language_rank, entailed, word, max(length), p.property"
+                " FROM search_value JOIN property_rank AS p ON p.rank = property_rank"
+                " GROUP BY type, property_rank, language_rank, entailed, word"
+            )
+    finally:
+        connection.execute("DROP TABLE search_key")
+
+
+type _Key = tuple[int, bool, int, str, str, str | None, str | None, int]
+
+
+def _keys(values: Iterator[tuple[int, str, str]]) -> Iterator[_Key]:
+    """Yield the index's keys of `name_value` rows: the whole value's, then one per later word start.
+
+    A word row's key is the normalized value from its word on, at most `MAX_QUERY_CHARS` characters, as no query
+    compares more, and it holds only the value's first `KEY_CHARS` characters; a hit reads the rest from `name_value`.
+    Only word starts within the first
+    `MAX_QUERY_CHARS` normalized characters get one, so a value's rows hold at most about `MAX_QUERY_CHARS` ** 2 / 2
+    characters, however long it is.
+
+    Args:
+        values: The rows, as (row id, normalized value, value).
+
+    Yields:
+        Keys as (row id, word, key length, key, value, rest of key, rest of value, word start), with at most
+        `KEY_CHARS` characters of the key and of the value, and the rest None if there's none.
+    """
+    for source, normalized, value in values:
+        yield source, False, min(len(normalized), KEY_CHARS), *_cut(normalized, value), 0
+        for start in word_starts(normalized[:MAX_QUERY_CHARS]):
+            key = normalized[start : start + MAX_QUERY_CHARS]
+            yield source, True, min(len(key), KEY_CHARS), *_cut(key, value[:KEY_CHARS]), start
+
+
+def _cut(key: str, value: str) -> tuple[str, str, str | None, str | None]:
+    """Return a key's and a value's first `KEY_CHARS` characters, then the rest of each; None if there's none."""
+    return key[:KEY_CHARS], value[:KEY_CHARS], key[KEY_CHARS:] or None, value[KEY_CHARS:] or None
 
 
 @validated_dataclass(frozen=True)
 class _Lane:
-    """A lane of `search_value`: its values of one type, name property rank, language rank, and direct or entailed.
+    """A lane of `search_value`: its rows of one type, name property rank, language rank, entailed or not, and word.
 
     Its values are stored by length, then normalized value, then value, so a query reads its matches of one length in
     rank order.
@@ -193,6 +262,7 @@ class _Lane:
         property_rank: Its name property's position in `NAME_PROPERTIES`, from 0.
         language_rank: Its languages' rank by `LANGUAGE_RANKING`, from 0; languages that rank alike share one.
         entailed: Whether its values are entailed through a sub-property, rather than direct.
+        word: Whether its rows are word rows, keyed from a later word start, rather than whole values.
         max_length: Its longest normalized value's length, at most `KEY_CHARS`.
         property: Its name property's IRI.
     """
@@ -201,38 +271,41 @@ class _Lane:
     property_rank: Annotated[int, Field(ge=0)]
     language_rank: Annotated[int, Field(ge=0)]
     entailed: bool
+    word: bool
     max_length: Annotated[int, Field(ge=1, le=KEY_CHARS)]
     property: str
 
-    def tier(self) -> tuple[int, int, bool]:
-        """Return its rank among lanes (§2.6, rules 2-4): lanes of one tier rank alike."""
-        return self.property_rank, self.language_rank, self.entailed
+    def tier(self) -> tuple[bool, int, int, bool]:
+        """Return its rank among lanes (§2.6, rules 2-5); a tier's lanes tie."""
+        return self.word, self.property_rank, self.language_rank, self.entailed
 
 
 class _Match(NamedTuple):
     normalized: str
     value: str
     iri: str
+    entity: int
     language: str | None
+    word_start: int
     lane: _Lane
 
 
 _MATCHES = (
-    "SELECT s.normalized, s.normalized_rest, s.value, s.value_rest, entity.iri, s.language"
+    "SELECT s.normalized, s.normalized_rest, s.value, s.value_rest, entity.iri, s.entity, s.language, s.word_start"
     " FROM search_value AS s JOIN entity ON entity.id = s.entity"
-    " WHERE s.type = ? AND s.property_rank = ? AND s.language_rank = ? AND s.entailed = ? AND s.length = ?"
+    " WHERE s.type = ? AND s.property_rank = ? AND s.language_rank = ? AND s.entailed = ? AND s.word = ?"
+    " AND s.length = ?"
     " AND s.normalized >= ? AND s.normalized < ?"
-    " ORDER BY s.normalized, s.value, s.entity"
+    " ORDER BY s.normalized, s.value, s.entity, s.word_start"
 )
 
 
 def search(connection: sqlite3.Connection, query: SearchQuery) -> SearchResults:
     """Return a page of a query's results, ranked by §2.6, one per IRI with its best-matching value.
 
-    Values rank by exact match first, then their name property's position (`NAME_PROPERTIES`), then their language's
-    (`LANGUAGE_RANKING`), then direct before entailed, then shorter, then by normalized value, then by value (code
-    point). Values longer than `KEY_CHARS` rank among themselves by their first `KEY_CHARS` characters. An IRI ranks by
-    its best value; IRIs with the same best value keep an order that's arbitrary but the same for every query.
+    Values rank by §2.6's rules, a word match as the normalized value from its word on. Values longer than `KEY_CHARS`
+    rank among themselves by their first `KEY_CHARS` characters. An IRI ranks by its best value; IRIs with the same
+    best value keep an order that's arbitrary but the same for every query.
 
     Args:
         connection: A connection to the derived database.
@@ -261,32 +334,58 @@ def search(connection: sqlite3.Connection, query: SearchQuery) -> SearchResults:
         def matches(tier: list[_Lane], length: int) -> Iterator[_Match]:
             return _tier_matches(connection, cursors, tier, text[:KEY_CHARS], length)
 
-        exact_matches = (match for tier in tiers for match in matches(tier, key_length) if match.normalized == text)
+        whole = [tier for tier in tiers if not tier[0].word]
+        exact_matches = (match for tier in whole for match in matches(tier, key_length) if match.normalized == text)
         if not take(exact_matches, exact=True):
             for tier in tiers:
-                lengths = range(min(len(text) + 1, KEY_CHARS), max(lane.max_length for lane in tier) + 1)
+                # A word row whose key is the query itself isn't an exact match, as the value is longer.
+                word = tier[0].word
+                first = len(text) if word else len(text) + 1
+                lengths = range(min(first, KEY_CHARS), max(lane.max_length for lane in tier) + 1)
                 prefix_matches = (
                     match
                     for length in lengths
                     for match in matches(tier, length)
-                    if match.normalized.startswith(text) and match.normalized != text
+                    if match.normalized.startswith(text) and (word or match.normalized != text)
                 )
                 if take(prefix_matches, exact=False):
                     break
-    found = list(best.values())[query.offset : query.offset + query.limit]
+    found = [
+        (_with_value(connection, match) if match.lane.word and len(match.value) == KEY_CHARS else match, exact)
+        for match, exact in list(best.values())[query.offset : query.offset + query.limit]
+    ]
     types = _types(connection, [match.iri for match, _ in found], query.types)
     hits = tuple(
-        SearchHit(match.iri, types[match.iri], match.value, match.lane.property, match.language, exact)
+        SearchHit(
+            match.iri, types[match.iri], match.value, match.lane.property, match.language, exact, match.word_start
+        )
         for match, exact in found
     )
     return SearchResults(hits, more=len(best) >= wanted)
 
 
+def _with_value(connection: sqlite3.Connection, match: _Match) -> _Match:
+    """Return a word row's match with its whole value, of which word rows hold the first `KEY_CHARS` characters.
+
+    It's read from `name_value`: of the entity's values with the row's property, directness and language, the first by
+    value that starts with the row's and whose normalized value has the key at the word's start.
+    """
+    rows = connection.execute(
+        "SELECT value, normalized FROM name_value WHERE entity = ? AND property = ? AND direct = ? AND language IS ?"
+        " ORDER BY value",
+        (match.entity, match.lane.property, not match.lane.entailed, match.language),
+    )
+    for value, normalized in rows:
+        if value.startswith(match.value) and normalized.startswith(match.normalized, match.word_start):
+            return match._replace(value=value)
+    return match  # not reached: the row was built from such a value
+
+
 def _lanes(connection: sqlite3.Connection, query: SearchQuery) -> list[_Lane]:
     """Return the lanes the query's filters allow, in tier order."""
     rows = connection.execute(
-        "SELECT type, property_rank, language_rank, entailed, max_length, property FROM search_lane"
-        " ORDER BY property_rank, language_rank, entailed, type"
+        "SELECT type, property_rank, language_rank, entailed, word, max_length, property FROM search_lane"
+        " ORDER BY word, property_rank, language_rank, entailed, type"
     )
     lanes = [_Lane(*row) for row in rows]
     return [
@@ -311,7 +410,16 @@ def _tier_matches(
         if length <= lane.max_length:
             cursor = connection.execute(
                 _MATCHES,
-                (lane.type, lane.property_rank, lane.language_rank, lane.entailed, length, key, key + LAST_CHAR),
+                (
+                    lane.type,
+                    lane.property_rank,
+                    lane.language_rank,
+                    lane.entailed,
+                    lane.word,
+                    length,
+                    key,
+                    key + LAST_CHAR,
+                ),
             )
             cursors.callback(cursor.close)
             lanes.append(_rows(cursor, lane))
@@ -319,9 +427,10 @@ def _tier_matches(
 
 
 def _rows(cursor: sqlite3.Cursor, lane: _Lane) -> Iterator[_Match]:
-    """Yield a lane's rows as matches, with their whole normalized value and value."""
-    for normalized, normalized_rest, value, value_rest, iri, language in cursor:
-        yield _Match(normalized + (normalized_rest or ""), value + (value_rest or ""), iri, language, lane)
+    """Yield a lane's rows as matches, with their whole key (a word row's from its word on) and value."""
+    for normalized, normalized_rest, value, value_rest, iri, entity, language, word_start in cursor:
+        whole_key, whole_value = normalized + (normalized_rest or ""), value + (value_rest or "")
+        yield _Match(whole_key, whole_value, iri, entity, language, word_start, lane)
 
 
 def _types(

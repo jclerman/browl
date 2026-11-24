@@ -196,7 +196,7 @@ def test_no_ontology_iri(app: FastAPI) -> None:
         page = frame(client)
         assert page.nav == [*TREE_LINKS, SIGN_IN]
         labels = " ".join(tree.label for tree in TREES).split()
-        assert page.nav_text.split() == ["browl", "Search", "names", "Browse", *labels, "Sign", "in"]
+        assert page.nav_text.split() == ["browl", "Search", "the", "ontology", "Browse", *labels, "Sign", "in"]
 
 
 def test_ontology_without_page(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
