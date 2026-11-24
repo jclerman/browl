@@ -1,26 +1,13 @@
-# The counts that correct `axiom-triples.rq`'s for its axiom count (browl.precache.axiom_counts), by ?kind:
-# - "annotation_property": an annotation property's sub-property, domain and range triples, annotation axioms, not
-#   logical ones as they'd be for an object or data property;
+# The counts that correct `axiom-triples.rq`'s for the axiom count (browl.precache.axiom_counts), by ?kind:
 # - "datatype_definition": a datatype's owl:equivalentClass triples, datatype definitions, not logical axioms;
-# - "symmetric": pairs of IRIs a symmetric predicate links both ways, one axiom stated twice;
-# - "node": the axioms that are a node of their own, typed: n-ary disjointness and difference, negative property
-#   assertions and SWRL rules, one axiom each, whose triples `axiom-not-triples.rq` leaves out. (Other axioms with a
+# - "symmetric": pairs of IRIs a symmetric predicate links both ways, one axiom stated twice; not a datatype's
+#   definitions, which are two axioms;
+# - "node": the axioms that are a typed node of their own (n-ary disjointness and difference, negative property
+#   assertions, SWRL rules), one axiom each, whose triples `axiom-not-triples.rq` leaves out. (Other axioms with a
 #   blank subject, such as general class axioms, are one triple each, which `axiom-triples.rq` counts.)
 # Run on the default graph alone; the prologue (browl.precache.core.PREFIXES) is added when it's run.
 SELECT ?kind (COUNT(*) AS ?count)
 WHERE {
-  {
-    VALUES ?predicate { rdfs:subPropertyOf rdfs:domain rdfs:range }
-    ?s rdf:type owl:AnnotationProperty .
-    FILTER isIRI(?s)
-    ?s ?predicate ?o
-    FILTER NOT EXISTS {
-      VALUES ?logical { owl:ObjectProperty owl:DatatypeProperty }
-      ?s rdf:type ?logical
-    }
-    BIND ("annotation_property" AS ?kind)
-  }
-  UNION
   {
     ?s rdf:type rdfs:Datatype .
     FILTER isIRI(?s)
@@ -36,6 +23,7 @@ WHERE {
     ?s ?predicate ?o .
     ?o ?predicate ?s
     FILTER (isIRI(?s) && isIRI(?o) && STR(?s) < STR(?o))
+    FILTER (?predicate != owl:equivalentClass || NOT EXISTS { ?s rdf:type rdfs:Datatype })
     BIND ("symmetric" AS ?kind)
   }
   UNION

@@ -6,35 +6,22 @@ its annotations from Fuseki, as an entity page's annotations panel reads them (`
 """
 
 import sqlite3
-from typing import NamedTuple
 
 from fastapi import Request
 from pydantic import BaseModel, ConfigDict
 
-from browl.annotations import IRIValue, group_annotations
 from browl.derived import AxiomKind, EntityType, Meta, read_axiom_counts, read_type_counts
 from browl.jobs import JobState
 from browl.jobtypes import ImportResult
 from browl.links import EntityLink, read_entity_links
 from browl.loading import dataset_name
-from browl.names import name_property_iris
-from browl.overview import AnnotationsPanel, read_annotations, shown_name
+from browl.overview import AnnotationsPanel, annotation_iris, annotations_panel, read_annotations
 from browl.pages import link_root, read_derived
 from browl.settings import Settings
 from browl.usages import ready_store
 
 MAX_PREFIXES = 1_000
 """The most prefixes the page lists; an ontology file may declare many more, and the page says how many."""
-
-
-class _Derived(NamedTuple):
-    """What the home page reads from the derived database (`Home`'s fields of the same names)."""
-
-    entity_counts: dict[EntityType, int]
-    axiom_counts: dict[AxiomKind, int]
-    prefixes: dict[str, str]
-    prefix_count: int
-    links: dict[str, EntityLink]
 
 
 class Home(BaseModel):
@@ -95,29 +82,22 @@ async def read_home(request: Request, state: JobState, meta: Meta) -> Home:
     assert meta.ontology_iri is not None  # the home page is the ontology's
     generation, clause = ready_store(state)
     annotations, too_many = await read_annotations(request, dataset_name(generation), meta.ontology_iri, clause)
-    mentioned: list[str] = []
-    for property_, value in annotations or ():
-        mentioned.append(property_)
-        if isinstance(value, IRIValue):
-            mentioned.append(value.iri)
+    mentioned = annotation_iris(annotations)
     settings: Settings = request.app.state.settings
     prefix, root = settings.reserved_prefix, link_root(request.scope)
 
-    def read(connection: sqlite3.Connection) -> _Derived:
-        return _Derived(
+    def read(
+        connection: sqlite3.Connection,
+    ) -> tuple[dict[EntityType, int], dict[AxiomKind, int], tuple[dict[str, str], int], dict[str, EntityLink]]:
+        return (
             read_type_counts(connection),
             read_axiom_counts(connection),
-            *_read_prefixes(connection),
+            _read_prefixes(connection),
             read_entity_links(connection, mentioned, prefix, root),
         )
 
-    counts, axioms, prefixes, prefix_count, links = await read_derived(request, read, state)
+    counts, axioms, (prefixes, prefix_count), links = await read_derived(request, read, state)
     counts.pop(EntityType.ONTOLOGY, None)
-    groups = None
-    if annotations is not None:
-        groups = group_annotations(
-            annotations, name_property_iris(settings), lambda each: shown_name(each, links), settings.language_ranking
-        )
     # The job state's counts and imports are the latest job's: the ready generation's unless another job has started
     # since the page read the state (`browl.usages.ready_store`), when they're left out rather than shown wrongly.
     current = state.generation == generation
@@ -129,7 +109,7 @@ async def read_home(request: Request, state: JobState, meta: Meta) -> Home:
         prefix_count=prefix_count,
         triples=state.triples if current else None,
         imports=state.imports if current else None,
-        annotations=AnnotationsPanel(groups=groups, too_many=too_many),
+        annotations=annotations_panel(annotations, too_many, links, settings),
         links=links,
     )
 

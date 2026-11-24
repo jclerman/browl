@@ -167,6 +167,8 @@ INDEXES: dict[str, tuple[str, ...]] = {
     "name_value": ("CREATE INDEX name_value_entity ON name_value (entity)",),
     "edge": ("CREATE INDEX edge_child ON edge (hierarchy, child)",),
     "equiv_group": ("CREATE INDEX equiv_group_representative ON equiv_group (representative)",),
+    # The home page's order (`browl.home`), so it reads the first prefixes rather than sorting them all per view.
+    "prefix": ("CREATE INDEX prefix_name ON prefix (prefix COLLATE NOCASE, prefix)",),
 }
 """Each table's secondary indexes, created once the table is filled, which is faster than keeping them up to date
 (`create_indexes`)."""
@@ -197,11 +199,6 @@ class Meta:
     title: str | None = None
     version_info: str | None = None
 
-    @property
-    def version(self) -> str | None:
-        """Return the version to show: the version IRI if there is one, else the version info, else None."""
-        return self.version_iri if self.version_iri is not None else self.version_info
-
 
 class EntityType(StrEnum):
     """An entity's type, as `entity.type` stores it."""
@@ -224,13 +221,13 @@ class AxiomKind(StrEnum):
         LOGICAL: A logical axiom: a class, property or individual axiom, a key, or a SWRL rule.
         DECLARATION: A declaration.
         ANNOTATION: An annotation assertion, or an annotation property's sub-property, domain or range.
-        OTHER: A datatype definition.
+        DATATYPE_DEFINITION: A datatype definition.
     """
 
     LOGICAL = "logical"
     DECLARATION = "declaration"
     ANNOTATION = "annotation"
-    OTHER = "other"
+    DATATYPE_DEFINITION = "datatype_definition"
 
 
 class UsageRootKind(StrEnum):

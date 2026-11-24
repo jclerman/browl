@@ -1,7 +1,8 @@
 """Tests for the axiom counts (`browl.precache.axiom_counts`): checked against the OWLAPI's counts of the same RDF."""
 
+import logging
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import closing
 
 import jpype
@@ -9,8 +10,9 @@ import pytest
 
 from browl import owlapi
 from browl.derived import AxiomKind, read_axiom_counts
-from browl.precache.axiom_counts import count_axioms
-from browl.rdf import OWL, RDF, RDFS
+from browl.fuseki import SparqlError
+from browl.precache.axiom_counts import _number, _typed_apart, count_axioms
+from browl.rdf import IRI, OWL, RDF, RDFS, Literal, Term
 from browl.settings import Settings
 from tests.helpers import connect, loaded, make_settings, ontology_ntriples
 
@@ -26,7 +28,7 @@ OWLAPI_KINDS = {
         "ANNOTATION_PROPERTY_DOMAIN",
         "ANNOTATION_PROPERTY_RANGE",
     ),
-    AxiomKind.OTHER: ("DATATYPE_DEFINITION",),
+    AxiomKind.DATATYPE_DEFINITION: ("DATATYPE_DEFINITION",),
 }
 """The OWLAPI's axiom types of each kind but logical, which is every other type (its `getLogicalAxiomCount` counts
 datatype definitions too)."""
@@ -61,9 +63,11 @@ def owlapi_counts(ntriples: bytes) -> Counter[AxiomKind]:
     return counts
 
 
-async def stored_counts(fuseki_url: str, settings: Settings, ntriples: bytes) -> Counter[AxiomKind]:
-    """Return the axiom counts the pre-caching stage stores for an ontology's N-Triples."""
-    async with loaded(fuseki_url, settings, {None: ntriples}, "") as store:
+async def stored_counts(
+    fuseki_url: str, settings: Settings, ntriples: bytes, imports: Mapping[str, bytes] | None = None
+) -> Counter[AxiomKind]:
+    """Return the axiom counts the pre-caching stage stores for an ontology's N-Triples, with its imports' by graph."""
+    async with loaded(fuseki_url, settings, {None: ntriples, **(imports or {})}, "") as store:
         with closing(connect(settings, store.generation)) as connection:
             return Counter(read_axiom_counts(connection))
 
@@ -125,16 +129,47 @@ async def test_symmetric_and_header(fuseki_url: str, settings: Settings) -> None
 )
 def test_property_assertion_kind(types: set[str], kind: AxiomKind) -> None:
     """Check that a triple's predicate makes it an annotation assertion or a property assertion as its types say."""
-    counts = count_axioms({(f"{EX}p", None): 3}, {}, {}, {f"{EX}p": types})
+    counts = count_axioms({(f"{EX}p", None): 3}, {}, {}, {}, {f"{EX}p": types})
     assert counts == Counter({kind: 3})
 
 
 def test_adjustments() -> None:
     """Check the corrections: annotation property axioms and datatype definitions move; the others add or subtract."""
     triples = {(f"{RDFS}subPropertyOf", None): 5, (f"{OWL}equivalentClass", None): 4}
-    adjustments = {"annotation_property": 2, "datatype_definition": 1, "symmetric": 1, "node": 3}
-    counts = count_axioms(triples, {}, adjustments, {})
-    assert counts == Counter({AxiomKind.LOGICAL: 9 - 2 - 1 - 1 + 3, AxiomKind.ANNOTATION: 2, AxiomKind.OTHER: 1})
+    adjustments = {"datatype_definition": 1, "symmetric": 1, "node": 3}
+    # An annotation property's axioms move; a punned one's, or an undeclared property's, stay logical.
+    property_axioms = {f"{EX}note": 2, f"{EX}punned": 1, f"{EX}undeclared": 1}
+    types = {
+        f"{EX}note": {f"{OWL}AnnotationProperty"},
+        f"{EX}punned": {f"{OWL}AnnotationProperty", f"{OWL}ObjectProperty"},
+    }
+    counts = count_axioms(triples, {}, adjustments, property_axioms, types)
+    assert counts == Counter(
+        {AxiomKind.LOGICAL: 9 - 2 - 1 - 1 + 3, AxiomKind.ANNOTATION: 2, AxiomKind.DATATYPE_DEFINITION: 1}
+    )
+
+
+def test_negative_kind(caplog: pytest.LogCaptureFixture) -> None:
+    """Check that a kind the corrections would make negative counts as none, with a warning."""
+    with caplog.at_level(logging.WARNING, logger="browl.precache.axiom_counts"):
+        counts = count_axioms({}, {}, {"symmetric": 1}, {}, {})
+    assert counts == Counter()
+    assert [record.getMessage() for record in caplog.records] == [
+        "The axiom count of kind logical came to -1; counting none"
+    ]
+
+
+def test_typed_apart_inconsistent() -> None:
+    """Check that fewer `rdf:type` triples in all than by class is an error, not a negative count."""
+    with pytest.raises(SparqlError, match="counted 1 rdf:type triples, but 2 by class"):
+        _typed_apart({(f"{RDF}type", None): 1, (f"{RDF}type", f"{EX}A"): 2})
+
+
+@pytest.mark.parametrize("term", [Literal("-1"), Literal("x"), IRI(f"{EX}n"), None])
+def test_number_invalid(term: Term | None) -> None:
+    """Check that a count that isn't a literal non-negative integer is an error."""
+    with pytest.raises(SparqlError, match="gave a count of"):
+        _number(term)
 
 
 def test_vocabulary_not_axioms() -> None:
@@ -145,15 +180,51 @@ def test_vocabulary_not_axioms() -> None:
         (f"{RDF}type", f"{OWL}Ontology"): 1,
         (f"{RDFS}comment", None): 2,
     }
-    counts = count_axioms(triples, {(f"{RDFS}comment", None): 1}, {}, {})
+    counts = count_axioms(triples, {(f"{RDFS}comment", None): 1}, {}, {}, {})
     assert counts == Counter({AxiomKind.ANNOTATION: 1})
 
 
 async def test_imports_not_counted(fuseki_url: str, settings: Settings) -> None:
     """Check that only the ontology's own axioms are counted, not an import's, in its named graph."""
     imported = f"<{EX}C> <{RDF}type> <{OWL}Class> .\n<{EX}C> <{RDFS}subClassOf> <{EX}A> .\n".encode()
-    graphs = {None: SYMMETRIC_AND_HEADER, "http://example.org/y": imported}
-    async with loaded(fuseki_url, settings, graphs, "") as store:
-        with closing(connect(settings, store.generation)) as connection:
-            counts = Counter(read_axiom_counts(connection))
+    counts = await stored_counts(fuseki_url, settings, SYMMETRIC_AND_HEADER, {"http://example.org/y": imported})
     assert counts == Counter({AxiomKind.LOGICAL: 2, AxiomKind.DECLARATION: 2, AxiomKind.ANNOTATION: 1})
+
+
+IMPORTED_TYPES = f"""\
+<{EX}note> <{RDF}type> <{OWL}AnnotationProperty> .
+<{EX}p> <{RDF}type> <{OWL}ObjectProperty> .
+""".encode()
+
+USES_IMPORTED = f"""\
+<http://example.org/x> <{RDF}type> <{OWL}Ontology> .
+<http://example.org/x> <{OWL}imports> <http://example.org/y> .
+<{EX}note> <{RDFS}subPropertyOf> <{RDFS}comment> .
+<{EX}note> <{RDFS}domain> <{EX}A> .
+<{EX}a> <{EX}p> <{EX}b> .
+""".encode()
+
+
+async def test_imported_property_types(fuseki_url: str, settings: Settings) -> None:
+    """Check that a property's kind comes from its declaration in an import too, as the OWLAPI reads it."""
+    counts = await stored_counts(fuseki_url, settings, USES_IMPORTED, {"http://example.org/y": IMPORTED_TYPES})
+    assert counts == Counter({AxiomKind.ANNOTATION: 2, AxiomKind.LOGICAL: 1})
+
+
+DATATYPES_BOTH_WAYS = f"""\
+<http://example.org/x> <{RDF}type> <{OWL}Ontology> .
+<{EX}D1> <{RDF}type> <{RDFS}Datatype> .
+<{EX}D2> <{RDF}type> <{RDFS}Datatype> .
+<{EX}D1> <{OWL}equivalentClass> <{EX}D2> .
+<{EX}D2> <{OWL}equivalentClass> <{EX}D1> .
+<{EX}A> <{RDF}type> <{OWL}Class> .
+<{EX}B> <{RDF}type> <{OWL}Class> .
+<{EX}A> <{OWL}equivalentClass> <{EX}B> .
+<{EX}B> <{OWL}equivalentClass> <{EX}A> .
+""".encode()
+
+
+async def test_datatypes_both_ways(jvm: None, fuseki_url: str, settings: Settings) -> None:
+    """Check two datatypes defined as each other, and two classes stated equivalent both ways, against the OWLAPI."""
+    expected = await owlapi.run_java(owlapi_counts, DATATYPES_BOTH_WAYS)
+    assert await stored_counts(fuseki_url, settings, DATATYPES_BOTH_WAYS) == expected

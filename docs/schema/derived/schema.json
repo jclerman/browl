@@ -1081,6 +1081,15 @@
       ],
       "indexes": [
         {
+          "name": "prefix_name",
+          "def": "CREATE INDEX prefix_name ON prefix (prefix COLLATE NOCASE, prefix)",
+          "table": "prefix",
+          "columns": [
+            "prefix",
+            "prefix"
+          ]
+        },
+        {
           "name": "sqlite_autoindex_prefix_1",
           "def": "PRIMARY KEY (prefix)",
           "table": "prefix",
@@ -1170,7 +1179,7 @@
           "name": "kind",
           "type": "TEXT",
           "nullable": false,
-          "comment": "The kind: logical, declaration, annotation (assertions and annotation property axioms) or other (datatype definitions)."
+          "comment": "The kind: logical, declaration, annotation (assertions and annotation property axioms) or datatype_definition."
         },
         {
           "name": "count",

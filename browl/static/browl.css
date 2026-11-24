@@ -316,7 +316,6 @@ code {
 
 .home-panels {
   display: grid;
-  grid-template-areas: "ontology" "annotations" "prefixes" "imports";
   grid-template-columns: minmax(0, 1fr);
   gap: var(--space);
 }
@@ -329,25 +328,8 @@ code {
   max-width: none;
 }
 
-.home-panels .ontology {
-  grid-area: ontology;
-}
-
-.home-panels .annotations {
-  grid-area: annotations;
-}
-
-.home-panels .prefixes {
-  grid-area: prefixes;
-}
-
-.home-panels .imports {
-  grid-area: imports;
-}
-
 @media (min-width: 64rem) {
   .home-panels {
-    grid-template-areas: "ontology annotations" "prefixes imports";
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 }

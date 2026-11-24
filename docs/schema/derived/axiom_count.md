@@ -18,10 +18,10 @@ CREATE TABLE axiom_count (
 
 ## Columns
 
-| Name  | Type    | Default | Nullable | Children | Parents | Comment                                                                                                                 |
-| ----- | ------- | ------- | -------- | -------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
-| kind  | TEXT    |         | false    |          |         | The kind: logical, declaration, annotation (assertions and annotation property axioms) or other (datatype definitions). |
-| count | INTEGER |         | false    |          |         | How many axioms there are of it.                                                                                        |
+| Name  | Type    | Default | Nullable | Children | Parents | Comment                                                                                                        |
+| ----- | ------- | ------- | -------- | -------- | ------- | -------------------------------------------------------------------------------------------------------------- |
+| kind  | TEXT    |         | false    |          |         | The kind: logical, declaration, annotation (assertions and annotation property axioms) or datatype_definition. |
+| count | INTEGER |         | false    |          |         | How many axioms there are of it.                                                                               |
 
 ## Constraints
 

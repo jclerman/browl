@@ -1,13 +1,4 @@
-"""The axiom-counts pre-caching hook (P-17): the `axiom_count` table, for the home page (DESIGN.md §2.5).
-
-The ontology's own axioms, without its imports, counted from its triples by OWL 2's mapping to RDF rather than by the
-OWLAPI, so no step loads the whole ontology into the OWLAPI for them: each triple is one axiom, or none, by its
-predicate, and its class if it's an `rdf:type` (`axiom-triples.rq`), less those of nodes whose triples aren't axioms,
-such as the ontology's header and reified axioms (`axiom-not-triples.rq`); then corrected (`axiom-adjustments.rq`) for
-annotation properties' own axioms, datatype definitions, symmetric axioms stated both ways, which count once, and the
-axioms that are a node of their own (n-ary disjointness, negative assertions, SWRL rules).
-Annotation assertions are told from property assertions as the annotations panel tells them (`entity-annotations.rq`).
-"""
+"""The axiom-counts pre-caching hook (P-17): `axiom_count`, from the triples (DESIGN.md §2.8, The axiom count)."""
 
 import logging
 from collections import Counter, defaultdict
@@ -55,7 +46,7 @@ LOGICAL_PREDICATES = frozenset(
     }
 )
 """The vocabulary's predicates whose triple with an IRI subject is a logical axiom (or, for some subjects, another kind,
-which `axiom-adjustments.rq` counts)."""
+which the adjustments move)."""
 
 BUILTIN_ANNOTATIONS = frozenset(
     {f"{RDFS}{name}" for name in ("label", "comment", "seeAlso", "isDefinedBy")}
@@ -69,11 +60,15 @@ BUILTIN_ANNOTATIONS = frozenset(
 VOCABULARIES = (RDF, RDFS, OWL, XSD, SWRL)
 """The vocabularies whose terms, as a predicate or a class, make no axiom unless listed above."""
 
-_LOGICAL_PROPERTY_TYPES = frozenset({f"{OWL}ObjectProperty", f"{OWL}DatatypeProperty"} | CHARACTERISTICS)
+DATATYPE_DEFINITION, SYMMETRIC, NODE = "datatype_definition", "symmetric", "node"
+"""The kinds of `axiom-adjustments.rq`'s counts."""
+
+_LOGICAL_PROPERTIES = frozenset({f"{OWL}ObjectProperty", f"{OWL}DatatypeProperty"})
+_LOGICAL_PROPERTY_TYPES = _LOGICAL_PROPERTIES | CHARACTERISTICS
 _TYPE = f"{RDF}type"
 
-type Counts = Mapping[tuple[str, str | None], int]
-"""Triple counts by predicate and, for `rdf:type`, IRI class (None for a class expression)."""
+type Key = tuple[str, str | None]
+"""A triple count's predicate and, for `rdf:type`, IRI class (None for a class expression)."""
 
 
 @hook()
@@ -86,23 +81,33 @@ async def axiom_counts(context: PreCacheContext) -> None:
         kind, count = (stream.variables.index(name) for name in ("kind", "count"))
         async for row in stream:
             match row[kind]:
-                case Literal(value=value):
+                case Literal(value=value) if value in (DATATYPE_DEFINITION, SYMMETRIC, NODE):
                     adjustments[value] += _number(row[count])
                 case other:
                     raise SparqlError(f"an axiom count query gave a kind of {other!r:.200}")
+    property_axioms: dict[str, int] = {}
+    async with context.bulk_select(sparql_file("axiom-property-axioms.rq"), imports=False) as stream:
+        subject, count = (stream.variables.index(name) for name in ("s", "count"))
+        async for row in stream:
+            property_axioms[str(row[subject])] = _number(row[count])
+    # The properties' types from the imports too, as the OWLAPI reads them.
     types: defaultdict[str, set[str]] = defaultdict(set)
     async with context.bulk_select(sparql_file("axiom-property-types.rq")) as stream:
         property_, type_ = (stream.variables.index(name) for name in ("property", "type"))
         async for row in stream:
             types[str(row[property_])].add(str(row[type_]))
-    counts = count_axioms(triples, not_axioms, adjustments, types)
+    counts = count_axioms(triples, not_axioms, adjustments, property_axioms, types)
     rows = [(kind.value, counts[kind]) for kind in AxiomKind]
     await context.db.insert("INSERT INTO axiom_count (kind, count) VALUES (?, ?)", rows)
     logger.info("The ontology has %d axioms: %r", sum(counts.values()), {kind.value: counts[kind] for kind in counts})
 
 
 def count_axioms(
-    triples: Counts, not_axioms: Counts, adjustments: Mapping[str, int], types: Mapping[str, AbstractSet[str]]
+    triples: Mapping[Key, int],
+    not_axioms: Mapping[Key, int],
+    adjustments: Mapping[str, int],
+    property_axioms: Mapping[str, int],
+    types: Mapping[str, AbstractSet[str]],
 ) -> Counter[AxiomKind]:
     """Return the axioms of each kind, from the counts of the hook's queries.
 
@@ -110,6 +115,7 @@ def count_axioms(
         triples: The ontology's triples (`axiom-triples.rq`).
         not_axioms: Those of them that aren't axioms whatever their predicate (`axiom-not-triples.rq`).
         adjustments: The corrections by kind (`axiom-adjustments.rq`).
+        property_axioms: Each IRI's sub-property, domain and range triples (`axiom-property-axioms.rq`).
         types: Each property's declared types and characteristics (`axiom-property-types.rq`).
     """
     counts: Counter[AxiomKind] = Counter()
@@ -117,11 +123,20 @@ def count_axioms(
         kind = _kind(*key, types)
         if kind is not None:
             counts[kind] += count - not_axioms.get(key, 0)
-    moved = adjustments.get("annotation_property", 0)
-    defined = adjustments.get("datatype_definition", 0)
-    counts[AxiomKind.LOGICAL] += adjustments.get("node", 0) - adjustments.get("symmetric", 0) - moved - defined
+    # An annotation property's sub-property, domain and range axioms are annotation axioms.
+    moved = sum(
+        count
+        for iri, count in property_axioms.items()
+        if f"{OWL}AnnotationProperty" in (declared := types.get(iri, set())) and not declared & _LOGICAL_PROPERTIES
+    )
+    defined = adjustments.get(DATATYPE_DEFINITION, 0)
+    counts[AxiomKind.LOGICAL] += adjustments.get(NODE, 0) - adjustments.get(SYMMETRIC, 0) - moved - defined
     counts[AxiomKind.ANNOTATION] += moved
-    counts[AxiomKind.OTHER] += defined
+    counts[AxiomKind.DATATYPE_DEFINITION] += defined
+    for kind, count in counts.items():
+        if count < 0:  # only a construct the queries misread: shown as none, not negative
+            logger.warning("The axiom count of kind %s came to %d; counting none", kind.value, count)
+            counts[kind] = 0
     return counts
 
 
@@ -145,22 +160,25 @@ def _kind(predicate: str, class_: str | None, types: Mapping[str, AbstractSet[st
     return AxiomKind.LOGICAL  # a property assertion
 
 
-def _typed_apart(counts: dict[tuple[str, str | None], int]) -> dict[tuple[str, str | None], int]:
+def _typed_apart(counts: Mapping[Key, int]) -> dict[Key, int]:
     """Return `axiom-triples.rq`'s counts with its `rdf:type` total made the count of those whose class isn't an IRI.
 
     The query counts every triple by predicate, and the `rdf:type` triples again by IRI class, as that's faster than
     counting them apart (see the query).
+
+    Raises:
+        SparqlError: The total is less than the counts by class.
     """
     typed = sum(count for (predicate, class_), count in counts.items() if predicate == _TYPE and class_ is not None)
     total = counts.get((_TYPE, None), 0)
     if total < typed:
         raise SparqlError(f"the axiom triples query counted {total} rdf:type triples, but {typed} by class")
-    return counts | {(_TYPE, None): total - typed}
+    return {**counts, (_TYPE, None): total - typed}
 
 
-async def _grouped(context: PreCacheContext, query: str) -> dict[tuple[str, str | None], int]:
+async def _grouped(context: PreCacheContext, query: str) -> dict[Key, int]:
     """Return a query's counts by predicate and class, on the ontology alone."""
-    counts: dict[tuple[str, str | None], int] = {}
+    counts: dict[Key, int] = {}
     async with context.bulk_select(query, imports=False) as stream:
         predicate, class_, count = (stream.variables.index(name) for name in ("predicate", "class", "count"))
         async for row in stream:

@@ -263,6 +263,15 @@ SCAN_RESULT = (
 """The usage table's scan (`usage-scan.rq`): x SubClassOf A, x's label, and a blank subject's triple naming A."""
 
 
+AXIOM_COUNT_QUERIES = {
+    "SELECT ?predicate ?class (COUNT(*) AS ?count)": ("?predicate", "?class", "?count"),
+    "SELECT ?kind (COUNT(*) AS ?count)": ("?kind", "?count"),
+    "SELECT ?s (COUNT(*) AS ?count)": ("?s", "?count"),
+    "SELECT ?property ?type": ("?property", "?type"),
+}
+"""The axiom counts' queries' SELECT clauses, and their columns."""
+
+
 def answer(query: str) -> str:
     """Return a stubbed Fuseki's answer: the entities', names', edges', owner map's, usage scan's, else the header's."""
     if "?subject ?predicate ?object" in query:
@@ -277,10 +286,9 @@ def answer(query: str) -> str:
         return NAME_RESULT
     if "?child ?relation" in query:
         return EDGE_RESULT
-    # The axiom counts' queries (browl.precache.axiom_counts): none.
-    for columns in ("?predicate ?class ?count", "?kind ?count", "?property ?type"):
-        if f"SELECT {columns.replace(' ?count', ' (COUNT(*) AS ?count)')}" in query:
-            names = columns.split()
+    # The axiom counts' queries (browl.precache.axiom_counts), by their SELECT clause: none.
+    for select, names in AXIOM_COUNT_QUERIES.items():
+        if select in query:
             return "\t".join([*names, f"?{END_VARIABLE}"]) + "\n" + "\t" * len(names) + "true\n"
     return ONTOLOGY_RESULT
 

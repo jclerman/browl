@@ -39,7 +39,7 @@ from browl.home import read_home
 from browl.jobs import JobState
 from browl.links import EntityLink, entity_name
 from browl.overview import read_overview
-from browl.pages import TREES, app_path, cut_name, href, is_under, link_root, read_derived, templates
+from browl.pages import TREES, app_path, cut_name, href, is_under, link_root, read_derived, templates, tree_href
 from browl.tabs import (
     PANEL_PARAM,
     TAB_PARAM,
@@ -331,7 +331,8 @@ async def _page(
         assert meta is not None  # read for the home page (`_found`)
         name = cut_name(meta.title or meta.ontology_iri or "")
         home = await read_home(request, state, meta)
-        home_context = {"home": home, "name": name, "trees": TREES, "reasoners": REASONER_LABELS}
+        trees = [(tree_href(request, tree), tree) for tree in TREES]
+        home_context = {"home": home, "name": name, "trees": trees, "reasoners": REASONER_LABELS}
         return templates.TemplateResponse(request, "home.html", home_context | common)
     assert tab is not None  # an entity page has tabs
     links = tab_links(tabs, tab, href(request, at.page), at.fragment, href(request, at.panel or at.page))

@@ -1,0 +1,11 @@
+# The ontology's sub-property, domain and range triples with an IRI subject, counted by ?s, for the axiom count
+# (browl.precache.axiom_counts), which counts an annotation property's as annotation axioms, not logical ones, by the
+# property's types in the ontology and its imports. Few, so the isIRI test is cheap. Run on the default graph alone;
+# the prologue (browl.precache.core.PREFIXES) is added when it's run.
+SELECT ?s (COUNT(*) AS ?count)
+WHERE {
+  VALUES ?predicate { rdfs:subPropertyOf rdfs:domain rdfs:range }
+  ?s ?predicate ?o
+  FILTER isIRI(?s)
+}
+GROUP BY ?s
