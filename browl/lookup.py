@@ -6,8 +6,8 @@ by its IRI (fallback URLs, and each of the IRIs that share a URL), and `hash?pat
 script (`static/hash.js`) fetches for the entity named by the URL's fragment, which the server never sees.
 
 Entity pages have tabs (`browl.tabs`): the Overview tab (`browl.overview`), and the Usage tab (`browl.usage_tab`), paged
-by `page=…`, whose label's count a third route serves, `usage-count?iri=…`, once the page has rendered. The home page is
-a placeholder until P-17.
+by `page=…`, whose label's count a third route serves, `usage-count?iri=…`, once the page has rendered. The ontology's
+own page is the home page (`browl.home`), without tabs.
 """
 
 import dataclasses
@@ -24,6 +24,7 @@ from fastapi.routing import APIRoute
 from starlette.routing import Match
 from starlette.types import Scope
 
+from browl.admin import REASONER_LABELS
 from browl.derived import (
     TYPE_LABELS,
     Entity,
@@ -34,10 +35,11 @@ from browl.derived import (
     is_hash_prefix,
     read_meta,
 )
+from browl.home import read_home
 from browl.jobs import JobState
 from browl.links import EntityLink, entity_name
 from browl.overview import read_overview
-from browl.pages import app_path, cut_name, href, is_under, link_root, read_derived, templates
+from browl.pages import TREES, app_path, cut_name, href, is_under, link_root, read_derived, templates
 from browl.tabs import (
     PANEL_PARAM,
     TAB_PARAM,
@@ -328,7 +330,9 @@ async def _page(
     if is_home:
         assert meta is not None  # read for the home page (`_found`)
         name = cut_name(meta.title or meta.ontology_iri or "")
-        return templates.TemplateResponse(request, "home.html", {"meta": meta, "name": name} | common)
+        home = await read_home(request, state, meta)
+        home_context = {"home": home, "name": name, "trees": TREES, "reasoners": REASONER_LABELS}
+        return templates.TemplateResponse(request, "home.html", home_context | common)
     assert tab is not None  # an entity page has tabs
     links = tab_links(tabs, tab, href(request, at.page), at.fragment, href(request, at.panel or at.page))
     entity = entities[0]

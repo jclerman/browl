@@ -596,6 +596,7 @@ are documented in [`SCHEMA.md`](SCHEMA.md):
 | `root` | Each hierarchy's roots, which the tree pages start from (P-18) | `edge`, in Python: found on demand, they'd take a scan of `counts` and a lookup in `edge` per node, 1–2 s on NCBITaxon |
 | `usage_root`, `usage_ref`, `usage_blank` | The blank-node owner map (P-27): each blank-node root that's a usage, with its kind, owner, predicate and store label; the entities each is a usage of; per entity, its triples with a blank subject | One bulk query over the blank nodes, found by their types and predicates (`owner-map.rq`, `browl.precache.owner_map`): 5–7 s on Uberon and HPO; on NCBITaxon 26 s, 2.69 M rows ([S-7 findings](../research/S-7/README.md)). The whole hook takes 9 s on Uberon, and 34–49 s on NCBITaxon, where it grows the process by 0.33 GB; NCBITaxon's tables are 78 MiB (P-27a) |
 | `hash_prefix` | Distinct URL paths that have hash entities under them | `entity` |
+| `type_count` | How many entities have each type, for the home page (U-1); a punned IRI counts once per type | `entity`, by one `GROUP BY` at the end of the entities hook (P-17): counted per view, it'd scan NCBITaxon's 3 M rows |
 | `prefix` | CURIE prefix → namespace | The built-in ones, overridden by the ontology file's own, overridden by `EXTRA_PREFIXES` ([2.7](#27-display-names)) |
 | `meta` | Ontology IRI, version IRI, title, `owl:versionInfo`, reasoner used, load time (the job's start), generation number | The ontology header query (below) and the job |
 | `build_key` | Component → build key (below) | `browl.precache.keys` |
@@ -1473,6 +1474,26 @@ browl's Fuseki client checks every IRI it reads (2.14).
 **Base directions** (RDF 1.2's `"…"@ar--rtl`): Fuseki stores and returns them, and browl's Fuseki client reads them as
 `rdf:dirLangString` literals. The OWLAPI 4.5 predates RDF 1.2: its N-Triples parser accepts them but reads `ar--rtl`
 as the whole language tag, so the Manchester rendering shows such a literal as written (P-4).
+
+**The home page** _(P-17, `browl.home`)_: the page at the ontology IRI's URL (U-2), without tabs. Under its title:
+
+- **A warning, in red and boxed, if any import couldn't be loaded:** how many of how many, that the site leaves out what
+  they declare though the ontology still lists them, and each one's IRI, what imports it if it's indirect, and why
+  (the job state's `ImportResult.reason`, P-8). It comes first, so it's seen before anything it affects.
+- **An Ontology panel:** the ontology IRI; the version IRI, else `owl:versionInfo` (`Meta.version`); the reasoner applied
+  ("None" if none); the load time; the entities of each type, each linked to its tree page, from `type_count`
+  ([2.5](#25-derived-data-pre-caching)); and the triples loaded, the ontology's own (the default graph) and its loaded
+  imports' together, from the job state. An IRI is a link only if it's `http` or `https` and short enough to show
+  whole, as an annotation's IRI value is (`links.html`'s `web_iri`): the upload's IRIs are unchecked, and autoescaping
+  doesn't stop a `javascript:` IRI in an `href`.
+- **The Annotations panel**, as an entity's (above): the ontology IRI's annotation triples, by the same query, so
+  `owl:imports` and `owl:versionIRI`, which aren't annotations, aren't in it. Its failure fails only the panel.
+- **An Imports panel:** every import, direct and indirect, with what imports it, and its triple count, or "not loaded"
+  in red.
+
+The job state's triple counts and imports are the latest job's, so they're shown only when it's the ready generation's
+job; a page served just as a new job starts leaves them out rather than show the new job's. The page's data is a
+`Home`, built apart from its HTML for the JSON API (P-33).
 
 ### 2.9 Page layout
 

@@ -69,6 +69,7 @@ COLUMNS = {
         ("direct", "INTEGER", 1, 0),
     ],
     "prefix": [("prefix", "TEXT", 1, 1), ("namespace", "TEXT", 1, 0)],
+    "type_count": [("type", "TEXT", 1, 1), ("count", "INTEGER", 1, 0)],
     "search_lane": [
         ("type", "TEXT", 1, 1),
         ("property_rank", "INTEGER", 1, 2),

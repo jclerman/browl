@@ -1,10 +1,78 @@
 {% extends "base.html" %}
+{% from "annotations.html" import annotation_list %}
+{% from "links.html" import web_iri %}
 {% block title %}{{ name | isolate }}{% endblock %}
 {# The ontology is the page's subject, so its title isn't repeated. #}
 {% block title_suffix %} · {{ frame.site_name }}{% endblock %}
 {% block content %}
-{# A placeholder until P-17. #}
+{# The home page (U-1, `browl.home.Home`): the dropped imports' warning first, then the ontology's metadata, its
+   annotations and its imports, in the Overview tab's panels. #}
+{% set meta = home.meta %}
+{% set dropped = home.dropped_imports %}
+<div class="home-page">
 <h1><bdi>{{ name }}</bdi></h1>
-<p><code dir="ltr">{{ meta.ontology_iri }}</code></p>
-{% if meta.version %}<p>Version: <code dir="ltr">{{ meta.version }}</code></p>{% endif %}
+{% if dropped %}
+<section class="import-warning" aria-labelledby="import-warning-heading">
+  <h2 id="import-warning-heading">{{ dropped | length }} of the ontology's {{ home.imports | length }} imports couldn't be
+    loaded</h2>
+  <p>This site leaves out what {{ "it declares" if dropped | length == 1 else "they declare" }}, though the ontology
+    still lists {{ "it" if dropped | length == 1 else "them" }} among its imports.</p>
+  <ul>
+    {% for result in dropped %}
+    <li>{{ web_iri(result.iri) }}
+      {%- if result.imported_by is not none %} (imported by {{ web_iri(result.imported_by) }}){% endif %}:
+      {{ result.reason }}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+<section class="panel" tabindex="0" aria-labelledby="ontology-heading">
+  <h2 id="ontology-heading">Ontology</h2>
+  <dl class="frame">
+    <dt>IRI</dt>
+    <dd>{{ web_iri(meta.ontology_iri) }}</dd>
+    {% if meta.version_iri is not none %}
+    <dt>Version IRI</dt>
+    <dd>{{ web_iri(meta.version_iri) }}</dd>
+    {% elif meta.version_info is not none %}
+    <dt>Version</dt>
+    <dd><bdi class="value">{{ meta.version_info | cut_text(MAX_LITERAL_CHARS) }}</bdi></dd>
+    {% endif %}
+    <dt>Reasoner</dt>
+    <dd>{{ reasoners[meta.reasoner] }}</dd>
+    <dt>Loaded</dt>
+    <dd><time datetime="{{ meta.loaded_at.isoformat() }}">{{ meta.loaded_at.strftime("%Y-%m-%d %H:%M UTC") }}</time></dd>
+    <dt>Entities</dt>
+    {% for tree in trees %}
+    <dd><a href="{{ frame.trees[loop.index0][0] }}">{{ tree.label }}</a>: {{ "{:,}".format(home.entity_counts.get(tree.hierarchy, 0)) }}</dd>
+    {% endfor %}
+    {% if home.triples is not none %}
+    <dt>Triples</dt>
+    <dd>{{ "{:,}".format(home.triples) }} in the ontology</dd>
+    {% if home.import_triples is not none %}
+    <dd>{{ "{:,}".format(home.import_triples) }} in its imports</dd>
+    {% endif %}
+    {% endif %}
+  </dl>
+</section>
+{{ annotation_list(home.annotations, home.links) }}
+{% if home.imports is not none %}
+<section class="panel" tabindex="0" aria-labelledby="imports-heading">
+  <h2 id="imports-heading">Imports</h2>
+  {% if not home.imports %}
+  <p class="note">None.</p>
+  {% else %}
+  <ul class="imports">
+    {% for result in home.imports %}
+    <li{% if result.dropped %} class="failure"{% endif %}>{{ web_iri(result.iri) }}
+      {%- if result.imported_by is not none %} (imported by {{ web_iri(result.imported_by) }}){% endif %}:
+      {% if result.dropped %}not loaded
+      {%- elif result.triples is not none %}{{ "{:,}".format(result.triples) }} triples
+      {%- else %}loaded{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endif %}
+</div>
 {% endblock %}

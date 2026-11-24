@@ -286,6 +286,30 @@ code {
   color: var(--muted);
 }
 
+/* The home page (U-1): the Overview tab's panels, under a warning, in red and boxed, if imports couldn't be loaded. */
+
+.home-page > h1 {
+  margin-bottom: var(--space);
+}
+
+.import-warning {
+  margin-bottom: var(--space);
+  padding: 0 var(--space) calc(var(--space) / 2);
+  border: 2px solid var(--danger);
+  border-radius: 4px;
+  color: var(--danger);
+}
+
+.import-warning h2 {
+  margin: 0;
+  padding: calc(var(--space) / 2) 0;
+  font-size: 1.1rem;
+}
+
+.import-warning p {
+  max-width: var(--measure);
+}
+
 /* An entity page (DESIGN.md §2.9): named grid areas, its columns set here alone, so a hierarchy column can be added
    later; the window-filling frame, below, sets the rows. */
 

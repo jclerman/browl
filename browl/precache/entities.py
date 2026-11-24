@@ -1,4 +1,4 @@
-"""The entities pre-caching hook (P-10): the `entity` and `hash_prefix` tables."""
+"""The entities pre-caching hook (P-10): the `entity`, `hash_prefix` and `type_count` tables."""
 
 import functools
 import logging
@@ -28,7 +28,7 @@ header (`entities`). Named individuals come later (U-18)."""
 
 @hook("base_url", "reserved_prefix")
 async def entities(context: PreCacheContext) -> None:
-    """Fill `entity`, with each entity's URL path and fragment (`browl.urls.URLMapper`), and `hash_prefix`.
+    """Fill `entity`, with each entity's URL path and fragment (`browl.urls.URLMapper`), `hash_prefix` and `type_count`.
 
     The entities are the ontology itself, whose IRI the `meta` row holds, and every declared class and property, from
     one bulk query (`entity-list.rq`). The URLs are computed on the database's thread, off the event loop. IRIs whose
@@ -50,6 +50,7 @@ async def entities(context: PreCacheContext) -> None:
     await context.db.create_indexes("entity")
     await context.db.run(fill_hash_prefix)
     await context.db.create_indexes("hash_prefix")
+    await context.db.run(fill_type_count)
     if reserved.count:
         logger.warning(
             "%d entity IRIs would have URLs under the reserved prefix /%s, so they get fallback URLs: %r%s",
@@ -104,3 +105,8 @@ def fill_hash_prefix(connection: sqlite3.Connection) -> None:
     connection.execute(
         "INSERT INTO hash_prefix SELECT DISTINCT path FROM entity WHERE fragment IS NOT NULL ORDER BY path"
     )
+
+
+def fill_type_count(connection: sqlite3.Connection) -> None:
+    """Fill `type_count` from `entity`: how many entities have each type, for the home page."""
+    connection.execute("INSERT INTO type_count SELECT type, count(*) FROM entity GROUP BY type ORDER BY type")

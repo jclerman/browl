@@ -146,6 +146,10 @@ CREATE TABLE prefix (
     prefix TEXT PRIMARY KEY,
     namespace TEXT NOT NULL
 ) WITHOUT ROWID;
+CREATE TABLE type_count (
+    type TEXT PRIMARY KEY,
+    count INTEGER NOT NULL
+) WITHOUT ROWID;
 """
 """The tables (§2.5). Entities are referred to by `entity.id`, a dense integer (e.g. for descendant bitmaps); an IRI
 declared with several types (punning) has a row for each. The `build_key` table and its columns, and `meta.generation`,
@@ -473,6 +477,11 @@ def is_current(data_dir: Path, generation: int, keys: Mapping[str, str]) -> bool
         return False
     connection.close()
     return True
+
+
+def read_type_counts(connection: sqlite3.Connection) -> dict[EntityType, int]:
+    """Return how many entities have each type (the `type_count` table); a type with none has no key."""
+    return {EntityType(kind): count for kind, count in connection.execute("SELECT type, count FROM type_count")}
 
 
 def read_meta(connection: sqlite3.Connection) -> Meta:

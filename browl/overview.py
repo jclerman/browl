@@ -127,7 +127,7 @@ async def read_overview(request: Request, state: JobState, iri: str) -> Overview
     generation, clause = ready_store(state)
     dataset = dataset_name(generation)
     async with task_group() as group:
-        annotations_task = group.create_task(_read_annotations(request, dataset, iri, clause))
+        annotations_task = group.create_task(read_annotations(request, dataset, iri, clause))
         axioms_task = group.create_task(_read_axioms(request, dataset, iri, clause))
     annotations, too_many_annotations = annotations_task.result()
     axioms, too_many_axioms = axioms_task.result()
@@ -166,7 +166,7 @@ async def read_overview(request: Request, state: JobState, iri: str) -> Overview
     )
 
 
-async def _read_annotations(
+async def read_annotations(
     request: Request, dataset: str, iri: str, clause: str
 ) -> tuple[list[tuple[IRI, AnnotationValue]] | None, bool]:
     """Return an entity's annotations (`browl.annotations.fetch_annotations`), and whether they're too many.

@@ -1110,6 +1110,56 @@
         }
       ],
       "def": "CREATE TABLE prefix (\n    prefix TEXT PRIMARY KEY,\n    namespace TEXT NOT NULL\n) WITHOUT ROWID"
+    },
+    {
+      "name": "type_count",
+      "type": "table",
+      "comment": "How many entities entity holds of each type, for the home page (U-1), so it needn't count them on every view. A punned IRI counts once for each of its types; a type with no entities has no row.",
+      "columns": [
+        {
+          "name": "type",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "The entity type, as in entity.type."
+        },
+        {
+          "name": "count",
+          "type": "INTEGER",
+          "nullable": false,
+          "comment": "How many entities have it."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "sqlite_autoindex_type_count_1",
+          "def": "PRIMARY KEY (type)",
+          "table": "type_count",
+          "columns": [
+            "type"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "type",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (type)",
+          "table": "type_count",
+          "columns": [
+            "type"
+          ]
+        },
+        {
+          "name": "sqlite_autoindex_type_count_1",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (type)",
+          "table": "type_count",
+          "columns": [
+            "type"
+          ]
+        }
+      ],
+      "def": "CREATE TABLE type_count (\n    type TEXT PRIMARY KEY,\n    count INTEGER NOT NULL\n) WITHOUT ROWID"
     }
   ],
   "relations": [

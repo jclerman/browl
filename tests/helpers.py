@@ -32,7 +32,7 @@ from browl.loading import dataset_name
 from browl.names import name_property_iris, normalize
 from browl.precache import hierarchies
 from browl.precache.core import Hook
-from browl.precache.entities import Reserved, fill_hash_prefix, insert_entities
+from browl.precache.entities import Reserved, fill_hash_prefix, fill_type_count, insert_entities
 from browl.precache.keys import build_keys
 from browl.precache.stage import HOOKS, pre_cache
 from browl.rdf import RDF, RDFS
@@ -351,6 +351,7 @@ def derived_stage(
         with derived.build(settings.data_dir, meta, build_keys(settings, HOOKS)) as connection:
             insert_entities(rows, mapper, Reserved(), connection)
             fill_hash_prefix(connection)
+            fill_type_count(connection)
             set_names(connection, names or {})
             for group in equivalence_groups:
                 connection.executemany(
