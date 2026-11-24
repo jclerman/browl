@@ -13,7 +13,8 @@ CREATE TABLE search_property (
     iri TEXT NOT NULL,
     prose INTEGER NOT NULL,
     by_default INTEGER NOT NULL,
-    value_count INTEGER NOT NULL
+    value_count INTEGER NOT NULL,
+    curie TEXT
 )
 ```
 
@@ -28,6 +29,7 @@ CREATE TABLE search_property (
 | prose       | INTEGER |         | false    |                                                                                                                                                                       |         | 1 if it's prose (definitions, comments, notes), which the lane index leaves out; 0 if it's name-like (labels, synonyms, IDs, cross-references).                                                                    |
 | by_default  | INTEGER |         | false    |                                                                                                                                                                       |         | 1 if a search that names no properties searches it: the name, label and synonym properties, and any other name-like one whose values are on fewer than browl.precache.values.NAME_REUSE entities each, on average. |
 | value_count | INTEGER |         | false    |                                                                                                                                                                       |         | How many values it has in annotation_value; 0 for one listed only for its sub-properties.                                                                                                                          |
+| curie       | TEXT    |         | true     |                                                                                                                                                                       |         | Its CURIE if it isn't a declared entity, by the rule entity.curie follows (browl.names.curie_prefixes); NULL if it is, whose is entity.curie, or if no prefix covers it.                                           |
 
 ## Constraints
 
@@ -59,6 +61,7 @@ erDiagram
   INTEGER prose
   INTEGER by_default
   INTEGER value_count
+  TEXT curie
 }
 "annotation_value" {
   INTEGER entity

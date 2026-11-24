@@ -119,7 +119,8 @@ class SearchProperty:
     Attributes:
         iri: Its IRI.
         name: Its display name; None if it isn't a declared entity (e.g. an undeclared built-in, `rdfs:label`).
-        curie: Its CURIE, from the longest namespace in the `prefix` table that covers it; None if none does.
+        curie: Its CURIE, as its entity page gives it (`entity.curie`), or if it isn't declared, by the same rule;
+            None if no prefix covers it.
         prose: Whether it's prose, rather than name-like: prose isn't in the lane index.
         by_default: Whether a query searches it when it names no properties.
         values: How many values it has, on declared entities; a property searched by default, or with sub-properties
@@ -489,27 +490,20 @@ def search_properties(connection: sqlite3.Connection, order: Sequence[str] = ())
 
 def _properties(connection: sqlite3.Connection, order: Sequence[str]) -> list[tuple[int, SearchProperty]]:
     """Return the properties search knows, with their ids, in walk order (`search_properties`)."""
-    prefixes = sorted(connection.execute("SELECT prefix, namespace FROM prefix"), key=lambda row: -len(row[1]))
     subs = dict(
         connection.execute(
             "SELECT s.property, sum(p.value_count) FROM sub_property AS s JOIN search_property AS p ON p.id = s.sub"
             " GROUP BY s.property"
         ).fetchall()
     )
-
-    def curie(iri: str) -> str | None:
-        for prefix, namespace in prefixes:
-            if iri.startswith(namespace) and len(iri) > len(namespace):
-                return f"{prefix}:{iri[len(namespace) :]}"
-        return None
-
     rows = connection.execute(
-        "SELECT id, iri, (SELECT display_name FROM entity WHERE entity.iri = p.iri ORDER BY type LIMIT 1),"
-        " prose, by_default, value_count FROM search_property AS p"
+        "SELECT p.id, p.iri, e.display_name, coalesce(e.curie, p.curie), p.prose, p.by_default, p.value_count"
+        " FROM search_property AS p"
+        " LEFT JOIN entity AS e ON e.id = (SELECT id FROM entity WHERE entity.iri = p.iri ORDER BY type LIMIT 1)"
     )
     found = [
-        (id_, SearchProperty(iri, name, curie(iri), bool(prose), bool(default), count, subs.get(id_, 0)))
-        for id_, iri, name, prose, default, count in rows
+        (id_, SearchProperty(iri, name, curie, bool(prose), bool(default), count, subs.get(id_, 0)))
+        for id_, iri, name, curie, prose, default, count in rows
     ]
     first = {iri: n for n, iri in enumerate(dict.fromkeys(order))}
 

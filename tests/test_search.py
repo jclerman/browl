@@ -736,33 +736,30 @@ async def test_id_in_two_languages_searched_by_default(data_dir: Path) -> None:
 
 
 def test_property_labels() -> None:
-    """Check a property's label: its display name, else its CURIE by the longest namespace, else its IRI.
+    """Check a property's label: its display name, else its entity's CURIE, else its own if undeclared, else its IRI.
 
     And that a property's count of its sub-properties' values is transitive, as `sub_property` is.
     """
     connection = sqlite3.connect(":memory:")
     connection.executescript(SCHEMA)
     connection.executemany(
-        "INSERT INTO prefix VALUES (?, ?)", [("owl", "http://www.w3.org/2002/07/owl#"), ("ex", EX), ("exa", f"{EX}a/")]
-    )
-    connection.execute(
-        "INSERT INTO entity (iri, type, path, display_name) VALUES (?, 'annotation_property', '', ?)",
-        (f"{EX}named", "a name"),
+        "INSERT INTO entity (iri, type, path, display_name, curie) VALUES (?, 'annotation_property', '', ?, ?)",
+        [(f"{EX}named", "a name", "ex:named"), (f"{EX}a/sub", None, "chosen:sub")],
     )
     rows = [
-        (1, "http://www.w3.org/2002/07/owl#versionInfo", 1),
-        (2, f"{EX}named", 0),
-        (3, f"{EX}a/sub", 5),
-        (4, f"{EX}a/subsub", 7),
-        (5, "urn:x", 2),
+        (1, "http://www.w3.org/2002/07/owl#versionInfo", 1, "owl:versionInfo"),
+        (2, f"{EX}named", 0, None),
+        (3, f"{EX}a/sub", 5, None),
+        (4, f"{EX}a/subsub", 7, "exa:subsub"),
+        (5, "urn:x", 2, None),
     ]
-    connection.executemany("INSERT INTO search_property VALUES (?, ?, 0, 0, ?)", rows)
+    connection.executemany("INSERT INTO search_property VALUES (?, ?, 0, 0, ?, ?)", rows)
     connection.executemany("INSERT INTO sub_property VALUES (?, ?)", [(2, 3), (2, 4), (3, 4)])
     found = {p.iri: (p.label, p.sub_values) for p in search_properties(connection)}
     assert found == {
         "http://www.w3.org/2002/07/owl#versionInfo": ("owl:versionInfo", 0),
         f"{EX}named": ("a name", 12),
-        f"{EX}a/sub": ("exa:sub", 7),
+        f"{EX}a/sub": ("chosen:sub", 7),  # the entity's, as the names hook chose it
         f"{EX}a/subsub": ("exa:subsub", 0),
         "urn:x": ("urn:x", 0),
     }

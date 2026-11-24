@@ -68,6 +68,7 @@ erDiagram
   INTEGER prose
   INTEGER by_default
   INTEGER value_count
+  TEXT curie
 }
 ```
 

@@ -38,6 +38,41 @@ def expand_curie(name: str, prefixes: Mapping[str, str]) -> str:
     return name
 
 
+def curie_prefixes(declared: Mapping[str, str], configured: Mapping[str, str]) -> list[tuple[str, str]]:
+    """Return the CURIE prefixes (§2.7), as (name, namespace), in the order an IRI that several cover takes them.
+
+    They're the built-in ones, overridden by those the ontology file declares, overridden by `EXTRA_PREFIXES`. The
+    longest namespace comes first; of several prefixes for one namespace, the one of the best source (configured, then
+    declared, then built in), then a named one rather than the default (empty) prefix, then by name.
+
+    Args:
+        declared: The prefixes the ontology file declares.
+        configured: `EXTRA_PREFIXES`.
+    """
+    prefixes = {**BUILTIN_PREFIXES, **declared, **configured}
+    source_rank = {name: 0 if name in configured else 1 if name in declared else 2 for name in prefixes}
+
+    def preference(item: tuple[str, str]) -> tuple[int, int, bool, str]:
+        name, namespace = item
+        return -len(namespace), source_rank[name], name == "", name
+
+    return sorted(prefixes.items(), key=preference)
+
+
+def curie(iri: str, prefixes: Iterable[tuple[str, str]]) -> str | None:
+    """Return an IRI's CURIE, by the first prefix whose namespace is a proper prefix of it; None if none is.
+
+    Examples:
+        >>> prefixes = curie_prefixes({"ex": "http://example.org/", "a": "http://example.org/a/"}, {})
+        >>> curie("http://example.org/a/b", prefixes), curie("http://example.org/", prefixes)
+        ('a:b', None)
+    """
+    for name, namespace in prefixes:
+        if iri.startswith(namespace) and len(iri) > len(namespace):
+            return f"{name}:{iri[len(namespace) :]}"
+    return None
+
+
 def name_properties(settings: Settings) -> dict[str, str]:
     """Return the name properties (`NAME_PROPERTIES`, O-4), best first, by IRI, each with the first name given for it.
 

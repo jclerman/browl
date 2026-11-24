@@ -12,7 +12,7 @@ from collections import Counter, defaultdict
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
-from browl.names import name_property_iris
+from browl.names import curie, curie_prefixes, name_property_iris
 from browl.precache.core import PreCacheContext, batched, hook
 from browl.rdf import OWL, RDFS, XSD_STRING, Literal, Term
 
@@ -118,7 +118,8 @@ async def annotation_values(context: PreCacheContext) -> None:
         columns = tuple(stream.variables.index(name) for name in ("sub", "property"))
         async for batch in batched(stream):
             await context.db.run(functools.partial(_stage_sub_properties, batch, columns))
-    await context.db.run(functools.partial(fill_staged, names, words))
+    prefixes = curie_prefixes(context.job.prefixes, context.job.settings.extra_prefixes)
+    await context.db.run(functools.partial(fill_staged, names, words, prefixes))
     await context.db.create_indexes("search_property")
     await context.db.create_indexes("annotation_value")
 
@@ -238,15 +239,22 @@ def _stage_sub_properties(
     connection.executemany("INSERT INTO sub_staging VALUES (?, ?)", [(str(row[sub]), str(row[prop])) for row in batch])
 
 
-def fill_staged(names: Sequence[str], words: Mapping[str, Counter[int]], connection: sqlite3.Connection) -> None:
+def fill_staged(
+    names: Sequence[str],
+    words: Mapping[str, Counter[int]],
+    prefixes: Sequence[tuple[str, str]],
+    connection: sqlite3.Connection,
+) -> None:
     """Fill the tables from the staged rows: values by entity id, once for each type an IRI is declared with (punning).
 
     A property is kept if it has values on declared entities, is searched by default (a default search reaches its
-    sub-properties' values even if it has none), or is a super-property of one with values (`classify`).
+    sub-properties' values even if it has none), or is a super-property of one with values (`classify`). One that isn't
+    a declared entity gets its CURIE here, by the rule the names hook sets `entity.curie` by.
 
     Args:
         names: The name properties' IRIs.
         words: Each property's values' word counts, by IRI, as staged.
+        prefixes: The CURIE prefixes, in the order an IRI takes them (`browl.names.curie_prefixes`).
         connection: The derived database, with the staging tables filled.
     """
     supers: defaultdict[str, set[str]] = defaultdict(set)
@@ -277,6 +285,12 @@ def fill_staged(names: Sequence[str], words: Mapping[str, Counter[int]], connect
         [(prose, default, stats[iri].values if iri in stats else 0, iri) for iri, (prose, default) in kinds.items()],
     )
     connection.executemany("DELETE FROM search_property WHERE iri = ?", [(iri,) for iri in every if iri not in kinds])
+    undeclared = connection.execute(
+        "SELECT iri FROM search_property AS p WHERE NOT EXISTS (SELECT 1 FROM entity WHERE entity.iri = p.iri)"
+    ).fetchall()
+    connection.executemany(
+        "UPDATE search_property SET curie = ? WHERE iri = ?", [(curie(iri, prefixes), iri) for (iri,) in undeclared]
+    )
     connection.execute(
         "INSERT OR IGNORE INTO sub_property (property, sub)"
         " SELECT p.id, s.id FROM sub_staging JOIN search_property AS p ON p.iri = sub_staging.property"

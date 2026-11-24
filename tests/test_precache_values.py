@@ -27,7 +27,7 @@ from browl.precache.values import (
 )
 from browl.prefixes import read_prefixes
 from browl.rdf import RDFS
-from browl.search import SearchQuery, search, search_properties
+from browl.search import SearchProperty, SearchQuery, search, search_properties
 from browl.settings import Settings
 from tests.conftest import DATA
 from tests.helpers import connect, make_settings
@@ -260,7 +260,8 @@ async def test_search_on_real_fuseki(
 async def test_walk_order(built: tuple[Settings, int]) -> None:
     """Check the walk (rule 3): the query's order first, in it, then the defaults, then the others, by label.
 
-    Without the names hook, the properties have no display names or CURIEs, so their labels are their IRIs.
+    Without the names hook, the declared properties have no display names or CURIEs, so their labels are their IRIs;
+    the undeclared ones' are their CURIEs.
     """
     settings, generation = built
     with closing(connect(settings, generation, HOOKS_USED)) as connection:
@@ -268,11 +269,11 @@ async def test_walk_order(built: tuple[Settings, int]) -> None:
         best = [search(connection, SearchQuery("c", order=order)).hits[0].value for order in ((SYNONYM,), (LABEL,))]
     rest = [found for found in walked if found.iri not in (SYNONYM, LABEL)]
 
-    def by_label(group: list[str]) -> list[str]:
-        return sorted(group, key=lambda iri: (iri.casefold(), iri))
+    def by_label(group: list[SearchProperty]) -> list[str]:
+        return [found.iri for found in sorted(group, key=lambda found: (found.label.casefold(), found.iri))]
 
-    defaults = by_label([found.iri for found in rest if found.by_default])
-    others = by_label([found.iri for found in rest if not found.by_default])
+    defaults = by_label([found for found in rest if found.by_default])
+    others = by_label([found for found in rest if not found.by_default])
     assert [found.iri for found in walked] == [SYNONYM, LABEL, *defaults, *others]
     assert defaults and others
     assert best == ["cardium", "cœur"]  # the heart's best value is by the order given

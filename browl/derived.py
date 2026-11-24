@@ -84,7 +84,8 @@ CREATE TABLE search_property (
     iri TEXT NOT NULL,
     prose INTEGER NOT NULL,
     by_default INTEGER NOT NULL,
-    value_count INTEGER NOT NULL
+    value_count INTEGER NOT NULL,
+    curie TEXT
 );
 CREATE TABLE sub_property (
     property INTEGER NOT NULL,

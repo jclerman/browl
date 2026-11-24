@@ -30,7 +30,7 @@ from browl.imports import OWL_IMPORTS
 from browl.jobs import JobContext, StageFunction
 from browl.jobtypes import ImportResult, Reasoner
 from browl.loading import dataset_name
-from browl.names import name_property_iris
+from browl.names import curie_prefixes, name_property_iris
 from browl.precache import hierarchies, values
 from browl.precache.core import Hook
 from browl.precache.entities import Reserved, fill_hash_prefix, fill_type_count, insert_entities
@@ -403,7 +403,8 @@ def derived_stage(
                 values.create_staging(connection)
                 connection.executemany("INSERT INTO value_staging VALUES (?, ?, ?, ?)", annotation_values)
                 connection.executemany("INSERT INTO sub_staging VALUES (?, ?)", sub_properties)
-                values.fill_staged(name_property_iris(settings), words, connection)
+                prefixes = curie_prefixes(context.prefixes, settings.extra_prefixes)
+                values.fill_staged(name_property_iris(settings), words, prefixes, connection)
                 search.fill_index(connection, settings.language_ranking)
 
     async def stage(context: JobContext) -> None:

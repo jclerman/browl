@@ -98,6 +98,7 @@ COLUMNS = {
         ("prose", "INTEGER", 1, 0),
         ("by_default", "INTEGER", 1, 0),
         ("value_count", "INTEGER", 1, 0),
+        ("curie", "TEXT", 0, 0),
     ],
     "search_value": [
         ("type", "TEXT", 1, 1),

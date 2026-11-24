@@ -339,6 +339,12 @@
           "type": "INTEGER",
           "nullable": false,
           "comment": "How many values it has in annotation_value; 0 for one listed only for its sub-properties."
+        },
+        {
+          "name": "curie",
+          "type": "TEXT",
+          "nullable": true,
+          "comment": "Its CURIE if it isn't a declared entity, by the rule entity.curie follows (browl.names.curie_prefixes); NULL if it is, whose is entity.curie, or if no prefix covers it."
         }
       ],
       "indexes": [
@@ -362,7 +368,7 @@
           ]
         }
       ],
-      "def": "CREATE TABLE search_property (\n    id INTEGER PRIMARY KEY,\n    iri TEXT NOT NULL,\n    prose INTEGER NOT NULL,\n    by_default INTEGER NOT NULL,\n    value_count INTEGER NOT NULL\n)"
+      "def": "CREATE TABLE search_property (\n    id INTEGER PRIMARY KEY,\n    iri TEXT NOT NULL,\n    prose INTEGER NOT NULL,\n    by_default INTEGER NOT NULL,\n    value_count INTEGER NOT NULL,\n    curie TEXT\n)"
     },
     {
       "name": "sub_property",

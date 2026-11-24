@@ -243,6 +243,9 @@ comments:
         1 if a search that names no properties searches it: the name, label and synonym properties, and any other
         name-like one whose values are on fewer than browl.precache.values.NAME_REUSE entities each, on average.
       value_count: How many values it has in annotation_value; 0 for one listed only for its sub-properties.
+      curie: >-
+        Its CURIE if it isn't a declared entity, by the rule entity.curie follows (browl.names.curie_prefixes); NULL if
+        it is, whose is entity.curie, or if no prefix covers it.
   - table: sub_property
     tableComment: >-
       Each property's sub-properties, transitively (rdfs:subPropertyOf), among those in search_property, stored in key

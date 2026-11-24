@@ -17,7 +17,9 @@ from browl.precache.core import Hook
 from browl.precache.entities import entities
 from browl.precache.names import names
 from browl.precache.stage import HOOKS, pre_caching_stage
+from browl.precache.values import annotation_values
 from browl.prefixes import read_prefixes
+from browl.search import search_properties
 from browl.settings import Settings
 from tests.conftest import DATA
 from tests.helpers import (
@@ -32,6 +34,10 @@ from tests.helpers import (
     NAME_HEADER,
     ONTOLOGY_RESULT,
     OWL,
+    SUB_END,
+    SUB_HEADER,
+    VALUES_END,
+    VALUES_HEADER,
     connect,
     fuseki,
     job,
@@ -185,6 +191,36 @@ async def test_curies(data_dir: Path) -> None:
         stored = dict(connection.execute("SELECT prefix, namespace FROM prefix"))  # type: ignore[arg-type]
     assert stored == BUILTIN_PREFIXES | context.prefixes | settings.extra_prefixes
     assert stored["owl"] == "http://example.org/not-owl#"
+
+
+async def test_property_curies(data_dir: Path) -> None:
+    """Check that search's properties have the CURIEs entity pages give them, declared or not (`curie_prefixes`).
+
+    A declared property's is its entity's; an undeclared one's follows the same rule: the configured, then the
+    declared, then a named prefix, whatever their names' order.
+    """
+    settings = make_settings(EXTRA_PREFIXES={"zz": f"{EX}z/"})
+    context = job(settings, 1)
+    context.upload.write_text(  # type: ignore[union-attr]
+        f"@prefix : <{EX}d#> .\n@prefix d: <{EX}d#> .\n@prefix yy: <{SKOS}> .\n@prefix a: <{EX}z/> .\n"
+    )
+    context.prefixes = read_upload_prefixes(settings.data_dir, 1)
+    declared = f"{EX}d#declared"
+    properties = [declared, f"{EX}d#p", f"{SKOS}p", f"{EX}z/p"]
+    rows = "".join(f'<{EX}d#thing>\t<{p}>\t"v"\t\n' for p in properties)
+    entity_rows = entity_result((f"{EX}d#thing", "Class"), (declared, "AnnotationProperty"))
+    bodies = (HEADER + END, entity_rows, name_result(), VALUES_HEADER + rows + VALUES_END, SUB_HEADER + SUB_END)
+    async with fuseki(*bodies) as http:
+        await pre_caching_stage(context, http, hooks=(entities, names, annotation_values))
+    with closing(connect(settings, 1, (entities, names, annotation_values))) as connection:
+        found = {p.iri: p.curie for p in search_properties(connection)}
+        entity_curie = connection.execute("SELECT curie FROM entity WHERE iri = ?", (declared,)).fetchone()[0]
+    assert {iri: found[iri] for iri in properties} == {
+        declared: entity_curie,
+        f"{EX}d#p": "d:p",  # named, over the default prefix
+        f"{SKOS}p": "yy:p",  # declared, over the built-in skos
+        f"{EX}z/p": "zz:p",  # configured, over the declared a
+    }
 
 
 async def test_no_valid_name_property(data_dir: Path) -> None:
