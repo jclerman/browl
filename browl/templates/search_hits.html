@@ -1,14 +1,16 @@
 {# A search hit (`browl.search_page.ShownHit`), laid out as DESIGN.md §2.9, Search, describes. #}
 {# Text split around the query's match (`browl.search_page.Marked`). #}
 {% macro marked(text) %}{{ text.before }}{% if text.marked %}<mark>{{ text.marked }}</mark>{% endif %}{{ text.rest }}{% endmacro %}
-{% macro hit_row(hit) -%}
+{# The matched value, if it isn't the name, then the entity's name. #}
+{% macro hit_text(hit) -%}
 <span class="hit-text">
   {%- if hit.term is not none -%}
   <bdi class="hit-term">{{ marked(hit.term) }}</bdi> <span class="hit-arrow" aria-hidden="true">→</span><span class="visually-hidden">, for</span> {% endif -%}
   <bdi class="hit-name">{{ marked(hit.name) }}</bdi>
 </span>
-{%- if hit.id_text is not none %}
-<code class="hit-id" dir="ltr">{{ hit.id_text | bidi_encoded }}</code>
-{%- endif %}
+{%- endmacro %}
+{# The autocomplete's option. #}
+{% macro hit_row(hit) -%}
+{{ hit_text(hit) }}
 <span class="hit-types">{{ hit.types }}</span>
 {%- endmacro %}

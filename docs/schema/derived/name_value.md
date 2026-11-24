@@ -2,7 +2,7 @@
 
 ## Description
 
-Each entity's values of the name properties (NAME_PROPERTIES), for display names and search: one row per value and name property, direct if the entity has it under that property itself, else entailed through rdfs:subPropertyOf; stored in entity order.
+Each entity's values of the name properties (NAME_PROPERTIES), for display names: one row per value and name property, direct if the entity has it under that property itself, else entailed through rdfs:subPropertyOf; stored in entity order.
 
 <details>
 <summary><strong>Table Definition</strong></summary>

@@ -1,6 +1,7 @@
 """Tests for the search route (P-20, U-10, DESIGN.md §2.13): the autocomplete fragment and the full results page."""
 
 import html.parser
+import re
 import urllib.parse
 from collections.abc import Iterator
 from typing import NamedTuple
@@ -9,7 +10,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from browl import search_page
+from browl import search, search_page
 from browl.derived import EntityType, NotCurrentError
 from browl.pages import MAX_NAME_CHARS
 from browl.search import MAX_OFFSET, MAX_QUERY_CHARS
@@ -22,6 +23,10 @@ pytestmark = pytest.mark.usefixtures("data_dir")
 EX = "http://example.org/"
 LABEL = "http://www.w3.org/2000/01/rdf-schema#label"
 SYNONYM = "http://www.geneontology.org/formats/oboInOwl#hasExactSynonym"
+XREF = "http://www.geneontology.org/formats/oboInOwl#hasDbXref"
+DEFINITION = "http://purl.obolibrary.org/obo/IAO_0000115"
+SUB_LABEL = f"{EX}subLabel"
+SOURCE = f"{EX}source"
 SEARCH = "/_browl/search"
 MANY = PAGE_SIZE + 5
 """How many classes named "item …" there are: more than a page."""
@@ -35,7 +40,7 @@ def ex(name: str) -> str:
 
 
 def search_stage() -> object:
-    """Return a stage with a few named entities, a synonym, an entailed label, a punned IRI, and `MANY` items."""
+    """Return a stage with a few named entities, synonyms, an entailed label, a punned IRI, `MANY` items, and prose."""
     entities = [
         (ex("heart"), EntityType.CLASS),
         (ex("myoblast"), EntityType.CLASS),
@@ -45,20 +50,29 @@ def search_stage() -> object:
         (ex("other"), EntityType.CLASS),
         (ex("long"), EntityType.CLASS),
         (SYNONYM, EntityType.ANNOTATION_PROPERTY),
+        (SUB_LABEL, EntityType.ANNOTATION_PROPERTY),
+        (XREF, EntityType.ANNOTATION_PROPERTY),
+        (SOURCE, EntityType.ANNOTATION_PROPERTY),
     ]
     entities += [(ex(f"item{n}"), EntityType.CLASS) for n in range(MANY)]
-    values: list[tuple[str, str, str, str | None, bool]] = [
-        (ex("heart"), LABEL, "heart muscle", "en", True),
-        (ex("heart"), SYNONYM, "myocardium", "en", True),
-        (ex("heart"), SYNONYM, "cardiac muscle tissue", "en", True),
-        (ex("myoblast"), LABEL, "Myoblast", "en", True),
-        (ex("hasPart"), LABEL, "has part", "en", True),
-        (ex("pun"), LABEL, "punned", "en", True),
-        (ex("other"), LABEL, "other thing", "en", False),
-        (ex("long"), LABEL, LONG, "en", True),
-        (SYNONYM, LABEL, "has exact synonym", "en", True),
+    values: list[tuple[str, str, str, str | None]] = [
+        (ex("heart"), LABEL, "heart muscle", "en"),
+        (ex("heart"), SYNONYM, "myocardium", "en"),
+        (ex("heart"), SYNONYM, "cardiac muscle tissue", "en"),
+        (ex("heart"), XREF, "FMA:7088", None),
+        (ex("heart"), DEFINITION, "A hollow organ that pumps blood through the circulatory system.", "en"),
+        (ex("myoblast"), LABEL, "Myoblast", "en"),
+        (ex("hasPart"), LABEL, "has part", "en"),
+        (ex("pun"), LABEL, "punned", "en"),
+        (ex("other"), SUB_LABEL, "other thing", "en"),
+        (ex("long"), LABEL, LONG, "en"),
+        (SYNONYM, LABEL, "has exact synonym", "en"),
+        (SUB_LABEL, LABEL, "sub-label", "en"),
+        (XREF, LABEL, "database cross reference", "en"),
     ]
-    values += [(ex(f"item{n}"), LABEL, f"item {n:03}", "en", True) for n in range(MANY)]
+    values += [(ex(f"item{n}"), LABEL, f"item {n:03}", "en") for n in range(MANY)]
+    values += [(ex(f"item{n}"), SOURCE, "RadLex", None) for n in range(3)]  # repeated, so not searched by default
+    values.append((SOURCE, LABEL, "source", "en"))
     names: dict[str, tuple[str | None, str | None]] = {
         ex("heart"): ("heart muscle", "ex:heart"),
         ex("myoblast"): ("Myoblast", None),
@@ -67,9 +81,12 @@ def search_stage() -> object:
         ex("other"): ("other thing", None),
         ex("long"): (LONG, None),
         SYNONYM: ("has exact synonym", None),
+        SUB_LABEL: ("sub-label", None),
+        XREF: ("database cross reference", None),
+        SOURCE: ("source", None),
     }
     names |= {ex(f"item{n}"): (f"item {n:03}", None) for n in range(MANY)}
-    return derived_stage(entities, names=names, name_values=values)
+    return derived_stage(entities, names=names, annotation_values=values, sub_properties=[(SUB_LABEL, LABEL)])
 
 
 @pytest.fixture
@@ -94,6 +111,7 @@ class Hit(NamedTuple):
         types: Its types.
         href: Its link.
         id: Its CURIE, else IRI; None if it isn't shown.
+        property: The label of the property the value is from; None if it isn't shown.
     """
 
     term: str | None
@@ -101,6 +119,7 @@ class Hit(NamedTuple):
     types: str
     href: str
     id: str | None = None
+    property: str | None = None
 
 
 class Hits(html.parser.HTMLParser):
@@ -138,7 +157,7 @@ class Hits(html.parser.HTMLParser):
             self._link_text = []
             if "hit" in classes:
                 self._fields = {"href": self._href}
-        for field in ("hit-term", "hit-name", "hit-types", "hit-id"):
+        for field in ("hit-term", "hit-name", "hit-types", "hit-id", "hit-property"):
             if field in classes:
                 self._field = field
                 self._fields[field] = ""
@@ -146,19 +165,22 @@ class Hits(html.parser.HTMLParser):
             self._mark = []
 
     def handle_endtag(self, tag: str) -> None:
-        """End a field, a mark, or a link and its hit."""
-        if tag in ("bdi", "span", "code") and self._field is not None:
+        """End a field, a mark, a link, or a hit: an option (`li`), or a row of the results' table (`tr`)."""
+        if tag in ("bdi", "span", "code", "td") and self._field is not None:
             self._field = None
         elif tag == "mark" and self._mark is not None:
             self.marks.append("".join(self._mark))
             self._mark = None
         elif tag == "a" and self._href is not None:
             self.links.append((" ".join("".join(self._link_text).split()), self._href))
-            if self._fields:
-                f = self._fields
-                self.hits.append(Hit(f.get("hit-term"), f["hit-name"], f["hit-types"], f["href"], f.get("hit-id")))
-                self._fields = {}
             self._href = None
+        elif tag in ("li", "tr") and self._fields:
+            f = self._fields
+            hit = Hit(
+                f.get("hit-term"), f["hit-name"], f["hit-types"], f["href"], f.get("hit-id"), f.get("hit-property")
+            )
+            self.hits.append(hit)
+            self._fields = {}
 
     def handle_data(self, data: str) -> None:
         """Collect a field's, mark's and link's text."""
@@ -292,18 +314,24 @@ def test_fragment_reads_no_ids(client: TestClient, monkeypatch: pytest.MonkeyPat
 
 
 def test_blank_page_shows_form(client: TestClient) -> None:
-    """Check that the results page with no query shows its form, and no results."""
+    """Check that the results page with no query shows its filters, and the results' panel with a prompt, no hits."""
     response = client.get(SEARCH)
     assert response.status_code == 200
-    assert 'name="q"' in response.text
-    assert "Results" not in response.text
+    assert 'name="property"' in response.text
+    assert '<h2 id="results-heading">Results</h2>' in response.text
+    assert "Type what to search for in the search box" in response.text
+    assert Hits(response.text).hits == []
+    assert "No matches." not in response.text
 
 
 def test_page_shows_hits_with_ids(client: TestClient) -> None:
-    """Check that the results page shows the hits as the autocomplete does, each with its CURIE, else IRI."""
+    """Check that the results page shows the hits as the autocomplete does, each with its CURIE, else IRI, and property.
+
+    A property without a display name is labelled as `NAME_PROPERTIES` names it.
+    """
     assert results(client, [("q", "myo")]).hits == [
-        Hit(None, "Myoblast", "Class", "/myoblast", f"{EX}myoblast"),
-        Hit("myocardium", "heart muscle", "Class", "/heart", "ex:heart"),
+        Hit(None, "Myoblast", "Class", "/myoblast", f"{EX}myoblast", "rdfs:label"),
+        Hit("myocardium", "heart muscle", "Class", "/heart", "ex:heart", "has exact synonym"),
     ]
 
 
@@ -322,8 +350,54 @@ def test_property_filter(client: TestClient) -> None:
 
 def test_entailed_filter(client: TestClient) -> None:
     """Check that "Direct only" leaves out values entailed through a sub-property (U-10)."""
-    assert [hit.name for hit in results(client, [("q", "oth")]).hits] == ["other thing"]
-    assert results(client, [("q", "oth"), ("values", "direct")]).hits == []
+    assert [hit.name for hit in results(client, [("q", "oth"), ("property", LABEL)]).hits] == ["other thing"]
+    assert results(client, [("q", "oth"), ("property", LABEL), ("values", "direct")]).hits == []
+
+
+def test_property_choices(client: TestClient) -> None:
+    """Check that the page offers the name-like properties with values, with their counts, in two groups.
+
+    First the names, IDs and synonyms, which a search with none checked searches, name properties first, then the
+    others; each group by display name. Prose isn't offered (U-47). A property's count says how many values its
+    sub-properties add.
+    """
+    text = client.get(SEARCH, params={"q": "a"}).text
+    assert "(none checked: names, IDs, and synonyms)" in text
+    offered = re.findall(r'name="property" value="([^"]+)"', text)
+    assert offered == [LABEL, SYNONYM, XREF, SUB_LABEL, SOURCE]
+    groups = re.findall(
+        r'<fieldset class="property-group[^"]*">\s*<legend>([^<]+)</legend>(.*?)</fieldset>', text, re.DOTALL
+    )
+    shown = {
+        legend: re.findall(r"<bdi>([^<]+)</bdi>\s*<small class=\"note\">\(([^)]*)\)</small>", body)
+        for legend, body in groups
+    }
+    assert shown == {
+        "Names, IDs, and synonyms": [
+            ("rdfs:label", f"{MANY + 10:,}, and 1 in sub-properties"),  # the punned IRI's label counts per type
+            ("has exact synonym", "2"),
+            ("database cross reference", "1"),  # its values are on one entity each
+            ("sub-label", "1"),
+        ],
+        "Other properties": [("source", "3")],  # its value is on 3
+    }
+    assert "*" not in "".join(body for _, body in groups)
+    classes = re.findall(r'<fieldset class="property-group([^"]*)">\s*<legend>([^<]+)</legend>', text)
+    assert classes == [("", "Names, IDs, and synonyms"), (" other-properties", "Other properties")]  # muted
+
+
+def test_default_properties(client: TestClient) -> None:
+    """Check that a search with no property checked covers the names, IDs and synonyms, not repeated values (U-47)."""
+    assert [hit.property for hit in results(client, [("q", "fma")]).hits] == ["database cross reference"]
+    assert results(client, [("q", "radlex")]).hits == []
+    assert suggest(client, "radlex").hits == []
+    assert [hit.property for hit in results(client, [("q", "radlex"), ("property", SOURCE)]).hits] == ["source"] * 3
+
+
+def test_prose_not_searchable(client: TestClient) -> None:
+    """Check that a prose property's values aren't searched, and it can't be chosen (until P-46)."""
+    assert results(client, [("q", "hollow")]).hits == []
+    assert client.get(SEARCH, params=[("q", "hollow"), ("property", DEFINITION)]).status_code == 404
 
 
 class Checked(html.parser.HTMLParser):
@@ -376,7 +450,8 @@ def test_property_labelled_as_set() -> None:
     Its IRI is in two prefixes' namespaces, so a CURIE made from them could differ from the setting's.
     """
     app = make_app(NAME_PROPERTIES=["rdfs:label", "exa:name"], EXTRA_PREFIXES={"ex": EX, "exa": f"{EX}a/"})
-    with loaded(app, search_stage()) as client:
+    stage = derived_stage([(ex("a"), EntityType.CLASS)], annotation_values=[(ex("a"), f"{EX}a/name", "a", None)])
+    with loaded(app, stage) as client:
         text = client.get(SEARCH, params={"q": "a"}).text
     assert "<bdi>exa:name</bdi>" in text
     assert "ex:a/name" not in text
@@ -392,7 +467,6 @@ def test_paging(client: TestClient) -> None:
     assert params == [("q", "item"), ("type", "class"), ("values", "direct"), ("offset", str(PAGE_SIZE))]
     response = client.get(SEARCH, params=params)
     assert f"Showing {PAGE_SIZE + 1}–{MANY}" in response.text
-    assert f'<ol class="hits" start="{PAGE_SIZE + 1}">' in response.text
     second = Hits(response.text)
     assert [hit.name for hit in second.hits] == [f"item {n:03}" for n in range(PAGE_SIZE, MANY)]
     assert "Next" not in dict(second.links)
@@ -448,6 +522,7 @@ def test_paging_stops_at_max_offset(client: TestClient, monkeypatch: pytest.Monk
         [("q", "a"), ("suggest", "1"), ("suggest", "1")],
         [("q", "a"), ("type", "individual")],
         [("q", "a"), ("property", f"{EX}notAName")],
+        [("q", "a"), ("property", "http://www.w3.org/2004/02/skos/core#prefLabel")],  # a default, but without values
         [("q", "a"), ("values", "some")],
         [("q", "a"), ("offset", "0")],
         [("q", "a"), ("offset", "01")],
@@ -543,3 +618,64 @@ def test_value_offset(value: str, offset: int, start: int) -> None:
 def test_split(text: str, query: str, word_start: int, split: tuple[str, str, str]) -> None:
     """Check how a hit's text is split around its match, from the match's normalized offset."""
     assert _split(text, query, word_start) == Marked(*split)
+
+
+def test_common_value_note(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that the results page counts a common value in a note above the hits, rather than listing its entities."""
+    monkeypatch.setattr(search, "COMMON_MIN", 5)
+    entities = [(ex(f"c{n}"), EntityType.CLASS) for n in range(20)]
+    values = [(ex(f"c{n}"), LABEL, f"class {n}", None) for n in range(20)]
+    values += [(ex(f"c{n}"), XREF, "GC_ID:1", None) for n in range(15)]
+    values.append((ex("c19"), XREF, "GC_ID:2", None))
+    with loaded(make_app(), derived_stage(entities, annotation_values=values)) as client:
+        response = client.get(SEARCH, params=[("q", "gc_id"), ("property", XREF)])
+        default = client.get(SEARCH, params=[("q", "gc_id")])
+        only_common = client.get(SEARCH, params=[("q", "gc_id:1"), ("property", XREF)])
+        later = client.get(SEARCH, params=[("q", "gc_id"), ("property", XREF), ("offset", "50")])
+    assert response.status_code == 200
+    notes = re.findall(r'<ul class="common-values">(.*?)</ul>', response.text, re.DOTALL)
+    assert [" ".join(re.sub("<[^>]+>", "", note).split()) for note in notes] == [
+        f"GC_ID:1 ({XREF}) is on 15 classes (75%): too many to list."  # undeclared, so labelled by IRI
+    ]
+    assert [hit.term or hit.name for hit in Hits(response.text).hits] == ["GC_ID:2"]
+    assert "common-values" not in default.text
+    assert "No matches." in default.text
+    assert "common-values" in only_common.text and "No matches." not in only_common.text  # it's found, if not listed
+    assert "common-values" not in later.text  # with the first page only
+
+
+def test_super_property_choice() -> None:
+    """Check that a property with no values, but a sub-property with some, is offered, with its sub-property's count."""
+    mapping, acronym = ex("mappingTerm"), ex("acronym")
+    entities = [(ex("heart"), EntityType.CLASS), (mapping, EntityType.ANNOTATION_PROPERTY)]
+    entities.append((acronym, EntityType.ANNOTATION_PROPERTY))
+    values = [(ex("heart"), LABEL, "heart", "en"), (ex("heart"), acronym, "HT", None)]
+    values += [(mapping, LABEL, "mapping term", "en"), (acronym, LABEL, "acronym", "en")]
+    names: dict[str, tuple[str | None, str | None]] = {mapping: ("mapping term", None), acronym: ("acronym", None)}
+    stage = derived_stage(entities, names=names, annotation_values=values, sub_properties=[(acronym, mapping)])
+    with loaded(make_app(), stage) as client:
+        text = client.get(SEARCH, params=[("q", "ht"), ("property", mapping)]).text
+    assert re.search(r"<bdi>mapping term</bdi>\s*<small class=\"note\">\(0, and 1 in sub-properties\)</small>", text)
+    assert re.search(rf'value="{re.escape(mapping)}" form="site-search" checked', text)
+    assert [hit.property for hit in Hits(text).hits] == ["acronym"]
+
+
+@pytest.mark.parametrize("text", ['say "hi"', "a<b>&c"])
+def test_query_kept_in_box(client: TestClient, text: str) -> None:
+    """Check that the page's query comes back in the box as typed, escaped."""
+    page = client.get(SEARCH, params={"q": text}).text
+    match = re.search(r'<input id="site-search-box"[^>]*value="([^"]*)"', page, re.DOTALL)
+    assert match is not None
+    assert html.unescape(match.group(1)) == text
+
+
+def test_page_filters_belong_to_the_bar(client: TestClient) -> None:
+    """Check that the search page's one box is the bar's, holding its query, and that its filters belong to its form."""
+    text = client.get(SEARCH, params=[("q", "myo"), ("property", LABEL)]).text
+    assert 'id="search-text"' not in text
+    assert re.search(r'<input id="site-search-box"[^>]*value="myo"', text)
+    inputs = re.findall(r'<input type="(?:checkbox|radio)" name="(\w+)"[^>]*>', text)
+    assert inputs and all(
+        'form="site-search"' in tag for tag in re.findall(r'<input type="(?:checkbox|radio)"[^>]*>', text)
+    )
+    assert '<button type="submit" form="site-search">Search</button>' in text

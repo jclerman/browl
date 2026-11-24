@@ -38,6 +38,41 @@ def expand_curie(name: str, prefixes: Mapping[str, str]) -> str:
     return name
 
 
+def curie_prefixes(declared: Mapping[str, str], configured: Mapping[str, str]) -> list[tuple[str, str]]:
+    """Return the CURIE prefixes (§2.7), as (name, namespace), in the order an IRI that several cover takes them.
+
+    They're the built-in ones, overridden by those the ontology file declares, overridden by `EXTRA_PREFIXES`. The
+    longest namespace comes first; of several prefixes for one namespace, the one of the best source (configured, then
+    declared, then built in), then a named one rather than the default (empty) prefix, then by name.
+
+    Args:
+        declared: The prefixes the ontology file declares.
+        configured: `EXTRA_PREFIXES`.
+    """
+    prefixes = {**BUILTIN_PREFIXES, **declared, **configured}
+    source_rank = {name: 0 if name in configured else 1 if name in declared else 2 for name in prefixes}
+
+    def preference(item: tuple[str, str]) -> tuple[int, int, bool, str]:
+        name, namespace = item
+        return -len(namespace), source_rank[name], name == "", name
+
+    return sorted(prefixes.items(), key=preference)
+
+
+def curie(iri: str, prefixes: Iterable[tuple[str, str]]) -> str | None:
+    """Return an IRI's CURIE, by the first prefix whose namespace is a proper prefix of it; None if none is.
+
+    Examples:
+        >>> prefixes = curie_prefixes({"ex": "http://example.org/", "a": "http://example.org/a/"}, {})
+        >>> curie("http://example.org/a/b", prefixes), curie("http://example.org/", prefixes)
+        ('a:b', None)
+    """
+    for name, namespace in prefixes:
+        if iri.startswith(namespace) and len(iri) > len(namespace):
+            return f"{name}:{iri[len(namespace) :]}"
+    return None
+
+
 def name_properties(settings: Settings) -> dict[str, str]:
     """Return the name properties (`NAME_PROPERTIES`, O-4), best first, by IRI, each with the first name given for it.
 
@@ -112,10 +147,10 @@ def best_values(values: Iterable[Literal], ranking: Sequence[str]) -> list[str]:
 
 @contextmanager
 def rank_tables(connection: sqlite3.Connection, properties: Sequence[str], ranking: Sequence[str]) -> Iterator[None]:
-    """Create temporary tables of the name values' ranks for the duration, for display names and search.
+    """Create temporary tables of name values' ranks for the duration, for display names.
 
-    `property_rank (property, rank)` gives each name property's position, and `language_rank (language, rank)` each
-    language tag in `name_value` its rank by `language_rank`, as dense integers from 0: tags that rank alike share one.
+    `property_rank (property, rank)` gives each name property's position, and `language_rank` each language tag in
+    `name_value` its rank (`language_ranks`).
 
     Args:
         connection: A connection to the derived database, with `name_value` filled.
@@ -123,14 +158,36 @@ def rank_tables(connection: sqlite3.Connection, properties: Sequence[str], ranki
         ranking: The language ranking, lowercased (`Settings.language_ranking`).
     """
     tags = [row[0] for row in connection.execute("SELECT DISTINCT language FROM name_value")]
-    ranks = {tag: language_rank(tag, ranking) for tag in tags}
-    dense = {rank: n for n, rank in enumerate(sorted(set(ranks.values())))}
     connection.execute("CREATE TEMP TABLE property_rank (property TEXT PRIMARY KEY, rank INTEGER NOT NULL)")
     connection.executemany("INSERT INTO property_rank VALUES (?, ?)", [(iri, n) for n, iri in enumerate(properties)])
+    try:
+        with language_ranks(connection, tags, ranking):
+            yield
+    finally:
+        connection.execute("DROP TABLE property_rank")
+
+
+@contextmanager
+def language_ranks(
+    connection: sqlite3.Connection, tags: Iterable[str | None], ranking: Sequence[str]
+) -> Iterator[None]:
+    """Create a temporary table of language tags' ranks for the duration, for display names and search.
+
+    `language_rank (language, rank)` gives each tag its rank by `language_rank`, as dense integers from 0: tags that
+    rank alike share one.
+
+    Args:
+        connection: A connection to the derived database.
+        tags: The language tags to rank; None for untagged values.
+        ranking: The language ranking, lowercased (`Settings.language_ranking`).
+    """
+    ranks = {tag: language_rank(tag, ranking) for tag in tags}
+    dense = {rank: n for n, rank in enumerate(sorted(set(ranks.values())))}
     connection.execute("CREATE TEMP TABLE language_rank (language TEXT, rank INTEGER NOT NULL)")
-    connection.executemany("INSERT INTO language_rank VALUES (?, ?)", [(tag, dense[ranks[tag]]) for tag in tags])
+    connection.executemany(
+        "INSERT INTO language_rank VALUES (?, ?)", [(tag, dense[rank]) for tag, rank in ranks.items()]
+    )
     try:
         yield
     finally:
-        connection.execute("DROP TABLE property_rank")
         connection.execute("DROP TABLE language_rank")

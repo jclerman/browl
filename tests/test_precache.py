@@ -49,6 +49,7 @@ from browl.precache.header import OntologyHeader, ontology_header
 from browl.precache.keys import build_keys
 from browl.precache.search import search
 from browl.precache.stage import HOOKS, build, pre_cache, pre_caching_stage, rebuild, remove_previous
+from browl.precache.values import annotation_values
 from browl.settings import Settings
 from tests.conftest import DATA
 from tests.helpers import (
@@ -778,7 +779,8 @@ def test_restart_rebuilds(settings: Settings, prepare: Callable[[Settings], obje
         state = app.state.jobs.state
         assert (state.generation, state.stage, state.ready_generation, state.started_at) == (2, Stage.READY, 2, STARTED)
         assert client.get("/probe").json() == 2
-    queries = 1 + sum({search: 0, axiom_counts: 5}.get(hook, 1) for hook in HOOKS)  # the header's, then the hooks'
+    # The header's, then the hooks': none for search's, two for the annotation values (values, sub-properties)
+    queries = 1 + sum({search: 0, annotation_values: 2, axiom_counts: 5}.get(hook, 1) for hook in HOOKS)
     assert fuseki.requests == ["/$/ping", *[f"/{dataset_name(2)}/sparql"] * queries]
     assert derived_files(settings) == ["2.sqlite3"]
     with closing(connect(settings, 2)) as connection:

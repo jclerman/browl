@@ -42,6 +42,7 @@ TREE_LINKS = [
     ("/_browl/tree/annotation-properties", "Annotation properties"),
 ]
 ADMIN_LINK = ("/_browl/admin/upload", "Admin")
+ADVANCED = ("/_browl/search", "Advanced search")
 SIGN_IN = ("/_browl/admin/upload", "Sign in")
 CREDIT = (PROJECT_URL, "hosted with")
 
@@ -148,7 +149,7 @@ def test_frame_on_every_page(client: TestClient, path: str) -> None:
     An in-page link (`#…`) would be looked up as an entity by the hash-IRI script on a path hash entities share.
     """
     page = frame(client, path)
-    assert page.nav == [("/onto", "The <Onto>"), *TREE_LINKS, SIGN_IN, CREDIT]
+    assert page.nav == [("/onto", "The <Onto>"), ADVANCED, *TREE_LINKS, SIGN_IN, CREDIT]
     assert not page.footer
     assert not [link for link, _ in page.nav if link.startswith("#")]
 
@@ -170,7 +171,7 @@ def test_frame_on_unavailable_pages(app: FastAPI, loaded: bool) -> None:
         assert ("Retry-After" in response.headers) is loaded
         assert response.headers["Content-Security-Policy"] == CONTENT_SECURITY_POLICY
         page = Frame(response.text)
-        assert page.nav[-len(TREE_LINKS) - 2 :] == [*TREE_LINKS, SIGN_IN, CREDIT]
+        assert page.nav[-len(TREE_LINKS) - 3 :] == [ADVANCED, *TREE_LINKS, SIGN_IN, CREDIT]
         assert ("The <Onto>" in page.nav_text) is loaded
 
 
@@ -202,9 +203,10 @@ def test_no_ontology_iri(app: FastAPI) -> None:
     with TestClient(app) as client:
         run(client, app, ontology=None, title=None)
         page = frame(client)
-        assert page.nav == [*TREE_LINKS, SIGN_IN, CREDIT]
+        assert page.nav == [ADVANCED, *TREE_LINKS, SIGN_IN, CREDIT]
         labels = " ".join(tree.label for tree in TREES).split()
-        assert page.nav_text.split() == ["Search", "the", "ontology", "Browse", *labels, "Sign", "in", "hosted", "with"]
+        words = ["Search", "the", "ontology", "Advanced", "search", "Browse", *labels, "Sign", "in", "hosted", "with"]
+        assert page.nav_text.split() == words
 
 
 def test_ontology_without_page(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -213,7 +215,7 @@ def test_ontology_without_page(client: TestClient, monkeypatch: pytest.MonkeyPat
     client.app.state.derived.close()  # type: ignore[attr-defined]
     run(client, client.app, title="Unlinked")  # type: ignore[arg-type]
     page = frame(client)
-    assert page.nav == [*TREE_LINKS, SIGN_IN, CREDIT]
+    assert page.nav == [ADVANCED, *TREE_LINKS, SIGN_IN, CREDIT]
     assert "Unlinked" in page.nav_text
     assert title(client).endswith(" · \u2068Unlinked\u2069")
 
@@ -250,7 +252,7 @@ def test_under_root_path(app: FastAPI) -> None:
         page = frame(client, "/site/example.org/x")
         assert page.nav == [
             ("/site/onto", "The <Onto>"),
-            *[(f"/site{link}", text) for link, text in [*TREE_LINKS, SIGN_IN]],
+            *[(f"/site{link}", text) for link, text in [ADVANCED, *TREE_LINKS, SIGN_IN]],
             CREDIT,
         ]
 
@@ -280,7 +282,7 @@ def test_unreadable_name(
         for path in ["/_browl/admin/upload", "/_browl/admin/status"]:
             response = client.get(path)
             assert response.status_code == 200
-            assert Frame(response.text).nav == [*TREE_LINKS, SIGN_IN, CREDIT]
+            assert Frame(response.text).nav == [ADVANCED, *TREE_LINKS, SIGN_IN, CREDIT]
             assert " · browl</title>" in response.text
     assert len(calls) == 1  # the failure is kept until RETRY_AFTER_S has passed
     assert bool(caplog.records) is not isinstance(error, NotCurrentError)

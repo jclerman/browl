@@ -100,10 +100,20 @@ code {
   text-decoration: underline;
 }
 
+/* The box, then the link to the search page. */
 .site-search {
   position: relative; /* the suggestions open under the box */
+  display: flex;
   flex: 1 1 12rem;
+  gap: calc(var(--space) / 2);
+  align-items: center;
   max-width: 32rem;
+}
+
+.search-page-link {
+  flex: none;
+  font-size: 0.875rem;
+  white-space: nowrap;
 }
 
 .site-search input {
@@ -244,6 +254,11 @@ code {
 
 .content {
   padding: var(--space);
+}
+
+/* A page's title starts at the content's padding, without the browser's margin above it, as an entity page's does. */
+.content h1 {
+  margin-top: 0;
 }
 
 .stages .done {
@@ -917,8 +932,137 @@ code {
   max-width: 60rem;
 }
 
-.search-query input {
-  width: min(30rem, 100%);
+/* A wide, tall enough window: the form in a column on the left and the results in a panel on the right, each
+   scrolling within the window, so the filters stay in view (DESIGN.md §2.9, Search). Otherwise they stack. */
+@supports selector(:has(a)) {
+  @media screen and (width >= 56rem) and (height >= 32rem) {
+    body:has(.search-page) {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      height: 100vh;
+      height: 100dvh;
+    }
+
+    body:has(.search-page) .content {
+      display: grid;
+      grid-template-rows: minmax(0, 1fr);
+      min-height: 0;
+      padding-bottom: 0;
+    }
+
+    .search-page {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      grid-template-columns: minmax(20rem, 34rem) minmax(0, 1fr);
+      gap: 0 calc(var(--space) * 2);
+      align-items: baseline;
+      max-width: none;
+      min-height: 0;
+    }
+
+    /* The heading over the filters; the results beside both. */
+    .search-page h1 {
+      grid-row: 1;
+      grid-column: 1;
+    }
+
+    .search-form {
+      grid-row: 2;
+      grid-column: 1;
+    }
+
+    /* The results span both rows, sharing them (subgrid): the heading and count in the heading's row, the body a
+       panel under them, beside the filters. */
+    .search-results {
+      display: grid;
+      grid-row: 1 / -1;
+      grid-column: 2;
+      grid-template-rows: subgrid;
+      align-self: stretch;
+      min-height: 0;
+    }
+
+    .results-head {
+      display: flex;
+      gap: var(--space);
+      align-items: baseline;
+      align-self: baseline;
+    }
+
+    .results-head h2 {
+      margin-block: 0;
+    }
+
+    .results-head .note {
+      margin: 0;
+    }
+
+    .search-form,
+    .results-body {
+      align-self: stretch;
+      min-height: 0;
+      padding-bottom: var(--space);
+      overflow-y: auto;
+    }
+
+    .search-results thead th {
+      position: sticky;
+      top: 0;
+      background: var(--bg);
+    }
+
+    /* Stacked, full width; as blocks, since a column flexbox that wraps sizes the multi-column properties box too
+       tall. */
+    .search-filters {
+      display: block;
+    }
+
+    .search-filters > fieldset {
+      box-sizing: border-box;
+      width: 100%;
+      margin: 0 0 var(--space);
+    }
+  }
+}
+
+/* The properties in two groups, the names, IDs and synonyms first; the others' names muted, so those stand out. */
+.search-filters .property-group {
+  margin: 0 0 calc(var(--space) / 2);
+  padding: 0;
+  border: none;
+}
+
+.property-group > legend {
+  margin-bottom: calc(var(--space) / 4);
+  padding: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.other-properties bdi {
+  color: var(--muted);
+}
+
+/* The property choices flow into as many columns as fit, each at least 14rem. */
+.property-choices {
+  column-width: 14rem;
+  column-gap: var(--space);
+}
+
+/* Each choice's text wraps beside its checkbox, a long name breaking anywhere rather than under the box. */
+.search-filters .property-choices label {
+  display: flex;
+  gap: 0.3em;
+  align-items: baseline;
+  break-inside: avoid;
+}
+
+.property-choices label > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .search-filters {
@@ -936,20 +1080,45 @@ code {
   display: block;
 }
 
+/* Stacked, the properties scroll in a box of their own; beside the results, the filters scroll as one. */
+@media not screen and (width >= 56rem) and (height >= 32rem) {
+  .search-properties {
+    max-height: 16rem;
+    overflow-y: auto;
+  }
+}
+
+.common-values {
+  padding-left: 1.5em;
+}
+
+.common-value {
+  font-style: italic;
+}
+
+/* A table, one line per hit; on a narrow screen, each hit's cells wrap as one block. */
 .hits {
-  padding-left: 2.5em;
+  border-collapse: collapse;
 }
 
-.hits li {
-  margin-bottom: calc(var(--space) / 2);
+.hits th {
+  color: var(--muted);
+  font-size: 0.85em;
+  font-weight: normal;
+  text-align: start;
 }
 
-/* One line per hit; where it doesn't fit, the CURIE and types wrap below the names. */
+.hits th,
+.hits td {
+  padding: calc(var(--space) / 4) calc(var(--space) / 2);
+  vertical-align: baseline;
+}
+
+.hits td:first-child {
+  min-width: 12rem;
+}
+
 .hits .hit {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0 var(--space);
-  align-items: baseline;
   color: inherit;
   text-decoration: none;
 }
@@ -960,13 +1129,37 @@ code {
 }
 
 .hit-id {
-  min-width: 0;
+  overflow-wrap: anywhere;
   color: var(--muted);
   font-size: 0.85em;
 }
 
-.hits .hit-types {
-  margin-inline-start: auto;
+.hit-property {
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+@media (width <= 40rem) {
+  .hits thead {
+    display: none;
+  }
+
+  .hits tr {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 var(--space);
+    align-items: baseline;
+    margin-bottom: calc(var(--space) / 2);
+  }
+
+  .hits td {
+    padding: 0;
+  }
+
+  .hits td:first-child {
+    flex: 1 0 100%;
+    min-width: 0;
+  }
 }
 
 .search-paging {

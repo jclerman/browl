@@ -1,49 +1,83 @@
 {% extends "base.html" %}
-{% from "search_hits.html" import hit_row %}
+{% from "search_hits.html" import hit_text %}
 {% block title %}{% if blank %}Search{% else %}Search: {{ text | isolate }}{% endif %}{% endblock %}
 {% block content %}
 {# The full results page, with type and property filters (U-10; `browl.search_page`). #}
 <div class="search-page">
   <h1>Search</h1>
-  <form class="search-form" action="{{ action }}" method="get" role="search">
-    <p class="search-query">
-      <label for="search-text">Search for</label>
-      <input id="search-text" type="search" name="q" value="{{ text }}" maxlength="{{ max_query_chars }}"
-             autocomplete="off" spellcheck="false">
-      <button type="submit">Search</button>
-    </p>
+  {# The filters belong to the navigation bar's search form (`form=`), so its box searches with them: submitted, with
+     or without JS, and in its suggestions (`hx-include`). One box, with the autocomplete, rather than two. #}
+  <div class="search-form" role="group" aria-labelledby="filters-heading">
+    <p id="filters-heading" class="note">Filters for the search box above. Press Enter in it, or:
+      <button type="submit" form="site-search">Search</button></p>
     <div class="search-filters">
       <fieldset>
         <legend>Entity types <small>(none checked: all)</small></legend>
         {% for value, label, checked in types %}
-        <label><input type="checkbox" name="type" value="{{ value }}"{% if checked %} checked{% endif %}> {{ label }}</label>
+        <label><input type="checkbox" name="type" value="{{ value }}" form="site-search"{% if checked %} checked{% endif %}> {{ label }}</label>
         {% endfor %}
       </fieldset>
-      <fieldset>
-        <legend>Name properties <small>(none checked: all)</small></legend>
-        {% for choice in properties %}
-        <label><input type="checkbox" name="property" value="{{ choice.iri }}"{% if choice.checked %} checked{% endif %}>
-          <bdi>{{ choice.label }}</bdi></label>
+      <fieldset class="search-properties">
+        <legend>Properties <small>(none checked: names, IDs, and synonyms)</small></legend>
+        {% for group, title in ((properties | selectattr("by_default") | list, "Names, IDs, and synonyms"),
+                                (properties | rejectattr("by_default") | list, "Other properties")) if group %}
+        <fieldset class="property-group{% if not group[0].by_default %} other-properties{% endif %}">
+          <legend>{{ title }}</legend>
+          <div class="property-choices">
+            {% for choice in group %}
+            <label><input type="checkbox" name="property" value="{{ choice.iri }}" form="site-search"{% if choice.checked %} checked{% endif %}>
+              <span><bdi>{{ choice.label }}</bdi>
+              <small class="note">({{ "{:,}".format(choice.values) }}{% if choice.sub_values %}, and {{ "{:,}".format(choice.sub_values) }} in sub-properties{% endif %})</small></span></label>
+            {% endfor %}
+          </div>
+        </fieldset>
         {% endfor %}
       </fieldset>
       <fieldset>
         <legend>Values</legend>
-        <label><input type="radio" name="values" value="all"{% if not direct %} checked{% endif %}> Direct, and entailed through sub-properties</label>
-        <label><input type="radio" name="values" value="direct"{% if direct %} checked{% endif %}> Direct only</label>
+        <label><input type="radio" name="values" value="all" form="site-search"{% if not direct %} checked{% endif %}> Direct, and entailed through sub-properties</label>
+        <label><input type="radio" name="values" value="direct" form="site-search"{% if direct %} checked{% endif %}> Direct only</label>
       </fieldset>
     </div>
-  </form>
-  {% if not blank %}
+  </div>
+  {# On a wide window, its heading shares the page heading's row, and its body is a panel under it, beside the
+     filters, that scrolls; focusable, so the keyboard can scroll it. #}
   <section class="search-results" aria-labelledby="results-heading">
-    <h2 id="results-heading">Results</h2>
-    {% if hits %}
-    <p class="note">Showing {{ "{:,}".format(offset + 1) }}–{{ "{:,}".format(offset + hits | length) }}</p>
-    <ol class="hits" start="{{ offset + 1 }}">
-      {% for hit in hits %}
-      <li><a class="hit" href="{{ hit.link.href }}">{{ hit_row(hit) }}</a></li>
-      {% endfor %}
-    </ol>
+    <div class="results-head">
+      <h2 id="results-heading">Results</h2>
+      {% if hits %}
+      <p class="note">Showing {{ "{:,}".format(offset + 1) }}–{{ "{:,}".format(offset + hits | length) }}</p>
+      {% endif %}
+    </div>
+    <div class="results-body" tabindex="0" aria-labelledby="results-heading">
+    {% if blank %}
+    <p class="note">Type what to search for in the search box at the top of the page.</p>
     {% else %}
+    {% if common %}
+    <ul class="common-values">
+      {% for found in common %}
+      <li><bdi class="common-value">{{ found.value }}</bdi> <span class="note">(<bdi>{{ found.property }}</bdi>)</span>
+        is on {{ found.counts }}: too many to list.</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% if hits %}
+    <table class="hits">
+      <thead>
+        <tr><th scope="col">Match</th><th scope="col">ID</th><th scope="col">Property</th><th scope="col">Types</th></tr>
+      </thead>
+      <tbody>
+        {% for hit in hits %}
+        <tr>
+          <td><a class="hit" href="{{ hit.link.href }}">{{ hit_text(hit) }}</a></td>
+          <td>{% if hit.id_text is not none %}<code class="hit-id" dir="ltr">{{ hit.id_text | bidi_encoded }}</code>{% endif %}</td>
+          <td class="hit-property"><bdi>{{ hit.property or "" }}</bdi></td>
+          <td class="hit-types">{{ hit.types }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% elif not common %}
     <p class="note">{% if offset %}No more results.{% else %}No matches.{% endif %}</p>
     {% endif %}
     {% if previous is not none or next is not none %}
@@ -52,7 +86,8 @@
       {% if next is not none %}<a href="{{ next }}" rel="next nofollow">Next</a>{% endif %}
     </nav>
     {% endif %}
+    {% endif %}
+    </div>
   </section>
-  {% endif %}
 </div>
 {% endblock %}

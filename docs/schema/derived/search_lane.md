@@ -2,7 +2,7 @@
 
 ## Description
 
-The lanes of search_value: each (type, property_rank, language_rank, entailed, word) group that has rows, with its longest value's length. A query seeks only lanes that exist, and no lengths past a lane's longest.
+The lanes of search_value: each (type, property, language_rank, word) group that has rows, with its longest value's length. A query seeks only lanes that exist, and no lengths past a lane's longest.
 
 <details>
 <summary><strong>Table Definition</strong></summary>
@@ -10,13 +10,11 @@ The lanes of search_value: each (type, property_rank, language_rank, entailed, w
 ```sql
 CREATE TABLE search_lane (
     type TEXT NOT NULL,
-    property_rank INTEGER NOT NULL,
+    property INTEGER NOT NULL,
     language_rank INTEGER NOT NULL,
-    entailed INTEGER NOT NULL,
     word INTEGER NOT NULL,
     max_length INTEGER NOT NULL,
-    property TEXT NOT NULL,
-    PRIMARY KEY (type, property_rank, language_rank, entailed, word)
+    PRIMARY KEY (type, property, language_rank, word)
 ) WITHOUT ROWID
 ```
 
@@ -24,47 +22,51 @@ CREATE TABLE search_lane (
 
 ## Columns
 
-| Name          | Type    | Default | Nullable | Children | Parents | Comment                                                            |
-| ------------- | ------- | ------- | -------- | -------- | ------- | ------------------------------------------------------------------ |
-| type          | TEXT    |         | false    |          |         | The entities' type (entity.type).                                  |
-| property_rank | INTEGER |         | false    |          |         | The name property's position in NAME_PROPERTIES, from 0.           |
-| language_rank | INTEGER |         | false    |          |         | The languages' rank (search_value.language_rank).                  |
-| entailed      | INTEGER |         | false    |          |         | 0 for direct values, 1 for values entailed through a sub-property. |
-| word          | INTEGER |         | false    |          |         | 0 for whole values' rows, 1 for word rows (search_value.word).     |
-| max_length    | INTEGER |         | false    |          |         | The lane's longest search_value.length, so at most KEY_CHARS.      |
-| property      | TEXT    |         | false    |          |         | The name property's IRI.                                           |
+| Name          | Type    | Default | Nullable | Children | Parents                               | Comment                                                        |
+| ------------- | ------- | ------- | -------- | -------- | ------------------------------------- | -------------------------------------------------------------- |
+| type          | TEXT    |         | false    |          |                                       | The entities' type (entity.type).                              |
+| property      | INTEGER |         | false    |          | [search_property](search_property.md) | The property (search_property.id).                             |
+| language_rank | INTEGER |         | false    |          |                                       | The languages' rank (search_value.language_rank).              |
+| word          | INTEGER |         | false    |          |                                       | 0 for whole values' rows, 1 for word rows (search_value.word). |
+| max_length    | INTEGER |         | false    |          |                                       | The lane's longest search_value.length, so at most KEY_CHARS.  |
 
 ## Constraints
 
-| Name                           | Type        | Definition                                                       |
-| ------------------------------ | ----------- | ---------------------------------------------------------------- |
-| type                           | PRIMARY KEY | PRIMARY KEY (type)                                               |
-| property_rank                  | PRIMARY KEY | PRIMARY KEY (property_rank)                                      |
-| language_rank                  | PRIMARY KEY | PRIMARY KEY (language_rank)                                      |
-| entailed                       | PRIMARY KEY | PRIMARY KEY (entailed)                                           |
-| word                           | PRIMARY KEY | PRIMARY KEY (word)                                               |
-| sqlite_autoindex_search_lane_1 | PRIMARY KEY | PRIMARY KEY (type, property_rank, language_rank, entailed, word) |
+| Name                           | Type        | Definition                                        |
+| ------------------------------ | ----------- | ------------------------------------------------- |
+| type                           | PRIMARY KEY | PRIMARY KEY (type)                                |
+| property                       | PRIMARY KEY | PRIMARY KEY (property)                            |
+| language_rank                  | PRIMARY KEY | PRIMARY KEY (language_rank)                       |
+| word                           | PRIMARY KEY | PRIMARY KEY (word)                                |
+| sqlite_autoindex_search_lane_1 | PRIMARY KEY | PRIMARY KEY (type, property, language_rank, word) |
 
 ## Indexes
 
-| Name                           | Definition                                                       |
-| ------------------------------ | ---------------------------------------------------------------- |
-| sqlite_autoindex_search_lane_1 | PRIMARY KEY (type, property_rank, language_rank, entailed, word) |
+| Name                           | Definition                                        |
+| ------------------------------ | ------------------------------------------------- |
+| sqlite_autoindex_search_lane_1 | PRIMARY KEY (type, property, language_rank, word) |
 
 ## Relations
 
 ```mermaid
 erDiagram
 
+"search_lane" }o--|| "search_property" : "search_lane.property references search_property.id"
 
 "search_lane" {
   TEXT type PK
-  INTEGER property_rank PK
+  INTEGER property PK
   INTEGER language_rank PK
-  INTEGER entailed PK
   INTEGER word PK
   INTEGER max_length
-  TEXT property
+}
+"search_property" {
+  INTEGER id
+  TEXT iri
+  INTEGER prose
+  INTEGER by_default
+  INTEGER value_count
+  TEXT curie
 }
 ```
 

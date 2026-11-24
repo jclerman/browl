@@ -2,9 +2,9 @@
 
 import functools
 import sqlite3
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 
-from browl.names import BLANK, BUILTIN_PREFIXES, LAST_CHAR, name_property_iris, normalize, rank_tables
+from browl.names import BLANK, LAST_CHAR, curie_prefixes, name_property_iris, normalize, rank_tables
 from browl.precache.core import PreCacheContext, batched, hook
 from browl.rdf import Literal, Term
 
@@ -25,16 +25,14 @@ async def names(context: PreCacheContext) -> None:
     """Fill `prefix` and `name_value`, then set each entity's CURIE and display name (DESIGN.md §2.7).
 
     The prefixes are the built-in ones, overridden by those the ontology file declares, overridden by `EXTRA_PREFIXES`
-    (O-11). The name values come from one bulk query (`NAME_VALUES`), over the imports too; an IRI that isn't a
-    declared entity's is left out. A value under a name property both directly and through a sub-property is stored
-    once, as direct.
+    (O-11; `browl.names.curie_prefixes`). The name values come from one bulk query (`NAME_VALUES`), over the imports
+    too; an IRI that isn't a declared entity's is left out. A value under a name property both directly and through a
+    sub-property is stored once, as direct.
     """
     settings = context.job.settings
-    declared, configured = context.job.prefixes, settings.extra_prefixes
-    prefixes = BUILTIN_PREFIXES | declared | configured
-    source_rank = {name: 0 if name in configured else 1 if name in declared else 2 for name in prefixes}
+    prefixes = curie_prefixes(context.job.prefixes, settings.extra_prefixes)
     await context.db.run(functools.partial(_store_prefixes, prefixes))
-    await context.db.run(functools.partial(_set_curies, prefixes, source_rank))
+    await context.db.run(functools.partial(_set_curies, prefixes))
 
     properties = name_property_iris(settings)
     await context.db.run(_create_staging)
@@ -49,23 +47,17 @@ async def names(context: PreCacheContext) -> None:
     await context.db.run(functools.partial(_set_display_names, properties, settings.language_ranking))
 
 
-def _store_prefixes(prefixes: Mapping[str, str], connection: sqlite3.Connection) -> None:
-    connection.executemany("INSERT INTO prefix (prefix, namespace) VALUES (?, ?)", sorted(prefixes.items()))
+def _store_prefixes(prefixes: Sequence[tuple[str, str]], connection: sqlite3.Connection) -> None:
+    connection.executemany("INSERT INTO prefix (prefix, namespace) VALUES (?, ?)", sorted(prefixes))
 
 
-def _set_curies(prefixes: Mapping[str, str], source_rank: Mapping[str, int], connection: sqlite3.Connection) -> None:
-    """Set each entity's CURIE, from the longest namespace that's a proper prefix of its IRI.
+def _set_curies(prefixes: Sequence[tuple[str, str]], connection: sqlite3.Connection) -> None:
+    """Set each entity's CURIE, by the first prefix, in the order given, whose namespace is a proper prefix of its IRI.
 
-    Of several prefixes for that namespace, the one of the best source rank is taken (configured, then declared by the
-    ontology, then built in), then a named one rather than the default (empty) prefix, then the first in order. Each
+    The order is `browl.names.curie_prefixes`, as `browl.names.curie`, for IRIs that aren't entities, takes it too. Each
     prefix updates the entities in its namespace's range of the IRI index, so the IRIs aren't scanned once per prefix.
     """
-
-    def preference(item: tuple[str, str]) -> tuple[int, int, bool, str]:
-        name, namespace = item
-        return (-len(namespace), source_rank[name], name == "", name)
-
-    for name, namespace in sorted(prefixes.items(), key=preference):
+    for name, namespace in prefixes:
         connection.execute(
             "UPDATE entity SET curie = ? || substr(iri, ?) WHERE iri > ? AND iri < ? AND curie IS NULL",
             (f"{name}:", len(namespace) + 1, namespace, namespace + LAST_CHAR),
