@@ -1,9 +1,13 @@
 """Tests for the routing of entity URLs: home, entity, disambiguation and hash pages, the fallback route, and 404."""
 
+import asyncio
 import html.parser
 import sqlite3
 import urllib.parse
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import replace
+from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -12,10 +16,10 @@ from starlette.requests import Request
 
 import browl.lookup
 import browl.pages
-from browl.derived import EntityType, read_meta
-from browl.jobs import Stage
+from browl.derived import EntityType, NotCurrentError, read_meta
+from browl.jobs import JobState, Stage
 from browl.lookup import request_path
-from browl.pages import MAX_NAME_CHARS, STATIC_DIR
+from browl.pages import MAX_NAME_CHARS, NO_LINK, STATIC_DIR, OntologyLink, PageFrame
 from browl.usage_tab import PageNotFoundError, UsageTab
 from tests.helpers import derived_stage, iso, make_app
 
@@ -682,3 +686,30 @@ def test_disambiguation_long_name(app: FastAPI) -> None:
         run(client, app, names={"https://other.org/x": ("b" * 300, None)})
         text = client.get("/other.org/x").text
     assert f"<bdi>{'b' * (MAX_NAME_CHARS - 1)}…</bdi></a>" in text
+
+
+def test_frame_link_read_again_after_rebuild() -> None:
+    """Check that a link that couldn't be read during a rebuild is read again once it ends, without waiting (#153)."""
+    started = datetime.now(UTC)
+    job = JobState(1, Stage.PRE_CACHING, started, ready_generation=1)
+    reads: list[int] = []
+
+    class Jobs:
+        async def current(self) -> JobState:
+            return job
+
+    class Derived:
+        async def read(self, generation: int, reader: object) -> OntologyLink:
+            reads.append(generation)
+            if job.running:
+                raise NotCurrentError("rebuilding")
+            return OntologyLink("Onto", "/onto")
+
+    app = SimpleNamespace(state=SimpleNamespace(jobs=Jobs(), derived=Derived()))
+    request = SimpleNamespace(app=app)
+    frame = PageFrame(app, [], [])  # type: ignore[arg-type]
+    assert asyncio.run(frame.ontology_link(request)) == NO_LINK  # type: ignore[arg-type]
+    assert asyncio.run(frame.ontology_link(request)) == NO_LINK  # type: ignore[arg-type]
+    assert reads == [1]  # the failure is cached while the rebuild runs
+    job = replace(job, stage=Stage.READY, finished_at=datetime.now(UTC))
+    assert asyncio.run(frame.ontology_link(request)) == OntologyLink("Onto", "/onto")  # type: ignore[arg-type]
