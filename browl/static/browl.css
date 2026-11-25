@@ -667,24 +667,31 @@ code {
 }
 
 /* An entity page (DESIGN.md §2.9): named grid areas, one column; the window-filling frame, below, sets the rows, and
-   adds a column on the left for the hierarchy column (U-45). Here, as in the one-page view, that's above the tabs. */
+   puts the hierarchy column (U-45) on the left. Here, as in the one-page view, it's above the tabs, after its fold
+   control. */
 
 .entity-page {
   display: grid;
-  grid-template-areas: "header" "tree" "tabs" "panel";
+  grid-template-areas: "header" "fold" "tree" "tabs" "panel";
   grid-template-columns: minmax(0, 1fr);
 }
 
 /* The hierarchy column (U-45): its trees' nodes are the tree pages', the entity's marked as in its axioms. Its lines
    don't wrap, and indent less, as a deep hierarchy (NCBITaxon's are about 40 levels) would leave a narrow column no
    room; it scrolls sideways instead. Above the tabs, it scrolls within itself past a part of the window, so the
-   page's content stays near. */
+   page's content stays near. Its heading stays in view, and its open nodes' rows stick below it. */
 
 .hierarchy-column {
   grid-area: tree;
-  margin-top: var(--space);
   font-size: 0.9rem;
   overflow-x: auto;
+}
+
+.hierarchy-column .tree {
+  --tree-stick: 1.75rem; /* below the heading */
+
+  width: max-content; /* so the rows' backgrounds span the widest */
+  min-width: 100%;
 }
 
 .hierarchy-column .tree li {
@@ -704,11 +711,25 @@ code {
 }
 
 .hierarchy-column h2 {
-  margin: 0 0 calc(var(--space) / 4);
+  position: sticky;
+  top: 0;
+  left: 0; /* also as the column scrolls sideways */
+  z-index: 2;
+  height: 1.75rem;
+  margin: 0;
   font-size: 1rem;
+  line-height: 1.75rem;
+  white-space: nowrap;
+  background: var(--bg);
 }
 
-.hierarchy-column h2 + .tree + h2 {
+.hierarchy-full {
+  margin-left: 0.5em;
+  font-size: 0.85em;
+  font-weight: normal;
+}
+
+.hierarchy-column .tree + h2 {
   margin-top: var(--space);
 }
 
@@ -717,20 +738,46 @@ code {
   font-weight: bold;
 }
 
-/* The "Hierarchy" toggle hides the column, through `:has`; without it, the column stays. */
+/* The fold control: a checkbox, so it works without JS, through `:has`; without `:has`, the column stays, without
+   it. Above the column it's a line, "▾ Hierarchy"; beside it, a strip on its left, "«", and once folded, "» Hierarchy"
+   written down it. */
 
-.page-toggles {
-  display: flex;
-  gap: 0 var(--space);
+.hierarchy-fold {
+  display: none;
+  grid-area: fold;
+  align-items: center;
+  gap: 0.25em;
+  margin-top: var(--space);
+  color: var(--muted);
+  font-size: 0.9rem;
+  cursor: pointer;
 }
 
-.hierarchy-toggle {
-  display: none;
+.hierarchy-fold::before {
+  content: "▸";
+}
+
+.hierarchy-fold:has(:checked)::before {
+  content: "▾";
+}
+
+.hierarchy-fold:hover {
+  color: var(--fg);
+}
+
+.hierarchy-fold:has(:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.hierarchy-resize {
+  display: none; /* beside the column, in the frame */
+  grid-area: resize;
 }
 
 @supports selector(:has(a)) {
-  .hierarchy-toggle {
-    display: inline-flex;
+  .hierarchy-fold {
+    display: flex;
   }
 
   .entity-page:has(#hierarchy-shown:not(:checked)) > .hierarchy-column {
@@ -827,10 +874,6 @@ code {
 
 .one-page-toggle {
   display: none; /* where the frame applies, below */
-}
-
-.one-page-toggle,
-.hierarchy-toggle {
   align-items: center;
   gap: calc(var(--space) / 4);
   padding: calc(var(--space) / 4) 0;
@@ -1120,6 +1163,53 @@ code {
   color: var(--muted);
 }
 
+.tree-row {
+  display: block;
+}
+
+/* An open node's row sticks to the top while its children scroll past, below its parent's, so the path to what's in
+   view stays in view (§2.9). Rows stack by depth, up to eight; deeper ones share the last place, each covering its
+   parent's. A stuck row is one line, cut short. On a tree page they stick below the navigation bar, whose height
+   `static/tree.js` measures. */
+
+.tree {
+  --tree-row: 1.6em;
+  --tree-stick: 0px;
+}
+
+.tree-page .tree {
+  --tree-stick: var(--site-bar-height, 3.25rem);
+}
+
+.tree li:has(> [role="group"]:not([hidden])) > .tree-row {
+  position: sticky;
+  top: calc(var(--tree-stick) + var(--tree-slot, 7) * var(--tree-row));
+  z-index: 1;
+  height: var(--tree-row);
+  overflow: hidden;
+  line-height: var(--tree-row);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  background: var(--bg);
+}
+
+.tree-row[data-depth="0"] { --tree-slot: 0; }
+.tree-row[data-depth="1"] { --tree-slot: 1; }
+.tree-row[data-depth="2"] { --tree-slot: 2; }
+.tree-row[data-depth="3"] { --tree-slot: 3; }
+.tree-row[data-depth="4"] { --tree-slot: 4; }
+.tree-row[data-depth="5"] { --tree-slot: 5; }
+.tree-row[data-depth="6"] { --tree-slot: 6; }
+
+/* Moved to by the keys, an item isn't left under the rows stuck above it. */
+.tree [role="treeitem"] {
+  scroll-margin-top: calc(var(--tree-stick) + 8 * var(--tree-row));
+}
+
+.tree-siblings {
+  padding-left: 1.25rem;
+}
+
 /* The window-filling frame (DESIGN.md §2.9, U-30): on screen, an entity page fills the window, and the page itself
    doesn't scroll. The navigation bar, the header and the tab bar keep their heights, and the tab panel takes the rest;
    it scrolls what doesn't fit, and the Overview's panels scroll within themselves. Medium windows stack the panels at
@@ -1150,26 +1240,77 @@ code {
         min-height: 0;
       }
 
-      /* The hierarchy column, where shown: on the left, beside the tabs and the panel, scrolling within itself. */
+      /* The hierarchy column: on the left, beside the tabs and the panel, scrolling within itself, with its fold
+         control on its far left, and a handle on its right that drags its width (`static/one-page.js`), from 10rem
+         to half the page. Folded, only the control is left. */
+      & .entity-page:has(#hierarchy-shown) {
+        grid-template-areas: "header header" "fold tabs" "fold panel";
+        grid-template-columns: auto minmax(0, 1fr);
+        column-gap: calc(var(--space) / 2);
+      }
+
       & .entity-page:has(#hierarchy-shown:checked) {
-        grid-template-areas: "header header" "tree tabs" "tree panel";
-        grid-template-columns: clamp(12rem, 22%, 20rem) minmax(0, 1fr);
-        column-gap: var(--space);
+        grid-template-areas: "header header header header" "fold tree resize tabs" "fold tree resize panel";
+        grid-template-columns:
+          auto clamp(10rem, var(--hierarchy-width, clamp(12rem, 22%, 20rem)), 50%) var(--space)
+          minmax(0, 1fr);
+        column-gap: 0;
       }
 
       & .hierarchy-column {
         min-height: 0;
         max-height: none;
-        padding-right: calc(var(--space) / 2);
+        margin-top: var(--space);
         border-bottom: none;
-        border-right: 1px solid var(--border);
       }
 
-      & .hierarchy-column h2 {
-        position: sticky;
-        top: 0;
-        left: 0; /* also as the column scrolls sideways */
-        background: var(--bg);
+      & .hierarchy-fold {
+        align-items: start;
+        margin-right: calc(var(--space) / 2);
+        padding: calc(var(--space) / 4) 0;
+        border-radius: 4px;
+        writing-mode: vertical-rl;
+      }
+
+      & .hierarchy-fold::before {
+        content: "»";
+        font-size: 1.25rem;
+        line-height: 1;
+        text-orientation: upright;
+      }
+
+      & .hierarchy-fold:has(:checked)::before {
+        content: "«";
+      }
+
+      & .hierarchy-fold:hover {
+        background: var(--bar-bg);
+      }
+
+      & .hierarchy-fold:has(:checked) .hierarchy-fold-text {
+        position: absolute; /* named, but not shown, beside the column's heading */
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+      }
+
+      & .entity-page:has(#hierarchy-shown:checked) .hierarchy-resize {
+        display: block;
+        margin-top: var(--space);
+        background: linear-gradient(var(--border), var(--border)) center / 1px 100% no-repeat;
+      }
+
+      & .hierarchy-resize[tabindex] {
+        cursor: col-resize;
+        touch-action: none;
+      }
+
+      & .hierarchy-resize[tabindex]:hover,
+      & .hierarchy-resize[tabindex]:focus-visible {
+        background-image: linear-gradient(var(--accent), var(--accent));
+        background-size: 3px 100%;
+        outline: none;
       }
 
       /* Two title lines high whatever the name; a longer one is cut, whole in its tooltip, as are many types. */

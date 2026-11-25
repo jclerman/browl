@@ -2,7 +2,8 @@
 
 The column shows the entity's ancestors as one merged tree, so its size grows with the number of ancestors, not with
 the number of paths. Each node is drawn once, under its first parent by display name, and under each other parent as a
-one-line reference to it. The entity's direct children are listed below it, closed. The nodes are the tree pages'
+one-line reference to it. The entity's direct children are listed below it, closed, and a link after its first parent's
+children shown fetches its siblings in their place. The nodes are the tree pages'
 (`browl.trees`), but their links name no open nodes (`browl.trees.column_node`). They're read from SQLite alone: the
 ancestors by walking up `edge` through its `edge_child` index.
 """
@@ -18,7 +19,7 @@ from fastapi import Request
 from browl.derived import Entity, EntityType
 from browl.hierarchy import ChildPage, node_ids, read_nodes
 from browl.pages import TREES, TreePage, link_root, tree_href, tree_path
-from browl.trees import ShownList, ShownNode, column_node, shown_children
+from browl.trees import ShownList, ShownNode, column_node, shown_children, siblings_link
 
 COLUMN_IDS = {
     EntityType.CLASS: "hc",
@@ -29,13 +30,9 @@ COLUMN_IDS = {
 """Each hierarchy's prefix of its column tree's element ids, unlike the tree pages' (`browl.trees.ROOT_ID`), so a
 punned IRI's trees can share the page."""
 
-HEADINGS = {
-    EntityType.CLASS: "Class hierarchy",
-    EntityType.OBJECT_PROPERTY: "Object property hierarchy",
-    EntityType.DATA_PROPERTY: "Data property hierarchy",
-    EntityType.ANNOTATION_PROPERTY: "Annotation property hierarchy",
-}
-"""Each hierarchy's tree's heading in the column, which links to its tree page."""
+HEADING = "Local hierarchy"
+"""The heading of the column's tree, which shows the entity's ancestors but not their siblings; for each of a punned
+IRI's trees, followed by its hierarchy's name."""
 
 
 @dataclass(frozen=True)
@@ -44,8 +41,8 @@ class ColumnTree:
 
     Attributes:
         tree: The hierarchy's tree page.
-        heading: The tree's heading.
-        href: The link to its tree page.
+        heading: The tree's heading (`HEADING`).
+        href: The link to its tree page, after the heading.
         id: The prefix of the tree's element ids; its heading's id is `{id}-h`.
         roots: The tree's roots, as shown.
     """
@@ -61,24 +58,28 @@ def read_column(request: Request, connection: sqlite3.Connection, entities: Sequ
     """Return the hierarchy column of an IRI's page, given its entities, one of each type.
 
     Returns:
-        A tree for each hierarchy the IRI is in, in the navigation bar's order: a punned IRI may be in several. An IRI
-        in none, as one with neither parents nor children isn't, has none.
+        A tree for each hierarchy the IRI is in, in the navigation bar's order: a punned IRI may be in several.
     """
-    trees = []
+    found = []
     for tree in TREES:
         entity = next((each for each in entities if each.type == tree.hierarchy), None)
-        if entity is None:
-            continue
-        roots = _merged_tree(request, connection, tree, entity.iri)
+        roots = None if entity is None else _merged_tree(request, connection, tree, entity.iri)
         if roots is not None:
-            trees.append(
-                ColumnTree(tree, HEADINGS[tree.hierarchy], tree_href(request, tree), COLUMN_IDS[tree.hierarchy], roots)
-            )
-    return trees
+            found.append((tree, roots))
+    return [
+        ColumnTree(
+            tree,
+            HEADING if len(found) == 1 else f"{HEADING}: {tree.label}",
+            tree_href(request, tree),
+            COLUMN_IDS[tree.hierarchy],
+            roots,
+        )
+        for tree, roots in found
+    ]
 
 
 def _merged_tree(request: Request, connection: sqlite3.Connection, tree: TreePage, iri: str) -> ShownList | None:
-    """Return the roots of an entity's merged tree, as shown; None if the entity is in no hierarchy of the tree's."""
+    """Return the roots of an entity's merged tree, as shown; None if it isn't a node of the tree's hierarchy."""
     hierarchy = tree.hierarchy
     entity = node_ids(connection, hierarchy, [iri]).get(iri)
     if entity is None:
@@ -87,8 +88,6 @@ def _merged_tree(request: Request, connection: sqlite3.Connection, tree: TreePag
     prefix: str = request.app.state.settings.reserved_prefix
     nodes = read_nodes(connection, hierarchy, parents, prefix, link_root(request.scope))
     by_id = {node.id: node for node in nodes}
-    if not parents[entity] and not by_id[entity].children:
-        return None
     rank = {node.id: index for index, node in enumerate(nodes)}
     first = {node: min(above, key=rank.__getitem__) for node, above in parents.items() if above}
     under: dict[int, list[int]] = {}  # each node's children in the tree, in order, as `nodes` is
@@ -127,12 +126,17 @@ def _merged_tree(request: Request, connection: sqlite3.Connection, tree: TreePag
                 drawn = "above" if places[child] < child_at else "below"
                 shown_list.append(ShownNode(by_id[child], child_id, None, None, drawn=drawn))
         page = ChildPage(nodes=[by_id[child] for child in under[node]], offset=0, total=len(shown_list))
-        return column_node(request, page_path, item, element_id, ShownList(page, shown_list))
+        siblings = None
+        if first.get(entity) == node:  # the entity's siblings: the rest of its first parent's children
+            siblings = siblings_link(request, connection, tree, item, element_id, by_id[entity])
+        return column_node(request, page_path, item, element_id, ShownList(page, shown_list, siblings=siblings))
 
     for index, root in enumerate(roots):
         place(root, (index,))
     shown_roots = [shown(root, (index,), []) for index, root in enumerate(roots)]
-    return ShownList(ChildPage(nodes=[by_id[root] for root in roots], offset=0, total=len(roots)), shown_roots)
+    siblings = None if parents[entity] else siblings_link(request, connection, tree, None, id_prefix, by_id[entity])
+    page = ChildPage(nodes=[by_id[root] for root in roots], offset=0, total=len(roots))
+    return ShownList(page, shown_roots, siblings=siblings)
 
 
 def _parents(connection: sqlite3.Connection, hierarchy: EntityType, node: int) -> dict[int, list[int]]:

@@ -37,7 +37,7 @@ class Column(html.parser.HTMLParser):
     """An entity page's hierarchy column: its headings, and the HTML of its trees, for `Tree`.
 
     Attributes:
-        headings: Each tree's heading's text and link.
+        headings: Each tree's heading's text, and the link after it.
         trees: Each tree's HTML.
     """
 
@@ -49,25 +49,25 @@ class Column(html.parser.HTMLParser):
         self.html = match.group(0) if match else ""
         self.trees = re.findall(r'<ul class="tree" role="tree".*?\n  </ul>', self.html, re.DOTALL)
         self._heading: list[str] | None = None
-        self._href = ""
+        self._href: str | None = None
         self.feed(self.html)
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Start a heading's text."""
         if tag == "h2":
-            self._heading = []
+            self._heading, self._href = [], None
         elif tag == "a" and self._heading is not None:
             self._href = dict(attrs).get("href") or ""
 
     def handle_endtag(self, tag: str) -> None:
         """End a heading."""
         if tag == "h2" and self._heading is not None:
-            self.headings.append(("".join(self._heading), self._href))
+            self.headings.append(("".join(self._heading), self._href or ""))
             self._heading = None
 
     def handle_data(self, data: str) -> None:
         """Collect a heading's text."""
-        if self._heading is not None:
+        if self._heading is not None and self._href is None:
             self._heading.append(data)
 
 
@@ -86,7 +86,7 @@ def shown(found: Column, index: int = 0) -> list[tuple[int, str]]:
 def test_merged_tree(client: TestClient) -> None:
     """Check that a node with two parents is drawn under its first, by name, and is a reference under the other."""
     found = column(client, "/Deep")
-    assert found.headings == [("Class hierarchy", "/_browl/tree/classes")]
+    assert found.headings == [("Local hierarchy", "/_browl/tree/classes")]
     assert shown(found) == [
         (0, "Top"),
         (1, "Left"),
@@ -112,6 +112,7 @@ def test_entity_highlighted_with_children(client: TestClient) -> None:
         (1, "Left"),
         (2, "Bottom"),
         (3, "Deep"),
+        (2, "Show its sibling (1)"),  # after its first parent's children shown
         (1, "Right"),
         (2, "Bottom (also above)"),
     ]
@@ -132,9 +133,12 @@ def test_reference_below(app: FastAPI) -> None:
 
 
 def test_root(client: TestClient) -> None:
-    """Check that a root's column shows only it and its children, closed, by name."""
+    """Check that a root's column shows only it and its children, closed, by name, and a link to the other roots."""
     found = column(client, "/Top")
-    assert shown(found) == [(0, "Top"), (1, "Big"), (1, "Left"), (1, "Right")]
+    assert shown(found) == [(0, "Top"), (1, "Big"), (1, "Left"), (1, "Right"), (0, "Show its sibling (1)")]
+    siblings = Tree(found.trees[0]).items[-1]
+    assert siblings.href == "/_browl/tree/classes"  # without JS, the roots' first page, which holds Top
+    assert query(siblings.load or "") == [("at", "hc"), ("siblings-of", ex("Top"))]
     big = Tree(found.trees[0]).item("Big")
     assert big.expanded == "false"
     assert big.toggle == "/Big"  # without JS, its page, whose column shows its children
@@ -161,18 +165,23 @@ def test_links_independent_of_depth(app: FastAPI) -> None:
     assert max(urllib.parse.unquote(link).count(EX) for link in links) == 1  # its node's, not those above it
 
 
-@pytest.mark.parametrize("path", ["/Free", "/_browl/iri?iri=http%3A%2F%2Fexample.org%2Fnote3"])
-def test_no_hierarchy(client: TestClient, path: str) -> None:
-    """Check that an entity with neither parents nor children has no column, and no toggle."""
-    page = client.get(path).text
-    assert "hierarchy-column" not in page
-    assert "hierarchy-shown" not in page
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/Free", [(0, "Free"), (0, "Show its sibling (1)")]),
+        ("/_browl/iri?iri=http%3A%2F%2Fexample.org%2Fnote3", [(0, "note 003"), (0, "Show its siblings (519)")]),
+    ],
+)
+def test_isolated(client: TestClient, path: str, expected: list[tuple[int, str]]) -> None:
+    """Check that an entity with neither parents nor children has a column: itself, and a link to the other roots."""
+    assert shown(column(client, path)) == expected
 
 
-def test_toggle(client: TestClient) -> None:
-    """Check that a page with a column has its toggle, shown by default."""
+def test_fold_control(client: TestClient) -> None:
+    """Check that a page with a column has its fold control, unfolded by default, and the handle that widens it."""
     page = client.get("/Top").text
-    assert '<input type="checkbox" id="hierarchy-shown" checked autocomplete="off">' in page
+    assert '<input type="checkbox" id="hierarchy-shown" class="visually-hidden" checked' in page
+    assert '<div class="hierarchy-resize" role="separator"' in page
 
 
 def test_not_in_panel(client: TestClient) -> None:
@@ -183,13 +192,10 @@ def test_not_in_panel(client: TestClient) -> None:
 
 def test_equivalence_group(client: TestClient) -> None:
     """Check that an equivalence group is one node, also when its page is a member's other than its representative."""
-    for path in ("/Sub", "/Alias"):
-        assert shown(column(client, path)) == [
-            (0, "Top"),
-            (1, "Left"),
-            (2, "Alias ≡ Alias2 ≡ Alias3 ≡ … (+1)"),
-            (3, "Sub"),
-        ]
+    group = "Alias ≡ Alias2 ≡ Alias3 ≡ … (+1)"
+    assert shown(column(client, "/Sub")) == [(0, "Top"), (1, "Left"), (2, group), (3, "Sub")]
+    sibling = (2, "Show its sibling (1)")
+    assert shown(column(client, "/Alias")) == [(0, "Top"), (1, "Left"), (2, group), (3, "Sub"), sibling]
     page = client.get("/Same").text
     assert re.search(r'href="/Alias" class="tree-current" aria-current="page"', page)
 
@@ -197,29 +203,38 @@ def test_equivalence_group(client: TestClient) -> None:
 def test_property(client: TestClient) -> None:
     """Check that a property's column is its property hierarchy's."""
     found = column(client, "/q")
-    assert found.headings == [("Object property hierarchy", "/_browl/tree/object-properties")]
+    assert found.headings == [("Local hierarchy", "/_browl/tree/object-properties")]
     assert shown(found) == [(0, ex("p")), (1, ex("q"))]  # unnamed, so shown by IRI
     assert Tree(found.trees[0]).items[0].id == "ho-0"
 
 
 def test_punned(app: FastAPI) -> None:
-    """Check that a punned IRI gets a tree for each hierarchy it's in, in the navigation bar's order."""
+    """Check that a punned IRI gets a tree for each hierarchy it's in, in the navigation bar's order, each named."""
     entities = [(ex(name), EntityType.CLASS) for name in ("Top", "pun")]
     entities += [(ex(name), EntityType.OBJECT_PROPERTY) for name in ("p", "pun")]
-    entities += [(ex("pun"), EntityType.ANNOTATION_PROPERTY)]  # in no hierarchy: no tree
+    entities += [(ex("pun"), EntityType.ANNOTATION_PROPERTY)]  # a root, alone
     edges = [(ex("pun"), SUB_CLASS, ex("Top")), (ex("pun"), SUB_PROPERTY, ex("p"))]
     stage = derived_stage(entities, names={ex(name): (name, None) for name in ("Top", "pun", "p")}, edges=edges)
     with loaded(app, stage) as client:
         found = column(client, "/pun")
-    assert [heading for heading, _ in found.headings] == ["Class hierarchy", "Object property hierarchy"]
-    assert [shown(found, index) for index in (0, 1)] == [[(0, "Top"), (1, "pun")], [(0, "p"), (1, "pun")]]
+    assert [heading for heading, _ in found.headings] == [
+        "Local hierarchy: Classes",
+        "Local hierarchy: Object properties",
+        "Local hierarchy: Annotation properties",
+    ]
+    assert [shown(found, index) for index in (0, 1, 2)] == [
+        [(0, "Top"), (1, "pun")],
+        [(0, "p"), (1, "pun")],
+        [(0, "pun")],
+    ]
+    assert [Tree(tree).items[0].id for tree in found.trees] == ["hc-0", "ho-0", "ha-0"]
 
 
 def test_children_paged(client: TestClient) -> None:
     """Check that the entity's children are paged as on the tree pages, and that the next page's fragment is served."""
     items = Tree(column(client, "/Big").trees[0]).items
-    assert len(items) == 2 + CHILD_PAGE + 1  # Top, Big, its first page and "Show the next 500"
-    more = items[-1]
+    assert len(items) == 2 + CHILD_PAGE + 2  # Top, Big, its first page, "Show the next 500" and its siblings' link
+    more = items[-2]
     assert more.text == f"Show the next {CHILD_PAGE} (501–1,000 of 1,250)"
     assert query(more.href) == [*opened("Top", "Big"), ("children-of", ex("Big")), ("offset", str(CHILD_PAGE))]
     assert query(more.load or "") == [("node", ex("Big")), ("at", "hc-0-0"), ("offset", str(CHILD_PAGE))]
@@ -261,3 +276,56 @@ def test_reads_use_index(client: TestClient) -> None:
             ("class", json.dumps([1, 2])),
         ).fetchall()
     assert any("edge_child" in row[-1] for row in plan), plan
+
+
+def test_siblings(client: TestClient) -> None:
+    """Check that the siblings' fragment shows the first parent's children, the entity among them, open and marked."""
+    siblings = Tree(column(client, "/Bottom").trees[0]).item("Show its sibling (1)")
+    assert siblings.href == "/Left"  # without JS, the parent's page, whose column shows its children
+    assert query(siblings.load or "") == [("node", ex("Left")), ("at", "hc-0-0"), ("siblings-of", ex("Bottom"))]
+    fragment = client.get(siblings.load or "")
+    assert fragment.status_code == 200
+    items = Tree(fragment.text).items
+    group = "Alias ≡ Alias2 ≡ Alias3 ≡ … (+1)"
+    assert [(item.id, item.text, item.expanded) for item in items] == [
+        ("hc-0-0-0", group, "false"),
+        ("hc-0-0-1", "Bottom", "true"),
+        ("hc-0-0-1-0", "Deep", None),
+    ]
+    assert items[0].toggle == "/Alias"
+    assert re.search(r'id="hc-0-0-1" href="/Bottom" class="tree-current" aria-current="page"', fragment.text)
+
+
+def test_siblings_page_holds_entity(client: TestClient) -> None:
+    """Check that the siblings' fragment shows the page of them that holds the entity, after a link to those before."""
+    siblings = Tree(column(client, "/kid1249").trees[0]).item("Show its siblings (1,249)")
+    items = Tree(client.get(siblings.load or "").text).items
+    previous = items[0]
+    assert (previous.text, previous.href) == (f"Show the previous {CHILD_PAGE} (501–1,000 of 1,250)", "/Big")
+    assert [item.id for item in items[1:3]] == ["hc-0-0-1000", "hc-0-0-1001"]
+    assert len(items) == 1 + 250
+    assert re.search(r'href="/kid1249" class="tree-current" aria-current="page"', client.get(siblings.load or "").text)
+
+
+def test_siblings_of_root(client: TestClient) -> None:
+    """Check that a root's siblings' fragment shows the roots, with the column's links."""
+    siblings = Tree(column(client, "/Free").trees[0]).items[-1]
+    items = Tree(client.get(siblings.load or "").text).items
+    assert [(item.id, item.text) for item in items] == [("hc-0", "Free"), ("hc-1", "Top")]
+    assert items[1].toggle == "/Top"
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        [("node", ex("Left")), ("at", "hc-0-0"), ("siblings-of", ex("Deep"))],  # not its child
+        [("node", ex("Left")), ("at", "hc-0-0"), ("siblings-of", ex("Nope"))],
+        [("node", ex("Left")), ("at", "t-0"), ("siblings-of", ex("Bottom"))],  # a tree page's id
+        [("node", ex("Left")), ("at", "hc-0-0"), ("siblings-of", ex("Bottom")), ("offset", "500")],
+        [("node", ex("Left")), ("siblings-of", ex("Bottom"))],  # no `at`
+        [("at", "hc"), ("siblings-of", ex("Left"))],  # not a root
+    ],
+)
+def test_siblings_not_found(client: TestClient, params: list[tuple[str, str]]) -> None:
+    """Check that a siblings' fragment for a node that isn't the parent's child, or with another id, is a 404."""
+    assert client.get("/_browl/tree/classes", params=params).status_code == 404

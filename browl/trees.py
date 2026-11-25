@@ -11,7 +11,17 @@ from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
 from browl.derived import EntityType
-from browl.hierarchy import ChildPage, TreeNode, count_roots, node_ids, node_iris, read_children, read_node
+from browl.hierarchy import (
+    CHILD_PAGE,
+    ChildPage,
+    TreeNode,
+    child_index,
+    count_roots,
+    node_ids,
+    node_iris,
+    read_children,
+    read_node,
+)
 from browl.pages import (
     PANEL_HEADERS,
     TREES,
@@ -44,6 +54,10 @@ CHILDREN_OF_PARAM = "children-of"
 
 OFFSET_PARAM = "offset"
 """The query parameter that says how many children, or roots, come before those shown; absent for none."""
+
+SIBLINGS_PARAM = "siblings-of"
+"""The query parameter that asks the hierarchy column's fragment for the page of `node`'s children, or of the roots,
+that holds this node, by IRI: the page's entity, which is shown open and marked."""
 
 MAX_OPEN = 100
 """The most open nodes a page takes from its URL; the rest are ignored."""
@@ -108,6 +122,7 @@ class ShownList:
             after the page before it.
         more: The link to the page after it, without JS; None for the last.
         more_load: The URL of the next page's fragment, for htmx, which adds it in place; None for the last.
+        siblings: In the hierarchy column, after the page's entity's first parent's children: its siblings' link.
     """
 
     page: ChildPage
@@ -115,6 +130,22 @@ class ShownList:
     previous: str | None = None
     more: str | None = None
     more_load: str | None = None
+    siblings: "Siblings | None" = None
+
+
+@dataclass(frozen=True)
+class Siblings:
+    """The hierarchy column's link that shows the page's entity's siblings, after its first parent's children shown.
+
+    Attributes:
+        count: How many siblings it has.
+        href: Without JS, the page that shows them: its parent's, or the tree page with the roots.
+        load: The URL of the fragment that shows them, in place of its parent's children shown (`SIBLINGS_PARAM`).
+    """
+
+    count: int
+    href: str
+    load: str
 
 
 @dataclass(frozen=True)
@@ -127,6 +158,7 @@ class _Query:
         offset: How many of its children, or of the roots, come before those shown.
         node: The IRI of the node whose children alone are asked for, as a fragment; None for the page, or the roots.
         at: For a fragment, its node's element id, or for the roots, their ids' prefix; None for the page.
+        siblings_of: For the hierarchy column's fragment, the IRI of the node whose page of siblings it shows.
     """
 
     open: list[str]
@@ -134,18 +166,21 @@ class _Query:
     offset: int = 0
     node: str | None = None
     at: str | None = None
+    siblings_of: str | None = None
 
 
 def _read_query(request: Request) -> _Query | None:
     """Return what a tree page's URL asks for; None if it repeats a parameter, or gives one that isn't valid."""
-    single = single_params(request, (CHILDREN_OF_PARAM, OFFSET_PARAM, NODE_PARAM, AT_PARAM))
+    single = single_params(request, (CHILDREN_OF_PARAM, OFFSET_PARAM, NODE_PARAM, AT_PARAM, SIBLINGS_PARAM))
     if single is None:
         return None
     children_of, offset = single[CHILDREN_OF_PARAM], single[OFFSET_PARAM]
-    node, at = single[NODE_PARAM], single[AT_PARAM]
+    node, at, siblings_of = single[NODE_PARAM], single[AT_PARAM], single[SIBLINGS_PARAM]
     number = read_offset(offset)
     if number is None:
         return None
+    if siblings_of is not None and (at is None or not is_column_id(at) or offset is not None):
+        return None  # its offset is the page that holds it
     if at is None:  # the page
         if node is not None or (children_of is not None and offset is None):
             return None
@@ -156,7 +191,7 @@ def _read_query(request: Request) -> _Query | None:
     ):
         return None
     opened = list(dict.fromkeys(request.query_params.getlist(OPEN_PARAM)))[:MAX_OPEN]
-    return _Query(opened, children_of, number, node, at)
+    return _Query(opened, children_of, number, node, at, siblings_of)
 
 
 @dataclass
@@ -180,6 +215,7 @@ class _Builder:
         opened: The open nodes the links name, by id and IRI: the nodes shown open, in tree order, after a fragment's
             node and the nodes open above it.
         column: Whether the nodes are the hierarchy column's (`is_column_id`), whose links name no open nodes.
+        current: In the hierarchy column, the node of the page's entity, shown open and marked.
     """
 
     request: Request
@@ -194,6 +230,7 @@ class _Builder:
     read: int = 0
     opened: list[tuple[int, str]] = field(default_factory=list)
     column: bool = False
+    current: int | None = None
     _open_at: dict[int, list[str]] = field(default_factory=dict)  # each node shown open: its element ids
     _closing: dict[int, list[str]] = field(default_factory=dict)  # each node shown open: the links' IRIs once closed
     _pages: dict[tuple[int | None, int], ChildPage] = field(default_factory=dict)
@@ -259,11 +296,13 @@ class _Builder:
         nodes = []
         for item in shown.nodes:
             node = item.node
+            current = node.id == self.current
             if not node.children:
-                nodes.append(item)
+                nodes.append(replace(item, current=True) if current else item)
                 continue
             if self.column:
-                nodes.append(column_node(self.request, self.page_path, node, item.id))
+                children = None if item.children is None else self._linked(item.children, node, item.id, [])
+                nodes.append(column_node(self.request, self.page_path, node, item.id, children, current))
                 continue
             children = None
             if item.children is not None:
@@ -282,8 +321,14 @@ class _Builder:
         if page.offset and self.query.at is None:  # a fragment's page goes after those before it
             anchor = None if parent is None else parent_id
             previous = self.page_link(opened, anchor, parent_iri, page.offset - page.previous_count)
-        if page.next_count and self.column and parent is not None:  # the parent's page shows its children's pages
-            more, more_load = parent.link.href, self.fragment_link(parent, parent_id, [], page.end)
+        elif (
+            page.offset and self.current is not None
+        ):  # the siblings' page: the parent's page, or the tree page, shows those before
+            start = page.offset - page.previous_count
+            previous = self.page_link([], None, None, start) if parent is None else parent.link.href
+        if page.next_count and self.column:  # the parent's page, or the tree page, shows its children's pages
+            more = self.page_link([], None, None, page.end) if parent is None else parent.link.href
+            more_load = self.fragment_link(parent, parent_id, [], page.end)
         elif page.next_count:
             more = self.page_link(opened, f"{parent_id}-{page.end}", parent_iri, page.end)
             more_load = self.fragment_link(parent, parent_id, path[:-1], page.end)
@@ -378,6 +423,36 @@ def column_node(
     return ShownNode(node, element_id, node.link.href or page_path, load, children, current)
 
 
+def siblings_link(
+    request: Request,
+    connection: sqlite3.Connection,
+    tree: TreePage,
+    parent: TreeNode | None,
+    parent_id: str,
+    node: TreeNode,
+) -> Siblings | None:
+    """Return the hierarchy column's link to a node's siblings; None if it has none.
+
+    Args:
+        request: The request.
+        connection: The derived database.
+        tree: The node's tree page.
+        parent: Its first parent, under which the column draws it; None for a root.
+        parent_id: Its parent's element id, or for a root, the roots' ids' prefix.
+        node: The node.
+    """
+    count = (count_roots(connection, tree.hierarchy) if parent is None else parent.children) - 1
+    if count < 1:
+        return None
+    page_path = tree_path(request.app.state.settings.reserved_prefix, tree)
+    params = [*([] if parent is None else [(NODE_PARAM, parent.link.iri)]), (AT_PARAM, parent_id)]
+    load = href(request, with_query(page_path, [*params, (SIBLINGS_PARAM, node.link.iri)]))
+    if parent is not None:
+        return Siblings(count, parent.link.href or page_path, load)
+    index = child_index(connection, tree.hierarchy, None, node.id) or 0
+    return Siblings(count, page_link(request, page_path, [], None, None, index - index % CHILD_PAGE), load)
+
+
 def shown_children(
     request: Request,
     connection: sqlite3.Connection,
@@ -427,24 +502,39 @@ async def tree_page(request: Request, slug: str) -> Response:
 
     def build(connection: sqlite3.Connection) -> ShownList | None:
         target = query.children_of if query.at is None else query.node
-        ids = node_ids(connection, hierarchy, [*query.open, *([] if target is None else [target])])
+        wanted = [
+            *query.open,
+            *([] if target is None else [target]),
+            *([query.siblings_of] if query.siblings_of else []),
+        ]
+        ids = node_ids(connection, hierarchy, wanted)
         if target is not None and target not in ids:
             return None
         window = None if target is None else ids[target]
+        offset, current = query.offset, None
+        if query.siblings_of is not None:
+            current = ids.get(query.siblings_of)
+            index = None if current is None else child_index(connection, hierarchy, window, current)
+            if current is None or index is None:
+                return None
+            offset = index - index % CHILD_PAGE
         known: dict[int, str] = {}  # the open nodes the URL names, each once, an IRI of each
         for iri in query.open:
             if iri in ids:
                 known.setdefault(ids[iri], iri)
         chars = _link_chars([*known.values(), *([] if query.node is None else [query.node])])
-        column = query.at is not None and query.node is not None and is_column_id(query.at)
-        builder = _Builder(request, connection, hierarchy, page_path, query, set(known), window, chars, column=column)
+        column = query.at is not None and is_column_id(query.at)
+        opens = set(known) | ({current} if current is not None else set())
+        builder = _Builder(
+            request, connection, hierarchy, page_path, query, opens, window, chars, column=column, current=current
+        )
         parent = None if window is None else read_node(connection, hierarchy, window, prefix, link_root(request.scope))
         if query.offset and query.offset >= (count_roots(connection, hierarchy) if parent is None else parent.children):
             return None  # checked before any page is read
         if query.at is not None:
             iris = node_iris(connection, (node for node in known if parent is None or node != parent.id))
             above = [*iris.items(), *([] if parent is None else [(parent.id, parent.link.iri)])]
-            shown = builder.build(parent, query.at, query.offset, above)
+            shown = builder.build(parent, query.at, offset, above)
         else:
             # A window on a node that isn't shown open is ignored, e.g. once a link has closed it or its parent.
             shown = builder.build(None, ROOT_ID, 0 if window is not None else query.offset, [])

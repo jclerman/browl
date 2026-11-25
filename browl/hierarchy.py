@@ -235,3 +235,34 @@ def _group_members(connection: sqlite3.Connection, nodes: list[int]) -> dict[int
             members.append(iri)
             groups[node] = (members, size - len(members))
     return groups
+
+
+def child_index(connection: sqlite3.Connection, hierarchy: EntityType, parent: int | None, node: int) -> int | None:
+    """Return a node's index among a node's children, or the hierarchy's roots, in their order; None if it isn't one.
+
+    Args:
+        connection: The derived database.
+        hierarchy: The hierarchy, by its entities' type.
+        parent: The parent node; None for the roots.
+        node: The node.
+    """
+    params: list[str | int]
+    if parent is None:
+        source, params = "root AS r JOIN entity AS e ON e.id = r.node", [hierarchy]
+        where, member = "r.hierarchy = ?", "r.node = ?"
+    else:
+        source, params = "edge AS r JOIN entity AS e ON e.id = r.child", [hierarchy, parent]
+        where, member = "r.hierarchy = ? AND r.parent = ?", "r.child = ?"
+    found = connection.execute(
+        f"SELECT coalesce(e.display_name, e.iri), e.iri FROM {source} WHERE {where} AND {member}", (*params, node)
+    ).fetchone()
+    if found is None:
+        return None
+    name, iri = found
+    key = "coalesce(e.display_name, e.iri)"
+    index: int = connection.execute(
+        f"SELECT count(*) FROM {source} WHERE {where}"
+        f" AND ({key} < ? COLLATE NOCASE OR ({key} = ? COLLATE NOCASE AND e.iri < ?))",
+        (*params, name, name, iri),
+    ).fetchone()[0]
+    return index

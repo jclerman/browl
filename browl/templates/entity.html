@@ -24,16 +24,17 @@
     </div>
     <h1 title="{{ name | isolate }}" dir="auto">{{ name }}</h1>
   </div>
-  {% if column %}{{ hierarchy_column(column) }}{% endif %}
+  {% if column %}
+  {# The hierarchy column, folded by the control on its left, and widened by dragging the handle on its right. #}
+  <label class="hierarchy-fold"><input type="checkbox" id="hierarchy-shown" class="visually-hidden" checked
+    autocomplete="off" aria-controls="hierarchy-column"><span class="hierarchy-fold-text">Hierarchy</span></label>
+  {{ hierarchy_column(column) }}
+  <div class="hierarchy-resize" role="separator" aria-orientation="vertical" aria-label="Hierarchy's width"
+    aria-controls="hierarchy-column"></div>
+  {% endif %}
   <div class="tab-bar">
     {{ tab_list(tabs, "Entity") }}
-    <div class="page-toggles">
-      {% if column %}
-      <label class="hierarchy-toggle"><input type="checkbox" id="hierarchy-shown" checked autocomplete="off">
-        Hierarchy</label>
-      {% endif %}
-      <label class="one-page-toggle"><input type="checkbox" id="one-page" autocomplete="off"> Scroll as one page</label>
-    </div>
+    <label class="one-page-toggle"><input type="checkbox" id="one-page" autocomplete="off"> Scroll as one page</label>
   </div>
   {% call tab_panel(tabs) %}{% include "entity_panel.html" %}{% endcall %}
 </div>

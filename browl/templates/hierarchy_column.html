@@ -1,11 +1,13 @@
 {# The hierarchy column (`browl.hierarchy_column`, DESIGN.md §2.9): a tree for each hierarchy the entity is in, each
-   headed by a link to its tree page. The "Hierarchy" toggle in the tab bar hides it (`browl.css`). #}
+   headed "Local hierarchy", as it shows the entity's ancestors but not their siblings, then a link to its tree page.
+   The control on its left folds it (`browl.css`). #}
 {% from "tree_nodes.html" import tree_items %}
 
 {% macro hierarchy_column(column) -%}
-<nav class="hierarchy-column" aria-label="Hierarchy">
+<nav class="hierarchy-column" id="hierarchy-column" aria-label="Hierarchy">
   {%- for each in column %}
-  <h2 id="{{ each.id }}-h"><a href="{{ each.href }}">{{ each.heading }}</a></h2>
+  <h2><span id="{{ each.id }}-h">{{ each.heading }}</span><a class="hierarchy-full" href="{{ each.href }}">Full
+    tree</a></h2>
   <ul class="tree" role="tree" aria-labelledby="{{ each.id }}-h">
     {{- tree_items(each.roots) }}
   </ul>
