@@ -63,7 +63,7 @@ docker compose up --build
 
 The site is then at <http://localhost:8000/>. The settings are described in `.env.example` and
 [`docs/DESIGN.md`](docs/DESIGN.md) §2.12. To try sign-in itself, register a Google OAuth client as
-[`docs/SIGN-IN.md`](docs/SIGN-IN.md) says.
+[`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md) says.
 
 ## Making changes
 

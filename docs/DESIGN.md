@@ -1847,9 +1847,10 @@ How it works (P-22, `browl.auth`):
 - **Sign-in** (`admin/sign-in?next=…`) redirects to Google with the scope `openid email` and `prompt=select_account`, so
   someone signed in to Google with the wrong account can pick another. Google returns to `admin/oidc-callback`, whose
   URL is built from `BASE_URL`, not the request, since a proxy may change the request's scheme or host; it's the
-  redirect URI each operator registers with their OAuth client ([`SIGN-IN.md`](SIGN-IN.md)). Authlib checks the state
-  and the ID token's signature, issuer, audience and nonce. The token's email must be verified; it's lowercased, and
-  the browser returns to `next`, which must be a path of this app (no open redirect), else to the upload page.
+  redirect URI each operator registers with their OAuth client ([`AUTHENTICATION.md`](AUTHENTICATION.md)). Authlib
+  checks the state and the ID token's signature, issuer, audience and nonce. The token's email must be verified; it's
+  lowercased, and the browser returns to `next`, which must be a path of this app (no open redirect), else to the
+  upload page.
 - **The session** is Starlette's signed cookie, `browl_session`: HttpOnly, `SameSite=Lax` (so it comes back with
   Google's redirect), `Secure` when `BASE_URL` is `https`, for 12 hours. It holds only the email address, and the
   sign-in's state while it runs. Its key is made on first start and kept in `DATA_DIR/session.key` (mode 600), so

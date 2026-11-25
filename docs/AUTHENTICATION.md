@@ -1,4 +1,4 @@
-# Setting up Google sign-in
+# Setting up authentication
 
 browl's admin pages need Google sign-in ([`DESIGN.md`](DESIGN.md) §2.11). Each operator registers their own OAuth
 client with Google, once, and gives browl its ID and secret. browl can't ship one: Google sends users back only to the
