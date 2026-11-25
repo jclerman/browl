@@ -16,6 +16,7 @@ import rdflib
 from fastapi.testclient import TestClient
 
 import browl.imports
+from browl.admin import status_context
 from browl.imports import (
     OWL_IMPORTS,
     FetchError,
@@ -672,12 +673,10 @@ def test_status_shows_dropped_imports(data_dir: Path) -> None:
     )
     JobStore(data_dir / STATE_DB).write(state)
     with TestClient(make_app()) as client:
-        page = client.get("/_browl/admin/status").text
+        page = " ".join(client.get("/_browl/admin/status").text.split())
     assert "1,234 triples loaded, not counting imports." in page
-    assert (
-        "1 of the ontology's 2 imports\n    couldn't be loaded</strong>, so the site leaves out what it declares."
-        in page
-    )
+    assert "1 of the ontology's 2 imports couldn't be loaded</strong>, so the site leaves out what it declares." in page
+    assert '<details class="imports" open> <summary>2 imports</summary>' in page
     assert f'<li class="failure"><code>file:///x</code> (imported by <code>{EX}a</code>):' in page
     assert "only http and https" in page
     assert "5 triples" in page
@@ -712,7 +711,7 @@ def test_status_import_states(
     """Check how the status shows imports and triples in each state: dropped, loaded, only fetched, or none."""
     now = datetime.now(UTC)
     state = JobState(1, Stage.LOADING, now, now, Stage.LOADING, "boom", imports=imports, triples=triples)
-    page = templates.get_template("admin/_job_status.html").render(job=state, stages=list(Stage), poll_s=1)
+    page = templates.get_template("admin/_job_status.html").render(status_context(state))
     page = " ".join(page.split())
     for text in present:
         assert text in page

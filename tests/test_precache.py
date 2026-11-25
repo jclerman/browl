@@ -772,7 +772,7 @@ def test_restart_rebuilds(settings: Settings, prepare: Callable[[Settings], obje
     with TestClient(app) as client:
         response = client.get("/probe")
         assert (response.status_code, response.headers["Retry-After"]) == (503, str(RETRY_AFTER_S))
-        assert '<li class="current" aria-current="step">pre-caching</li>' in status(client)
+        assert '<span class="step-label">Pre-Caching</span>' in status(client)
         fuseki.released.set()
         assert client.portal is not None
         client.portal.call(app.state.jobs.wait)
@@ -830,9 +830,7 @@ def test_restart_rebuild_fails(settings: Settings) -> None:
         client.portal.call(app.state.jobs.wait)
         response = client.get("/probe")
         assert response.status_code == 503 and "<h1>Not available</h1>" in response.text
-        assert "Failed in stage <strong>pre-caching</strong>: rebuilding after a restart: pre-caching query" in (
-            status(client)
-        )
+        assert "<strong>Pre-Caching Failed</strong>: rebuilding after a restart: pre-caching query" in (status(client))
     assert derived_files(settings) == []
 
 

@@ -346,7 +346,7 @@ def test_failed_after_claim(
     state = app.state.jobs.state
     assert (state.generation, state.failed_stage, state.reasoner) == (1, Stage.UPLOADING, Reasoner.ELK)
     assert reason in (state.reason or "")
-    assert "Failed in stage <strong>uploading</strong>" in response.text
+    assert "<strong>Upload Failed</strong>" in response.text
     assert not upload_path(data_dir, 1, ".ttl").parent.exists()
     assert (state.upload_name, state.upload_syntax) == ("o.ttl", "Turtle")
     assert state.upload_bytes == len(LONG)

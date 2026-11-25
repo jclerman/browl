@@ -4,6 +4,8 @@ Signing in and out, under the same prefix but open to everyone, is in `browl.aut
 """
 
 import logging
+from datetime import UTC, datetime
+from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Request, Response, status
@@ -11,7 +13,8 @@ from fastapi.openapi.docs import get_swagger_ui_html, get_swagger_ui_oauth2_redi
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from browl.auth import require_admin
-from browl.jobs import JobRunningError, Stage
+from browl.job_view import job_elapsed, job_steps
+from browl.jobs import JobRunningError, JobState
 from browl.jobtypes import Reasoner
 from browl.pages import is_htmx, link_root, same_origin, templates
 from browl.upload import FORMATS, StorageError, UploadError, receive_upload
@@ -44,9 +47,19 @@ async def job_status(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "admin/_job_status.html" if htmx else "admin/status.html",
-        {"job": job, "stages": list(Stage), "poll_s": STATUS_POLL_S},
+        status_context(job),
         headers=headers,
     )
+
+
+def status_context(job: JobState) -> dict[str, Any]:
+    """Return what the status fragment (`admin/_job_status.html`) renders: the job, its stages' boxes, and so on."""
+    return {
+        "job": job,
+        "steps": [] if job.stage is None else job_steps(job),
+        "elapsed": job_elapsed(job, datetime.now(UTC)),
+        "poll_s": STATUS_POLL_S,
+    }
 
 
 def _polling_page(request: Request) -> str:
@@ -71,9 +84,7 @@ async def _upload_page(
         request,
         "admin/upload.html",
         {
-            "job": await request.app.state.jobs.current(),
-            "stages": list(Stage),
-            "poll_s": STATUS_POLL_S,
+            **status_context(await request.app.state.jobs.current()),
             "reasoners": list(REASONER_LABELS.items()),
             "accept": ",".join(sorted(FORMATS)),
             "error": error,

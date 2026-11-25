@@ -97,6 +97,15 @@ def start_job(client: TestClient, app: FastAPI) -> None:
     assert loading.wait(timeout=5)
 
 
+def steps(html: str) -> list[tuple[str, str, str]]:
+    """Return each stage box's state, `aria-current` attribute (or ""), and label, from the status fragment."""
+    return re.findall(
+        r'<li class="step step-(\w+)" tabindex="0" aria-describedby="step-tip-[\w-]+"( aria-current="step")?>'
+        r' <span class="step-icon" aria-hidden="true"></span> <span class="step-label">([^<]+)</span>',
+        html,
+    )
+
+
 def fragment(client: TestClient) -> str:
     """Return the status route's fragment, as htmx asks for it, with whitespace collapsed."""
     response = client.get(STATUS, headers=HTMX)
@@ -270,17 +279,17 @@ def test_status_running(client: TestClient, app: FastAPI) -> None:
     start_job(client, app)
     started = app.state.jobs.state.started_at
     html = fragment(client)
-    assert "Load 1 is running, started" in html
-    assert f'<time datetime="{started.isoformat()}">{started:%Y-%m-%d %H:%M:%S} UTC</time>' in html
+    assert "Running</span>" in html
+    assert f'Load 1 · started <time datetime="{started.isoformat()}">{started:%Y-%m-%d %H:%M:%S} UTC</time>' in html
+    assert "· running for " in html
     assert 'hx-get="/_browl/admin/status" hx-trigger="every 2s" hx-swap="outerHTML"' in html
-    stages = re.findall(r'<li class="(\w+)"( aria-current="step")?>([\w-]+)', html)
-    assert stages == [
-        ("done", "", "uploading"),
-        ("done", "", "imports"),
-        ("done", "", "reasoning"),
-        ("current", ' aria-current="step"', "loading"),
-        ("pending", "", "pre-caching"),
-        ("pending", "", "ready"),
+    assert steps(html) == [
+        ("done", "", "Uploaded"),
+        ("done", "", "Imports Fetched"),
+        ("skipped", "", "No Reasoner"),
+        ("current", ' aria-current="step"', "Storing Triples"),
+        ("pending", "", "Pre-Cache"),
+        ("pending", "", "Publish"),
     ]
 
 
@@ -288,23 +297,30 @@ def test_status_ready(client: TestClient, app: FastAPI) -> None:
     """Check that after a load the status shows Ready highlighted, and stops polling (#85)."""
     run_job(client, app)
     html = fragment(client)
-    assert "Load 1 is ready, started" in html
+    assert "Ready</span>" in html
+    assert "· took " in html
     assert "hx-trigger" not in html
-    assert re.findall(r'<li class="(\w+)"', html) == ["done"] * 5 + ["current"]
-    assert '<li class="current" aria-current="step">ready' in html
+    assert [state for state, _, _ in steps(html)] == ["done", "done", "skipped", "done", "done", "done"]
+    assert "aria-current" not in html
+    assert ">Published</span>" in html
 
 
 def test_status_failed(client: TestClient, app: FastAPI) -> None:
     """Check that after a failure the status shows the failed stage and the reason, escaped."""
     run_job(client, app, reasoning=SECRET_REASON)
     html = fragment(client)
-    assert "Load 1 failed, started" in html
+    assert "Failed</span>" in html
+    assert "· failed after " in html
     assert "hx-trigger" not in html
-    assert '<li class="failed" aria-current="step">reasoning (failed)</li>' in html
-    assert re.findall(r'<li class="(\w+)"', html) == ["done", "done", "failed", "pending", "pending", "pending"]
-    assert (
-        "Failed in stage <strong>reasoning</strong>: &lt;script&gt;alert(&#39;reason&#39;)&lt;/script&gt;</p>" in html
-    )
+    assert steps(html) == [
+        ("done", "", "Uploaded"),
+        ("done", "", "Imports Fetched"),
+        ("failed", ' aria-current="step"', "Inference Failed"),
+        ("pending", "", "Store Triples"),
+        ("pending", "", "Pre-Cache"),
+        ("pending", "", "Publish"),
+    ]
+    assert "<strong>Inference Failed</strong>: &lt;script&gt;alert(&#39;reason&#39;)&lt;/script&gt;</p>" in html
     assert SECRET_REASON not in html
 
 
@@ -388,7 +404,7 @@ def test_restart_serves_loaded_ontology() -> None:
         run_job(client, first)
     with TestClient(make_app()) as client:
         assert client.get("/no/such/page").status_code == 404  # past the gate, to the router
-        assert "Load 1 is ready" in fragment(client)
+        assert "Ready</span> <span>Load 1 ·" in fragment(client)
 
 
 def test_restart_after_interrupted_job(data_dir: Path) -> None:
@@ -401,4 +417,4 @@ def test_restart_after_interrupted_job(data_dir: Path) -> None:
         response = client.get("/example.org/onto")
         assert response.status_code == 503
         assert "<h1>Not available</h1>" in response.text
-        assert f"Failed in stage <strong>loading</strong>: {INTERRUPTED_BY_RESTART}" in fragment(client)
+        assert f"<strong>Storing Failed</strong>: {INTERRUPTED_BY_RESTART}" in fragment(client)

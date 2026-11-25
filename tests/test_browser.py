@@ -291,16 +291,18 @@ def test_status_polls_while_running(page: Page, status_server: LiveServer) -> No
     status_server.call(jobs.start())
     watch_policy(page)
     page.goto(f"{status_server.url}{STATUS}")
-    current = page.locator("#job-status li[aria-current]")
-    expect(current).to_have_text("reasoning")
+    current = page.locator("#job-status .step-current .step-label")
+    expect(page.locator("#job-status .step-skipped .step-label")).to_have_text("No Reasoner")
+    expect(page.locator("#job-status .step-done")).to_have_count(2)
+    expect(current).to_have_count(0)
     mark(page)
     status_server.call(release(reasoned))
-    expect(current).to_have_text("loading")
+    expect(current).to_have_text("Storing Triples")
     assert marked(page)
     with page.expect_navigation():
         status_server.call(release(loaded))
     assert not marked(page)
-    expect(current).to_have_text("ready")
+    expect(page.locator("#job-status .step-label").last).to_have_text("Published")
     assert page.url == f"{status_server.url}{STATUS}"
     polls: list[str] = []
     page.on("request", lambda request: polls.append(request.url))
@@ -380,7 +382,7 @@ def test_refused_upload_page_refreshes_without_javascript(
     loaded, navigations = refuse_upload(page, status_server)
     page.wait_for_event("request", lambda request: request.is_navigation_request())
     status_server.call(release(loaded))
-    expect(page.locator("#job-status")).to_contain_text("is ready")
+    expect(page.locator("#job-status .pill")).to_have_text("Ready")
     nav = page.get_by_role("navigation", name="Site")
     expect(nav.get_by_role("link", name="New ontology")).to_be_visible()
     page.wait_for_timeout(REFRESH_S * 2 * 1000)
@@ -409,7 +411,7 @@ def test_no_refresh_once_finished(page: Page, status_server: LiveServer, path: s
     status_server.call(status_server.app.state.jobs.start())
     status_server.call(status_server.app.state.jobs.wait())
     page.goto(f"{status_server.url}{path}")
-    expect(page.locator("#job-status")).to_contain_text("is ready")
+    expect(page.locator("#job-status .pill")).to_have_text("Ready")
     expect(page.locator('meta[http-equiv="refresh"]')).to_have_count(0)
 
 
