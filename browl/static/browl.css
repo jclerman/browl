@@ -396,8 +396,14 @@ code {
   font-weight: 700;
 }
 
-.step-note {
+.step-note,
+.step-time {
   font-size: 0.8rem;
+}
+
+/* A box's note and time each take a line of their own; the time's digits keep their width as it ticks. */
+.step-time {
+  font-variant-numeric: tabular-nums;
 }
 
 .step-icon {
@@ -484,6 +490,60 @@ code {
   max-width: var(--measure);
 }
 
+/* The details panel of the running stage, or of work in the background: tinted as the current box is, with a bar
+   when it can tell how far it has got. */
+.step-panel {
+  margin: var(--space) 0;
+  padding: 0.6rem 0.9rem;
+  border-left: 4px solid var(--active-fg);
+  border-radius: 0.35rem;
+  background: var(--active-bg);
+  color: var(--active-fg);
+}
+
+.step-panel p {
+  margin: 0.15rem 0;
+}
+
+.step-panel-head {
+  font-variant-numeric: tabular-nums;
+}
+
+.step-detail {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+.step-progress {
+  display: block;
+  width: 100%;
+  height: 0.5rem;
+  margin: 0.4rem 0 0.2rem;
+  border: 1px solid color-mix(in srgb, var(--active-fg) 45%, transparent);
+  border-radius: 999px;
+  overflow: hidden;
+  appearance: none;
+  background: var(--bg);
+  accent-color: var(--active-fg);
+}
+
+.step-progress::-webkit-progress-bar {
+  background: var(--bg);
+}
+
+.step-progress::-webkit-progress-value {
+  background: var(--active-fg);
+}
+
+.step-progress::-moz-progress-bar {
+  background: var(--active-fg);
+}
+
+.background-title {
+  margin-top: calc(2 * var(--space));
+  font-size: 1.1rem;
+}
+
 .imports summary {
   cursor: pointer;
 }
@@ -497,6 +557,11 @@ code {
   .step {
     flex-flow: row wrap;
     text-align: left;
+  }
+
+  /* At the box's right end, apart from its note. */
+  .step-time {
+    margin-left: auto;
   }
 
   .step:not(:last-child)::after {

@@ -316,6 +316,11 @@ class UsageTables:
         build = self._build
         return build if build is not None and build.generation == generation and not build.task.done() else None
 
+    def progress(self, generation: int) -> Progress | None:
+        """Return how far this process's build of a generation's table has got; None if it isn't building it."""
+        build = self._running(generation)
+        return None if build is None else build.progress
+
     def failed(self, generation: int) -> bool:
         """Return whether a generation's build failed in this process."""
         return generation in self._failed

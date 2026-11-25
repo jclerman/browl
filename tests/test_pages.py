@@ -11,6 +11,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import browl.jobs
 from browl.derived import DERIVED_DIR
 from browl.jobs import (
     INTERRUPTED_BY_RESTART,
@@ -24,6 +25,7 @@ from browl.jobs import (
 )
 from browl.jobtypes import StageError
 from browl.pages import RETRY_AFTER_S, SiteGate, app_path, link_root, templates
+from browl.precache.usage_table import Progress
 from tests.helpers import derived_stage, make_app
 
 pytestmark = pytest.mark.usefixtures("data_dir")
@@ -322,6 +324,94 @@ def test_status_failed(client: TestClient, app: FastAPI) -> None:
     ]
     assert "<strong>Inference Failed</strong>: &lt;script&gt;alert(&#39;reason&#39;)&lt;/script&gt;</p>" in html
     assert SECRET_REASON not in html
+
+
+def test_status_running_progress(client: TestClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check the running stage's progress: its box's time so far, a done box's time, and the details panel.
+
+    The panel says what the stage is doing, with a bar for how far it has got.
+    """
+    monkeypatch.setattr(browl.jobs, "PROGRESS_S", 0)
+    reported = threading.Event()
+
+    async def loading(context: JobContext) -> None:
+        context.report("Added 640,000 of 1,167,135 triples (55%)", 640_000 / 1_167_135)
+        await asyncio.sleep(0.05)  # the report is recorded
+        reported.set()
+        await asyncio.Event().wait()
+
+    app.state.jobs.register(Stage.LOADING, loading)
+    client.portal.call(app.state.jobs.start)
+    assert reported.wait(timeout=5)
+    html = fragment(client)
+    took = '<span class="step-time"><span class="visually-hidden">took </span>0 s</span>'
+    assert f'<span class="step-label">Uploaded</span> {took}' in html
+    assert '<span class="step-label">No Reasoner</span> <span class="step-tip"' in html  # skipped: no time
+    assert (
+        '<span class="step-label">Storing Triples</span> <span class="step-time">'
+        '<span class="visually-hidden">running for </span>0 s</span>'
+    ) in html
+    assert (
+        '<div class="step-panel" role="group" aria-labelledby="step-panel-current">'
+        ' <p class="step-panel-head"><strong id="step-panel-current">Storing Triples</strong> · running for 0 s</p>'
+        ' <p class="step-detail">Added 640,000 of 1,167,135 triples (55%)</p>'
+        ' <progress class="step-progress" max="100" value="54.8" aria-labelledby="step-panel-current">55%</progress>'
+    ) in html
+    stored = JobStore(app.state.settings.data_dir / STATE_DB).read()
+    assert (stored.detail, stored.fraction) == ("Added 640,000 of 1,167,135 triples (55%)", 640_000 / 1_167_135)
+
+
+def test_status_running_no_detail(client: TestClient, app: FastAPI) -> None:
+    """Check that the panel of a stage that hasn't said what it's doing has just its label and time, and no bar."""
+    start_job(client, app)
+    html = fragment(client)
+    assert '<strong id="step-panel-current">Storing Triples</strong> · running for ' in html
+    assert 'class="step-detail"' not in html
+    assert "<progress" not in html
+
+
+class FakeTables:
+    """Usage tables whose build of the ready generation's table is running with some progress, or failed."""
+
+    def __init__(self, progress: Progress | None = None, failed: bool = False) -> None:  # noqa: D107
+        self._progress, self._failed = progress, failed
+
+    def progress(self, generation: int) -> Progress | None:  # noqa: D102
+        return self._progress
+
+    def failed(self, generation: int) -> bool:  # noqa: D102
+        return self._failed
+
+
+def test_status_background_build(client: TestClient, app: FastAPI) -> None:
+    """Check that once the job is ready, the usage table's build shows after publishing.
+
+    The fragment polls without redirecting until the build ends.
+    """
+    run_job(client, app)
+    app.state.usage_tables = FakeTables(Progress(triples=200, scanned=50))
+    response = client.get(f"{STATUS}?background", headers=HTMX)
+    assert "HX-Redirect" not in response.headers
+    html = " ".join(response.text.split())
+    assert f'hx-get="{STATUS}?background" hx-trigger="every 2s" hx-swap="outerHTML"' in html
+    assert '<h2 class="background-title">After publishing</h2>' in html
+    assert '<strong id="background-1">Building the usage table</strong> · running for 0 s</p>' in html
+    assert '<p class="step-detail">Scanned 50 of 200 triples (25%)</p>' in html
+    assert 'max="100" value="25.0"' in html
+    assert "HX-Redirect" in client.get(STATUS, headers=HTMX).headers  # a poll from when the job ran
+    app.state.usage_tables = FakeTables()
+    html = fragment(client)
+    assert "hx-trigger" not in html
+    assert "After publishing" not in html
+
+
+def test_status_background_build_failed(client: TestClient, app: FastAPI) -> None:
+    """Check that a failed usage table build says so, and doesn't poll."""
+    run_job(client, app)
+    app.state.usage_tables = FakeTables(failed=True)
+    html = fragment(client)
+    assert '<p class="failure">The usage table\'s build failed' in html
+    assert "hx-trigger" not in html
 
 
 def test_status_poll_running_no_redirect(client: TestClient, app: FastAPI) -> None:

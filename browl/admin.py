@@ -13,16 +13,20 @@ from fastapi.openapi.docs import get_swagger_ui_html, get_swagger_ui_oauth2_redi
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from browl.auth import require_admin
-from browl.job_view import job_elapsed, job_steps
+from browl.job_view import Activity, job_elapsed, job_steps, running_activity, usage_table_activity
 from browl.jobs import JobRunningError, JobState
 from browl.jobtypes import Reasoner
 from browl.pages import is_htmx, link_root, same_origin, templates
 from browl.upload import FORMATS, StorageError, UploadError, receive_upload
+from browl.usage_tables import UsageTables
 
 logger = logging.getLogger(__name__)
 
 STATUS_POLL_S = 2
-"""How often the status fragment polls itself while a job runs."""
+"""How often the status fragment polls itself while a job runs, or background work does."""
+
+BACKGROUND_POLL = "background"
+"""The query parameter of the status fragment's polls while only background work runs (`job_status`)."""
 
 SWAGGER_UI_URL = "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.35.0"
 """Swagger UI for the API docs, pinned to an exact version: an accepted exception to the no-CDN rule (§2.13)."""
@@ -38,26 +42,47 @@ async def job_status(request: Request) -> HTMLResponse:
     An htmx request gets just the status fragment, which polls this route while a job runs; any other request gets a
     page. A poll that finds the job ended gets `HX-Redirect` to a fresh GET of its page, so the header shows the new
     ontology (#101); a reload would re-send a refused upload's POST. Only a running job's fragment polls, so no loop.
+
+    Once the job has ended, the fragment polls while background work runs, such as the usage table's build (P-27c),
+    with `?background`, so such a poll swaps in the fragment rather than redirecting; the polling stops once the work
+    ends.
     """
     htmx = is_htmx(request)
     job = await request.app.state.jobs.current()
     headers = {"Cache-Control": "no-store"}
-    if htmx and not job.running:
+    if htmx and not job.running and BACKGROUND_POLL not in request.query_params:
         headers["HX-Redirect"] = _polling_page(request)
     return templates.TemplateResponse(
         request,
         "admin/_job_status.html" if htmx else "admin/status.html",
-        status_context(job),
+        status_context(job, getattr(request.app.state, "usage_tables", None)),
         headers=headers,
     )
 
 
-def status_context(job: JobState) -> dict[str, Any]:
-    """Return what the status fragment (`admin/_job_status.html`) renders: the job, its stages' boxes, and so on."""
+def status_context(job: JobState, tables: UsageTables | None = None) -> dict[str, Any]:
+    """Return what the status fragment (`admin/_job_status.html`) renders: the job, its stages' boxes, and so on.
+
+    Args:
+        job: The job state.
+        tables: The usage tables, whose build of the ready generation's table shows once no job is running.
+    """
+    now = datetime.now(UTC)
+    steps = [] if job.stage is None else job_steps(job, now)
+    background: list[Activity] = []
+    background_failed = False
+    if tables is not None and not job.running and job.ready_generation is not None:
+        if (progress := tables.progress(job.ready_generation)) is not None:
+            background.append(usage_table_activity(progress))
+        background_failed = tables.failed(job.ready_generation)
     return {
         "job": job,
-        "steps": [] if job.stage is None else job_steps(job),
-        "elapsed": job_elapsed(job, datetime.now(UTC)),
+        "steps": steps,
+        "elapsed": job_elapsed(job, now),
+        "activity": running_activity(job, steps),
+        "background": background,
+        "background_failed": background_failed,
+        "background_poll": BACKGROUND_POLL,
         "poll_s": STATUS_POLL_S,
     }
 
@@ -84,7 +109,7 @@ async def _upload_page(
         request,
         "admin/upload.html",
         {
-            **status_context(await request.app.state.jobs.current()),
+            **status_context(await request.app.state.jobs.current(), getattr(request.app.state, "usage_tables", None)),
             "reasoners": list(REASONER_LABELS.items()),
             "accept": ",".join(sorted(FORMATS)),
             "error": error,

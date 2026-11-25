@@ -1,6 +1,20 @@
-{# The load job's status (A-5, A-6). While a job runs, it polls its route and replaces itself. #}
+{# The load job's status (A-5, A-6). While a job runs, or work after it in the background, it polls its route and
+   replaces itself. #}
+{% macro activity_panel(activity, id) %}
+{# What some work is doing: its label and time so far, what it says it's doing, and a bar if it can tell how far it
+   has got. The home of a stage's sub-steps, once there are any. #}
+<div class="step-panel" role="group" aria-labelledby="{{ id }}">
+  <p class="step-panel-head"><strong id="{{ id }}">{{ activity.label }}</strong>
+    {%- if activity.elapsed is not none %} · running for {{ activity.elapsed }}{% endif %}</p>
+  {% if activity.detail is not none %}<p class="step-detail">{{ activity.detail }}</p>{% endif %}
+  {% if activity.percent is not none %}
+  <progress class="step-progress" max="100" value="{{ activity.percent }}" aria-labelledby="{{ id }}">{{ activity.percent | round | int }}%</progress>
+  {% endif %}
+</div>
+{% endmacro %}
 <section id="job-status" class="job-status" aria-live="polite"
-  {%- if job.running %} hx-get="{{ url_for('job_status').path }}" hx-trigger="every {{ poll_s }}s" hx-swap="outerHTML"{% endif %}>
+  {%- if job.running %} hx-get="{{ url_for('job_status').path }}" hx-trigger="every {{ poll_s }}s" hx-swap="outerHTML"
+  {%- elif background %} hx-get="{{ url_for('job_status').path }}?{{ background_poll }}" hx-trigger="every {{ poll_s }}s" hx-swap="outerHTML"{% endif %}>
   {% if job.stage is none %}
   <p>No ontology has been loaded yet.</p>
   {% else %}
@@ -20,11 +34,13 @@
       <span class="step-icon" aria-hidden="true"></span>
       <span class="step-label">{{ step.label }}</span>
       {% if step.note is not none %}<span class="step-note">{{ step.note }}</span>{% endif %}
+      {% if step.time is not none %}<span class="step-time"><span class="visually-hidden">{{ "running for" if step.state == "current" else "took" }} </span>{{ step.time }}</span>{% endif %}
       <span class="step-tip" id="step-tip-{{ step.stage }}" role="tooltip">{{ step.tooltip }}</span>
     </li>
     {% endfor %}
   </ol>
   <div class="step-details">
+    {% if activity is not none %}{{ activity_panel(activity, "step-panel-current") }}{% endif %}
     {% for step in steps if step.state == "failed" %}
     <p class="failure"><strong>{{ step.label }}</strong>: {{ job.reason }}</p>
     {% endfor %}
@@ -60,6 +76,14 @@
         {% endfor %}
       </ul>
     </details>
+    {% endif %}
+    {% if background or background_failed %}
+    <h2 class="background-title">After publishing</h2>
+    {% for item in background %}{{ activity_panel(item, "background-" ~ loop.index) }}{% endfor %}
+    {% if background_failed %}
+    <p class="failure">The usage table's build failed, so the Usage tab can't list usages; the app's log says why. It's
+      tried again when the app next starts.</p>
+    {% endif %}
     {% endif %}
   </div>
   {% endif %}
