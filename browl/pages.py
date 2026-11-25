@@ -12,6 +12,7 @@ import sqlite3
 import urllib.parse
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from time import monotonic
 from typing import NamedTuple
@@ -408,8 +409,9 @@ class SiteGate:
 class PageFrame:
     """Give each request the ontology's link (`request.state.ontology_link`), and each response the security headers.
 
-    The link is read once per generation; while it can't be read, the navigation bar shows only browl's name, and it's
-    tried again after `RETRY_AFTER_S`. HTML responses also get `CONTENT_SECURITY_POLICY`.
+    The link is read once per generation, and again once a job running under it ends, such as a rebuild after a
+    restart (#153); while it can't be read, the navigation bar shows only browl's name, and it's tried again after
+    `RETRY_AFTER_S`. HTML responses also get `CONTENT_SECURITY_POLICY`.
 
     Args:
         app: The application it wraps.
@@ -422,15 +424,18 @@ class PageFrame:
         self.app = app
         self.passthrough = passthrough
         self.csp_exempt = csp_exempt
-        self._cached: tuple[int, OntologyLink | None, float] | None = None  # generation, link or failure, retry time
+        # The generation and job's end it was read for, the link or None if reading failed, and when to retry.
+        self._cached: tuple[tuple[int, datetime | None], OntologyLink | None, float] | None = None
 
     async def ontology_link(self, request: Request) -> OntologyLink:
         """Return the ready generation's ontology link, or `NO_LINK` if there's none or it can't be read."""
-        generation = (await request.app.state.jobs.current()).ready_generation
+        job = await request.app.state.jobs.current()
+        generation = job.ready_generation
         if generation is None:
             return NO_LINK
+        key = (generation, job.finished_at)
         cached = self._cached
-        if cached is not None and cached[0] == generation and (cached[1] is not None or monotonic() < cached[2]):
+        if cached is not None and cached[0] == key and (cached[1] is not None or monotonic() < cached[2]):
             return cached[1] or NO_LINK
         reader: DerivedReader = request.app.state.derived
         link: OntologyLink | None = None
@@ -441,7 +446,7 @@ class PageFrame:
         except Exception:
             # The name is decoration: failing to read it mustn't fail the page, such as the admin's upload page.
             logger.exception("Couldn't read the ontology's name and home page for the navigation bar")
-        self._cached = (generation, link, monotonic() + RETRY_AFTER_S)
+        self._cached = (key, link, monotonic() + RETRY_AFTER_S)
         return link or NO_LINK
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
