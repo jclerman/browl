@@ -11,13 +11,13 @@
   --accent: #3d6b8c;
   --danger: #a33a32;
   --mark-bg: #f7eab8; /* the page's entity, in an axiom: --fg 11.7:1, --accent 4.7:1 on it */
-  /* A load stage's state (the admin status): done, running, failed; not started uses --bar-bg and --muted. */
+  /* A load stage's state (`_load_progress.html`): done, running, failed; not started uses --bar-bg and --muted. */
   --done-bg: #e1f0e1;
   --done-fg: #25622f; /* 6.2:1 on --done-bg */
   --active-bg: #fbefb8;
   --active-fg: #6a4c00; /* 6.9:1 */
   --failed-bg: #f7e0dd;
-  --failed-fg: #a33a32; /* 5.2:1; the same as --danger */
+  --failed-fg: var(--danger); /* 5.2:1, dark 5.6:1 */
   --font-text: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --space: 1rem;
@@ -25,7 +25,7 @@
   --title-size: 1.75rem;
   --title-leading: 1.25;
   --header-height: calc(2 * var(--title-size) * var(--title-leading)); /* an entity page's: two title lines */
-  --stepper-width: 60rem; /* the admin status's stepper, and the details below it */
+  --stepper-width: 60rem; /* the load's stepper, and the details below it */
 }
 
 @media (prefers-color-scheme: dark) {
@@ -43,7 +43,6 @@
     --active-bg: #3b3214;
     --active-fg: #f0d27a; /* 8.6:1 */
     --failed-bg: #3c2321;
-    --failed-fg: #e08a80; /* 5.6:1 */
   }
 }
 
@@ -295,8 +294,9 @@ code {
   color: var(--danger);
 }
 
-/* The admin status (A-5): a summary line with the job's outcome as a pill; a stepper, a box per load stage, all the
-   same width, joined by a line, colored by state; below it, the details. On a narrow screen the stepper is a column. */
+/* The load's progress, on the admin status (A-5) and the "loading" page: a summary line, on the admin status with the
+   job's outcome as a pill; a stepper, a box per load stage, all the same width, joined by a line, colored by state;
+   below it, the details. On a narrow screen the stepper is a column. */
 
 .job-summary {
   display: flex;
@@ -310,21 +310,6 @@ code {
   border-radius: 999px;
   font-size: 0.85rem;
   font-weight: 600;
-}
-
-.pill-running {
-  background: var(--active-bg);
-  color: var(--active-fg);
-}
-
-.pill-ready {
-  background: var(--done-bg);
-  color: var(--done-fg);
-}
-
-.pill-failed {
-  background: var(--failed-bg);
-  color: var(--failed-fg);
 }
 
 .stepper {
@@ -362,6 +347,7 @@ code {
   content: "";
 }
 
+.pill-ready,
 .step-done {
   background: var(--done-bg);
   color: var(--done-fg);
@@ -372,14 +358,19 @@ code {
   background: var(--done-fg);
 }
 
-.step-current {
+.step-current,
+.step-failed {
   border-width: 2px;
+}
+
+.pill-running,
+.step-current {
   background: var(--active-bg);
   color: var(--active-fg);
 }
 
+.pill-failed,
 .step-failed {
-  border-width: 2px;
   background: var(--failed-bg);
   color: var(--failed-fg);
 }
