@@ -23,6 +23,7 @@ import browl.overview
 import browl.pages
 from browl import owl
 from browl.annotations import AnnotationValue, IRIValue, LiteralValue
+from browl.auth import SESSION_COOKIE
 from browl.derived import EntityType
 from browl.jobs import JobContext, Stage, StageFunction
 from browl.jobtypes import StageError
@@ -31,7 +32,7 @@ from browl.rdf import IRI, RDFS, XSD
 from browl.rdf import RDF as RDF_NS
 from browl.usage_tab import PageNotFoundError, UsageGroup, UsageTab
 from tests.conftest import DATA
-from tests.helpers import AUTH_ON, WAIT_S, LiveServer, derived_stage, iso, make_app, no_axioms
+from tests.helpers import AUTH_ON, WAIT_S, LiveServer, derived_stage, iso, make_app, no_axioms, session_cookie
 from tests.test_search_page import SYNONYM, search_stage
 from tests.test_trees import tree_stage
 
@@ -508,6 +509,27 @@ def test_navigation_bar_wide(page: Page, server: LiveServer) -> None:
     assert abs(credit["x"] + credit["width"] - sign_in["x"] - sign_in["width"]) < 2
     nav.get_by_role("link", name=TITLE).click()
     expect(page.locator("main h1")).to_have_text(TITLE)
+
+
+@pytest.mark.parametrize("size", [WIDE, NARROW], ids=["wide", "narrow"])
+def test_signed_in_bar(page: Page, server: LiveServer, size: dict[str, int]) -> None:
+    """Check that, signed in, "Sign out" sits over the credit at the bar's end, and signs out (review S11)."""
+    cookie = session_cookie(server.app.state.settings.data_dir, AUTH_ON["SEED_ADMINS"][0])
+    page.context.add_cookies([{"name": SESSION_COOKIE, "value": cookie, "url": server.url}])
+    page.set_viewport_size(size)
+    page.goto(f"{server.url}/example.org/thing")
+    nav = page.get_by_role("navigation", name="Site")
+    expect(nav.get_by_role("link", name="Sign in")).to_have_count(0)
+    expect(nav.locator(".admin-link")).to_have_count(1)  # hidden in the closed menu on a narrow screen
+    sign_out = nav.get_by_role("button", name="Sign out")
+    button, credit = box(sign_out), box(nav.get_by_role("link", name="hosted with browl"))
+    assert credit["y"] >= button["y"] + button["height"]  # under it, both at the bar's end
+    assert abs(credit["x"] + credit["width"] - button["x"] - button["width"]) < 2
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    sign_out.click()
+    expect(nav.get_by_role("link", name="Sign in")).to_be_visible()
+    assert urllib.parse.urlsplit(page.url).path == "/"
+    expect(nav.locator(".admin-link")).to_have_count(0)
 
 
 @NO_JS
