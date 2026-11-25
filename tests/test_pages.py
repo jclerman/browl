@@ -396,7 +396,7 @@ def test_status_background_build(client: TestClient, app: FastAPI) -> None:
     assert f'hx-get="{STATUS}?background" hx-trigger="every 2s" hx-swap="outerHTML"' in html
     assert '<h2 class="background-title">After publishing</h2>' in html
     assert '<strong id="background-1">Building the usage table</strong> · running for 0 s</p>' in html
-    assert '<p class="step-detail">Scanned 50 of 200 triples (25%)</p>' in html
+    assert '<p class="step-detail">Step 2 of 3: Scanned 50 of 200 triples (25%)</p>' in html
     assert 'max="100" value="25.0"' in html
     assert "HX-Redirect" in client.get(STATUS, headers=HTMX).headers  # a poll from when the job ran
     app.state.usage_tables = FakeTables()

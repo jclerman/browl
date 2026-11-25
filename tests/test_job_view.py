@@ -59,10 +59,10 @@ def test_running_activity() -> None:
 @pytest.mark.parametrize(
     ("progress", "detail", "percent"),
     [
-        (Progress(started=0.0), "Counting triples", None),
-        (Progress(started=0.0, triples=0), "Counting triples", None),
-        (Progress(started=0.0, triples=3, scanned=1), "Scanned 1 of 3 triples (33%)", 33.3),
-        (Progress(started=0.0, triples=3, scanned=3, scanned_at=5.0), "Writing the table", None),
+        (Progress(started=0.0), "Step 1 of 3: Counting triples", None),
+        (Progress(started=0.0, triples=0), "Step 1 of 3: Counting triples", None),
+        (Progress(started=0.0, triples=3, scanned=1), "Step 2 of 3: Scanned 1 of 3 triples (33%)", 33.3),
+        (Progress(started=0.0, triples=3, scanned=3, scanned_at=5.0), "Step 3 of 3: Writing the table", None),
     ],
 )
 def test_usage_table_activity(progress: Progress, detail: str, percent: float | None) -> None:

@@ -378,7 +378,9 @@ overwrites it, and a failed progress write is logged and skipped. What each stag
   without extra queries, and none is shown.
 
 The usage table's build after a load (P-27c) isn't part of the job: the status shows it, from the build's own progress
-in the server worker that runs it, once the job has ended.
+in the server worker that runs it, once the job has ended: its step of three (counting the triples, scanning them,
+writing the table), and while scanning, the triples scanned of the total ("Step 2 of 3: Scanned 3,100,000 of 5,200,000
+triples (60%)").
 
 **Reasoning** (P-7) chains three ROBOT commands in one run, so the ontology is parsed once:
 

@@ -82,6 +82,9 @@ NO_REASONER = StageLabels(
 )
 """The reasoning stage's labels when the job has no reasoner: it's skipped."""
 
+USAGE_TABLE_STEPS = 3
+"""The usage table build's steps (`usage_table_activity`)."""
+
 REASONER_NAMES = {Reasoner.ELK: "ELK", Reasoner.HERMIT: "HermiT"}
 """The reasoners' names, shown under the reasoning stage's label."""
 
@@ -182,19 +185,23 @@ def running_activity(job: JobState, steps: list[Step]) -> Activity | None:
 def usage_table_activity(progress: "Progress", now: float | None = None) -> Activity:
     """Return what a usage table build (P-27c) is doing, from its progress, at `now` (`time.monotonic`, if not given).
 
+    Its steps are counting the triples, scanning them and writing the table.
+
     >>> from browl.precache.usage_table import Progress
     >>> activity = usage_table_activity(Progress(started=0.0, triples=200, scanned=50), now=72.0)
     >>> activity.elapsed, activity.detail, activity.percent
-    ('1 min 12 s', 'Scanned 50 of 200 triples (25%)', 25.0)
+    ('1 min 12 s', 'Step 2 of 3: Scanned 50 of 200 triples (25%)', 25.0)
     """
     now = time.monotonic() if now is None else now
+    percent = None
     if progress.scanned_at is not None:
-        detail, percent = "Writing the table", None
+        step, doing = 3, "Writing the table"
     elif progress.triples:
         percent = _percent(progress.scanned / progress.triples)
-        detail = f"Scanned {count_of(progress.scanned, progress.triples, 'triples')}"
+        step, doing = 2, f"Scanned {count_of(progress.scanned, progress.triples, 'triples')}"
     else:
-        detail, percent = "Counting triples", None
+        step, doing = 1, "Counting triples"
+    detail = f"Step {step} of {USAGE_TABLE_STEPS}: {doing}"
     return Activity("Building the usage table", format_duration(now - progress.started), detail, percent)
 
 
