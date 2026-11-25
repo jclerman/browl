@@ -350,8 +350,8 @@ Uberon goes from upload file to ready in 7 s without reasoning, measured end to 
 **Progress** (P-31). The job state records when the current stage started, how long each stage that ended took, and
 what the running stage is doing: a short `detail`, and how far it has got (`fraction`, 0 to 1) when it can tell. Stage
 code reports progress through `JobContext.report` as often as is handy, e.g. per line of a tool's output; the runner
-shows the latest at once in its own worker, and records it at most every `PROGRESS_S` (2 s, the status's poll), a
-report that comes sooner being recorded once that time has passed, so the last isn't lost. Progress not yet recorded
+keeps the latest, and records and shows it at most every `PROGRESS_S` (2 s, the status's poll), a report that comes
+sooner being recorded once that time has passed, so the last isn't lost. Progress not yet recorded
 when its stage ends is dropped, a change of stage or the job's end waits for a progress write still running, so none
 overwrites it, and a failed progress write is logged and skipped. What each stage reports:
 
