@@ -7,9 +7,9 @@ client with Google, once, and gives browl its ID and secret.
 
 - **Every operator needs their own client, in a Google Cloud project they control.** It can be a new project, or one
   they or their organization already has. browl can't ship a client: Google sends users back only to the addresses
-  registered on it, and its secret must stay secret. Using someone else's client wouldn't work well either. Its owner
-  would control your sign-in, your users would see the owner's app name on the consent screen, and you would share the
-  owner's test-user list.
+  registered on it, and its secret must stay secret. Nor should you use someone else's client: its owner would control
+  your sign-in, your users would see the owner's app name on the consent screen, and you would share the owner's
+  test-user list.
 - **One project can serve all of an operator's deployments**, such as a local one and production. Give each deployment
   its own client in that project. One client can list several redirect URIs, but with separate clients, a leaked
   development secret can't be used for production, and either can be rotated or deleted without breaking the other.
@@ -38,7 +38,7 @@ In the [Google Cloud console](https://console.cloud.google.com/), no billing or 
    - Publishing status (under Audience, with the test users): in **Testing**, only the test users you list (up to 100)
      can sign in, to any of the project's clients. Publish the app (**In production**) to drop that list: any
      Google account can then sign in, and each deployment refuses the admin pages to those who aren't its admins.
-     browl asks only for the `openid` and `email` scopes, which need no review, and nothing under Data Access.
+     browl asks only for the `openid` and `email` scopes, which need no review; leave Data Access empty.
 3. **Create a client for each deployment** (Clients → Create client → **Web application**). Under **Authorized
    redirect URIs**, add the deployment's callback: `BASE_URL` without its trailing `/`, then
    `/{RESERVED_PREFIX}/admin/oidc-callback`. For example `https://ontology.example.org/_browl/admin/oidc-callback`,
@@ -59,8 +59,9 @@ SEED_ADMINS='["you@example.org"]'
 ```
 
 `SEED_ADMINS` lists the admins' Google account email addresses, as JSON. They can't be removed in the UI. Only
-addresses Google reports as verified sign in.
+accounts whose address Google reports as verified can sign in.
 
 Sign in from the "Sign in" link in the navigation bar. A signed-in user who isn't an admin is refused the admin pages.
-Sign-ins last 12 hours. They're signed by a key browl makes on first start and keeps in `DATA_DIR/session.key`.
-Deleting that file and restarting signs everyone out.
+Sign-ins last 12 hours. Signing out ends the account's sign-ins on every device. Session cookies are signed with a key
+browl makes on first start and keeps in `DATA_DIR/session.key`. Deleting that file and restarting signs everyone out.
+If the file is ever emptied or cut short, browl refuses to start, saying so; delete it, and browl makes a new key.
