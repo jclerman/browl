@@ -35,8 +35,8 @@ In the [Google Cloud console](https://console.cloud.google.com/), no billing or 
    - Leave out the logo: adding one needs Google to verify the app's brand.
    - Audience: **External**, unless every admin is in your Google Workspace organization, when **Internal** limits
      sign-in to it.
-   - Publishing status (under Audience, with the test users): in **Testing**, only the test users you list (up to
-     100) can sign in, to any of the project's clients. Publish the app (**In production**) to drop that list: any
+   - Publishing status (under Audience, with the test users): in **Testing**, only the test users you list (up to 100)
+     can sign in, to any of the project's clients. Publish the app (**In production**) to drop that list: any
      Google account can then sign in, and each deployment refuses the admin pages to those who aren't its admins.
      browl asks only for the `openid` and `email` scopes, which need no review, and nothing under Data Access.
 3. **Create a client for each deployment** (Clients → Create client → **Web application**). Under **Authorized
