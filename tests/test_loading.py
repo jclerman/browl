@@ -506,3 +506,24 @@ def test_loader_progress(name: str | None, total: int | None, added: list[tuple[
     ]
     expected = [(f"{prefix}{detail}" if name else detail[0].upper() + detail[1:], part) for detail, part in indexes]
     assert reports == added + expected
+
+
+def test_loader_progress_skips_other_lines() -> None:
+    """Check that lines the loader's progress doesn't know are skipped, and a total of 0 tuples gives no percentage."""
+    reports: list[tuple[str, float | None]] = []
+    progress = LoaderProgress(None, 10, lambda detail, fraction: reports.append((detail, fraction)))
+    for line in [
+        "01:43:19 WARN  riot            :: [line: 5, col: 1 ] Bad IRI: <x y>",
+        "\tat org.apache.jena.riot.system.ErrorHandlerFactory.warning(ErrorHandlerFactory.java:150)",
+        "01:43:19 INFO  loader          :: Add: 1,0",
+        "Add: 5 big.nt (Batch: 5 / Avg: 5)",
+        "01:43:19 INFO  loader          :: Finished: /data/jobs/3/big.nt: 0 tuples in 0.01s (Avg: 0)",
+        "01:43:19 INFO  loader          :: Start replay index SPO",
+        "01:43:19 INFO  loader          :: Add: 5 Index (Batch: 5 / Avg: 5)",
+    ]:
+        progress.add(line)
+    assert reports == [
+        ("Writing the primary index", None),
+        ("Building the other indexes from SPO", None),
+        ("Indexed 5 triples", None),
+    ]
