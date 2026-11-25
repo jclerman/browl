@@ -325,6 +325,23 @@ def test_store_migrates_version_3(data_dir: Path) -> None:
     assert schema_version(path) == len(browl.jobs.MIGRATIONS)
 
 
+def test_store_migrates_version_6(data_dir: Path) -> None:
+    """Check that a version 6 database migrates, its job read with no stage times or progress, timed start to end."""
+    path = data_dir / STATE_DB
+    with closing(sqlite3.connect(path)) as connection:
+        connection.executescript(
+            f"BEGIN;\n{';'.join(browl.jobs.MIGRATIONS[:6])}\nPRAGMA user_version = 6;\n"
+            "INSERT INTO job VALUES (1, 4, 'ready', '2026-01-02T03:04:05+00:00', '2026-01-02T03:05:17+00:00',"
+            " NULL, NULL, 4, 'elk', 'o.ttl', 'Turtle', 123, '[]', 9, '{}');\nCOMMIT;"
+        )
+    state = JobStore(path).read()
+    assert (state.generation, state.stage, state.triples) == (4, Stage.READY, 9)
+    assert (state.stage_started_at, state.stage_seconds) == (None, {})
+    assert (state.detail, state.fraction, state.detail_iri) == (None, None, None)
+    assert job_elapsed(state, datetime.now(UTC)) == "1 min 12 s"
+    assert schema_version(path) == len(browl.jobs.MIGRATIONS)
+
+
 async def test_stage_results_recorded(data_dir: Path) -> None:
     """Check that the imports, triple counts and prefixes the stages set are stored, also when a stage fails."""
     imports = [ImportResult("http://a/", None, None, 3), ImportResult("file:/x", "http://a/", "not allowed")]
