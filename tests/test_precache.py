@@ -193,6 +193,35 @@ async def test_stage_reports_progress(settings: Settings, monkeypatch: pytest.Mo
     ]
 
 
+async def test_stage_reports_latest_stream(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that while two bulk queries stream at once, the rows received are counted from the latest to open."""
+    monkeypatch.setattr(browl.precache.stage, "PROGRESS_S", 0)
+    query = "SELECT ?entity ?type WHERE { ?entity a ?type }"
+
+    @hook()
+    async def fill(context: PreCacheContext) -> None:
+        async with context.bulk_select(query) as outer:
+            async for _ in outer:
+                await asyncio.sleep(0)
+                async with context.bulk_select(query) as inner:
+                    await asyncio.sleep(0)
+                    async for _ in inner:
+                        await asyncio.sleep(0)
+
+    reports: list[str] = []
+    context = job(settings, 9)
+    context.on_progress = lambda detail, fraction, iri: reports.append(detail)
+    async with fuseki() as http:
+        await pre_caching_stage(context, http, hooks=[fill])
+    details = (report.removeprefix("Hook 1 of 1, fill · 0 s · ") for report in reports[1:-1])
+    phases = [phase for phase, _ in itertools.groupby(details)]
+    assert phases[:3] == [
+        "receiving query results: 1 rows",
+        "waiting for query results",  # the inner query's, not yet with a row
+        "receiving query results: 1 rows",
+    ]
+
+
 async def test_stage_hook_fails(settings: Settings) -> None:
     """Check that a failing hook fails the stage, leaving no new file and the previous one in place."""
     previous = make_previous(settings, 3)
@@ -622,9 +651,14 @@ async def test_rebuild_waits_for_fuseki(settings: Settings, monkeypatch: pytest.
     """Check that a rebuild after a restart waits for Fuseki to answer its ping, pausing longer each time."""
     monkeypatch.setattr(stage, "FUSEKI_RETRY_S", (0.02, 0.04))
     pings: list[float] = []
+    reports: list[tuple[str, int]] = []
+    context = job(settings, 3)
+    context.on_progress = lambda detail, fraction, iri: reports.append((detail, len(pings)))
     async with pinged_fuseki(pings, 0, 503, 0, 0) as http:
-        await rebuild(job(settings, 3), http, hooks=[])
+        await rebuild(context, http, hooks=[])
     assert len(pings) == 5
+    assert reports[0] == ("Waiting for Fuseki", 0)
+    assert reports[1] == ("Reading the ontology's header", 5)
     pauses = [later - earlier for earlier, later in itertools.pairwise(pings)]
     assert pauses[0] >= 0.02 and pauses[1] >= 0.04 and pauses[3] >= 0.04
     assert is_current(settings, 3, [])

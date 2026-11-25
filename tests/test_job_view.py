@@ -22,6 +22,13 @@ def test_reasoner_named() -> None:
     assert (step.state, step.label, step.note) == (StepState.CURRENT, "Inferring Axioms", "HermiT")
 
 
+def test_no_reasoner_failed() -> None:
+    """Check that a job with no reasoner that failed in reasoning shows that stage as failed, not skipped."""
+    job = JobState(1, Stage.REASONING, NOW, NOW, Stage.REASONING, "boom", Reasoner.NONE)
+    step = job_steps(job)[2]
+    assert (step.state, step.label, step.note) == (StepState.FAILED, "Inference Failed", None)
+
+
 def test_rebuild_running() -> None:
     """Check that a rebuild, running in pre-caching under its ready generation, shows that stage as current."""
     steps = job_steps(JobState(1, Stage.PRE_CACHING, NOW, ready_generation=1, reasoner=Reasoner.ELK))

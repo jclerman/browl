@@ -315,6 +315,27 @@ def test_status_polls_while_running(page: Page, status_server: LiveServer) -> No
     assert violations(page) == []  # htmx works under the Content-Security-Policy
 
 
+def test_background_polls_stop(page: Page, status_server: LiveServer) -> None:
+    """Check that the status polls while a background build runs, without loading anew, and stops once it ends."""
+    jobs = status_server.app.state.jobs
+    status_server.call(jobs.start())
+    status_server.call(jobs.wait())
+    status_server.app.state.usage_tables = FakeTables(Progress(triples=200, scanned=50))
+    polls: list[str] = []
+    page.on("request", lambda request: polls.append(request.url))
+    page.goto(f"{status_server.url}{STATUS}")
+    expect(page.locator(".background-title")).to_have_text("After publishing")
+    mark(page)
+    page.wait_for_timeout(POLL_S * 3 * 1000)
+    assert f"{status_server.url}{STATUS}?background" in polls
+    status_server.app.state.usage_tables = FakeTables()  # the build has ended
+    expect(page.locator(".background-title")).to_have_count(0)
+    polls.clear()
+    page.wait_for_timeout(POLL_S * 3 * 1000)
+    assert polls == []
+    assert marked(page)  # swapped in, not loaded anew
+
+
 @pytest.mark.parametrize("path", [STATUS, UPLOAD])
 def test_header_shows_new_ontology(page: Page, status_server: LiveServer, path: str) -> None:
     """Check that, once a load ends, the status and upload pages' header names and links the new ontology (#101)."""
@@ -518,6 +539,22 @@ def test_upload_shows_progress(page: Page, status_server: LiveServer) -> None:
     assert len(posts) == 1
     assert status_server.call(status_server.app.state.jobs.current()).generation == 1
     assert violations(page) == []  # the script works under the Content-Security-Policy
+
+
+@pytest.mark.parametrize(("size", "shown"), [(123_456_789, "123.5 MB"), (1_560_000_000, "1.6 GB")])
+def test_upload_size_units(page: Page, status_server: LiveServer, size: int, shown: str) -> None:
+    """Check that the in-page upload shows a large file's size in MB or GB, as the status does.
+
+    The file is small; the page is told it's `size` bytes, which is all the script reads of its size.
+    """
+    posts: list[Route] = []
+    page.add_init_script(f"Object.defineProperty(File.prototype, 'size', {{get: () => {size}}})")
+    page.goto(f"{status_server.url}{UPLOAD}")
+    page.route(f"{status_server.url}{UPLOAD}", lambda route: posts.append(route))
+    page.set_input_files("#ontology", DATA / "routing.ttl")
+    page.get_by_role("button", name="Upload").click()
+    expect(page.locator(".upload-progress p")).to_contain_text(shown)
+    posts[0].abort()
 
 
 @pytest.mark.parametrize(
