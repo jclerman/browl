@@ -348,7 +348,8 @@ Uberon goes from upload file to ready in 7 s without reasoning, measured end to 
 5 minutes ([S-4 findings](../research/S-4/README.md)).
 
 **Progress** (P-31). The job state records when the current stage started, how long each stage that ended took, and
-what the running stage is doing: a short `detail`, and how far it has got (`fraction`, 0 to 1) when it can tell. Stage
+what the running stage is doing: a short `detail`, and how far it has got (`fraction`, 0 to 1) when it can tell. Ready
+has no work to time, so its time isn't recorded, and Publish shows none. Stage
 code reports progress through `JobContext.report` as often as is handy, e.g. per line of a tool's output; the runner
 keeps the latest, and records and shows it at most every `PROGRESS_S` (2 s, the status's poll), a report that comes
 sooner being recorded once that time has passed, so the last isn't lost. Progress not yet recorded

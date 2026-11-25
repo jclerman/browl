@@ -88,10 +88,10 @@ def test_rebuild_times() -> None:
     done = NOW - timedelta(minutes=30)
     seconds = {Stage.UPLOADING: 8.0, Stage.IMPORTS: 27.0, Stage.LOADING: 78.0, Stage.PRE_CACHING: 450.0}
     ready = JobState(1, Stage.READY, done - timedelta(seconds=563), done, ready_generation=1, stage_seconds=seconds)
-    ready = replace(ready, stage_started_at=done, stage_seconds={**seconds, Stage.READY: 0.0})
+    ready = replace(ready, stage_started_at=done)
     rebuilding = replace(ready.entering(Stage.PRE_CACHING, NOW), finished_at=None)
-    assert rebuilding.stage_seconds[Stage.READY] == 0.0  # not the 30 min it sat ready
+    assert Stage.READY not in rebuilding.stage_seconds  # not the 30 min it sat ready
     later = NOW + timedelta(seconds=60)
-    assert job_elapsed(rebuilding, later) == "2 min 53 s"  # 8 + 27 + 78 + 0, then 60 s of the rebuild
+    assert job_elapsed(rebuilding, later) == "2 min 53 s"  # 8 + 27 + 78, then 60 s of the rebuild
     rebuilt = replace(rebuilding.entering(Stage.READY, later), finished_at=later)
     assert job_elapsed(rebuilt, later) == "2 min 53 s"

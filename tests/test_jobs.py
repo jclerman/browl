@@ -1225,7 +1225,7 @@ async def test_rebuild_times(data_dir: Path, state: JobState) -> None:
     await runner.wait()
     rebuilt = runner.state
     assert (rebuilt.stage, rebuilt.failed_stage) == (Stage.READY, None)
-    assert rebuilt.stage_seconds.get(Stage.READY, 0.0) < 5  # not the time it sat ready
+    assert Stage.READY not in rebuilt.stage_seconds  # neither the time it sat ready, nor any
     assert rebuilt.stage_seconds[Stage.PRE_CACHING] < 5  # the rebuild's, not the load's
     assert job_elapsed(rebuilt, datetime.now(UTC)) == format_duration(sum(rebuilt.stage_seconds.values()))
 
@@ -1401,3 +1401,8 @@ def test_state_entering_and_failed() -> None:
     failed = moved.failed("boom")
     assert failed.stage_seconds.keys() == {Stage.IMPORTS, Stage.REASONING}
     assert JobState(1, Stage.IMPORTS, STARTED).entering(Stage.LOADING, later).stage_seconds == {}  # start unknown
+    ready = moved.entering(Stage.READY, later)
+    assert ready.entering(Stage.PRE_CACHING, later + timedelta(hours=1)).stage_seconds.keys() == {
+        Stage.IMPORTS,
+        Stage.REASONING,
+    }  # ready's time isn't recorded, so Publish shows none
