@@ -60,6 +60,9 @@ WRITING = "writing tables"
 INDEXING = "indexing"
 """A hook's phase, in its progress, while it creates indexes (`DerivedWriter.create_indexes`)."""
 
+FINISHING = "Finishing the database"
+"""The stage's progress once the hooks have run, while the build ends (`build`)."""
+
 
 async def pre_caching_stage(context: JobContext, http: httpx2.AsyncClient, hooks: Sequence[Hook] = HOOKS) -> None:
     """Build the new generation's derived database from the store just loaded, and swap it in (`pre_cache`).
@@ -104,6 +107,7 @@ async def pre_cache(context: JobContext, http: httpx2.AsyncClient, hooks: Sequen
                         await hook(hook_context)
                 except SparqlError as error:
                     raise StageError(f"pre-caching query failed ({hook.name}): {error}") from error
+            context.report(FINISHING)  # the build's end: its last indexes, ANALYZE, and the swap
     except SparqlError as error:
         raise StageError(f"pre-caching query failed: {error}") from error
 

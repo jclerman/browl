@@ -378,7 +378,8 @@ overwrites it, and a failed progress write is logged and skipped. What each stag
   ("5,165,079 database changes", SQLite's `total_changes`), when they've moved or there's no phase: every row inserted,
   updated or deleted, staging rows too, so they can exceed the rows received. The stage counts the rows and phases with
   its own Fuseki client and writer, which wrap the usual ones, so the hooks' code and build keys needn't change. Hooks
-  run open-ended bulk queries, so no total is known without extra queries, and none is shown.
+  run open-ended bulk queries, so no total is known without extra queries, and none is shown. Once the hooks have run,
+  "Finishing the database" while the build ends: its last indexes, `ANALYZE`, and the swap.
 
 The usage table's build after a load (P-27c) isn't part of the job: the status shows it, from the build's own progress
 in the server worker that runs it, once the job has ended: its step of three (counting the triples, scanning them,

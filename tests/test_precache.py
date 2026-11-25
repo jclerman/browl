@@ -181,7 +181,8 @@ async def test_stage_reports_progress(settings: Settings, monkeypatch: pytest.Mo
     async with fuseki() as http:
         await pre_caching_stage(context, http, hooks=[fill])
     assert reports[0] == "Reading the ontology's header"
-    phases = list(dict.fromkeys(report.removeprefix("Hook 1 of 1, fill · 0 s · ") for report in reports[1:]))
+    assert reports[-1] == "Finishing the database"
+    phases = list(dict.fromkeys(report.removeprefix("Hook 1 of 1, fill · 0 s · ") for report in reports[1:-1]))
     assert phases == [
         "waiting for query results",
         "receiving query results: 1 rows",
