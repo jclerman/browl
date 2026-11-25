@@ -66,7 +66,7 @@ def schema_version(path: Path) -> int:
 def test_store_migrates_new_database(data_dir: Path) -> None:
     """Check that a new database is created at the latest schema version, with no job."""
     store = JobStore(data_dir / "sub" / STATE_DB)
-    assert schema_version(store.path) == len(browl.jobs.MIGRATIONS) == 4
+    assert schema_version(store.path) == len(browl.jobs.MIGRATIONS) == 5
     assert store.read() == JobState()
 
 
@@ -75,25 +75,25 @@ def test_store_migrates_forward(data_dir: Path, monkeypatch: pytest.MonkeyPatch)
     path = data_dir / STATE_DB
     state = JobState(generation=1, stage=Stage.READY, started_at=STARTED, finished_at=STARTED, ready_generation=1)
     JobStore(path).write(state)
-    monkeypatch.setattr(browl.jobs, "MIGRATIONS", [*browl.jobs.MIGRATIONS, "CREATE TABLE admin (email TEXT);"])
+    monkeypatch.setattr(browl.jobs, "MIGRATIONS", [*browl.jobs.MIGRATIONS, "CREATE TABLE later (x TEXT);"])
     store = JobStore(path)
     assert schema_version(path) == len(browl.jobs.MIGRATIONS)
     assert store.read() == state
     with sqlite3.connect(path) as connection:
-        assert connection.execute("SELECT count(*) FROM admin").fetchone() == (0,)
+        assert connection.execute("SELECT count(*) FROM later").fetchone() == (0,)
 
 
 def test_store_rolls_back_failed_migration(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that a failing migration leaves the database at its previous version, with none of its changes."""
     path = data_dir / STATE_DB
     JobStore(path)
-    bad = "CREATE TABLE admin (email TEXT); INSERT INTO missing VALUES (1);"
+    bad = "CREATE TABLE later (x TEXT); INSERT INTO missing VALUES (1);"
     monkeypatch.setattr(browl.jobs, "MIGRATIONS", [*browl.jobs.MIGRATIONS, bad])
     with pytest.raises(sqlite3.OperationalError, match="missing"):
         JobStore(path)
     assert schema_version(path) == len(browl.jobs.MIGRATIONS) - 1
     with sqlite3.connect(path) as connection:
-        assert connection.execute("SELECT name FROM sqlite_master WHERE name = 'admin'").fetchone() is None
+        assert connection.execute("SELECT name FROM sqlite_master WHERE name = 'later'").fetchone() is None
 
 
 def test_store_refuses_newer_schema(data_dir: Path) -> None:

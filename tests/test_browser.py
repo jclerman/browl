@@ -31,7 +31,7 @@ from browl.rdf import IRI, RDFS, XSD
 from browl.rdf import RDF as RDF_NS
 from browl.usage_tab import PageNotFoundError, UsageGroup, UsageTab
 from tests.conftest import DATA
-from tests.helpers import WAIT_S, LiveServer, derived_stage, iso, make_app, no_axioms
+from tests.helpers import AUTH_ON, WAIT_S, LiveServer, derived_stage, iso, make_app, no_axioms
 from tests.test_search_page import SYNONYM, search_stage
 from tests.test_trees import tree_stage
 
@@ -90,9 +90,10 @@ def start_endless_job(server: LiveServer) -> None:
 def server(live_server: Callable[[FastAPI], LiveServer]) -> LiveServer:
     """Return a live server for an app whose entity URLs are all proxied, at /example.org/…, with the entities loaded.
 
-    That's the manual setup `tests/data/routing.ttl` describes.
+    That's the manual setup `tests/data/routing.ttl` describes. Authentication is on, so the bar shows "Sign in", as to
+    a visitor.
     """
-    server = live_server(make_app(BASE_URL="http://localhost:8000/"))
+    server = live_server(make_app(BASE_URL="http://localhost:8000/", **AUTH_ON))
     run_job(server)
     return server
 

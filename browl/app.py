@@ -11,9 +11,10 @@ import httpx2
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.middleware.sessions import SessionMiddleware
 
 import browl
-from browl import admin, derived, imports, loading, lookup, owlapi, precache, robot, search, search_page, trees
+from browl import admin, auth, derived, imports, loading, lookup, owlapi, precache, robot, search, search_page, trees
 from browl.derived import DerivedReader, NotCurrentError
 from browl.fuseki import FusekiClient, dataset_clause, ping
 from browl.jobs import JobContext, JobRunner, JobState, Stage, StageFunction
@@ -70,6 +71,7 @@ async def _start_usage_table(tables: UsageTables, state: JobState, settings: Set
 def create_app(
     settings: Settings | None = None,
     fuseki_transport: httpx2.AsyncBaseTransport | None = None,
+    oidc_transport: httpx2.AsyncBaseTransport | None = None,
     start_jvm: bool = True,
     stages: Mapping[Stage, StageFunction] | None = None,
     usage_tables: bool | None = None,
@@ -83,11 +85,13 @@ def create_app(
     builds it, it's rebuilt in the background (`JobRunner.rebuild`, §2.4). Its usage table (`app.state.usage_tables`)
     is built in the background once it's current, if it isn't already. On shutdown a running usage table build, load
     job or rebuild is cancelled, and the readers' connections closed. Pages are gated on the job state (`SiteGate`,
-    §2.13).
+    §2.13). Admin routes need an admin signed in (§2.11), unless `AUTH_DISABLED`.
 
     Args:
         settings: The settings; loaded from the environment if not given.
         fuseki_transport: The transport for the Fuseki client, which tests replace; httpx2's default if not given.
+        oidc_transport: The transport for sign-in's calls to Google, which tests replace; httpx2's default if not
+            given.
         start_jvm: Whether to start the JVM; tests that don't need it turn it off.
         stages: The load job's background stages; tests replace them. If not given: imports, reasoning, loading
             and pre-caching, and the derived database is rebuilt at startup if needed; if given, it never is. Either
@@ -164,7 +168,9 @@ def create_app(
         redoc_url=None,
     )
     app.state.settings = settings
+    app.state.oidc = auth.oidc_client(settings, oidc_transport)
     app.include_router(router, prefix=reserved)
+    app.include_router(admin.sign_in_router, prefix=reserved)
     app.include_router(admin.router, prefix=reserved)
     app.include_router(lookup.reserved_router, prefix=reserved)
     app.include_router(trees.router, prefix=reserved)
@@ -175,5 +181,17 @@ def create_app(
     app.add_middleware(SiteGate, exempt=[*no_pages, f"{reserved}/admin"])
     # Outside the gate, so its "loading" and "not available" pages have the frame too.
     app.add_middleware(PageFrame, passthrough=no_pages, csp_exempt=[f"{reserved}/admin/docs"])
+    app.add_middleware(auth.AdminMark, passthrough=no_pages)
+    # Outermost, so every layer within can read the session. Lax, so the session comes back with Google's redirect.
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=auth.session_key(settings.data_dir),
+        session_cookie=auth.SESSION_COOKIE,
+        max_age=auth.SESSION_MAX_AGE_S,
+        same_site="lax",
+        https_only=settings.base_url.scheme == "https",
+    )
     app.add_exception_handler(NotCurrentError, derived_not_current)
+    app.add_exception_handler(auth.SignInRequiredError, auth.sign_in_required)
+    app.add_exception_handler(auth.NotAdminError, auth.not_admin)
     return app

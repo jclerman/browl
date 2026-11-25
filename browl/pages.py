@@ -218,7 +218,8 @@ def frame_context(request: Request) -> dict[str, object]:
 
     Page titles end with the ontology's title, isolated, else `SITE_NAME` (`site_name`).
 
-    The ontology's link comes from `PageFrame`. P-22 marks requests from admins by setting `request.state.is_admin`.
+    The ontology's link comes from `PageFrame`; who's signed in, and whether they're an admin, from `browl.auth`
+    (`request.state.user` and `request.state.is_admin`).
     A tree page sets `request.state.current_tree` to its slug, so the bar marks its link.
     """
     reserved = f"/{request.app.state.settings.reserved_prefix}"
@@ -235,6 +236,9 @@ def frame_context(request: Request) -> dict[str, object]:
             "max_query_chars": MAX_QUERY_CHARS,
             "admin": href(request, f"{reserved}/admin/upload"),
             "is_admin": getattr(request.state, "is_admin", False) is True,
+            "user": getattr(request.state, "user", None),
+            "sign_in": href(request, f"{reserved}/admin/sign-in"),
+            "sign_out": href(request, f"{reserved}/admin/sign-out"),
             "title_end": isolate(link.title) if link.title is not None else SITE_NAME,
             "site_name": SITE_NAME,
             "project": PROJECT_URL,
