@@ -16,6 +16,7 @@ import httpx2
 import pytest
 
 import browl.jobs
+from browl.job_view import format_duration, job_elapsed
 from browl.jobs import (
     CANCELLED,
     INTERRUPTED_BY_RESTART,
@@ -1167,6 +1168,49 @@ async def test_restart_failed_but_current(data_dir: Path, state: JobState) -> No
         )
         assert (stored.generation, stored.started_at) == (state.generation, state.started_at)
     assert (await run_job(runner)).ready_generation == state.generation + 1  # the lock was released
+
+
+STAGE_SECONDS = {Stage.UPLOADING: 8.0, Stage.IMPORTS: 27.0, Stage.LOADING: 78.0, Stage.PRE_CACHING: 450.0}
+"""How long each stage of a job took, for the tests of stage times."""
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        pytest.param(
+            replace(
+                READY,
+                started_at=datetime.now(UTC) - timedelta(minutes=40),
+                finished_at=datetime.now(UTC) - timedelta(minutes=30),
+                stage_started_at=datetime.now(UTC) - timedelta(minutes=30),
+                stage_seconds=STAGE_SECONDS,
+            ),
+            id="ready 30 min ago",
+        ),
+        pytest.param(
+            replace(FAILED_LOAD, stage_started_at=STARTED, stage_seconds=STAGE_SECONDS), id="failed after swap-in"
+        ),
+    ],
+)
+async def test_rebuild_times(data_dir: Path, state: JobState) -> None:
+    """Check that a rebuild's stage times, and so the job's, leave out the time the job sat ready.
+
+    Also for a load that failed in pre-caching after its output was swapped in, which a start records ready
+    (`_restart_state`), and a later start's rebuild re-runs.
+    """
+    JobStore(data_dir / STATE_DB).write(state)
+    runner = await open_runner(data_dir)
+    if state.failed_stage is not None:
+        assert not await runner.rebuild(lambda context: asyncio.sleep(0), lambda generation: True)
+        assert runner.state.stage == Stage.READY
+        runner = await open_runner(data_dir)
+    assert await runner.rebuild(lambda context: asyncio.sleep(0), not_current)
+    await runner.wait()
+    rebuilt = runner.state
+    assert (rebuilt.stage, rebuilt.failed_stage) == (Stage.READY, None)
+    assert rebuilt.stage_seconds.get(Stage.READY, 0.0) < 5  # not the time it sat ready
+    assert rebuilt.stage_seconds[Stage.PRE_CACHING] < 5  # the rebuild's, not the load's
+    assert job_elapsed(rebuilt, datetime.now(UTC)) == format_duration(sum(rebuilt.stage_seconds.values()))
 
 
 @pytest.mark.parametrize(

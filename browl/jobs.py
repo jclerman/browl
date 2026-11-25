@@ -1043,8 +1043,13 @@ def _restart_state(state: JobState, current: Callable[[int], bool]) -> JobState 
         logger.warning(
             "Load job %d failed in pre-caching (%s), but its output is current: ready", generation, state.reason
         )
+        now = _now()  # entering ready from now, so a later rebuild doesn't count the restart's downtime in it
         return replace(
-            state, stage=Stage.READY, finished_at=_now(), failed_stage=None, reason=None, ready_generation=generation
+            state.entering(Stage.READY, now),
+            finished_at=now,
+            failed_stage=None,
+            reason=None,
+            ready_generation=generation,
         )
     if generation != state.ready_generation:
         return None  # a load's own pre-caching failed; the next upload builds a new generation
