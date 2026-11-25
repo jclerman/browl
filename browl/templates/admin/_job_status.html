@@ -1,20 +1,6 @@
 {# The load job's status (A-5, A-6). While a job runs, or work after it in the background, it polls its route and
    replaces itself. #}
-{% macro activity_panel(activity, id) %}
-{# What some work is doing: its label and time so far, what it says it's doing, and a bar if it can tell how far it
-   has got. The home of a stage's sub-steps, once there are any. #}
-<div class="step-panel" role="group" aria-labelledby="{{ id }}">
-  <p class="step-panel-head"><strong id="{{ id }}">{{ activity.label }}</strong>
-    {%- if activity.elapsed is not none %} · running for {{ activity.elapsed }}{% endif %}</p>
-  {# Each " · " part is kept whole, so a long line wraps between parts. #}
-  {% if activity.detail is not none %}<p class="step-detail">
-    {%- for part in activity.detail.split(" · ") %}{% if not loop.first %} · {% endif %}<span>{{ part }}</span>{% endfor -%}
-  </p>{% endif %}
-  {% if activity.percent is not none %}
-  <progress class="step-progress" max="100" value="{{ activity.percent }}" aria-labelledby="{{ id }}">{{ activity.percent | round | int }}%</progress>
-  {% endif %}
-</div>
-{% endmacro %}
+{% from "_load_progress.html" import activity_panel, stepper %}
 <section id="job-status" class="job-status" aria-live="polite"
   {%- if job.running %} hx-get="{{ url_for('job_status').path }}" hx-trigger="every {{ poll_s }}s" hx-swap="outerHTML"
   {%- elif background %} hx-get="{{ url_for('job_status').path }}?{{ background_poll }}" hx-trigger="every {{ poll_s }}s" hx-swap="outerHTML"{% endif %}>
@@ -28,20 +14,7 @@
       <time datetime="{{ job.started_at.isoformat() }}">{{ job.started_at.strftime("%Y-%m-%d %H:%M:%S UTC") }}</time>
       · {% if job.running %}running for{% elif outcome == "failed" %}failed after{% else %}took{% endif %} {{ elapsed }}</span>
   </p>
-  {# Each stage's box says its state in words as well as colors and an icon; its tooltip says what the stage does,
-     shown on hover or keyboard focus. #}
-  <ol class="stepper" aria-label="Load stages">
-    {% for step in steps %}
-    <li class="step step-{{ step.state }}" tabindex="0" aria-describedby="step-tip-{{ step.stage }}"
-      {%- if step.state in ("current", "failed") %} aria-current="step"{% endif %}>
-      <span class="step-icon" aria-hidden="true"></span>
-      <span class="step-label">{{ step.label }}</span>
-      {% if step.note is not none %}<span class="step-note">{{ step.note }}</span>{% endif %}
-      {% if step.time is not none %}<span class="step-time"><span class="visually-hidden">{{ "running for" if step.state == "current" else "took" }} </span>{{ step.time }}</span>{% endif %}
-      <span class="step-tip" id="step-tip-{{ step.stage }}" role="tooltip">{{ step.tooltip }}</span>
-    </li>
-    {% endfor %}
-  </ol>
+  {{ stepper(steps) }}
   <div class="step-details">
     {% if activity is not none %}{{ activity_panel(activity, "step-panel-current") }}{% endif %}
     {% for step in steps if step.state == "failed" %}

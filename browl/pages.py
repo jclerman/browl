@@ -12,6 +12,7 @@ import sqlite3
 import urllib.parse
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
 from typing import NamedTuple
@@ -25,6 +26,7 @@ from starlette.templating import Jinja2Templates
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from browl.derived import DerivedReader, EntityType, NotCurrentError, entities_with_iri, read_meta, ready_generation
+from browl.job_view import job_elapsed, job_steps, running_activity
 from browl.jobs import JobState, Site
 from browl.search import MAX_QUERY_CHARS
 
@@ -288,12 +290,27 @@ templates.env.globals.update(
 )
 
 
-def unavailable_page(request: Request, site: Site) -> Response:
-    """Return the "loading" or "not available" page, as the gate serves it."""
+def unavailable_page(request: Request, site: Site, job: JobState) -> Response:
+    """Return the "loading" or "not available" page, as the gate serves it.
+
+    While a job runs, the "loading" page shows its progress, as the admin status does, but not the file, imports or
+    reasons.
+    """
     headers = {"Cache-Control": "no-store"}
     if site == Site.LOADING:
         headers["Retry-After"] = str(RETRY_AFTER_S)
-        template, context = "loading.html", {"refresh_s": RETRY_AFTER_S}
+        now = datetime.now(UTC)
+        steps = [] if job.stage is None else job_steps(job, now)
+        template, context = (
+            "loading.html",
+            {
+                "refresh_s": RETRY_AFTER_S,
+                "job": job,
+                "steps": steps,
+                "elapsed": job_elapsed(job, now),
+                "activity": running_activity(job, steps),
+            },
+        )
     else:
         template, context = "not_available.html", {}
     return templates.TemplateResponse(request, template, context, status_code=503, headers=headers)
@@ -328,7 +345,7 @@ async def derived_not_current(request: Request, error: Exception) -> Response:
     restart (DESIGN.md §2.4), until it next reads the state.
     """
     logger.warning("Serving the loading page for %s: %s", request.url.path, error)
-    return unavailable_page(request, Site.LOADING)
+    return unavailable_page(request, Site.LOADING, await request.app.state.jobs.current())
 
 
 def link_root(scope: Scope) -> str:
@@ -388,11 +405,11 @@ class SiteGate:
             await self.app(scope, receive, send)
             return
         request = Request(scope)
-        site = (await request.app.state.jobs.current()).site
-        if site == Site.AVAILABLE or self.is_exempt(app_path(scope)):
+        job = await request.app.state.jobs.current()
+        if job.site == Site.AVAILABLE or self.is_exempt(app_path(scope)):
             await self.app(scope, receive, send)
             return
-        await unavailable_page(request, site)(scope, receive, send)
+        await unavailable_page(request, job.site, job)(scope, receive, send)
 
 
 class PageFrame:

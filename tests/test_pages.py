@@ -3,6 +3,7 @@
 import asyncio
 import re
 import threading
+import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -151,6 +152,47 @@ def test_loading(client: TestClient, app: FastAPI, path: str) -> None:
     assert response.headers["Cache-Control"] == "no-store"
     assert "<h1>Loading the ontology</h1>" in response.text
     assert f'<meta http-equiv="refresh" content="{RETRY_AFTER_S}">' in response.text
+
+
+def test_loading_shows_progress(client: TestClient, app: FastAPI) -> None:
+    """Check that the "loading" page shows the running job's stages and activity, but not the admin's details."""
+    loading = threading.Event()
+
+    async def reporting(context: JobContext) -> None:
+        context.report("Added 5 of 10 triples", 0.5)
+        loading.set()
+        await asyncio.Event().wait()
+
+    app.state.jobs.register(Stage.LOADING, reporting)
+    client.portal.call(app.state.jobs.start)
+    assert loading.wait(timeout=5)
+    for _ in range(50):
+        if app.state.jobs.state.detail is not None:
+            break
+        time.sleep(0.1)
+    html = " ".join(client.get("/example.org/onto").text.split())
+    assert [label for _, _, label in steps(html)] == [
+        "Uploaded",
+        "Ontology Read",
+        "No Reasoner",
+        "Storing Triples",
+        "Pre-Cache",
+        "Publish",
+    ]
+    assert "Running for " in html
+    assert '<p class="step-detail"><span>Added 5 of 10 triples</span></p>' in html
+    assert '<section class="job-status" aria-label="Load progress">' in html  # no hx-get: the page refreshes itself
+    assert "upload-file" not in html and "Load 1" not in html
+
+
+def test_loading_without_job_progress(client: TestClient, app: FastAPI) -> None:
+    """Check that a "loading" page served while no job runs (another worker's rebuild) shows no progress."""
+    run_job(client, app)
+    for file in (app.state.settings.data_dir / DERIVED_DIR).iterdir():
+        file.unlink()
+    html = client.get("/example.org/onto").text
+    assert "<h1>Loading the ontology</h1>" in html
+    assert 'class="stepper"' not in html
 
 
 @pytest.mark.parametrize(
