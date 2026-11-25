@@ -1,5 +1,6 @@
 """Tests for the marks `tests/conftest.py` gives the tests that use the `java`, `fuseki_url` or `browser` fixture."""
 
+import faulthandler
 import re
 
 import jpype
@@ -82,7 +83,13 @@ TEST_COUNT = 8
 
 # The inner runs' options: the marks registered, for `--strict-markers`, and without pytest-playwright, whose own
 # fixtures would clash with the outer run's.
-INI = "[pytest]\naddopts = --strict-markers -p no:randomly -p no:playwright\nmarkers =\n" + "".join(
+#
+# They also run without pytest's faulthandler plugin, because they share this process's signal handlers with its JVM.
+# The JVM handles SIGSEGV and SIGBUS itself: in compiled Java code, a read through a null reference faults, and the
+# JVM's handler turns that into a NullPointerException. An inner run's faulthandler plugin, on finishing, would put
+# back the handlers from before the JVM started and enable faulthandler over them, so the JVM's handler would be gone.
+# Its next routine fault would then end the process, as faulthandler reports a crash (issue #152).
+INI = "[pytest]\naddopts = --strict-markers -p no:randomly -p no:playwright -p no:faulthandler\nmarkers =\n" + "".join(
     f"    {mark}\n" for mark in FIXTURE_MARKS.values()
 )
 
@@ -220,3 +227,12 @@ def test_java_missing(real: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, ci
     result = real.runpytest("-rs")
     result.assert_outcomes(**({"errors": 1} if ci else {"skipped": 1}))
     result.stdout.fnmatch_lines([line])
+
+
+def test_faulthandler_untouched(real: pytest.Pytester, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that an inner run leaves this process's faulthandler, and so the JVM's signal handlers, alone (`INI`)."""
+    calls = []
+    monkeypatch.setattr(faulthandler, "enable", lambda *args, **kwargs: calls.append("enable"))
+    monkeypatch.setattr(faulthandler, "disable", lambda: calls.append("disable"))
+    real.runpytest().assert_outcomes(passed=1)
+    assert calls == []
