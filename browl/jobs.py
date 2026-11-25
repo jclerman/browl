@@ -1061,7 +1061,11 @@ def _restart_state(state: JobState, current: Callable[[int], bool]) -> JobState 
 
 
 def _recover(store: JobStore, lock: JobLock) -> JobState:
-    """Return the stored job state, failing a job recorded as running unless another process holds the job lock."""
+    """Return the stored job state, failing a job recorded as running unless another process holds the job lock.
+
+    The stage it was interrupted in gets no time: it ended at some unknown point before the restart, which would
+    count the app's downtime.
+    """
     if not lock.acquire():
         return store.read()  # another server worker is running the job
     try:
@@ -1069,6 +1073,8 @@ def _recover(store: JobStore, lock: JobLock) -> JobState:
         if state.running:
             logger.warning("Load job %d was interrupted by a restart in stage %s", state.generation, state.stage)
             state = state.failed(INTERRUPTED_BY_RESTART)
+            seconds = {stage: time for stage, time in state.stage_seconds.items() if stage != state.stage}
+            state = replace(state, stage_seconds=seconds)
             store.write(state)
         return state
     finally:

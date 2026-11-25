@@ -552,14 +552,31 @@ async def test_failure_record_interrupted(data_dir: Path, monkeypatch: pytest.Mo
     assert (await open_runner(data_dir)).state == state
 
 
-async def test_restart_fails_running_job(data_dir: Path) -> None:
-    """Check that a job left running by a previous process is recorded as failed in its stage."""
+@pytest.mark.parametrize(
+    ("stage", "seconds", "elapsed"),
+    [(Stage.LOADING, {Stage.UPLOADING: 3.0, Stage.IMPORTS: 4.0}, "7 s"), (Stage.UPLOADING, {}, "0 s")],
+)
+async def test_restart_fails_running_job(
+    data_dir: Path, stage: Stage, seconds: dict[Stage, float], elapsed: str
+) -> None:
+    """Check that a job left running by a previous process is recorded as failed in its stage.
+
+    That stage gets no time, and the job's is its other stages', as when it stopped isn't known: not the downtime.
+    """
     JobStore(data_dir / STATE_DB).write(
-        JobState(generation=3, stage=Stage.LOADING, started_at=STARTED, ready_generation=2)
+        JobState(
+            generation=3,
+            stage=stage,
+            started_at=STARTED,
+            ready_generation=2,
+            stage_started_at=STARTED,
+            stage_seconds=seconds,
+        )
     )
     state = (await open_runner(data_dir)).state
-    assert (state.failed_stage, state.reason, state.site) == (Stage.LOADING, INTERRUPTED_BY_RESTART, Site.NOT_AVAILABLE)
-    assert (await open_runner(data_dir)).state == state
+    assert (state.failed_stage, state.reason, state.site) == (stage, INTERRUPTED_BY_RESTART, Site.NOT_AVAILABLE)
+    assert state.stage_seconds == seconds
+    assert job_elapsed(state, datetime.now(UTC)) == elapsed
 
 
 async def test_close_cancels_job(data_dir: Path) -> None:

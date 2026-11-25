@@ -249,11 +249,12 @@ def job_elapsed(job: JobState, now: datetime) -> str | None:
     """Return how long a job ran, or has run so far; None if it hasn't started.
 
     That's its stages' times added up, the running one's so far, so a rebuild after a restart doesn't count the time
-    the job sat ready before it. A state stored before stage times were recorded gives its start to its end.
+    the job sat ready before it, nor an interrupted job the app's downtime (`browl.jobs._recover` records no time for
+    its stage). A state stored before stage times were recorded gives its start to its end.
     """
     if job.started_at is None:
         return None
-    if not job.stage_seconds:
+    if job.stage_started_at is None:
         return format_duration(((job.finished_at or now) - job.started_at).total_seconds())
     # While a rebuild redoes a stage, its earlier time is left out for the new one so far.
     seconds = sum(time for stage, time in job.stage_seconds.items() if not (job.running and stage == job.stage))
