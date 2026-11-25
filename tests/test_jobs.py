@@ -1327,6 +1327,30 @@ async def test_progress_dropped_at_stage_end(data_dir: Path, monkeypatch: pytest
     assert runner.state.detail is None
 
 
+async def test_stage_change_waits_for_progress_write(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a change of stage waits for a progress write still running, so the stored stage never goes back."""
+    monkeypatch.setattr(browl.jobs, "PROGRESS_S", 0)
+
+    async def imports(context: JobContext) -> None:
+        context.report("reading")
+        await asyncio.sleep(0.05)  # the progress write has started
+
+    runner = await open_runner(data_dir, {Stage.IMPORTS: imports})
+    stored: list[tuple[Stage | None, str | None]] = []
+    write = runner._store.write
+
+    def slow(state: JobState) -> None:
+        if state.detail is not None:
+            threading.Event().wait(0.3)
+        write(state)
+        stored.append((state.stage, state.detail))
+
+    monkeypatch.setattr(runner._store, "write", slow)
+    await run_job(runner)
+    assert stored[:3] == [(Stage.IMPORTS, None), (Stage.IMPORTS, "reading"), (Stage.REASONING, None)]
+    assert JobStore(data_dir / STATE_DB).read().stage == Stage.READY
+
+
 async def test_progress_write_fails(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
