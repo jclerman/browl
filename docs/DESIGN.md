@@ -1991,8 +1991,8 @@ the "loading" page; when no ontology is loaded, or the last load failed, it gets
 so crawlers and caches treat the outage as temporary and keep the URLs. The loading page adds `Retry-After` and
 refreshes itself at the same interval. While a job runs, it also shows the load's progress, as the admin status does
 (the stepper, and the running stage's details), without the uploaded file, the imports, the IRI a stage is on or a
-failure's reason (P-31). Neither page says why the site is unavailable; the failure reason is shown only on the admin
-status (P-5).
+failure's reason, or none if it can't read the job state (P-31). Neither page says why the site is unavailable; the
+failure reason is shown only on the admin status (P-5).
 
 Pages link to the service's own routes by root-relative paths, never by URLs built from the request's scheme and
 `Host`, which a proxy may change and a client may forge (P-5).

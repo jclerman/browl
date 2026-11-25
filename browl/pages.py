@@ -342,10 +342,15 @@ async def derived_not_current(request: Request, error: Exception) -> Response:
     """Serve "loading" for a request the gate let through while the derived database wasn't current.
 
     That happens in a server worker that last read the job state before another worker started rebuilding it after a
-    restart (DESIGN.md §2.4), until it next reads the state.
+    restart (DESIGN.md §2.4), until it next reads the state. If the state can't be read, the page shows no progress.
     """
     logger.warning("Serving the loading page for %s: %s", request.url.path, error)
-    return unavailable_page(request, Site.LOADING, await request.app.state.jobs.current())
+    try:
+        job = await request.app.state.jobs.current()
+    except (sqlite3.Error, OSError):
+        logger.warning("Couldn't read the job state, for the loading page's progress", exc_info=True)
+        job = JobState()
+    return unavailable_page(request, Site.LOADING, job)
 
 
 def link_root(scope: Scope) -> str:

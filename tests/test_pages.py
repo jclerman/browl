@@ -2,6 +2,7 @@
 
 import asyncio
 import re
+import sqlite3
 import threading
 import time
 from collections.abc import Iterator
@@ -217,6 +218,34 @@ def test_loading_without_job_progress(client: TestClient, app: FastAPI) -> None:
     html = client.get("/example.org/onto").text
     assert "<h1>Loading the ontology</h1>" in html
     assert 'class="stepper"' not in html
+
+
+def test_loading_job_state_unreadable(client: TestClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that the "loading" page for a derived database not current is served if the job state is unreadable.
+
+    It shows no progress, rather than failing.
+    """
+    run_job(client, app)
+    for file in (app.state.settings.data_dir / DERIVED_DIR).iterdir():
+        file.unlink()
+    current = app.state.jobs.current
+    calls: list[int] = []
+    fail_at = 0
+
+    async def failing_current() -> JobState:
+        calls.append(1)
+        if len(calls) == fail_at:
+            raise sqlite3.OperationalError("database is locked")
+        return await current()
+
+    monkeypatch.setattr(app.state.jobs, "current", failing_current)
+    assert "<h1>Loading the ontology</h1>" in client.get("/example.org/onto").text
+    fail_at, calls[:] = len(calls), []  # the last read, for the "loading" page
+    response = client.get("/example.org/onto")
+    assert len(calls) == fail_at
+    assert response.status_code == 503
+    assert "<h1>Loading the ontology</h1>" in response.text
+    assert 'class="stepper"' not in response.text
 
 
 @pytest.mark.parametrize(
