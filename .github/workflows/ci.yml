@@ -155,12 +155,15 @@ jobs:
           # A Playwright trace of each browser test that fails, for `playwright show-trace`.
           PYTEST_ADDOPTS: --tracing retain-on-failure
 
-      - name: Upload the failed browser tests' traces
+      # And the logs of the tests' Fuseki containers, one per worker, e.g. to tell a Fuseki crash from a browl failure.
+      - name: Upload the failed browser tests' traces and the Fuseki logs
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: playwright-traces-python-${{ matrix.python-version }}
-          path: test-results/
+          name: test-results-python-${{ matrix.python-version }}
+          path: |
+            test-results/
+            test-logs/
           if-no-files-found: ignore
           retention-days: 14
 
