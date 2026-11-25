@@ -163,13 +163,12 @@ async def _hook_progress(
     """Report a hook's progress every `PROGRESS_S` while the block runs: its label, time so far, and phase.
 
     The phase is the rows received while a bulk query streams, else `INDEXING` or `WRITING` while the hook waits for
-    one; then the rows written, if that has changed since the last report, or if there's no phase to show.
+    one. Rows written aren't shown: they count every row a hook changes, staging and updates too, so they'd read as
+    more than the rows received (e.g. the names hook's CURIEs), and they only move when a write ends.
     """
-    await db.run(lambda connection: None)  # so `rows` counts what the build wrote before, e.g. `meta`
-    started, rows = time.monotonic(), db.rows
+    started = time.monotonic()
 
     async def tick() -> None:
-        last = 0
         while True:
             parts = [label, format_duration(time.monotonic() - started)]
             if sparql.streams:
@@ -177,10 +176,6 @@ async def _hook_progress(
                 parts.append(f"receiving query results: {received:,} rows" if received else "waiting for query results")
             elif db.phase is not None:
                 parts.append(db.phase)
-            written = db.rows - rows
-            if written != last or len(parts) == 2:
-                parts.append(f"{written:,} rows written")
-            last = written
             context.report(" · ".join(parts))
             await asyncio.sleep(PROGRESS_S)
 
@@ -246,7 +241,6 @@ class _PhasedWriter(DerivedWriter):
 
     def __init__(self, writer: DerivedWriter) -> None:
         self._writer = writer
-        self.rows = writer.rows
         self.phase: str | None = None
 
     async def run[T](self, function: Callable[[sqlite3.Connection], T]) -> T:
@@ -257,7 +251,6 @@ class _PhasedWriter(DerivedWriter):
         try:
             return await self._writer.run(function)
         finally:
-            self.rows = self._writer.rows
             if outer:
                 self.phase = None
 

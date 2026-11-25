@@ -368,14 +368,13 @@ overwrites it, and a failed progress write is logged and skipped. What each stag
   stage counted them (the upload when no reasoner ran, and each RDF import; not a reasoned file, which would need a
   second parse), then its index phases by name, the second with its own count against the total the loader reports;
   then counting the store, opening it in Fuseki, and counting again.
-- **pre-caching:** reading the ontology header, then every `PROGRESS_S` each hook's number and name, its time so far
-  and its phase: while a bulk query streams, the rows received so far ("receiving query results: 1,234,567 rows");
-  else "indexing" or "writing tables" while it waits for the database, as a hook's last write, e.g. filling its tables
-  from staging or building the search index, can be one long statement. The rows it has written
-  (`DerivedWriter.rows`, from SQLite's `total_changes`) follow when they've changed since the last report, or when
-  there's no phase. The stage counts the rows and phases with its own Fuseki client and writer, which wrap the usual
-  ones, so the hooks' code and build keys needn't change. Hooks run open-ended bulk queries, so no total is known
-  without extra queries, and none is shown.
+- **pre-caching:** reading the ontology header, then every `PROGRESS_S` each hook's number and name, its time so far and
+  its phase: while a bulk query streams, the rows received so far ("receiving query results: 1,234,567 rows"); else
+  "indexing" or "writing tables" while it waits for the database, as a hook's last write, e.g. filling its tables from
+  staging or building the search index, can be one long statement. Rows written aren't shown: they count staging rows
+  and updates too, so they'd read as more than the rows received. The stage counts the rows and phases with its own
+  Fuseki client and writer, which wrap the usual ones, so the hooks' code and build keys needn't change. Hooks run
+  open-ended bulk queries, so no total is known without extra queries, and none is shown.
 
 The usage table's build after a load (P-27c) isn't part of the job: the status shows it, from the build's own progress
 in the server worker that runs it, once the job has ended: its step of three (counting the triples, scanning them,
@@ -2164,7 +2163,7 @@ go into this document.
 | P-24 | Performance check against N-1–N-3 targets at scale; whether streaming extraction alongside the TDB2 load is worth it | N-1–N-3 | all above | To do | [#42](https://github.com/jclerman/browl/issues/42) |
 | P-25 | Accessibility pass (trees, combobox, no-JS pages) | U-17 | P-18, P-20, P-38, P-39 | To do | [#35](https://github.com/jclerman/browl/issues/35) |
 | P-29 | Store the upload, fetched imports and ROBOT's output compressed at rest (gzip shrank Uberon 13–16×, P-8), and accept compressed uploads; measure the cost first | A-2 | P-8 | To do | [#71](https://github.com/jclerman/browl/issues/71) |
-| P-31 | Show load progress: each stage's elapsed time, ROBOT's current step, triples loaded of the total, the import being handled; for pre-caching, each hook's name, elapsed time and rows written (of the expected total where known); and background builds after a load (P-27c's usage table), with their progress | A-5 | P-8 | To do | [#73](https://github.com/jclerman/browl/issues/73) |
+| P-31 | Show load progress: each stage's elapsed time, ROBOT's current step, triples loaded of the total, the import being handled; for pre-caching, each hook's name, elapsed time and phase, with the rows received while a query streams; and background builds after a load (P-27c's usage table), with their progress | A-5 | P-8 | To do | [#73](https://github.com/jclerman/browl/issues/73) |
 | P-32 | Show the reasoner's own progress (per task, as Protégé does), running ROBOT's reasoning through its Java API with a progress monitor | A-5 | P-31, P-30 | To do | [#74](https://github.com/jclerman/browl/issues/74) |
 | P-36 | Cancel from the admin status page: a running load or rebuild (the job stops, its new store and derived files are removed, and the served ontology is unchanged) or a background build after a load; and a time limit on pre-caching | A-10 | P-22, P-31 | To do | [#111](https://github.com/jclerman/browl/issues/111) |
 | P-37 | Axioms broken across lines by their structure, with leading operators indented by depth, where they have more than one set of parentheses; axiom keywords bold and class-expression constructors in an accent color; on the Overview's Logical axioms panel and the Usage tab (2.8, 2.9); amends U-32 | U-32 | P-15, P-16, P-27 | To do | [#114](https://github.com/jclerman/browl/issues/114) |
