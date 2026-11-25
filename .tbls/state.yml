@@ -48,6 +48,17 @@ comments:
       prefixes: >-
         The prefixes the ontology file declares, as a JSON object of name to namespace IRI, for CURIEs; '{}' until
         the loading stage reads them.
+      stage_started_at: When the current stage started (P-31); NULL in a row stored before it was recorded.
+      stage_seconds: >-
+        How long each stage that ended took, in seconds, as a JSON object of stage (browl.jobs.Stage) to seconds,
+        the stage the job failed in included; '{}' before any has ended.
+      detail: >-
+        What the running stage is doing, e.g. 'Checking for unsatisfiable classes', recorded at most every PROGRESS_S
+        (P-31); NULL if it hasn't said, and once it ends.
+      fraction: How far the running stage has got, from 0 to 1; NULL if it can't tell, and once it ends.
+      detail_iri: >-
+        The IRI the running stage is working on, e.g. the import being fetched (P-31), kept apart from detail because
+        only the admin status shows it, as the "loading" page is public; NULL if none, and once the stage ends.
   - table: admin
     tableComment: >-
       Admins added in the UI (DESIGN.md 2.11): a signed-in user whose verified email is here, or in SEED_ADMINS, is an

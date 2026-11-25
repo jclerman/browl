@@ -25,6 +25,7 @@ from starlette.templating import Jinja2Templates
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from browl.derived import DerivedReader, EntityType, NotCurrentError, entities_with_iri, read_meta, ready_generation
+from browl.job_view import progress_context
 from browl.jobs import JobState, Site
 from browl.search import MAX_QUERY_CHARS
 
@@ -288,12 +289,16 @@ templates.env.globals.update(
 )
 
 
-def unavailable_page(request: Request, site: Site) -> Response:
-    """Return the "loading" or "not available" page, as the gate serves it."""
+def unavailable_page(request: Request, site: Site, job: JobState) -> Response:
+    """Return the "loading" or "not available" page, as the gate serves it.
+
+    While a job runs, the "loading" page shows its progress, as the admin status does, but not the file, imports (nor
+    the IRI a stage is working on) or reasons.
+    """
     headers = {"Cache-Control": "no-store"}
     if site == Site.LOADING:
         headers["Retry-After"] = str(RETRY_AFTER_S)
-        template, context = "loading.html", {"refresh_s": RETRY_AFTER_S}
+        template, context = "loading.html", {"refresh_s": RETRY_AFTER_S, **progress_context(job)}
     else:
         template, context = "not_available.html", {}
     return templates.TemplateResponse(request, template, context, status_code=503, headers=headers)
@@ -325,10 +330,15 @@ async def derived_not_current(request: Request, error: Exception) -> Response:
     """Serve "loading" for a request the gate let through while the derived database wasn't current.
 
     That happens in a server worker that last read the job state before another worker started rebuilding it after a
-    restart (DESIGN.md §2.4), until it next reads the state.
+    restart (DESIGN.md §2.4), until it next reads the state. If the state can't be read, the page shows no progress.
     """
     logger.warning("Serving the loading page for %s: %s", request.url.path, error)
-    return unavailable_page(request, Site.LOADING)
+    try:
+        job = await request.app.state.jobs.current()
+    except (sqlite3.Error, OSError):
+        logger.warning("Couldn't read the job state, for the loading page's progress", exc_info=True)
+        job = JobState()
+    return unavailable_page(request, Site.LOADING, job)
 
 
 def link_root(scope: Scope) -> str:
@@ -388,11 +398,11 @@ class SiteGate:
             await self.app(scope, receive, send)
             return
         request = Request(scope)
-        site = (await request.app.state.jobs.current()).site
-        if site == Site.AVAILABLE or self.is_exempt(app_path(scope)):
+        job = await request.app.state.jobs.current()
+        if job.site == Site.AVAILABLE or self.is_exempt(app_path(scope)):
             await self.app(scope, receive, send)
             return
-        await unavailable_page(request, site)(scope, receive, send)
+        await unavailable_page(request, job.site, job)(scope, receive, send)
 
 
 class PageFrame:

@@ -96,18 +96,24 @@ class _ImportLines:
 
     Attributes:
         importers: The IRIs that import something (at most `MAX_LISTED`): the document's own ontology.
+        triples: How many lines, so triples, have arrived.
     """
 
     _NEEDLE = f"<{OWL_IMPORTS}>".encode()
 
-    def __init__(self, found: dict[str, None]) -> None:
+    def __init__(self, found: dict[str, None], on_count: Callable[[int], None] | None = None) -> None:
         self._found = found
+        self._on_count = on_count
         self.importers: set[str] = set()
+        self.triples = 0
         self._pending: list[bytes] = []  # the current line's start, until its end arrives
         self._pending_bytes = 0
         self._skipping = False  # whether the current line is too long to read
 
     def __call__(self, chunk: bytes) -> None:
+        self.triples += chunk.count(b"\n")
+        if self._on_count is not None:
+            self._on_count(self.triples)
         end = chunk.rfind(b"\n") + 1
         if not end:
             self._hold(chunk)
@@ -144,21 +150,25 @@ class _ImportLines:
             start = data.find(self._NEEDLE, line_end, end)
 
 
-async def list_rdf_imports(path: Path, syntax: Syntax, settings: Settings) -> Listing:
-    """Return what an RDF document imports, each once, parsing all of it with Jena's `riot`.
+async def list_rdf_imports(
+    path: Path, syntax: Syntax, settings: Settings, on_count: Callable[[int], None] | None = None
+) -> Listing:
+    """Return what an RDF document imports, each once, and how many triples it holds, parsing it with Jena's `riot`.
+
+    `on_count`, if given, is called with the triples read so far, as they arrive.
 
     Raises:
         StageError: `riot` couldn't parse it.
     """
     found: dict[str, None] = {}
     command = [str(settings.jena_home / "bin" / "riot"), f"--syntax={SYNTAX_NAMES[syntax]}", "--output=nt", str(path)]
-    lines = _ImportLines(found)
+    lines = _ImportLines(found, on_count)
     completed = await run_process(command, timeout_s=SCAN_TIMEOUT_S, on_stdout=lines, name="riot")
     if reason := completed.limit_reason("listing imports (riot)", f"{SCAN_TIMEOUT_S:g} s"):
         raise StageError(reason)
     if not completed.ok:
         raise StageError(f"parse error: Jena couldn't read {path.name} as {SYNTAX_NAMES[syntax]}:\n{completed.output}")
-    return Listing(list(found), frozenset(lines.importers))
+    return Listing(list(found), frozenset(lines.importers), lines.triples)
 
 
 _EMBEDS_IPV4_LAST = tuple(
@@ -417,14 +427,18 @@ class _Document:
     iri: str | None  # None for the upload
 
 
-async def list_imports(document: _Document, settings: Settings) -> Listing:
+async def list_imports(
+    document: _Document, settings: Settings, on_count: Callable[[int], None] | None = None
+) -> Listing:
     """Return what a document imports; an OFN document is converted to Turtle, which then stands in for it.
+
+    An RDF document's triples are counted too, and `on_count`, if given, called with the count so far.
 
     Raises:
         StageError: It couldn't be parsed.
     """
     if document.syntax is not Syntax.OFN:
-        return await list_rdf_imports(document.path, document.syntax, settings)
+        return await list_rdf_imports(document.path, document.syntax, settings, on_count)
     converted = document.path.with_name(CONVERTED) if document.iri is None else document.path.with_suffix(".ttl")
     found = await convert_ofn(document.path, converted, settings)
     document.path, document.syntax = converted, Syntax.TURTLE
@@ -434,8 +448,17 @@ async def list_imports(document: _Document, settings: Settings) -> Listing:
 class _Closure:
     """A walk over an upload's import closure: each document listed in turn, each new import fetched, within limits."""
 
-    def __init__(self, directory: Path, settings: Settings, client: httpx2.AsyncClient) -> None:
+    def __init__(
+        self,
+        directory: Path,
+        settings: Settings,
+        client: httpx2.AsyncClient,
+        report: Callable[[str, float | None, str | None], None] | None = None,
+    ) -> None:
         self.directory = directory
+        self.report = report or (lambda detail, fraction, iri: None)
+        self.counts: dict[Path, int] = {}  # each RDF document's triples, by its file
+        self.read = 0  # the imports read so far
         self.settings = settings
         self.client = client
         self.results: dict[str, ImportResult] = {}
@@ -455,8 +478,18 @@ class _Closure:
         self.queue.append(upload)
         while self.queue:
             document = self.queue.popleft()
+            if document.iri is None:
+                doing = "Parsing the uploaded file"
+            else:
+                self.read += 1
+                doing = f"Reading import {self.read} of {len(self.files)} fetched so far"
+            self.report(doing, None, document.iri)
+
+            def on_count(triples: int, doing: str = doing, iri: str | None = document.iri) -> None:
+                self.report(f"{doing} · {triples:,} triples so far", None, iri)
+
             try:
-                listing = await list_imports(document, self.settings)
+                listing = await list_imports(document, self.settings, on_count)
             except StageError as error:
                 if document.iri is None:
                     raise
@@ -464,6 +497,8 @@ class _Closure:
                 del self.files[document.iri]
                 await asyncio.to_thread(document.path.unlink, missing_ok=True)
                 continue
+            if listing.triples is not None:
+                self.counts[document.path] = listing.triples
             if document.iri is None:
                 self.own = listing.names
             for iri in listing.imports:
@@ -487,6 +522,7 @@ class _Closure:
             self.attempts += 1
             path = self.directory / str(len(self.results) + 1)
             logger.info("Fetching import %s", iri)
+            self.report(f"Fetching import {self.attempts}", None, iri)
             timeout_s = min(FETCH_TIMEOUT_S, remaining_s)
             try:
                 syntax = await fetch(self.client, iri, path, self.settings, self.budget, timeout_s)
@@ -507,8 +543,9 @@ class _Closure:
 async def imports_stage(context: JobContext, allowed: AddressCheck | None = None) -> None:
     """Fetch the upload's imports, recursively, and write the catalog that maps every one of them to a local file.
 
-    Sets the context's `catalog`, `imports` and `import_files`, and `converted` for an OFN upload. An import that can't
-    be fetched or read, or is past a limit, is dropped, and listed as such.
+    Sets the context's `catalog`, `imports` and `import_files`, and `converted` for an OFN upload, and the triples in
+    each RDF file read (`JobContext.triple_counts`). An import that can't be fetched or read, or is past a limit, is
+    dropped, and listed as such. Reports the document being fetched or read, and the count so far.
 
     Args:
         context: The job.
@@ -524,7 +561,7 @@ async def imports_stage(context: JobContext, allowed: AddressCheck | None = None
     await asyncio.to_thread(directory.mkdir)
     upload = _Document(context.upload, FORMATS[context.upload.suffix], None)
     async with fetch_client(allowed) as client:
-        closure = _Closure(directory, context.settings, client)
+        closure = _Closure(directory, context.settings, client, context.report)
         await closure.walk(upload)
     catalog = context.upload.with_name(CATALOG)
     entries = await asyncio.to_thread(_catalog_entries, directory, closure.results, closure.files)
@@ -533,6 +570,7 @@ async def imports_stage(context: JobContext, allowed: AddressCheck | None = None
     context.converted = upload.path if upload.path != context.upload else None
     context.imports = list(closure.results.values())
     context.import_files = {iri: document.path for iri, document in closure.files.items()}
+    context.triple_counts = closure.counts
 
 
 def _catalog_entries(directory: Path, results: dict[str, ImportResult], files: dict[str, _Document]) -> dict[str, Path]:

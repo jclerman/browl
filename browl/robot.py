@@ -10,7 +10,7 @@ import asyncio
 import logging
 import re
 import signal
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -49,6 +49,33 @@ UNSATISFIABLE = re.compile(r"There are (\d+) unsatisfiable classes")
 UNSATISFIABLE_CLASS = re.compile(r"unsatisfiable: (\S+)")
 PARSE_ERROR = "INVALID ONTOLOGY FILE ERROR"
 
+LOADING = "Loading the ontology"
+"""The reasoning stage's progress until ROBOT names a step."""
+
+ROBOT_STEPS = {
+    "Starting reasoning": "Starting the reasoner",
+    "Checking for inconsistencies": "Checking for inconsistencies",
+    "Checking for unsatisfiable classes": "Checking for unsatisfiable classes",
+    "Checking for unsatisfiable object properties": "Checking for unsatisfiable object properties",
+    "Precomputing class hierarchy": "Precomputing the class hierarchy",
+    "Finding equivalencies": "Finding equivalent classes",
+    "Using these axiom generators": "Adding the inferred axioms",
+    "Removing redundant subclass axioms": "Removing redundant subclass axioms",
+    "Materializing imported ontologies": "Gathering the imports",
+    "Materializing...": "Reasoning over the properties",
+    "Materialization complete": "Adding the inferred links",
+}
+"""ROBOT's `-vv` log messages that start a step (S-2, research on Uberon), by their start, and the step's detail."""
+
+SUBCOMMAND_DETAILS = {"reason": None, "materialize": "Materializing", "query": "Removing superclass shortcuts"}
+"""The ROBOT subcommands browl runs (`reason_args`), and how a step's detail names each but the first."""
+
+# ROBOT's `-vv` output: a log line, e.g.
+# "2026-11-25 01:40:33,320 WARN  org.obolibrary.robot.CommandManager - <message>", then the messages in it.
+_LOG_MESSAGE = re.compile(r"^\S+ \S+ +[A-Z]+ +\S+ - (.*)$")
+_MATERIALIZING = re.compile(r"Materializing parents of class (\d+)/(\d+)")  # "Materializing parents of class 1/44"
+_SUBCOMMAND_TOOK = re.compile(r"Subcommand Timing: (\S+) took")  # "Subcommand Timing: reason took 0.272 seconds"
+
 
 @dataclass
 class RobotOutput:
@@ -73,6 +100,52 @@ class RobotOutput:
             self.unsatisfiable_count = int(match[1])
         elif (match := UNSATISFIABLE_CLASS.search(line)) and len(self.unsatisfiable) < UNSATISFIABLE_SHOWN:
             self.unsatisfiable.append(match[1])
+
+
+class RobotProgress:
+    """Follow a ROBOT run's step from its `-vv` output, reporting each step's detail, and how far it got if known.
+
+    ROBOT names its steps, but gives no percentage, except while materializing ("class 120/15000"). A subcommand
+    that logs no step of its own, as `query` doesn't, is known to start when the one before it logs its time.
+
+    Args:
+        args: ROBOT's arguments, whose subcommands it follows (`SUBCOMMAND_DETAILS`).
+        report: Called with each step's detail, and how far it has got, from 0 to 1, or None.
+    """
+
+    def __init__(self, args: Sequence[str], report: Callable[[str, float | None], None]) -> None:
+        """Report that the ontology is loading."""
+        self._subcommands = [arg for arg in args if arg in SUBCOMMAND_DETAILS]
+        self._name: str | None = None  # how details name the running subcommand; None while it's the first
+        self._report = report
+        report(LOADING, None)
+
+    def add(self, line: str) -> None:
+        """Look at a line of output."""
+        if (match := _LOG_MESSAGE.match(line)) is None:
+            return
+        message = match[1].strip()
+        if match := _SUBCOMMAND_TOOK.match(message):
+            if match[1] in self._subcommands:
+                after = self._subcommands.index(match[1]) + 1
+                self._name = SUBCOMMAND_DETAILS[self._subcommands[min(after, len(self._subcommands) - 1)]]
+                if after < len(self._subcommands):
+                    self._report(self._detail(None), None)
+        elif match := _MATERIALIZING.match(message):
+            done, total = int(match[1]), int(match[2])
+            detail = self._detail(f"Adding the inferred links, class {done:,} of {total:,}")
+            self._report(detail, done / total if total else None)
+        else:
+            for start, detail in ROBOT_STEPS.items():
+                if message.startswith(start):
+                    self._report(self._detail(detail), None)
+                    return
+
+    def _detail(self, step: str | None) -> str:
+        """Return a step's detail, named for the running subcommand unless it's the first; or the subcommand's name."""
+        if self._name is None:
+            return step or ""
+        return self._name if step is None else f"{self._name}: {step[0].lower()}{step[1:]}"
 
 
 def failure_reason(completed: Completed, output: RobotOutput, settings: Settings) -> str:
@@ -124,11 +197,16 @@ def reason_args(reasoner: Reasoner, source: Path, output: Path, settings: Settin
     return [*args, "query", "--update", str(SHORTCUTS_QUERY), "--output", str(output)]
 
 
-async def run_robot(args: Sequence[str], directory: Path, settings: Settings) -> None:
+async def run_robot(
+    args: Sequence[str],
+    directory: Path,
+    settings: Settings,
+    report: Callable[[str, float | None], None] | None = None,
+) -> None:
     """Run ROBOT with the arguments, within the reasoner limits, in a process group stopped however this ends.
 
     It runs in the sandbox, if there is one (`SANDBOX_SOCKET`), and is stopped if `directory`, which it writes into,
-    runs low on space.
+    runs low on space. If `report` is given, it's called with each step ROBOT logs (`RobotProgress`).
 
     Raises:
         StageError: ROBOT failed; the reason says how (`failure_reason`).
@@ -144,9 +222,17 @@ async def run_robot(args: Sequence[str], directory: Path, settings: Settings) ->
         *args,
     ]
     output = RobotOutput()
+    on_line = output.add
+    if report is not None:
+        progress = RobotProgress(args, report)
+
+        def on_line(line: str) -> None:
+            output.add(line)
+            progress.add(line)
+
     completed = await run_process(
         command,
-        output.add,
+        on_line,
         timeout_s=settings.reasoner_timeout_s,
         watch=[directory],
         name="ROBOT",
@@ -156,14 +242,20 @@ async def run_robot(args: Sequence[str], directory: Path, settings: Settings) ->
         raise StageError(failure_reason(completed, output, settings))
 
 
-async def robot_to_file(args: Sequence[str], partial: Path, output: Path, settings: Settings) -> None:
+async def robot_to_file(
+    args: Sequence[str],
+    partial: Path,
+    output: Path,
+    settings: Settings,
+    report: Callable[[str, float | None], None] | None = None,
+) -> None:
     """Run ROBOT writing to `partial`, renamed to `output` once it succeeds, so a stopped run leaves no partial file.
 
     Raises:
         StageError: ROBOT failed.
     """
     try:
-        await run_robot(args, output.parent, settings)
+        await run_robot(args, output.parent, settings, report)
         await asyncio.to_thread(partial.replace, output)
     except BaseException:
         await asyncio.to_thread(partial.unlink, missing_ok=True)
@@ -187,5 +279,5 @@ async def reasoning_stage(context: JobContext) -> None:
         raise StageError("internal error: the imports stage wrote no catalog")
     partial, reasoned = source.with_name(PARTIAL), source.with_name(REASONED)
     args = reason_args(context.reasoner, source, partial, context.settings, context.catalog)
-    await robot_to_file(args, partial, reasoned, context.settings)
+    await robot_to_file(args, partial, reasoned, context.settings, context.report)
     context.reasoned = reasoned

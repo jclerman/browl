@@ -17,11 +17,11 @@ from browl.derived import read_meta
 from browl.fuseki import UNION_FROM, FusekiAdmin, FusekiAdminError, FusekiClient, SparqlError, dataset_clause
 from browl.jobs import JobContext, Site, Stage
 from browl.jobtypes import ImportResult, StageError
-from browl.loading import count_store, dataset_name, loading_stage, store_path
+from browl.loading import LoaderProgress, count_store, dataset_name, loading_stage, store_path
 from browl.precache import HOOKS, build_keys
 from browl.process import Completed
 from browl.settings import Settings
-from tests.conftest import find_robot_jar
+from tests.conftest import DATA, find_robot_jar
 from tests.helpers import StaticServer, make_app, make_settings, turtle
 
 pytestmark = pytest.mark.anyio
@@ -78,7 +78,19 @@ async def test_load_and_replace(settings: Settings, http: httpx2.AsyncClient) ->
     ontology = f"@prefix ex: <{EX}> .\n<{EX}a> <{EX}p> <{EX}b> .\n<{EX}b> <{EX}p> <{EX}c> .\n"
     imported = f"<{EX}a> <{EX}p> <{EX}b> .\n<{EX}x> <{EX}p> <{EX}y> .\n"  # one triple the ontology also states
     first = job(settings, 101, ontology, {f"{EX}imported": imported})
+    reports: list[tuple[str, float | None]] = []
+    first.on_progress = lambda detail, fraction, iri: reports.append((detail, fraction))
+    assert first.ontology is not None
+    first.triple_counts = {first.ontology: 2}
     await loading_stage(first, http)
+    assert reports[0] == ("Ontology: adding triples", 0.0)  # of a total the imports stage counted
+    assert ("Import 1 of 1: adding triples", None) in reports  # of none
+    assert ("Ontology: writing the primary index", None) in reports
+    assert [detail for detail, _ in reports[-3:]] == [
+        "Counting the new store's triples",
+        "Opening the new store in Fuseki",
+        "Counting the triples Fuseki serves",
+    ]
     assert first.triples == 2
     assert first.prefixes == {"ex": EX}  # read here, so the job state stores them before pre-caching (S2)
     assert first.imports == [
@@ -458,3 +470,60 @@ def test_app_failed_load(
         assert state.failed_stage == Stage.LOADING
         assert state.reason is not None and state.reason.startswith("Fuseki serves")
         assert client.get("/anything").status_code == 503
+
+
+@pytest.mark.parametrize(
+    ("name", "total", "added"),
+    [
+        (
+            "Ontology",
+            1_200_000,
+            [
+                ("Ontology: adding triples", 0.0),
+                ("Ontology: added 1,000,000 of 1,200,000 triples (83%)", 1_000_000 / 1_200_000),
+            ],
+        ),
+        (None, None, [("Adding triples", None), ("Added 1,000,000 triples", None)]),
+    ],
+)
+def test_loader_progress(name: str | None, total: int | None, added: list[tuple[str, float | None]]) -> None:
+    """Check the triples added, then the index phases, followed in `tdb2.tdbloader`'s recorded output (no JVM).
+
+    The index phase's total is the count the loader gives once it has added them, even if it wasn't known before.
+    """
+    reports: list[tuple[str, float | None]] = []
+    progress = LoaderProgress(name, total, lambda detail, fraction: reports.append((detail, fraction)))
+    for line in (DATA / "output" / "tdbloader.log").read_text().splitlines():
+        progress.add(line)
+    prefix = "" if name is None else f"{name}: "
+    indexes = [
+        ("writing the primary index", None),
+        ("finished index SPO", None),
+        ("building the other indexes from SPO", 0.0),
+        ("indexed 1,000,000 of 1,200,000 triples (83%)", 1_000_000 / 1_200_000),
+        ("finished index OSP", None),
+        ("finished index POS", None),
+    ]
+    expected = [(f"{prefix}{detail}" if name else detail[0].upper() + detail[1:], part) for detail, part in indexes]
+    assert reports == added + expected
+
+
+def test_loader_progress_skips_other_lines() -> None:
+    """Check that lines the loader's progress doesn't know are skipped, and a total of 0 tuples gives no percentage."""
+    reports: list[tuple[str, float | None]] = []
+    progress = LoaderProgress(None, 10, lambda detail, fraction: reports.append((detail, fraction)))
+    for line in [
+        "01:43:19 WARN  riot            :: [line: 5, col: 1 ] Bad IRI: <x y>",
+        "\tat org.apache.jena.riot.system.ErrorHandlerFactory.warning(ErrorHandlerFactory.java:150)",
+        "01:43:19 INFO  loader          :: Add: 1,0",
+        "Add: 5 big.nt (Batch: 5 / Avg: 5)",
+        "01:43:19 INFO  loader          :: Finished: /data/jobs/3/big.nt: 0 tuples in 0.01s (Avg: 0)",
+        "01:43:19 INFO  loader          :: Start replay index SPO",
+        "01:43:19 INFO  loader          :: Add: 5 Index (Batch: 5 / Avg: 5)",
+    ]:
+        progress.add(line)
+    assert reports == [
+        ("Writing the primary index", None),
+        ("Building the other indexes from SPO", None),
+        ("Indexed 5 triples", None),
+    ]

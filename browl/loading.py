@@ -16,6 +16,7 @@ import asyncio
 import logging
 import re
 import shutil
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from browl.jobs import JobContext
 from browl.jobtypes import StageError
 from browl.prefixes import read_prefixes
 from browl.process import Completed, run_process
+from browl.progress_text import count_of
 from browl.rdf import Literal, RDFSyntaxError, Term, parse_tsv_header, parse_tsv_row
 from browl.settings import Settings
 from browl.upload import STORED_SUFFIXES, Syntax, check_job_file, upload_path
@@ -48,6 +50,58 @@ COUNT_TIMEOUT_S = 1800.0
 COUNT_TRIPLES = (Path(__file__).parent / "sparql" / "count-triples.rq").read_text(encoding="utf-8")
 """The query that counts each graph's triples, in one pass over the store."""
 
+# `tdb2.tdbloader`'s output: a line, then the messages in it.
+_LOADER_MESSAGE = re.compile(r"^\S+ +[A-Z]+ +\S+ +:: (.*)$")  # "01:43:19 INFO  loader          :: <message>"
+_ADDED = re.compile(r"Add: ([\d,]+) (\S+)")  # "Add: 1,000,000 big.nt (Batch: 1,360,544 / Avg: 1,360,544)"
+_FINISHED = re.compile(r"Finished: .*: ([\d,]+) tuples in ")  # "Finished: /jobs/3/big.nt: 1,200,000 tuples in 0.89s"
+_INDEX_DONE = re.compile(r"Finish - index (\w+)")  # "Finish - index SPO"
+_INDEX_REPLAY = re.compile(r"Start replay index (\w+)")  # "Start replay index SPO"
+_REPLAYED = "Index"
+"""The name in the `Add:` lines of `tdb2.tdbloader`'s index phase, where a file's name is in its loading phase's."""
+
+
+class LoaderProgress:
+    """Follow a `tdb2.tdbloader` run from its output, reporting how many triples it has added, then its index phases.
+
+    It logs a running count while adding triples (`Add: 1,000,000 uberon.ttl …`), and its index phases by name, the
+    second building the other indexes from the first, with a running count of its own (`Add: 1,000,000 Index …`).
+
+    Args:
+        name: What's loaded, e.g. "Import 2 of 5", which starts each detail; None for no name.
+        total: How many triples the file holds, if known, for a percentage.
+        report: Called with each detail, and how far that phase has got, from 0 to 1, or None.
+    """
+
+    def __init__(self, name: str | None, total: int | None, report: Callable[[str, float | None], None]) -> None:
+        """Follow a run that hasn't started."""
+        self._prefix = "" if name is None else f"{name}: "
+        self._total = total or None
+        self._report = report
+
+    def add(self, line: str) -> None:
+        """Look at a line of output."""
+        if (match := _LOADER_MESSAGE.match(line)) is None:
+            return
+        message = match[1]
+        if match := _ADDED.match(message):
+            done = int(match[1].replace(",", ""))
+            verb = "indexed" if match[2] == _REPLAYED else "added"
+            fraction = None if self._total is None else min(1.0, done / self._total)
+            self._say(f"{verb} {count_of(done, self._total, 'triples')}", fraction)
+        elif match := _FINISHED.match(message):
+            self._total = int(match[1].replace(",", "")) or None  # the index phase's total
+            self._say("writing the primary index")
+        elif match := _INDEX_REPLAY.match(message):
+            self._say(f"building the other indexes from {match[1]}", None if self._total is None else 0.0)
+        elif match := _INDEX_DONE.match(message):
+            self._say(f"finished index {match[1]}")
+        elif message.startswith("Start:"):
+            self._say("adding triples", None if self._total is None else 0.0)
+
+    def _say(self, detail: str, fraction: float | None = None) -> None:
+        text = f"{self._prefix}{detail}"
+        self._report(text[0].upper() + text[1:], fraction)
+
 
 def dataset_name(generation: int) -> str:
     """Return the name of the Fuseki dataset that serves a generation."""
@@ -68,8 +122,12 @@ def _failure(tool: str, completed: Completed) -> StageError:
     return StageError(reason or f"{tool} failed (exit status {completed.status}):\n{completed.output}")
 
 
-async def load_file(settings: Settings, store: Path, file: Path, graph: str | None = None) -> None:
+async def load_file(
+    settings: Settings, store: Path, file: Path, graph: str | None = None, progress: LoaderProgress | None = None
+) -> None:
     """Load an RDF file into a TDB2 store, into the named graph if one is given, else the default graph.
+
+    `progress`, if given, follows the loader's output.
 
     Raises:
         StageError: The loader failed.
@@ -79,6 +137,7 @@ async def load_file(settings: Settings, store: Path, file: Path, graph: str | No
         command += ["--graph", graph]
     completed = await run_process(
         [*command, str(file)],
+        None if progress is None else progress.add,
         timeout_s=LOAD_TIMEOUT_S,
         watch=[settings.data_dir, settings.fuseki_base],
         env={"JVM_ARGS": f"-Xmx{LOADER_HEAP}"},
@@ -168,7 +227,8 @@ async def loading_stage(context: JobContext, http: httpx2.AsyncClient) -> None:
     """Load the ontology and its fetched imports into a new TDB2 store, and switch Fuseki to it.
 
     Sets the context's `triples`, and each loaded import's, and its `prefixes` (`read_upload_prefixes`), so the job
-    state stores them before pre-caching starts.
+    state stores them before pre-caching starts. Reports the loader's progress (`LoaderProgress`), of the file's
+    triples where the imports stage counted them (`JobContext.triple_counts`), then each step after it.
 
     Args:
         context: The job.
@@ -190,12 +250,18 @@ async def loading_stage(context: JobContext, http: httpx2.AsyncClient) -> None:
     try:
         await remove_stale_stores(settings, admin, name)  # this also deletes any store left at `store`
         await asyncio.to_thread(store.parent.mkdir, parents=True, exist_ok=True)
-        await load_file(settings, store, ontology)
-        for iri, file in context.import_files.items():
-            await load_file(settings, store, file, graph=iri)
+        files = len(context.import_files)
+        progress = LoaderProgress("Ontology" if files else None, context.triple_counts.get(ontology), context.report)
+        await load_file(settings, store, ontology, progress=progress)
+        for number, (iri, file) in enumerate(context.import_files.items(), start=1):
+            progress = LoaderProgress(f"Import {number} of {files}", context.triple_counts.get(file), context.report)
+            await load_file(settings, store, file, graph=iri, progress=progress)
+        context.report("Counting the new store's triples")
         expected = await count_store(settings, store)
         registering = True
+        context.report("Opening the new store in Fuseki")
         await admin.add(name)
+        context.report("Counting the triples Fuseki serves")
         served = await count_fuseki(FusekiClient(http), name)
         if served != expected:
             raise StageError(f"Fuseki serves {_describe(served)} from the new store, which holds {_describe(expected)}")

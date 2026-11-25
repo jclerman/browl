@@ -22,6 +22,7 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
+import browl.precache.stage
 from browl import derived, usage_tables
 from browl.derived import EntityType, Meta, NotCurrentError, derived_path, entities_at, read_meta
 from browl.fuseki import END_VARIABLE, TSV, UNION_FROM, FusekiClient, SparqlError
@@ -121,6 +122,7 @@ async def test_stage_builds_database(settings: Settings) -> None:
         )
 
         await context.db.insert("INSERT INTO entity (iri, type, path) VALUES (?, 'class', '/')", [(f"{EX}a",)])
+        await context.db.run(lambda connection: None)  # a turn of the event loop with the changes made
         await context.db.create_indexes("entity")
 
     @hook()
@@ -151,6 +153,73 @@ async def test_stage_builds_database(settings: Settings) -> None:
     assert stored.loaded_at == LOADED_AT  # the job's start
     [query] = queries
     assert "owl:Ontology" in query and "FROM" not in query  # the ontology's IRIs come from its own graph
+
+
+async def test_stage_reports_progress(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that the stage reports reading the header, then each hook's number, name, time so far and phase.
+
+    The phase is a bulk query's rows received, or the writing or indexing the hook waits for; the database changes
+    are shown when they move, or when there's no phase.
+    """
+    monkeypatch.setattr(browl.precache.stage, "PROGRESS_S", 0)  # a report each turn of the event loop
+
+    @hook()
+    async def fill(context: PreCacheContext) -> None:
+        async with context.bulk_select("SELECT ?entity ?type WHERE { ?entity a ?type }") as stream:
+            await asyncio.sleep(0)  # as if no row had arrived yet
+            async for _ in stream:
+                await asyncio.sleep(0)  # a turn of the event loop per row
+        await context.db.insert(
+            "INSERT INTO prefix VALUES (?, ?)", [("ex", EX), ("owl", "http://www.w3.org/2002/07/owl#")]
+        )
+        await context.db.create_indexes("entity")
+        await asyncio.sleep(0)
+
+    reports: list[str] = []
+    context = job(settings, 9)
+    context.on_progress = lambda detail, fraction, iri: reports.append(detail)
+    async with fuseki() as http:
+        await pre_caching_stage(context, http, hooks=[fill])
+    assert reports[0] == "Reading the ontology's header"
+    assert reports[-1] == "Finishing the database"
+    phases = list(dict.fromkeys(report.removeprefix("Hook 1 of 1, fill · 0 s · ") for report in reports[1:-1]))
+    assert phases == [
+        "waiting for query results",
+        "receiving query results: 1 rows",
+        "writing tables",
+        "writing tables · 2 database changes",
+        "indexing",
+        "2 database changes",
+    ]
+
+
+async def test_stage_reports_latest_stream(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that while two bulk queries stream at once, the rows received are counted from the latest to open."""
+    monkeypatch.setattr(browl.precache.stage, "PROGRESS_S", 0)
+    query = "SELECT ?entity ?type WHERE { ?entity a ?type }"
+
+    @hook()
+    async def fill(context: PreCacheContext) -> None:
+        async with context.bulk_select(query) as outer:
+            async for _ in outer:
+                await asyncio.sleep(0)
+                async with context.bulk_select(query) as inner:
+                    await asyncio.sleep(0)
+                    async for _ in inner:
+                        await asyncio.sleep(0)
+
+    reports: list[str] = []
+    context = job(settings, 9)
+    context.on_progress = lambda detail, fraction, iri: reports.append(detail)
+    async with fuseki() as http:
+        await pre_caching_stage(context, http, hooks=[fill])
+    details = (report.removeprefix("Hook 1 of 1, fill · 0 s · ") for report in reports[1:-1])
+    phases = [phase for phase, _ in itertools.groupby(details)]
+    assert phases[:3] == [
+        "receiving query results: 1 rows",
+        "waiting for query results",  # the inner query's, not yet with a row
+        "receiving query results: 1 rows",
+    ]
 
 
 async def test_stage_hook_fails(settings: Settings) -> None:
@@ -582,9 +651,14 @@ async def test_rebuild_waits_for_fuseki(settings: Settings, monkeypatch: pytest.
     """Check that a rebuild after a restart waits for Fuseki to answer its ping, pausing longer each time."""
     monkeypatch.setattr(stage, "FUSEKI_RETRY_S", (0.02, 0.04))
     pings: list[float] = []
+    reports: list[tuple[str, int]] = []
+    context = job(settings, 3)
+    context.on_progress = lambda detail, fraction, iri: reports.append((detail, len(pings)))
     async with pinged_fuseki(pings, 0, 503, 0, 0) as http:
-        await rebuild(job(settings, 3), http, hooks=[])
+        await rebuild(context, http, hooks=[])
     assert len(pings) == 5
+    assert reports[0] == ("Waiting for Fuseki", 0)
+    assert reports[1] == ("Reading the ontology's header", 5)
     pauses = [later - earlier for earlier, later in itertools.pairwise(pings)]
     assert pauses[0] >= 0.02 and pauses[1] >= 0.04 and pauses[3] >= 0.04
     assert is_current(settings, 3, [])
@@ -772,7 +846,7 @@ def test_restart_rebuilds(settings: Settings, prepare: Callable[[Settings], obje
     with TestClient(app) as client:
         response = client.get("/probe")
         assert (response.status_code, response.headers["Retry-After"]) == (503, str(RETRY_AFTER_S))
-        assert '<li class="current" aria-current="step">pre-caching</li>' in status(client)
+        assert '<span class="step-label">Pre-Caching</span>' in status(client)
         fuseki.released.set()
         assert client.portal is not None
         client.portal.call(app.state.jobs.wait)
@@ -830,9 +904,7 @@ def test_restart_rebuild_fails(settings: Settings) -> None:
         client.portal.call(app.state.jobs.wait)
         response = client.get("/probe")
         assert response.status_code == 503 and "<h1>Not available</h1>" in response.text
-        assert "Failed in stage <strong>pre-caching</strong>: rebuilding after a restart: pre-caching query" in (
-            status(client)
-        )
+        assert "<strong>Pre-Caching Failed</strong>: rebuilding after a restart: pre-caching query" in (status(client))
     assert derived_files(settings) == []
 
 

@@ -11,6 +11,13 @@
   --accent: #3d6b8c;
   --danger: #a33a32;
   --mark-bg: #f7eab8; /* the page's entity, in an axiom: --fg 11.7:1, --accent 4.7:1 on it */
+  /* A load stage's state (`_load_progress.html`): done, running, failed; not started uses --bar-bg and --muted. */
+  --done-bg: #e1f0e1;
+  --done-fg: #25622f; /* 6.2:1 on --done-bg */
+  --active-bg: #fbefb8;
+  --active-fg: #6a4c00; /* 6.9:1 */
+  --failed-bg: #f7e0dd;
+  --failed-fg: var(--danger); /* 5.2:1, dark 5.6:1 */
   --font-text: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --space: 1rem;
@@ -18,6 +25,7 @@
   --title-size: 1.75rem;
   --title-leading: 1.25;
   --header-height: calc(2 * var(--title-size) * var(--title-leading)); /* an entity page's: two title lines */
+  --stepper-width: 60rem; /* the load's stepper, and the details below it */
 }
 
 @media (prefers-color-scheme: dark) {
@@ -30,6 +38,11 @@
     --accent: #7fa8c6;
     --danger: #e08a80;
     --mark-bg: #3d3822; /* --fg 8.5:1, --accent 4.7:1 */
+    --done-bg: #1f3524;
+    --done-fg: #93d19d; /* 7.4:1 */
+    --active-bg: #3b3214;
+    --active-fg: #f0d27a; /* 8.6:1 */
+    --failed-bg: #3c2321;
   }
 }
 
@@ -277,22 +290,294 @@ code {
   margin-top: 0;
 }
 
-.stages .done {
-  color: var(--muted);
-}
-
-.stages .current {
-  color: var(--accent);
-}
-
-.stages .failed,
 .failure {
   color: var(--danger);
 }
 
-.stages .current,
-.stages .failed {
+/* The load's progress, on the admin status (A-5) and the "loading" page: a summary line, on the admin status with the
+   job's outcome as a pill; a stepper, a box per load stage, all the same width, joined by a line, colored by state;
+   below it, the details. On a narrow screen the stepper is a column. */
+
+.job-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.pill {
+  padding: 0.1rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
   font-weight: 600;
+}
+
+.stepper {
+  --step-gap: 1.25rem;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--step-gap);
+  max-width: var(--stepper-width);
+  margin: var(--space) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.6rem 0.4rem;
+  border: 1px solid color-mix(in srgb, currentcolor 35%, transparent);
+  border-radius: 0.5rem;
+  background: var(--bar-bg);
+  color: var(--muted);
+  text-align: center;
+}
+
+.step:not(:last-child)::after {
+  position: absolute;
+  top: 50%;
+  left: 100%;
+  width: var(--step-gap);
+  height: 2px;
+  background: var(--border);
+  content: "";
+}
+
+.pill-ready,
+.step-done {
+  background: var(--done-bg);
+  color: var(--done-fg);
+}
+
+.step-done:not(:last-child)::after,
+.step-skipped:not(:last-child)::after {
+  background: var(--done-fg);
+}
+
+.step-current,
+.step-failed {
+  border-width: 2px;
+}
+
+.pill-running,
+.step-current {
+  background: var(--active-bg);
+  color: var(--active-fg);
+}
+
+.pill-failed,
+.step-failed {
+  background: var(--failed-bg);
+  color: var(--failed-fg);
+}
+
+.step-skipped {
+  border-style: dashed;
+}
+
+.step-label {
+  font-weight: 600;
+}
+
+.step-current .step-label,
+.step-failed .step-label {
+  font-weight: 700;
+}
+
+.step-note,
+.step-time {
+  font-size: 0.8rem;
+}
+
+/* A box's note and time each take a line of their own; the time's digits keep their width as it ticks. */
+.step-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.step-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.step-pending .step-icon {
+  border: 2px solid currentcolor;
+  border-radius: 50%;
+}
+
+.step-done .step-icon::before {
+  content: "✓";
+}
+
+.step-failed .step-icon::before {
+  content: "✕";
+}
+
+.step-skipped .step-icon::before {
+  content: "–";
+}
+
+/* One turn a second, so the poll's swap, every 2 s, restarts it about where it was. */
+.step-current .step-icon {
+  border: 2px solid currentcolor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: step-spin 1s linear infinite;
+}
+
+@keyframes step-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .step-current .step-icon {
+    animation: none;
+  }
+}
+
+.step-tip {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  left: 50%;
+  z-index: 1;
+  display: none;
+  width: max-content;
+  max-width: 14rem;
+  padding: 0.35rem 0.5rem;
+  transform: translateX(-50%);
+  border-radius: 0.35rem;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 0.8rem;
+  text-align: left;
+}
+
+.step:first-child .step-tip {
+  left: 0;
+  transform: none;
+}
+
+.step:last-child .step-tip {
+  right: 0;
+  left: auto;
+  transform: none;
+}
+
+.step:hover .step-tip,
+.step:focus-visible .step-tip {
+  display: block;
+}
+
+/* As wide as the stepper, so a running stage's detail line doesn't wrap short of its last box. */
+.step-details {
+  max-width: var(--stepper-width);
+}
+
+/* The details panel of the running stage, or of work in the background: tinted as the current box is, with a bar
+   when it can tell how far it has got. */
+.step-panel {
+  margin: var(--space) 0;
+  padding: 0.6rem 0.9rem;
+  border-left: 4px solid var(--active-fg);
+  border-radius: 0.35rem;
+  background: var(--active-bg);
+  color: var(--active-fg);
+}
+
+.step-panel p {
+  margin: 0.15rem 0;
+}
+
+.step-panel-head {
+  font-variant-numeric: tabular-nums;
+}
+
+.step-detail {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A part wraps inside itself only if it's wider than the line, e.g. a long import IRI on a phone. */
+.step-detail span {
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.step-progress {
+  display: block;
+  width: 100%;
+  height: 0.5rem;
+  margin: 0.4rem 0 0.2rem;
+  border: 1px solid color-mix(in srgb, var(--active-fg) 45%, transparent);
+  border-radius: 999px;
+  overflow: hidden;
+  appearance: none;
+  background: var(--bg);
+  accent-color: var(--active-fg);
+}
+
+.step-progress::-webkit-progress-bar {
+  background: var(--bg);
+}
+
+.step-progress::-webkit-progress-value {
+  background: var(--active-fg);
+}
+
+.step-progress::-moz-progress-bar {
+  background: var(--active-fg);
+}
+
+.background-title {
+  margin-top: calc(2 * var(--space));
+  font-size: 1.1rem;
+}
+
+.imports summary {
+  cursor: pointer;
+}
+
+@media (max-width: 40rem) {
+  .stepper {
+    --step-gap: 0.75rem;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .step {
+    flex-flow: row wrap;
+    text-align: left;
+  }
+
+  /* At the box's right end, apart from its note. */
+  .step-time {
+    margin-left: auto;
+  }
+
+  .step:not(:last-child)::after {
+    top: 100%;
+    left: 1.3rem;
+    width: 2px;
+    height: var(--step-gap);
+  }
+
+  .step .step-tip,
+  .step:first-child .step-tip,
+  .step:last-child .step-tip {
+    left: 0;
+    right: auto;
+    transform: none;
+  }
 }
 
 .upload {
@@ -319,6 +604,14 @@ code {
 .upload input[type="file"] {
   display: block;
   margin-top: calc(var(--space) / 4);
+}
+
+.upload-progress {
+  margin-top: calc(var(--space) / 2);
+}
+
+.upload-progress p {
+  margin: 0;
 }
 
 .note {

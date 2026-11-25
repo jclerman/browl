@@ -6,6 +6,7 @@ They drive headless Chromium through Playwright against the app on a live server
 import asyncio
 import contextlib
 import re
+import threading
 import urllib.parse
 from collections.abc import Callable
 from pathlib import Path
@@ -28,11 +29,14 @@ from browl.derived import EntityType
 from browl.jobs import JobContext, Stage, StageFunction
 from browl.jobtypes import StageError
 from browl.links import EntityLink
+from browl.precache.usage_table import Progress
 from browl.rdf import IRI, RDFS, XSD
 from browl.rdf import RDF as RDF_NS
+from browl.upload import UploadError
 from browl.usage_tab import PageNotFoundError, UsageGroup, UsageTab
 from tests.conftest import DATA
 from tests.helpers import AUTH_ON, WAIT_S, LiveServer, derived_stage, iso, make_app, no_axioms, session_cookie
+from tests.test_pages import FakeTables
 from tests.test_search_page import SYNONYM, search_stage
 from tests.test_trees import tree_stage
 
@@ -291,22 +295,45 @@ def test_status_polls_while_running(page: Page, status_server: LiveServer) -> No
     status_server.call(jobs.start())
     watch_policy(page)
     page.goto(f"{status_server.url}{STATUS}")
-    current = page.locator("#job-status li[aria-current]")
-    expect(current).to_have_text("reasoning")
+    current = page.locator("#job-status .step-current .step-label")
+    expect(page.locator("#job-status .step-skipped .step-label")).to_have_text("No Reasoner")
+    expect(page.locator("#job-status .step-done")).to_have_count(2)
+    expect(current).to_have_count(0)
     mark(page)
     status_server.call(release(reasoned))
-    expect(current).to_have_text("loading")
+    expect(current).to_have_text("Storing Triples")
     assert marked(page)
     with page.expect_navigation():
         status_server.call(release(loaded))
     assert not marked(page)
-    expect(current).to_have_text("ready")
+    expect(page.locator("#job-status .step-label").last).to_have_text("Published")
     assert page.url == f"{status_server.url}{STATUS}"
     polls: list[str] = []
     page.on("request", lambda request: polls.append(request.url))
     page.wait_for_timeout(POLL_S * 3 * 1000)
     assert polls == []
     assert violations(page) == []  # htmx works under the Content-Security-Policy
+
+
+def test_background_polls_stop(page: Page, status_server: LiveServer) -> None:
+    """Check that the status polls while a background build runs, without loading anew, and stops once it ends."""
+    jobs = status_server.app.state.jobs
+    status_server.call(jobs.start())
+    status_server.call(jobs.wait())
+    status_server.app.state.usage_tables = FakeTables(Progress(triples=200, scanned=50))
+    polls: list[str] = []
+    page.on("request", lambda request: polls.append(request.url))
+    page.goto(f"{status_server.url}{STATUS}")
+    expect(page.locator(".background-title")).to_have_text("After publishing")
+    mark(page)
+    page.wait_for_timeout(POLL_S * 3 * 1000)
+    assert f"{status_server.url}{STATUS}?background" in polls
+    status_server.app.state.usage_tables = FakeTables()  # the build has ended
+    expect(page.locator(".background-title")).to_have_count(0)
+    polls.clear()
+    page.wait_for_timeout(POLL_S * 3 * 1000)
+    assert polls == []
+    assert marked(page)  # swapped in, not loaded anew
 
 
 @pytest.mark.parametrize("path", [STATUS, UPLOAD])
@@ -380,7 +407,7 @@ def test_refused_upload_page_refreshes_without_javascript(
     loaded, navigations = refuse_upload(page, status_server)
     page.wait_for_event("request", lambda request: request.is_navigation_request())
     status_server.call(release(loaded))
-    expect(page.locator("#job-status")).to_contain_text("is ready")
+    expect(page.locator("#job-status .pill")).to_have_text("Ready")
     nav = page.get_by_role("navigation", name="Site")
     expect(nav.get_by_role("link", name="New ontology")).to_be_visible()
     page.wait_for_timeout(REFRESH_S * 2 * 1000)
@@ -409,7 +436,7 @@ def test_no_refresh_once_finished(page: Page, status_server: LiveServer, path: s
     status_server.call(status_server.app.state.jobs.start())
     status_server.call(status_server.app.state.jobs.wait())
     page.goto(f"{status_server.url}{path}")
-    expect(page.locator("#job-status")).to_contain_text("is ready")
+    expect(page.locator("#job-status .pill")).to_have_text("Ready")
     expect(page.locator('meta[http-equiv="refresh"]')).to_have_count(0)
 
 
@@ -449,6 +476,7 @@ def test_upload_refused_early(
     with page.expect_response(lambda response: response.request.method == "POST") as response:
         page.click("button[type=submit]")
     assert response.value.status == status
+    assert response.value.request.resource_type == "xhr"  # sent by upload.js, which gets the response, not a reset
     expect(page.get_by_role("alert")).to_have_text(re.compile(f"The upload was refused: {re.escape(reason)}"))
 
 
@@ -471,6 +499,143 @@ def test_upload_from_another_site_refused(
         page.click("button")
     assert response.value.status == 403
     assert server.call(server.app.state.jobs.current()).stage is None
+
+
+# The in-page upload (P-31)
+
+
+def test_upload_shows_progress(page: Page, status_server: LiveServer) -> None:
+    """Check that, with JS, the button is disabled and progress shows until the response, and the page then loads.
+
+    The form is sent from the page, and can't be sent twice; the response's redirect is followed as the plain form's.
+    """
+    posts: list[Route] = []
+
+    def hold(route: Route) -> None:
+        if route.request.method == "POST":
+            posts.append(route)
+        else:
+            route.continue_()
+
+    watch_policy(page)
+    page.goto(f"{status_server.url}{UPLOAD}")
+    page.route(f"{status_server.url}{UPLOAD}", hold)
+    page.set_input_files("#ontology", DATA / "routing.ttl")
+    button = page.get_by_role("button", name="Upload")
+    button.click()
+    expect(button).to_be_disabled()
+    expect(page.get_by_role("progressbar")).to_be_visible()
+    sending = r"Sending the file: [\d.]+ (bytes|kB) of [\d.]+ kB \(\d+%\)|Sent [\d.]+ kB; waiting for the server…"
+    expect(page.locator(".upload-progress p")).to_have_text(re.compile(sending))
+    page.evaluate("document.querySelector('form.upload').requestSubmit()")  # as a second click would
+    page.wait_for_timeout(POLL_S * 1000)
+    assert len(posts) == 1
+    with page.expect_navigation():
+        posts[0].continue_()
+    expect(page.locator("#job-status .pill")).to_have_text("Ready")
+    expect(page.get_by_role("progressbar")).to_have_count(0)
+    expect(button).to_be_enabled()
+    assert page.url == f"{status_server.url}{UPLOAD}"
+    assert len(posts) == 1
+    assert status_server.call(status_server.app.state.jobs.current()).generation == 1
+    assert violations(page) == []  # the script works under the Content-Security-Policy
+
+
+@pytest.mark.parametrize(("size", "shown"), [(123_456_789, "123.5 MB"), (1_560_000_000, "1.6 GB")])
+def test_upload_size_units(page: Page, status_server: LiveServer, size: int, shown: str) -> None:
+    """Check that the in-page upload shows a large file's size in MB or GB, as the status does.
+
+    The file is small; the page is told it's `size` bytes, which is all the script reads of its size.
+    """
+    posts: list[Route] = []
+    page.add_init_script(f"Object.defineProperty(File.prototype, 'size', {{get: () => {size}}})")
+    page.goto(f"{status_server.url}{UPLOAD}")
+    page.route(f"{status_server.url}{UPLOAD}", lambda route: posts.append(route))
+    page.set_input_files("#ontology", DATA / "routing.ttl")
+    page.get_by_role("button", name="Upload").click()
+    expect(page.locator(".upload-progress p")).to_contain_text(shown)
+    posts[0].abort()
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        ("abort", "The upload failed: the connection to the server was lost."),
+        ("500", "The upload failed: HTTP 500."),
+    ],
+)
+def test_upload_failure_shown(page: Page, status_server: LiveServer, failure: str, message: str) -> None:
+    """Check that, with JS, an upload that fails without the server's refusal page says so, and can be tried again.
+
+    The connection is lost, or the response is an error page without the refusal's message.
+    """
+
+    def fail(route: Route) -> None:
+        if route.request.method != "POST":
+            route.continue_()
+        elif failure == "abort":
+            route.abort()
+        else:
+            route.fulfill(status=500, body="<html><main><p>Internal Server Error</p></main></html>")
+
+    page.goto(f"{status_server.url}{UPLOAD}")
+    page.route(f"{status_server.url}{UPLOAD}", fail)
+    page.set_input_files("#ontology", DATA / "routing.ttl")
+    button = page.get_by_role("button", name="Upload")
+    button.click()
+    expect(page.get_by_role("alert")).to_have_text(message)
+    expect(button).to_be_enabled()
+    expect(page.locator(".upload-progress")).to_be_hidden()
+    assert page.url == f"{status_server.url}{UPLOAD}"
+
+
+def test_upload_pauses_status_polls(page: Page, status_server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that, with JS, the status doesn't poll while the form is sent, and polls again once it's refused.
+
+    So a poll can't find the refused upload's job ended, and load the page afresh, losing the refusal. The server holds
+    the upload, as a browser holding the request would hold back its others too.
+    """
+    jobs = status_server.app.state.jobs
+    status_server.call(jobs.start())
+    status_server.call(jobs.wait())
+    status_server.app.state.usage_tables = FakeTables(Progress(triples=200, scanned=50))  # so the status polls
+    received, refuse = threading.Event(), threading.Event()
+
+    async def held(request: object, runner: object) -> None:
+        received.set()
+        await asyncio.to_thread(refuse.wait, WAIT_S)
+        raise UploadError("held, then refused")
+
+    monkeypatch.setattr(browl.admin, "receive_upload", held)
+    polls: list[str] = []
+    page.on("request", lambda request: polls.append(request.url) if "?background" in request.url else None)
+    page.goto(f"{status_server.url}{UPLOAD}")
+    page.wait_for_timeout(POLL_S * 2000)
+    assert polls  # it polls before the upload
+    page.set_input_files("#ontology", DATA / "routing.ttl")
+    page.get_by_role("button", name="Upload").click()
+    assert received.wait(WAIT_S)
+    sent = len(polls)
+    page.wait_for_timeout(POLL_S * 4000)
+    assert len(polls) == sent
+    refuse.set()
+    expect(page.get_by_role("alert")).to_have_text("The upload was refused: held, then refused")
+    page.wait_for_timeout(POLL_S * 4000)
+    assert len(polls) > sent
+
+
+@NO_JS
+def test_upload_without_javascript(page: Page, status_server: LiveServer) -> None:
+    """Check that, without JS, the plain form posts the upload, and the redirect loads the upload page (U-17)."""
+    page.goto(f"{status_server.url}{UPLOAD}")
+    page.set_input_files("#ontology", DATA / "routing.ttl")
+    with page.expect_response(lambda response: response.request.method == "POST") as response:
+        page.get_by_role("button", name="Upload").click()
+    assert response.value.status == 303
+    expect(page.locator("#job-status .pill")).to_have_text("Ready")
+    assert page.url == f"{status_server.url}{UPLOAD}"
+    expect(page.locator(".upload-progress")).to_be_hidden()
+    assert status_server.call(status_server.app.state.jobs.current()).generation == 1
 
 
 # The page frame (P-14a, DESIGN.md §2.9)

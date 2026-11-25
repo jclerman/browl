@@ -16,6 +16,7 @@ import rdflib
 from fastapi.testclient import TestClient
 
 import browl.imports
+from browl.admin import status_context
 from browl.imports import (
     OWL_IMPORTS,
     FetchError,
@@ -81,11 +82,14 @@ def test_import_lines(size: int) -> None:
     ]
     data = ("\n".join(lines) + "\n").encode()
     found: dict[str, None] = {}
-    collect = _ImportLines(found)
+    counts: list[int] = []
+    collect = _ImportLines(found, counts.append)
     for start in range(0, len(data), size):
         collect(data[start : start + size])
     assert list(found) == [f"{EX}a", f"{EX}b"]
     assert collect.importers == {f"{EX}o"}
+    assert collect.triples == counts[-1] == 5  # each line a triple, counted as it arrives
+    assert counts == sorted(counts)
 
 
 def test_import_lines_skip_long_line(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -442,7 +446,10 @@ async def test_stage(site: StaticServer, settings: Settings, data_dir: Path) -> 
     )
     missing = site.url + "/missing.ttl"
     upload = store_upload(data_dir, turtle(f"{EX}o", a, missing))
-    context = JobContext(1, settings, upload=upload)
+    reports: list[tuple[str, str | None]] = []
+    context = JobContext(
+        1, settings, upload=upload, on_progress=lambda detail, fraction, iri: reports.append((detail, iri))
+    )
     await imports_stage(context, allow_all)
     assert context.imports == [
         ImportResult(a),
@@ -450,9 +457,24 @@ async def test_stage(site: StaticServer, settings: Settings, data_dir: Path) -> 
         ImportResult(b, a),
         ImportResult("file:///etc/passwd", a, "only http and https imports are fetched"),
     ]
+    # The document being fetched or read, its IRI apart from the public detail, with the count so far; each read's
+    # triples as they arrive.
+    steps = [report for report in dict.fromkeys(reports) if " · " not in report[0]]
+    assert steps == [
+        ("Parsing the uploaded file", None),
+        ("Fetching import 1", a),
+        ("Fetching import 2", missing),
+        ("Reading import 1 of 1 fetched so far", a),
+        ("Fetching import 3", b),
+        ("Fetching import 4", "file:///etc/passwd"),  # tried, and dropped
+        ("Reading import 2 of 2 fetched so far", b),
+    ]
+    assert ("Reading import 2 of 2 fetched so far · 2 triples so far", b) in reports
     assert sorted(site.requested) == ["/a.ttl", "/b.rdf", "/missing.ttl"]
     imports_dir = upload.parent / "imports"
     assert context.import_files == {a: imports_dir / "1.ttl", b: imports_dir / "3.rdf"}
+    assert context.triple_counts.keys() == {upload, imports_dir / "1.ttl", imports_dir / "3.rdf"}
+    assert context.triple_counts[imports_dir / "3.rdf"] == 2  # its ontology, and its import
     assert context.catalog == upload.parent / "catalog.xml"
     entries = catalog_map(context.catalog)
     assert entries[a] == (imports_dir / "1.ttl").resolve().as_uri()
@@ -672,12 +694,10 @@ def test_status_shows_dropped_imports(data_dir: Path) -> None:
     )
     JobStore(data_dir / STATE_DB).write(state)
     with TestClient(make_app()) as client:
-        page = client.get("/_browl/admin/status").text
+        page = " ".join(client.get("/_browl/admin/status").text.split())
     assert "1,234 triples loaded, not counting imports." in page
-    assert (
-        "1 of the ontology's 2 imports\n    couldn't be loaded</strong>, so the site leaves out what it declares."
-        in page
-    )
+    assert "1 of the ontology's 2 imports couldn't be loaded</strong>, so the site leaves out what it declares." in page
+    assert '<details class="imports" open> <summary>2 imports</summary>' in page
     assert f'<li class="failure"><code>file:///x</code> (imported by <code>{EX}a</code>):' in page
     assert "only http and https" in page
     assert "5 triples" in page
@@ -712,7 +732,7 @@ def test_status_import_states(
     """Check how the status shows imports and triples in each state: dropped, loaded, only fetched, or none."""
     now = datetime.now(UTC)
     state = JobState(1, Stage.LOADING, now, now, Stage.LOADING, "boom", imports=imports, triples=triples)
-    page = templates.get_template("admin/_job_status.html").render(job=state, stages=list(Stage), poll_s=1)
+    page = templates.get_template("admin/_job_status.html").render(status_context(state))
     page = " ".join(page.split())
     for text in present:
         assert text in page

@@ -346,7 +346,7 @@ def test_failed_after_claim(
     state = app.state.jobs.state
     assert (state.generation, state.failed_stage, state.reasoner) == (1, Stage.UPLOADING, Reasoner.ELK)
     assert reason in (state.reason or "")
-    assert "Failed in stage <strong>uploading</strong>" in response.text
+    assert "<strong>Upload Failed</strong>" in response.text
     assert not upload_path(data_dir, 1, ".ttl").parent.exists()
     assert (state.upload_name, state.upload_syntax) == ("o.ttl", "Turtle")
     assert state.upload_bytes == len(LONG)
@@ -723,7 +723,7 @@ async def test_other_errors_unmapped(data_dir: Path, monkeypatch: pytest.MonkeyP
 
 async def test_upload_progress_streamed(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that the size recorded while a file streams in follows each chunk, not just the claim and the end."""
-    monkeypatch.setattr(browl.jobs, "UPLOAD_PROGRESS_S", 0)
+    monkeypatch.setattr(browl.jobs, "PROGRESS_S", 0)
     file_chunks = [LONG, TURTLE, TURTLE]
     messages = [FILE_START + file_chunks[0], *file_chunks[1:], b"\r\n--b--\r\n"]
     sent = 0
@@ -822,7 +822,7 @@ def test_check_syntax_indistinct(syntax: Syntax) -> None:
 
 def test_upload_progress_shown(client: TestClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that while a file uploads, the status shows how much has arrived so far."""
-    monkeypatch.setattr(browl.jobs, "UPLOAD_PROGRESS_S", 0)
+    monkeypatch.setattr(browl.jobs, "PROGRESS_S", 0)
     assert client.portal is not None
     with client.portal.wrap_async_context_manager(app.state.jobs.upload(Reasoner.NONE, "big.ttl", "Turtle")) as context:
         context.upload_bytes = 2_500_000

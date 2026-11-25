@@ -2,7 +2,9 @@
 
 import asyncio
 import re
+import sqlite3
 import threading
+import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +13,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import browl.jobs
 from browl.derived import DERIVED_DIR
 from browl.jobs import (
     INTERRUPTED_BY_RESTART,
@@ -24,6 +27,7 @@ from browl.jobs import (
 )
 from browl.jobtypes import StageError
 from browl.pages import RETRY_AFTER_S, SiteGate, app_path, link_root, templates
+from browl.precache.usage_table import Progress
 from tests.helpers import derived_stage, make_app
 
 pytestmark = pytest.mark.usefixtures("data_dir")
@@ -97,6 +101,15 @@ def start_job(client: TestClient, app: FastAPI) -> None:
     assert loading.wait(timeout=5)
 
 
+def steps(html: str) -> list[tuple[str, str, str]]:
+    """Return each stage box's state, `aria-current` attribute (or ""), and label, from the status fragment."""
+    return re.findall(
+        r'<li class="step step-(\w+)" tabindex="0" aria-describedby="step-tip-[\w-]+"( aria-current="step")?>'
+        r' <span class="step-icon" aria-hidden="true"></span> <span class="step-label">([^<]+)</span>',
+        html,
+    )
+
+
 def fragment(client: TestClient) -> str:
     """Return the status route's fragment, as htmx asks for it, with whitespace collapsed."""
     response = client.get(STATUS, headers=HTMX)
@@ -140,6 +153,99 @@ def test_loading(client: TestClient, app: FastAPI, path: str) -> None:
     assert response.headers["Cache-Control"] == "no-store"
     assert "<h1>Loading the ontology</h1>" in response.text
     assert f'<meta http-equiv="refresh" content="{RETRY_AFTER_S}">' in response.text
+
+
+def test_loading_shows_progress(client: TestClient, app: FastAPI) -> None:
+    """Check that the "loading" page shows the running job's stages and activity, but not the admin's details."""
+    loading = threading.Event()
+
+    async def reporting(context: JobContext) -> None:
+        context.report("Added 5 of 10 triples", 0.5)
+        loading.set()
+        await asyncio.Event().wait()
+
+    app.state.jobs.register(Stage.LOADING, reporting)
+    client.portal.call(app.state.jobs.start)
+    assert loading.wait(timeout=5)
+    for _ in range(50):
+        if app.state.jobs.state.detail is not None:
+            break
+        time.sleep(0.1)
+    html = " ".join(client.get("/example.org/onto").text.split())
+    assert [label for _, _, label in steps(html)] == [
+        "Uploaded",
+        "Ontology Read",
+        "No Reasoner",
+        "Storing Triples",
+        "Pre-Cache",
+        "Publish",
+    ]
+    assert "Running for " in html
+    assert '<p class="step-detail"><span>Added 5 of 10 triples</span></p>' in html
+    assert '<section class="job-status" aria-label="Load progress">' in html  # no hx-get: the page refreshes itself
+    assert "upload-file" not in html and "Load 1" not in html
+
+
+def test_loading_leaves_out_iri(client: TestClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that the "loading" page leaves out the IRI a stage is working on, and escapes its detail.
+
+    The page is public, and an import's IRI may name an intranet host or carry a token; the admin status shows it.
+    """
+    monkeypatch.setattr(browl.jobs, "PROGRESS_S", 0)
+    reported = threading.Event()
+    iri = "http://intranet.example/o.ttl?access_token=hunter2"
+
+    async def imports(context: JobContext) -> None:
+        context.report("Fetching <import> 1", None, iri)
+        await asyncio.sleep(0.05)  # the report is recorded
+        reported.set()
+        await asyncio.Event().wait()
+
+    app.state.jobs.register(Stage.IMPORTS, imports)
+    client.portal.call(app.state.jobs.start)
+    assert reported.wait(timeout=5)
+    html = " ".join(client.get("/example.org/onto").text.split())
+    assert '<p class="step-detail"><span>Fetching &lt;import&gt; 1</span></p>' in html
+    assert "intranet.example" not in html and "hunter2" not in html
+    assert f'<p class="step-detail"><span><code>{iri}</code></span></p>' in fragment(client)
+
+
+def test_loading_without_job_progress(client: TestClient, app: FastAPI) -> None:
+    """Check that a "loading" page served while no job runs (another worker's rebuild) shows no progress."""
+    run_job(client, app)
+    for file in (app.state.settings.data_dir / DERIVED_DIR).iterdir():
+        file.unlink()
+    html = client.get("/example.org/onto").text
+    assert "<h1>Loading the ontology</h1>" in html
+    assert 'class="stepper"' not in html
+
+
+def test_loading_job_state_unreadable(client: TestClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that the "loading" page for a derived database not current is served if the job state is unreadable.
+
+    It shows no progress, rather than failing.
+    """
+    run_job(client, app)
+    for file in (app.state.settings.data_dir / DERIVED_DIR).iterdir():
+        file.unlink()
+    current = app.state.jobs.current
+    calls: list[int] = []
+    fail_at = 0
+
+    async def failing_current() -> JobState:
+        calls.append(1)
+        if len(calls) == fail_at:
+            raise sqlite3.OperationalError("database is locked")
+        return await current()
+
+    monkeypatch.setattr(app.state.jobs, "current", failing_current)
+    assert "<h1>Loading the ontology</h1>" in client.get("/example.org/onto").text
+    fail_at, calls[:] = len(calls), []  # the last read, for the "loading" page
+    response = client.get("/example.org/onto")
+    assert len(calls) == fail_at
+    assert response.status_code == 503
+    assert "<h1>Loading the ontology</h1>" in response.text
+    assert 'class="stepper"' not in response.text
 
 
 @pytest.mark.parametrize(
@@ -270,17 +376,17 @@ def test_status_running(client: TestClient, app: FastAPI) -> None:
     start_job(client, app)
     started = app.state.jobs.state.started_at
     html = fragment(client)
-    assert "Load 1 is running, started" in html
-    assert f'<time datetime="{started.isoformat()}">{started:%Y-%m-%d %H:%M:%S} UTC</time>' in html
+    assert "Running</span>" in html
+    assert f'Load 1 · started <time datetime="{started.isoformat()}">{started:%Y-%m-%d %H:%M:%S} UTC</time>' in html
+    assert "· running for " in html
     assert 'hx-get="/_browl/admin/status" hx-trigger="every 2s" hx-swap="outerHTML"' in html
-    stages = re.findall(r'<li class="(\w+)"( aria-current="step")?>([\w-]+)', html)
-    assert stages == [
-        ("done", "", "uploading"),
-        ("done", "", "imports"),
-        ("done", "", "reasoning"),
-        ("current", ' aria-current="step"', "loading"),
-        ("pending", "", "pre-caching"),
-        ("pending", "", "ready"),
+    assert steps(html) == [
+        ("done", "", "Uploaded"),
+        ("done", "", "Ontology Read"),
+        ("skipped", "", "No Reasoner"),
+        ("current", ' aria-current="step"', "Storing Triples"),
+        ("pending", "", "Pre-Cache"),
+        ("pending", "", "Publish"),
     ]
 
 
@@ -288,24 +394,119 @@ def test_status_ready(client: TestClient, app: FastAPI) -> None:
     """Check that after a load the status shows Ready highlighted, and stops polling (#85)."""
     run_job(client, app)
     html = fragment(client)
-    assert "Load 1 is ready, started" in html
+    assert "Ready</span>" in html
+    assert "· took " in html
     assert "hx-trigger" not in html
-    assert re.findall(r'<li class="(\w+)"', html) == ["done"] * 5 + ["current"]
-    assert '<li class="current" aria-current="step">ready' in html
+    assert [state for state, _, _ in steps(html)] == ["done", "done", "skipped", "done", "done", "done"]
+    assert "aria-current" not in html
+    assert ">Published</span>" in html
 
 
 def test_status_failed(client: TestClient, app: FastAPI) -> None:
     """Check that after a failure the status shows the failed stage and the reason, escaped."""
     run_job(client, app, reasoning=SECRET_REASON)
     html = fragment(client)
-    assert "Load 1 failed, started" in html
+    assert "Failed</span>" in html
+    assert "· failed after " in html
     assert "hx-trigger" not in html
-    assert '<li class="failed" aria-current="step">reasoning (failed)</li>' in html
-    assert re.findall(r'<li class="(\w+)"', html) == ["done", "done", "failed", "pending", "pending", "pending"]
-    assert (
-        "Failed in stage <strong>reasoning</strong>: &lt;script&gt;alert(&#39;reason&#39;)&lt;/script&gt;</p>" in html
-    )
+    assert steps(html) == [
+        ("done", "", "Uploaded"),
+        ("done", "", "Ontology Read"),
+        ("failed", ' aria-current="step"', "Inference Failed"),
+        ("pending", "", "Store Triples"),
+        ("pending", "", "Pre-Cache"),
+        ("pending", "", "Publish"),
+    ]
+    assert "<strong>Inference Failed</strong>: &lt;script&gt;alert(&#39;reason&#39;)&lt;/script&gt;</p>" in html
     assert SECRET_REASON not in html
+
+
+def test_status_running_progress(client: TestClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check the running stage's progress: its box's time so far, a done box's time, and the details panel.
+
+    The panel says what the stage is doing, with a bar for how far it has got.
+    """
+    monkeypatch.setattr(browl.jobs, "PROGRESS_S", 0)
+    reported = threading.Event()
+
+    async def loading(context: JobContext) -> None:
+        context.report("Added 640,000 of 1,167,135 triples (55%)", 640_000 / 1_167_135)
+        await asyncio.sleep(0.05)  # the report is recorded
+        reported.set()
+        await asyncio.Event().wait()
+
+    app.state.jobs.register(Stage.LOADING, loading)
+    client.portal.call(app.state.jobs.start)
+    assert reported.wait(timeout=5)
+    html = fragment(client)
+    took = '<span class="step-time"><span class="visually-hidden">took </span>0 s</span>'
+    assert f'<span class="step-label">Uploaded</span> {took}' in html
+    assert '<span class="step-label">No Reasoner</span> <span class="step-tip"' in html  # skipped: no time
+    assert (
+        '<span class="step-label">Storing Triples</span> <span class="step-time">'
+        '<span class="visually-hidden">running for </span>0 s</span>'
+    ) in html
+    assert (
+        '<div class="step-panel" role="group" aria-labelledby="step-panel-current">'
+        ' <p class="step-panel-head"><strong id="step-panel-current">Storing Triples</strong> · running for 0 s</p>'
+        ' <p class="step-detail"><span>Added 640,000 of 1,167,135 triples (55%)</span></p>'
+        ' <progress class="step-progress" max="100" value="54.8" aria-labelledby="step-panel-current">55%</progress>'
+    ) in html
+    stored = JobStore(app.state.settings.data_dir / STATE_DB).read()
+    assert (stored.detail, stored.fraction) == ("Added 640,000 of 1,167,135 triples (55%)", 640_000 / 1_167_135)
+
+
+def test_status_running_no_detail(client: TestClient, app: FastAPI) -> None:
+    """Check that the panel of a stage that hasn't said what it's doing has just its label and time, and no bar."""
+    start_job(client, app)
+    html = fragment(client)
+    assert '<strong id="step-panel-current">Storing Triples</strong> · running for ' in html
+    assert 'class="step-detail"' not in html
+    assert "<progress" not in html
+
+
+class FakeTables:
+    """Usage tables whose build of the ready generation's table is running with some progress, or failed."""
+
+    def __init__(self, progress: Progress | None = None, failed: bool = False) -> None:  # noqa: D107
+        self._progress, self._failed = progress, failed
+
+    def progress(self, generation: int) -> Progress | None:  # noqa: D102
+        return self._progress
+
+    def failed(self, generation: int) -> bool:  # noqa: D102
+        return self._failed
+
+
+def test_status_background_build(client: TestClient, app: FastAPI) -> None:
+    """Check that once the job is ready, the usage table's build shows after publishing.
+
+    The fragment polls without redirecting until the build ends.
+    """
+    run_job(client, app)
+    app.state.usage_tables = FakeTables(Progress(triples=200, scanned=50))
+    response = client.get(f"{STATUS}?background", headers=HTMX)
+    assert "HX-Redirect" not in response.headers
+    html = " ".join(response.text.split())
+    assert f'hx-get="{STATUS}?background" hx-trigger="every 2s" hx-swap="outerHTML"' in html
+    assert '<h2 class="background-title">After publishing</h2>' in html
+    assert '<strong id="background-1">Building the usage table</strong> · running for 0 s</p>' in html
+    assert '<p class="step-detail"><span>Step 2 of 3: Scanned 50 of 200 triples (25%)</span></p>' in html
+    assert 'max="100" value="25.0"' in html
+    assert "HX-Redirect" in client.get(STATUS, headers=HTMX).headers  # a poll from when the job ran
+    app.state.usage_tables = FakeTables()
+    html = fragment(client)
+    assert "hx-trigger" not in html
+    assert "After publishing" not in html
+
+
+def test_status_background_build_failed(client: TestClient, app: FastAPI) -> None:
+    """Check that a failed usage table build says so, and doesn't poll."""
+    run_job(client, app)
+    app.state.usage_tables = FakeTables(failed=True)
+    html = fragment(client)
+    assert '<p class="failure">The usage table\'s build failed' in html
+    assert "hx-trigger" not in html
 
 
 def test_status_poll_running_no_redirect(client: TestClient, app: FastAPI) -> None:
@@ -388,7 +589,7 @@ def test_restart_serves_loaded_ontology() -> None:
         run_job(client, first)
     with TestClient(make_app()) as client:
         assert client.get("/no/such/page").status_code == 404  # past the gate, to the router
-        assert "Load 1 is ready" in fragment(client)
+        assert "Ready</span> <span>Load 1 ·" in fragment(client)
 
 
 def test_restart_after_interrupted_job(data_dir: Path) -> None:
@@ -401,4 +602,4 @@ def test_restart_after_interrupted_job(data_dir: Path) -> None:
         response = client.get("/example.org/onto")
         assert response.status_code == 503
         assert "<h1>Not available</h1>" in response.text
-        assert f"Failed in stage <strong>loading</strong>: {INTERRUPTED_BY_RESTART}" in fragment(client)
+        assert f"<strong>Storing Failed</strong>: {INTERRUPTED_BY_RESTART}" in fragment(client)

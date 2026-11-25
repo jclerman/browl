@@ -1,59 +1,66 @@
-{# The load job's status (A-5, A-6). While a job runs, it polls its route and replaces itself. #}
+{# The load job's status (A-5, A-6). While a job runs, or work after it in the background, it polls its route and
+   replaces itself. #}
+{% from "_load_progress.html" import activity_panel, stepper %}
 <section id="job-status" class="job-status" aria-live="polite"
-  {%- if job.running %} hx-get="{{ url_for('job_status').path }}" hx-trigger="every {{ poll_s }}s" hx-swap="outerHTML"{% endif %}>
+  {%- if job.running or background is not none %} hx-get="{{ url_for('job_status').path }}
+  {%- if not job.running %}?{{ background_poll }}{% endif %}" hx-trigger="every {{ poll_s }}s" hx-swap="outerHTML"{% endif %}>
   {% if job.stage is none %}
   <p>No ontology has been loaded yet.</p>
   {% else %}
-  <p>
-    Load {{ job.generation }}
-    {% if job.running %}is running{% elif job.failed_stage is not none %}failed{% else %}is ready{% endif %},
-    started <time datetime="{{ job.started_at.isoformat() }}">{{ job.started_at.strftime("%Y-%m-%d %H:%M:%S UTC") }}</time>.
+  {% set outcome = "running" if job.running else "failed" if job.failed_stage is not none else "ready" %}
+  <p class="job-summary">
+    <span class="pill pill-{{ outcome }}">{{ outcome | capitalize }}</span>
+    <span>Load {{ job.generation }} · started
+      <time datetime="{{ job.started_at.isoformat() }}">{{ job.started_at.strftime("%Y-%m-%d %H:%M:%S UTC") }}</time>
+      · {% if job.running %}running for{% elif outcome == "failed" %}failed after{% else %}took{% endif %} {{ elapsed }}</span>
   </p>
-  {% if job.upload_name is not none %}
-  <p class="upload-file">
-    File <code>{{ job.upload_name }}</code>, {{ job.upload_syntax }}
-    {%- if job.upload_bytes is not none %},
-    <span title="{{ '{:,}'.format(job.upload_bytes) }} bytes">{{ job.upload_bytes | filesizeformat }}</span>
-    {%- if job.failed_stage == "uploading" %} received before the failure
-    {%- elif job.running and job.stage == "uploading" %} received so far{% endif %}
-    {%- endif %}.
-  </p>
-  {% endif %}
-  {% if job.triples is not none %}
-  <p>{{ "{:,}".format(job.triples) }} triples loaded{% if job.imports %}, not counting imports{% endif %}.</p>
-  {% endif %}
-  {% if job.imports %}
-  {% set dropped = job.dropped_imports %}
-  {% if dropped %}
-  <p class="failure" role="alert"><strong>{{ dropped | length }} of the ontology's {{ job.imports | length }} imports
-    couldn't be loaded</strong>, so the site leaves out what {{ "it declares" if dropped | length == 1 else "they declare" }}.</p>
-  {% endif %}
-  <ul class="imports">
-    {% for result in job.imports %}
-    <li{% if result.dropped %} class="failure"{% endif %}><code>{{ result.iri }}</code>
-      {%- if result.imported_by is not none %} (imported by <code>{{ result.imported_by }}</code>){% endif %}:
-      {% if result.dropped %}not loaded: {{ result.reason }}
-      {%- elif result.triples is not none %}{{ "{:,}".format(result.triples) }} triples
-      {%- else %}fetched{% endif %}</li>
+  {{ stepper(steps) }}
+  <div class="step-details">
+    {% if activity is not none %}{{ activity_panel(activity, "step-panel-current") }}{% endif %}
+    {% for step in steps if step.state == "failed" %}
+    <p class="failure"><strong>{{ step.label }}</strong>: {{ job.reason }}</p>
     {% endfor %}
-  </ul>
-  {% endif %}
-  <ol class="stages">
-    {% set current = stages.index(job.stage) %}
-    {% for stage in stages %}
-    {% if loop.index0 < current %}
-    <li class="done">{{ stage }}</li>
-    {% elif loop.index0 > current %}
-    <li class="pending">{{ stage }}</li>
-    {% elif job.failed_stage is not none %}
-    <li class="failed" aria-current="step">{{ stage }} (failed)</li>
-    {% else %}
-    <li class="current" aria-current="step">{{ stage }}</li>
+    {% if job.upload_name is not none %}
+    <p class="upload-file">
+      File <code>{{ job.upload_name }}</code>, {{ job.upload_syntax }}
+      {%- if job.upload_bytes is not none %},
+      <span title="{{ '{:,}'.format(job.upload_bytes) }} bytes">{{ job.upload_bytes | filesizeformat }}</span>
+      {%- if job.failed_stage == "uploading" %} received before the failure
+      {%- elif job.running and job.stage == "uploading" %} received so far{% endif %}
+      {%- endif %}.
+    </p>
     {% endif %}
-    {% endfor %}
-  </ol>
-  {% if job.failed_stage is not none %}
-  <p class="failure">Failed in stage <strong>{{ job.failed_stage }}</strong>: {{ job.reason }}</p>
-  {% endif %}
+    {% if job.triples is not none %}
+    <p>{{ "{:,}".format(job.triples) }} triples loaded{% if job.imports %}, not counting imports{% endif %}.</p>
+    {% endif %}
+    {% if job.imports %}
+    {% set dropped = job.dropped_imports %}
+    {% if dropped %}
+    <p class="failure" role="alert"><strong>{{ dropped | length }} of the ontology's {{ job.imports | length }} imports
+      couldn't be loaded</strong>, so the site leaves out what {{ "it declares" if dropped | length == 1 else "they declare" }}.</p>
+    {% endif %}
+    {# Closed unless an import couldn't be loaded. #}
+    <details class="imports"{% if dropped %} open{% endif %}>
+      <summary>{{ job.imports | length }} import{{ "s" if job.imports | length != 1 else "" }}</summary>
+      <ul>
+        {% for result in job.imports %}
+        <li{% if result.dropped %} class="failure"{% endif %}><code>{{ result.iri }}</code>
+          {%- if result.imported_by is not none %} (imported by <code>{{ result.imported_by }}</code>){% endif %}:
+          {% if result.dropped %}not loaded: {{ result.reason }}
+          {%- elif result.triples is not none %}{{ "{:,}".format(result.triples) }} triples
+          {%- else %}fetched{% endif %}</li>
+        {% endfor %}
+      </ul>
+    </details>
+    {% endif %}
+    {% if background is not none or background_failed %}
+    <h2 class="background-title">After publishing</h2>
+    {% if background is not none %}{{ activity_panel(background, "background-1") }}{% endif %}
+    {% if background_failed %}
+    <p class="failure">The usage table's build failed, so the Usage tab can't list usages; the app's log says why. It's
+      tried again when the app next starts.</p>
+    {% endif %}
+    {% endif %}
+  </div>
   {% endif %}
 </section>

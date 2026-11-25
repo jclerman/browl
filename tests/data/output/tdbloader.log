@@ -1,0 +1,12 @@
+01:43:18 INFO  loader          :: Loader = LoaderPhased
+01:43:18 INFO  loader          :: Start: /data/jobs/3/big.nt
+01:43:19 INFO  loader          :: Add: 1,000,000 big.nt (Batch: 1,360,544 / Avg: 1,360,544)
+01:43:19 INFO  loader          :: Finished: /data/jobs/3/big.nt: 1,200,000 tuples in 0.89s (Avg: 1,348,314)
+01:43:31 INFO  loader          :: Finish - index SPO
+01:43:31 INFO  loader          :: Start replay index SPO
+01:43:31 INFO  loader          :: Index set:  SPO => SPO->POS, SPO->OSP
+01:43:31 INFO  loader          :: Add: 1,000,000 Index (Batch: 25,000,000 / Avg: 25,000,000)
+01:43:31 INFO  loader          :: Index set:  SPO => SPO->POS, SPO->OSP [1,200,000 items, 0.2 seconds]
+01:43:31 INFO  loader          :: Finish - index OSP
+01:43:31 INFO  loader          :: Finish - index POS
+01:43:31 INFO  loader          :: Time = 13.411 seconds : Triples = 1,200,000 : Rate = 89,479 /s

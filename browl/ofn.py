@@ -31,10 +31,12 @@ class Listing:
         imports: The IRIs it imports, each once.
         names: IRIs it's known by, which an import of it may name: an OFN document's ontology and version IRIs; an RDF
             document's ontologies that import something.
+        triples: How many triples it holds, if the parser counted them, as `riot` does; else None.
     """
 
     imports: list[str]
     names: frozenset[str] = frozenset()
+    triples: int | None = None
 
 
 async def convert_ofn(source: Path, output: Path, settings: Settings) -> Listing:

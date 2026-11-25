@@ -1,0 +1,39 @@
+2026-11-25 01:40:33,179 INFO  org.obolibrary.robot.CommandLineHelper - Reasoner: elk
+2026-11-25 01:40:33,183 INFO  org.obolibrary.robot.ReasonOperation - Ontology has 47 axioms.
+2026-11-25 01:40:33,187 WARN  org.obolibrary.robot.ReasonOperation - Reference violations found: 32 - reasoning may be incomplete
+2026-11-25 01:40:33,244 INFO  org.obolibrary.robot.ReasonOperation - Starting reasoning...
+2026-11-25 01:40:33,245 INFO  org.obolibrary.robot.ReasonerHelper - Checking for inconsistencies
+2026-11-25 01:40:33,266 INFO  org.obolibrary.robot.ReasonerHelper - Checking for unsatisfiable classes...
+2026-11-25 01:40:33,281 INFO  org.obolibrary.robot.ReasonerHelper - Checking for unsatisfiable object properties...
+2026-11-25 01:40:33,287 INFO  org.obolibrary.robot.ReasonOperation - Precomputing class hierarchy...
+2026-11-25 01:40:33,289 INFO  org.obolibrary.robot.ReasonOperation - Finding equivalencies...
+2026-11-25 01:40:33,290 INFO  org.obolibrary.robot.ReasonOperation - Inferred the following equivalent classes
+2026-11-25 01:40:33,290 INFO  org.obolibrary.robot.ReasonOperation - Equivalence: <http://example.org/s/V> == <http://example.org/s/U>
+2026-11-25 01:40:33,290 INFO  org.obolibrary.robot.ReasonOperation - Reasoning took 1 seconds.
+2026-11-25 01:40:33,291 INFO  org.obolibrary.robot.ReasonOperation - Using these axiom generators:
+2026-11-25 01:40:33,291 INFO  org.obolibrary.robot.ReasonOperation -     Subclasses
+2026-11-25 01:40:33,291 INFO  org.obolibrary.robot.ReasonOperation -     Equivalent classes
+2026-11-25 01:40:33,291 INFO  org.obolibrary.robot.ReasonOperation -     Class assertions (individual direct types)
+2026-11-25 01:40:33,316 INFO  org.obolibrary.robot.ReasonOperation - Removing redundant subclass axioms...
+2026-11-25 01:40:33,318 INFO  org.obolibrary.robot.ReasonOperation - Ontology now has 75 axioms.
+2026-11-25 01:40:33,318 INFO  org.obolibrary.robot.ReasonOperation - Ontology has 75 axioms after all reasoning steps.
+2026-11-25 01:40:33,318 INFO  org.obolibrary.robot.ReasonOperation - Filling took 1 seconds.
+2026-11-25 01:40:33,320 WARN  org.obolibrary.robot.CommandManager - Subcommand Timing: reason took 0.272 seconds
+2026-11-25 01:40:33,322 INFO  org.obolibrary.robot.CommandLineHelper - Reasoner: elk
+2026-11-25 01:40:33,323 INFO  org.obolibrary.robot.MaterializeOperation - Materializing imported ontologies...
+2026-11-25 01:40:33,325 INFO  org.obolibrary.robot.MaterializeOperation - Materializing: Ontology(OntologyID(OntologyIRI(<http://example.org/s>) VersionIRI(<null>))) [Axioms: 75 Logical Axioms: 73] First 20 axioms: {EquivalentClasses(<http://example.org/s/Q> ObjectIntersectionOf(<http://example.org/s/P> ObjectSomeValuesFrom(<http://example.org/s/part_of> <http://example.org/s/R>))) EquivalentClass
+2026-11-25 01:40:33,327 INFO  org.obolibrary.robot.ReasonerHelper - Checking for inconsistencies
+2026-11-25 01:40:33,330 INFO  org.obolibrary.robot.ReasonerHelper - Checking for unsatisfiable classes...
+2026-11-25 01:40:33,331 INFO  org.obolibrary.robot.ReasonerHelper - Checking for unsatisfiable object properties...
+2026-11-25 01:40:33,331 INFO  org.obolibrary.robot.ReasonerHelper - Object-property precomputation is supported; using that to find unsatisfiable object properties...
+2026-11-25 01:40:33,333 INFO  org.obolibrary.robot.MaterializeOperation - Materializing...[<http://example.org/p>]
+2026-11-25 01:40:33,341 INFO  org.obolibrary.robot.MaterializeOperation - Materialization complete; iterating over classes
+2026-11-25 01:40:33,344 INFO  org.obolibrary.robot.MaterializeOperation -  Materializing parents of class 1/44
+2026-11-25 01:40:33,352 INFO  org.obolibrary.robot.MaterializeOperation - Adding 0 materialized parents
+2026-11-25 01:40:33,352 INFO  org.obolibrary.robot.MaterializeOperation - Asserting materialized superclasses took 0 seconds.
+2026-11-25 01:40:33,353 WARN  org.obolibrary.robot.CommandManager - Subcommand Timing: materialize took 0.032 seconds
+2026-11-25 01:40:33,583 INFO  org.semanticweb.owlapi.rdf.rdfxml.parser.OWLRDFConsumer - Unparsed triple: _:genid-nodeid-node1k89182n4x24 -> http://www.w3.org/2002/07/owl#onProperty -> http://example.org/s/part_of
+2026-11-25 01:40:33,584 INFO  org.semanticweb.owlapi.rdf.rdfxml.parser.OWLRDFConsumer - Unparsed triple: _:genid-nodeid-node1k89182n4x1 -> http://www.w3.org/2002/07/owl#onProperty -> http://example.org/s/part_of
+2026-11-25 01:40:33,584 INFO  org.semanticweb.owlapi.rdf.rdfxml.parser.OWLRDFConsumer - Unparsed triple: _:genid-nodeid-node1k89182n4x24 -> http://www.w3.org/2002/07/owl#someValuesFrom -> http://example.org/s/I
+2026-11-25 01:40:33,584 INFO  org.semanticweb.owlapi.rdf.rdfxml.parser.OWLRDFConsumer - Unparsed triple: _:genid-nodeid-node1k89182n4x1 -> http://www.w3.org/2002/07/owl#someValuesFrom -> http://example.org/s/F
+2026-11-25 01:40:33,594 WARN  org.obolibrary.robot.CommandManager - Subcommand Timing: query took 0.241 seconds
