@@ -8,9 +8,10 @@ queries can stream on the event loop. The file stores its build keys (`browl.pre
 import asyncio
 import logging
 import sqlite3
+import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import AbstractAsyncContextManager, AbstractContextManager, asynccontextmanager, suppress
+from contextlib import AbstractContextManager, asynccontextmanager, suppress
 from pathlib import Path
 
 import httpx2
@@ -18,7 +19,8 @@ import httpx2
 from browl import derived
 from browl.derived import Meta
 from browl.fuseki import FusekiClient, SparqlError, ping
-from browl.jobs import JobContext
+from browl.job_view import format_duration
+from browl.jobs import PROGRESS_S, JobContext
 from browl.jobtypes import StageError
 from browl.loading import dataset_name, read_upload_prefixes
 from browl.precache.axiom_counts import axiom_counts
@@ -81,13 +83,15 @@ async def pre_cache(context: JobContext, http: httpx2.AsyncClient, hooks: Sequen
     dataset = dataset_name(context.generation)
     keys = build_keys(context.settings, hooks)
     try:
+        context.report("Reading the ontology's header")
         meta = await header_meta(context, sparql, dataset)
         async with build(context.settings.data_dir, meta, keys) as db:
             hook_context = PreCacheContext(context, sparql, dataset, db)
-            for hook in hooks:
+            for number, hook in enumerate(hooks, start=1):
                 logger.info("Load job %d: pre-caching hook %s", context.generation, hook.name)
                 try:
-                    await hook(hook_context)
+                    async with _hook_progress(context, db, f"Hook {number} of {len(hooks)}, {hook.name}"):
+                        await hook(hook_context)
                 except SparqlError as error:
                     raise StageError(f"pre-caching query failed ({hook.name}): {error}") from error
     except SparqlError as error:
@@ -105,6 +109,7 @@ async def rebuild(context: JobContext, http: httpx2.AsyncClient, hooks: Sequence
     """
     if not context.prefixes:
         context.prefixes = await asyncio.to_thread(read_upload_prefixes, context.settings.data_dir, context.generation)
+    context.report("Waiting for Fuseki")
     await wait_for_fuseki(http)
     await pre_cache(context, http, hooks)
 
@@ -132,17 +137,40 @@ async def wait_for_fuseki(http: httpx2.AsyncClient, limit_s: float | None = None
         pause = min(pause * 2, longest)
 
 
-def build(data_dir: Path, meta: Meta, keys: Mapping[str, str]) -> AbstractAsyncContextManager[DerivedWriter]:
+@asynccontextmanager
+async def build(data_dir: Path, meta: Meta, keys: Mapping[str, str]) -> AsyncIterator[DerivedWriter]:
     """Build a generation's derived database on a thread of its own (`browl.derived.build`, `on_thread`).
 
     On a clean exit the database is swapped in; if the block fails or is cancelled, the temporary file is deleted.
     """
-    return on_thread(derived.build(data_dir, meta, keys), "derived-build")
+    async with on_thread(derived.build(data_dir, meta, keys), "derived-build") as db:
+        yield db
+
+
+@asynccontextmanager
+async def _hook_progress(context: JobContext, db: DerivedWriter, label: str) -> AsyncIterator[None]:
+    """Report a hook's progress every `PROGRESS_S` while the block runs: its label, time so far and rows written."""
+    await db.run(lambda connection: None)  # so `rows` counts what the build wrote before, e.g. `meta`
+    started, rows = time.monotonic(), db.rows
+
+    async def tick() -> None:
+        while True:
+            elapsed = format_duration(time.monotonic() - started)
+            context.report(f"{label} · {elapsed} · {db.rows - rows:,} rows written")
+            await asyncio.sleep(PROGRESS_S)
+
+    ticker = asyncio.create_task(tick())
+    try:
+        yield
+    finally:
+        ticker.cancel()
 
 
 @asynccontextmanager
 async def on_thread(
-    manager: AbstractContextManager[sqlite3.Connection], name: str, interrupt: bool = False
+    manager: AbstractContextManager[sqlite3.Connection],
+    name: str,
+    interrupt: bool = False,
 ) -> AsyncIterator[DerivedWriter]:
     """Enter a database build's context manager on a thread of its own, yielding a writer for its connection.
 

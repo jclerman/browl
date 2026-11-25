@@ -25,6 +25,7 @@ from browl.robot import (
     REASONED,
     UNSATISFIABLE_SHOWN,
     RobotOutput,
+    RobotProgress,
     failure_reason,
     reason_args,
     reasoning_stage,
@@ -515,3 +516,54 @@ async def test_memory_limit(java: None, data_dir: Path) -> None:
     settings = make_settings(ROBOT_JAR=str(find_robot_jar()), REASONER_MAX_HEAP="8m")
     with pytest.raises(StageError, match=r"^memory limit: reasoning needed more than REASONER_MAX_HEAP \(8m\)$"):
         await reason(settings, data_dir, "ok.ofn")
+
+
+def test_progress_from_recorded_output(settings: Settings) -> None:
+    """Check the steps followed in ROBOT's `-vv` output of a reason, materialize and query run (no JVM).
+
+    `query` logs no step of its own, so it shows from when `materialize` logs its time.
+    """
+    settings = settings.model_copy(update={"materialize_properties": [f"{NS}p"]})
+    reports: list[tuple[str, float | None]] = []
+    args = reason_args(Reasoner.ELK, Path("in.ofn"), Path("out.ttl"), settings, Path("catalog.xml"))
+    progress = RobotProgress(args, lambda detail, fraction: reports.append((detail, fraction)))
+    for line in (DATA / "output" / "robot-reason-materialize-query.log").read_text().splitlines():
+        progress.add(line)
+    assert reports == [
+        ("Loading the ontology", None),
+        ("Starting the reasoner", None),
+        ("Checking for inconsistencies", None),
+        ("Checking for unsatisfiable classes", None),
+        ("Checking for unsatisfiable object properties", None),
+        ("Precomputing the class hierarchy", None),
+        ("Finding equivalent classes", None),
+        ("Adding the inferred axioms", None),
+        ("Removing redundant subclass axioms", None),
+        ("Materializing", None),
+        ("Materializing: gathering the imports", None),
+        ("Materializing: checking for inconsistencies", None),
+        ("Materializing: checking for unsatisfiable classes", None),
+        ("Materializing: checking for unsatisfiable object properties", None),
+        ("Materializing: reasoning over the properties", None),
+        ("Materializing: adding the inferred links", None),
+        ("Materializing: adding the inferred links, class 1 of 44", 1 / 44),
+        ("Removing superclass shortcuts", None),
+    ]
+
+
+def test_progress_reason_only() -> None:
+    """Check that a run of `reason` alone names its steps plainly, ignoring lines that aren't ROBOT's log."""
+    reports: list[str] = []
+    progress = RobotProgress(["reason", "--input", "x"], lambda detail, fraction: reports.append(detail))
+    for line in [
+        "2026-01-02 03:04:05,678 INFO  org.obolibrary.robot.ReasonerHelper - Checking for inconsistencies",
+        "Checking for unsatisfiable classes...",
+        "2026-01-02 03:04:05,678 WARN  org.obolibrary.robot.CommandManager - Subcommand Timing: reason took 1 seconds",
+        "2026-01-02 03:04:05,678 INFO  org.obolibrary.robot.ReasonOperation -  Materializing parents of class 0/0",
+    ]:
+        progress.add(line)
+    assert reports == [
+        "Loading the ontology",
+        "Checking for inconsistencies",
+        "Adding the inferred links, class 0 of 0",
+    ]

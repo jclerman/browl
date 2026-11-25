@@ -347,6 +347,33 @@ The database is the job state's source of truth, so nothing here ties browl to o
 Uberon goes from upload file to ready in 7 s without reasoning, measured end to end; NCBITaxon is estimated at about
 5 minutes ([S-4 findings](../research/S-4/README.md)).
 
+**Progress** (P-31). The job state records when the current stage started, how long each stage that ended took, and
+what the running stage is doing: a short `detail`, and how far it has got (`fraction`, 0 to 1) when it can tell. Stage
+code reports progress through `JobContext.report` as often as is handy, e.g. per line of a tool's output; the runner
+shows the latest at once in its own worker, and records it at most every `PROGRESS_S` (2 s, the status's poll), a
+report that comes sooner being recorded once that time has passed, so the last isn't lost. Progress not yet recorded
+when its stage ends is dropped, a change of stage or the job's end waits for a progress write still running, so none
+overwrites it, and a failed progress write is logged and skipped. What each stage reports:
+
+- **imports:** the document being fetched or read, with the count so far ("Fetching import 3: IRI", "Reading import 2
+  of 3 fetched so far: IRI"), and the triples read so far. `riot` streams each RDF document as N-Triples, one triple a
+  line, so counting its lines gives each file's triples at no extra cost (`JobContext.triple_counts`); an OFN document
+  isn't counted.
+- **reasoning:** ROBOT's current step, from its `-vv` log ("Checking for unsatisfiable classes", "Precomputing the
+  class hierarchy", …), named for `materialize` or the shortcut query where they run; `query` logs no step, so it
+  shows once `materialize`, or `reason`, logs its time. ROBOT gives no percentage (P-32 will), except while
+  materializing each class's parents ("class 120 of 15,000").
+- **loading:** `tdb2.tdbloader`'s running count of triples added, as a percentage of the file's triples if the imports
+  stage counted them (the upload when no reasoner ran, and each RDF import; not a reasoned file, which would need a
+  second parse), then its index phases by name, the second with its own count against the total the loader reports;
+  then counting the store, opening it in Fuseki, and counting again.
+- **pre-caching:** reading the ontology header, then each hook's number and name, its time so far and the rows it has
+  written (`DerivedWriter.rows`, from SQLite's `total_changes`), every `PROGRESS_S`. Hooks run open-ended bulk queries,
+  so no total is known without extra queries, and none is shown.
+
+The usage table's build after a load (P-27c) isn't part of the job: the status shows it, from the build's own progress
+in the server worker that runs it, once the job has ended.
+
 **Reasoning** (P-7) chains three ROBOT commands in one run, so the ontology is parsed once:
 
 1. `reason --axiom-generators "SubClass EquivalentClass ClassAssertion"`, with ROBOT's default
@@ -769,7 +796,7 @@ by value. Fuseki can (`?s ?p <entity>`), so P-27 keeps two things instead ([S-7 
     slower; that's accepted, as loads are rare and pages are still served. The process grows by about 1.3 GB on
     NCBITaxon, mostly the ranks and SQLite's caches (`BUILD_CACHE_KIB`, `SCRATCH_CACHE_KIB`).
   - **A-10 and P-31:** `UsageTables.cancel` is what P-36's admin cancel will call; the build's progress
-    (`browl.precache.usage_table.Progress`) is what P-31 will show.
+    (`browl.precache.usage_table.Progress`, `UsageTables.progress`) shows on the admin status page (P-31).
 
 **Hierarchies** (P-12, `browl.precache.hierarchies`). Named direct parents: `rdfs:subClassOf` and `rdfs:subPropertyOf`
 triples with an IRI on both sides (asserted, or inferred if a reasoner ran), from one bulk query with the
@@ -1939,7 +1966,7 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | `admin/…` | Upload, status, admin list, sign-in and sign-out |
 | `admin/sign-in?next=…`, `admin/oidc-callback`, `admin/sign-out` | Sign-in with Google, Google's redirect back, and sign-out (a POST): the admin routes anyone may use ([2.11](#211-authentication-and-admins), P-22) |
 | `admin/upload` | The upload form (A-2, A-3) and the load job's status. The form is parsed as it streams in, the file written straight to the jobs volume, never held whole in memory or spooled to a temporary file; its reasoner field must come before its file. The job is claimed only once the file's name has been checked and its first 8 KiB found to look like the syntax the name says, so a malformed request or a mislabelled, OWL/XML or compressed file leaves the served ontology alone. A post a browser sent from another site's page (by `Sec-Fetch-Site`) is refused, against CSRF (P-6). While a job runs, the form is disabled, and a post (e.g. from a page loaded earlier) is refused with 409 |
-| `admin/status` | The load job's outcome (running, ready or failed), start time and elapsed time; a stepper, a box per stage, each the same width and colored by its state (done green, running yellow, not started grey, failed red, skipped grey and dashed), with an icon, a tooltip saying what the stage does, and a label for the state: Upload / Uploading / Uploaded, Fetch Imports, Infer Axioms (the reasoner's name below; "No Reasoner" if none), Store Triples, Pre-Cache, Publish, each in the same three forms, or e.g. "Inference Failed"; below the stepper, the failure's reason, the uploaded file (name, syntax, size), the triple count and the imports, collapsed unless one was dropped (A-5, A-6): an HTML fragment for htmx requests (`HX-Request`), which polls itself while a job runs (a poll that finds the job ended gets `HX-Redirect` to a fresh GET of the page it's on, the upload page if `HX-Current-URL` has its path, else the status page), else a page, which polls the same way, or refreshes itself while a job runs if JS is off (P-5) |
+| `admin/status` | The load job's outcome (running, ready or failed), start time and elapsed time; a stepper, a box per stage, each the same width and colored by its state (done green, running yellow, not started grey, failed red, skipped grey and dashed), with an icon, a tooltip saying what the stage does, and a label for the state: Upload / Uploading / Uploaded, Fetch Imports, Infer Axioms (the reasoner's name below; "No Reasoner" if none), Store Triples, Pre-Cache, Publish, each in the same three forms, or e.g. "Inference Failed"; in each done or failed box how long its stage took, and in the current one its time so far (P-31); below the stepper, a details panel for the running stage, the home of sub-steps later: its label and time so far, what it's doing (`detail`), and a progress bar when it can tell how far it has got (P-31); the failure's reason, the uploaded file (name, syntax, size), the triple count and the imports, collapsed unless one was dropped (A-5, A-6); once the job has ended, "After publishing", a panel for each background build still running, such as the usage table's (P-27c), with its time so far and progress, or a line saying it failed (P-31): an HTML fragment for htmx requests (`HX-Request`), which polls itself while a job runs (a poll that finds the job ended gets `HX-Redirect` to a fresh GET of the page it's on, the upload page if `HX-Current-URL` has its path, else the status page), and while a background build runs, with `?background`, which gets no redirect, else a page, which polls the same way, or refreshes itself while a job runs if JS is off (P-5) |
 | `admin/docs`, `admin/openapi.json` | FastAPI's API docs (Swagger UI only, no ReDoc), as admin routes, so admin sign-in covers them; moved from FastAPI's default root paths, where they would shadow ontology entities. Swagger UI loads its assets from a CDN at an exact pinned version: an accepted exception to the no-CDN rule ([2.2](#22-libraries-and-components)), for admin pages only (P-5) |
 | `api/…` | JSON API (U-42, P-33), below |
 | `health` | Liveness check for the container; also reports whether Fuseki answers |

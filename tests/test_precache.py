@@ -22,6 +22,7 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
+import browl.precache.stage
 from browl import derived, usage_tables
 from browl.derived import EntityType, Meta, NotCurrentError, derived_path, entities_at, read_meta
 from browl.fuseki import END_VARIABLE, TSV, UNION_FROM, FusekiClient, SparqlError
@@ -151,6 +152,27 @@ async def test_stage_builds_database(settings: Settings) -> None:
     assert stored.loaded_at == LOADED_AT  # the job's start
     [query] = queries
     assert "owl:Ontology" in query and "FROM" not in query  # the ontology's IRIs come from its own graph
+
+
+async def test_stage_reports_progress(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that the stage reports reading the header, then each hook's number, name, time so far and rows written."""
+    monkeypatch.setattr(browl.precache.stage, "PROGRESS_S", 0)  # a report each turn of the event loop
+
+    @hook()
+    async def fill(context: PreCacheContext) -> None:
+        await context.db.insert(
+            "INSERT INTO prefix VALUES (?, ?)", [("ex", EX), ("owl", "http://www.w3.org/2002/07/owl#")]
+        )
+        await context.db.run(lambda connection: None)  # a turn of the event loop with the rows written
+
+    reports: list[str] = []
+    context = job(settings, 9)
+    context.on_progress = lambda detail, fraction: reports.append(detail)
+    async with fuseki() as http:
+        await pre_caching_stage(context, http, hooks=[fill])
+    assert reports[0] == "Reading the ontology's header"
+    assert reports[1] == "Hook 1 of 1, fill · 0 s · 0 rows written"
+    assert "Hook 1 of 1, fill · 0 s · 2 rows written" in reports
 
 
 async def test_stage_hook_fails(settings: Settings) -> None:

@@ -82,11 +82,14 @@ def test_import_lines(size: int) -> None:
     ]
     data = ("\n".join(lines) + "\n").encode()
     found: dict[str, None] = {}
-    collect = _ImportLines(found)
+    counts: list[int] = []
+    collect = _ImportLines(found, counts.append)
     for start in range(0, len(data), size):
         collect(data[start : start + size])
     assert list(found) == [f"{EX}a", f"{EX}b"]
     assert collect.importers == {f"{EX}o"}
+    assert collect.triples == counts[-1] == 5  # each line a triple, counted as it arrives
+    assert counts == sorted(counts)
 
 
 def test_import_lines_skip_long_line(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -443,7 +446,8 @@ async def test_stage(site: StaticServer, settings: Settings, data_dir: Path) -> 
     )
     missing = site.url + "/missing.ttl"
     upload = store_upload(data_dir, turtle(f"{EX}o", a, missing))
-    context = JobContext(1, settings, upload=upload)
+    reports: list[str] = []
+    context = JobContext(1, settings, upload=upload, on_progress=lambda detail, fraction: reports.append(detail))
     await imports_stage(context, allow_all)
     assert context.imports == [
         ImportResult(a),
@@ -451,9 +455,23 @@ async def test_stage(site: StaticServer, settings: Settings, data_dir: Path) -> 
         ImportResult(b, a),
         ImportResult("file:///etc/passwd", a, "only http and https imports are fetched"),
     ]
+    # The document being fetched or read, with the count so far; each read's triples as they arrive.
+    steps = [detail for detail in dict.fromkeys(reports) if " · " not in detail]
+    assert steps == [
+        "Reading the ontology",
+        f"Fetching import 1: {a}",
+        f"Fetching import 2: {missing}",
+        f"Reading import 1 of 1 fetched so far: {a}",
+        f"Fetching import 3: {b}",
+        "Fetching import 4: file:///etc/passwd",  # tried, and dropped
+        f"Reading import 2 of 2 fetched so far: {b}",
+    ]
+    assert f"Reading import 2 of 2 fetched so far: {b} · 2 triples" in reports
     assert sorted(site.requested) == ["/a.ttl", "/b.rdf", "/missing.ttl"]
     imports_dir = upload.parent / "imports"
     assert context.import_files == {a: imports_dir / "1.ttl", b: imports_dir / "3.rdf"}
+    assert context.triple_counts.keys() == {upload, imports_dir / "1.ttl", imports_dir / "3.rdf"}
+    assert context.triple_counts[imports_dir / "3.rdf"] == 2  # its ontology, and its import
     assert context.catalog == upload.parent / "catalog.xml"
     entries = catalog_map(context.catalog)
     assert entries[a] == (imports_dir / "1.ttl").resolve().as_uri()

@@ -54,16 +54,27 @@ class DerivedWriter:
 
     Each call queues its work on that thread and waits for it. A cancelled call's work still runs; anything queued
     after it, such as the build's cleanup, runs once it's done.
+
+    Attributes:
+        rows: How many rows the connection had written (`sqlite3.Connection.total_changes`) when the last call ended,
+            for the load's progress (P-31).
     """
 
     def __init__(self, executor: ThreadPoolExecutor, connection: sqlite3.Connection) -> None:
         """Use the connection, which belongs to the executor's only thread."""
         self._executor = executor
         self._connection = connection
+        self.rows = 0
 
     async def run[T](self, function: Callable[[sqlite3.Connection], T]) -> T:
         """Call a function with the connection on its thread, returning its result."""
-        return await asyncio.get_running_loop().run_in_executor(self._executor, function, self._connection)
+        return await asyncio.get_running_loop().run_in_executor(self._executor, self._counted, function)
+
+    def _counted[T](self, function: Callable[[sqlite3.Connection], T]) -> T:
+        try:
+            return function(self._connection)
+        finally:
+            self.rows = self._connection.total_changes
 
     async def create_indexes(self, table: str) -> None:
         """Create a table's secondary indexes, once it's filled, so later hooks can use them (`derived.create_indexes`).
