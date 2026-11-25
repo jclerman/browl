@@ -68,11 +68,11 @@ def status_context(job: JobState, tables: UsageTables | None = None) -> dict[str
         job: The job state.
         tables: The usage tables, whose build of the ready generation's table shows once no job is running.
     """
-    background: list[Activity] = []
+    background: Activity | None = None
     background_failed = False
     if tables is not None and not job.running and job.ready_generation is not None:
         if (progress := tables.progress(job.ready_generation)) is not None:
-            background.append(usage_table_activity(progress))
+            background = usage_table_activity(progress)
         background_failed = tables.failed(job.ready_generation)
     return {
         **progress_context(job, with_iri=True),

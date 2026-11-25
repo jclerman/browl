@@ -2,8 +2,8 @@
    replaces itself. #}
 {% from "_load_progress.html" import activity_panel, stepper %}
 <section id="job-status" class="job-status" aria-live="polite"
-  {%- if job.running %} hx-get="{{ url_for('job_status').path }}" hx-trigger="every {{ poll_s }}s" hx-swap="outerHTML"
-  {%- elif background %} hx-get="{{ url_for('job_status').path }}?{{ background_poll }}" hx-trigger="every {{ poll_s }}s" hx-swap="outerHTML"{% endif %}>
+  {%- if job.running or background is not none %} hx-get="{{ url_for('job_status').path }}
+  {%- if not job.running %}?{{ background_poll }}{% endif %}" hx-trigger="every {{ poll_s }}s" hx-swap="outerHTML"{% endif %}>
   {% if job.stage is none %}
   <p>No ontology has been loaded yet.</p>
   {% else %}
@@ -53,9 +53,9 @@
       </ul>
     </details>
     {% endif %}
-    {% if background or background_failed %}
+    {% if background is not none or background_failed %}
     <h2 class="background-title">After publishing</h2>
-    {% for item in background %}{{ activity_panel(item, "background-" ~ loop.index) }}{% endfor %}
+    {% if background is not none %}{{ activity_panel(background, "background-1") }}{% endif %}
     {% if background_failed %}
     <p class="failure">The usage table's build failed, so the Usage tab can't list usages; the app's log says why. It's
       tried again when the app next starts.</p>
