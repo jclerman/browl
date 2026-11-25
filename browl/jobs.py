@@ -37,6 +37,12 @@ STATE_TTL_S = 1.0
 UPLOAD_PROGRESS_S = 1.0
 """How often a running upload's size so far is recorded, for the status to show it growing."""
 
+PROGRESS_S = 2.0
+"""The least time between records of a running stage's progress (`JobContext.report`), as often as the status polls."""
+
+MAX_DETAIL_CHARS = 300
+"""The longest progress detail recorded; a longer one, e.g. naming a long import IRI, is cut short."""
+
 INTERRUPTED_BY_RESTART = "interrupted by restart"
 REBUILDING = "rebuilding after a restart"
 INTERRUPTED_BY_SHUTDOWN = "interrupted by shutdown"
@@ -93,12 +99,21 @@ MIGRATIONS: list[str] = [
         signed_out_at TEXT NOT NULL
     );
     """,
+    # Version 7: the running stage's progress (P-31): when it started, what it's doing, and how far it has got; and
+    # how long each stage that ended took, as a JSON object.
+    """
+    ALTER TABLE job ADD COLUMN stage_started_at TEXT;
+    ALTER TABLE job ADD COLUMN stage_seconds TEXT NOT NULL DEFAULT '{}';
+    ALTER TABLE job ADD COLUMN detail TEXT;
+    ALTER TABLE job ADD COLUMN fraction REAL;
+    """,
 ]
 """The persistent database's schema migrations: entry n migrates from version n to n + 1."""
 
 _COLUMNS = (
     "generation, stage, started_at, finished_at, failed_stage, reason, ready_generation, reasoner,"
-    " upload_name, upload_syntax, upload_bytes, imports, triples, prefixes"
+    " upload_name, upload_syntax, upload_bytes, imports, triples, prefixes, stage_started_at, stage_seconds, detail,"
+    " fraction"
 )
 """The job table's columns but its id, in `JobState`'s order."""
 
@@ -156,6 +171,10 @@ class JobState:
         imports: The ontology's imports, direct and indirect, once the imports stage has listed them.
         triples: How many triples the store's default graph holds, once loaded: the ontology without its imports.
         prefixes: The prefixes the ontology file declares, name → namespace, once the loading stage has read them.
+        stage_started_at: When the current stage started; None in a state stored before it was recorded.
+        stage_seconds: How long each stage that ended took, in seconds, the stage the job failed in included.
+        detail: What the running stage is doing, e.g. "Checking for unsatisfiable classes"; None if it hasn't said.
+        fraction: How far it has got, from 0 to 1; None if it can't tell.
     """
 
     generation: int | None = None
@@ -172,6 +191,10 @@ class JobState:
     imports: tuple[ImportResult, ...] = ()
     triples: int | None = None
     prefixes: Mapping[str, str] = field(default_factory=dict)
+    stage_started_at: datetime | None = None
+    stage_seconds: Mapping[Stage, float] = field(default_factory=dict)
+    detail: str | None = None
+    fraction: float | None = None
 
     @property
     def dropped_imports(self) -> list[ImportResult]:
@@ -202,7 +225,19 @@ class JobState:
             reason = f"{REBUILDING}: {reason}"
         if len(reason) > MAX_REASON_CHARS:
             reason = f"{reason[:MAX_REASON_CHARS]}… (cut short; the app's log has it all)"
-        return replace(self, failed_stage=self.stage, reason=reason, finished_at=_now())
+        now = _now()
+        return replace(self._timed(now), failed_stage=self.stage, reason=reason, finished_at=now)
+
+    def entering(self, stage: Stage, now: datetime) -> Self:
+        """Return this state with the job moved on to a stage, recording how long the one it leaves took."""
+        return replace(self._timed(now), stage=stage, stage_started_at=now)
+
+    def _timed(self, now: datetime) -> Self:
+        """Return this state with the current stage's time recorded, and its progress cleared."""
+        seconds = dict(self.stage_seconds)
+        if self.stage is not None and self.stage_started_at is not None:
+            seconds[self.stage] = max(0.0, (now - self.stage_started_at).total_seconds())
+        return replace(self, stage_seconds=seconds, detail=None, fraction=None)
 
 
 def _now() -> datetime:
@@ -287,6 +322,7 @@ class JobStore:
                     reasoner=reasoner,
                     upload_name=upload_name,
                     upload_syntax=upload_syntax,
+                    stage_started_at=started_at,
                 )
                 self._write(connection, state)
                 connection.execute("COMMIT")
@@ -315,6 +351,10 @@ class JobStore:
             imports,
             triples,
             prefixes,
+            stage_started_at,
+            stage_seconds,
+            detail,
+            fraction,
         ) = row
         return JobState(
             generation=generation,
@@ -331,6 +371,10 @@ class JobStore:
             imports=_imports_from_json(imports),
             triples=triples,
             prefixes=json.loads(prefixes),
+            stage_started_at=None if stage_started_at is None else datetime.fromisoformat(stage_started_at),
+            stage_seconds={Stage(stage): seconds for stage, seconds in json.loads(stage_seconds).items()},
+            detail=detail,
+            fraction=fraction,
         )
 
     @staticmethod
@@ -354,6 +398,10 @@ class JobStore:
                 _imports_json(state.imports),
                 state.triples,
                 json.dumps(state.prefixes),
+                None if state.stage_started_at is None else state.stage_started_at.isoformat(),
+                json.dumps(state.stage_seconds),
+                state.detail,
+                state.fraction,
             ),
         )
 
@@ -411,6 +459,8 @@ class JobContext:
         prefixes: The prefixes the ontology file declares (`browl.loading.read_upload_prefixes`), read by the loading
             stage.
         started_at: When the job started.
+        triple_counts: How many triples an RDF file holds, by its path, where the imports stage counted them.
+        on_progress: Records the running stage's progress (`report`); the job runner sets it.
     """
 
     generation: int
@@ -426,6 +476,17 @@ class JobContext:
     triples: int | None = None
     prefixes: dict[str, str] = field(default_factory=dict)
     started_at: datetime = field(default_factory=_now)
+    triple_counts: dict[Path, int] = field(default_factory=dict)
+    on_progress: Callable[[str, float | None], None] | None = field(default=None, repr=False)
+
+    def report(self, detail: str, fraction: float | None = None) -> None:
+        """Say what the running stage is doing, and how far it has got, from 0 to 1, if it can tell.
+
+        Call it as often as is handy, e.g. per line of a tool's output: the runner records the latest at most every
+        `PROGRESS_S`, and a failed record doesn't fail the job.
+        """
+        if self.on_progress is not None:
+            self.on_progress(detail, fraction)
 
     @property
     def ontology(self) -> Path | None:
@@ -526,8 +587,10 @@ class JobRunner:
         self._task: asyncio.Task[None] | None = None
         self._writes: set[asyncio.Task[None]] = set()
         self._unstored: JobState | None = None  # the end of this runner's last job, if it couldn't be stored
-        self._progress_write: asyncio.Future[None] | None = None  # the running upload's last progress write
-        self._progress_at = 0.0  # when the running upload's progress was last recorded
+        self._progress_write: asyncio.Future[None] | None = None  # the last progress write
+        self._progress_at = 0.0  # when progress was last recorded
+        self._progress: tuple[str, float | None] | None = None  # the stage's progress reported, not yet recorded
+        self._progress_flush: asyncio.TimerHandle | None = None  # when it will be
         self._refreshing = asyncio.Lock()
         self._changes = 0
         self._set(state)
@@ -610,7 +673,11 @@ class JobRunner:
         self._busy = True  # set before any await, so a concurrent call is refused
         await self._claim(functools.partial(self._claim_in_thread, _now(), reasoner, name, syntax))
         context = JobContext(
-            self._state.generation or 0, self._settings, reasoner, started_at=self._state.started_at or _now()
+            self._state.generation or 0,
+            self._settings,
+            reasoner,
+            started_at=self._state.started_at or _now(),
+            on_progress=self._report,
         )
         logger.info("Load job %d started", context.generation)
         self._progress_at = time.monotonic()
@@ -666,6 +733,7 @@ class JobRunner:
             triples=state.triples,
             prefixes=dict(state.prefixes),
             started_at=state.started_at,
+            on_progress=self._report,
         )
         if not state.running:  # recorded ready
             try:
@@ -719,14 +787,56 @@ class JobRunner:
         if now - self._progress_at < UPLOAD_PROGRESS_S or context.upload_bytes == self._state.upload_bytes:
             return
         self._progress_at = now
-        state = replace(self._state, upload_bytes=context.upload_bytes)
+        # A cancelled await leaves the write running, so the job's end waits for it (`_store_end`).
+        await asyncio.shield(self._write_progress(replace(self._state, upload_bytes=context.upload_bytes)))
+
+    def _report(self, detail: str, fraction: float | None) -> None:
+        """Keep the running stage's progress, to record once `PROGRESS_S` has passed since the last record."""
+        if not self._state.running:
+            return
+        self._progress = (detail, fraction)
+        if self._progress_flush is None:
+            delay = max(0.0, self._progress_at + PROGRESS_S - time.monotonic())
+            self._progress_flush = asyncio.get_running_loop().call_later(delay, self._flush_progress)
+
+    def _flush_progress(self) -> None:
+        self._progress_flush = None
+        progress, self._progress = self._progress, None
+        if progress is None or not self._state.running:
+            return
+        self._progress_at = time.monotonic()
+        detail, fraction = progress
+        if len(detail) > MAX_DETAIL_CHARS:
+            detail = f"{detail[:MAX_DETAIL_CHARS]}…"
+        self._write_progress(replace(self._state, detail=detail, fraction=fraction))
+
+    def _drop_progress(self) -> None:
+        """Forget progress not yet recorded, as the stage it belongs to has ended."""
+        if self._progress_flush is not None:
+            self._progress_flush.cancel()
+            self._progress_flush = None
+        self._progress = None
+
+    def _write_progress(self, state: JobState) -> asyncio.Future[None]:
+        """Show a state with new progress at once, and store it after any earlier progress write; return the write."""
         self._set(state)
-        # A cancelled await leaves the thread writing, so the job's end waits for it (`_store_end`).
-        write = self._progress_write = asyncio.ensure_future(asyncio.to_thread(self._store.write, state))
+        write = self._progress_write = asyncio.ensure_future(self._store_progress(self._progress_write, state))
+        return write
+
+    async def _store_progress(self, previous: asyncio.Future[None] | None, state: JobState) -> None:
+        """Store a state with new progress, once the previous write is done; a failure is logged and skipped."""
+        if previous is not None:
+            await asyncio.wait({previous})
         try:
-            await asyncio.shield(write)
+            await asyncio.to_thread(self._store.write, state)
         except Exception:
-            logger.warning("Couldn't record load job %d's upload progress", context.generation, exc_info=True)
+            logger.warning("Couldn't record load job %d's progress", state.generation, exc_info=True)
+
+    async def _progress_written(self) -> None:
+        """Drop progress not yet recorded, and wait for any progress write, so none overwrites what's recorded next."""
+        self._drop_progress()
+        if self._progress_write is not None:
+            await asyncio.wait({self._progress_write})
 
     def _set(self, state: JobState) -> None:
         self._state = state
@@ -775,6 +885,7 @@ class JobRunner:
         self._record_end(self._state.failed(CANCELLED))
 
     async def _record(self, state: JobState) -> None:
+        await self._progress_written()
         await asyncio.to_thread(self._store.write, state)
         self._set(state)
 
@@ -799,6 +910,7 @@ class JobRunner:
 
         Once it's stored, or couldn't be, the task frees the runner and releases the job lock.
         """
+        self._drop_progress()
         self._set(state)
         task = asyncio.create_task(self._store_end(state))
         self._writes.add(task)
@@ -807,8 +919,7 @@ class JobRunner:
 
     async def _store_end(self, state: JobState) -> None:
         try:
-            if self._progress_write is not None:
-                await asyncio.wait({self._progress_write})  # so it can't land after, and overwrite, the end
+            await self._progress_written()
             await asyncio.to_thread(self._store.write, state)
         except Exception:
             # Other workers keep reading it as running until the next job or a restart; this one serves its end.
@@ -843,15 +954,16 @@ class JobRunner:
         order, functions = (BACKGROUND_STAGES, self._stages) if stages is None else (tuple(stages), stages)
         try:
             for stage in order:
-                await self._record(replace(self._with_results(context), stage=stage))
+                await self._record(self._with_results(context).entering(stage, _now()))
                 if function := functions.get(stage):
                     logger.info("Load job %d: %s", context.generation, stage)
                     try:
                         await function(context)
                     finally:
                         self._set(self._with_results(context))  # stored with the next stage, or the job's end
+            now = _now()
             await self._record(
-                replace(self._state, stage=Stage.READY, finished_at=_now(), ready_generation=context.generation)
+                replace(self._state.entering(Stage.READY, now), finished_at=now, ready_generation=context.generation)
             )
         except asyncio.CancelledError as error:
             await self._fail(error)
@@ -912,7 +1024,7 @@ def _restart_state(state: JobState, current: Callable[[int], bool]) -> JobState 
     if state.reason == REBUILD_INTERRUPTED_BY_RESTART:
         logger.warning("Load job %d's rebuild was interrupted by a restart, so it isn't tried again", generation)
         return None
-    return replace(state, stage=Stage.PRE_CACHING, finished_at=None, failed_stage=None, reason=None)
+    return replace(state.entering(Stage.PRE_CACHING, _now()), finished_at=None, failed_stage=None, reason=None)
 
 
 def _recover(store: JobStore, lock: JobLock) -> JobState:

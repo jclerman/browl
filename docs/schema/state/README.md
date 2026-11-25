@@ -11,7 +11,7 @@ browl keeps this SQLite file, `DATA_DIR/state.sqlite3`, for the load job's state
 
 | Name                    | Columns | Comment                                                                                                                                                                                           | Type  |
 | ----------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
-| [job](job.md)           | 15      | The latest load job (browl.jobs.JobState), at most one row: each job replaces the previous one's. Times are ISO 8601 with a time zone.                                                            | table |
+| [job](job.md)           | 19      | The latest load job (browl.jobs.JobState), at most one row: each job replaces the previous one's. Times are ISO 8601 with a time zone.                                                            | table |
 | [admin](admin.md)       | 2       | Admins added in the UI (DESIGN.md 2.11): a signed-in user whose verified email is here, or in SEED_ADMINS, is an admin. P-22 creates the table; P-23 adds the page that manages it.               | table |
 | [sign_out](sign_out.md) | 2       | When each account last signed out (DESIGN.md 2.11), admin or not: a session for that email that started at or before then is refused, so signing out ends the account's sessions on every device. | table |
 
@@ -37,6 +37,10 @@ erDiagram
   TEXT imports
   INTEGER triples
   TEXT prefixes
+  TEXT stage_started_at
+  TEXT stage_seconds
+  TEXT detail
+  REAL fraction
 }
 "admin" {
   TEXT email PK

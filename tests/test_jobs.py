@@ -66,7 +66,7 @@ def schema_version(path: Path) -> int:
 def test_store_migrates_new_database(data_dir: Path) -> None:
     """Check that a new database is created at the latest schema version, with no job."""
     store = JobStore(data_dir / "sub" / STATE_DB)
-    assert schema_version(store.path) == len(browl.jobs.MIGRATIONS) == 6
+    assert schema_version(store.path) == len(browl.jobs.MIGRATIONS) == 7
     assert store.read() == JobState()
 
 
@@ -165,7 +165,11 @@ async def test_runs_stages_in_order(data_dir: Path, monkeypatch: pytest.MonkeyPa
     assert state.stage == Stage.READY
     assert state.ready_generation == state.generation == 1
     assert state.failed_stage is None
-    assert (state.started_at, state.finished_at) == (STARTED, STARTED + timedelta(seconds=1))
+    # Each stage's start and the job's end take a time: each stage took 1 s.
+    assert (state.started_at, state.finished_at) == (STARTED, STARTED + timedelta(seconds=5))
+    assert state.stage_started_at == state.finished_at
+    assert state.stage_seconds == dict.fromkeys(list(Stage)[:-1], 1.0)
+    assert JobStore(data_dir / STATE_DB).read().stage_seconds == state.stage_seconds
     assert state.site == Site.AVAILABLE
     assert (await run_job(runner)).ready_generation == 2
 
@@ -769,7 +773,7 @@ async def test_upload_progress_write_fails(
         await runner.record_upload_progress(context)
     await runner.wait()
     assert runner.state.stage == Stage.READY
-    assert "Couldn't record load job 1's upload progress" in caplog.text
+    assert "Couldn't record load job 1's progress" in caplog.text
 
 
 async def test_upload_progress_write_before_end(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1207,3 +1211,108 @@ async def test_rebuild_check_fails(data_dir: Path) -> None:
         await runner.rebuild(lambda context: asyncio.sleep(0), broken)
     assert JobStore(data_dir / STATE_DB).read() == READY
     assert (await run_job(runner)).ready_generation == 4
+
+
+def recording_writes(runner: JobRunner, monkeypatch: pytest.MonkeyPatch, fail: bool = False) -> list[JobState]:
+    """Record each state the runner's store is asked to write; if `fail`, fail the writes of progress."""
+    writes: list[JobState] = []
+    write = runner._store.write
+
+    def recorded(state: JobState) -> None:
+        writes.append(state)
+        if fail and state.detail is not None:
+            raise sqlite3.OperationalError("database is locked")
+        write(state)
+
+    monkeypatch.setattr(runner._store, "write", recorded)
+    return writes
+
+
+async def test_progress_rate_limited(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a stage's progress is recorded at most every `PROGRESS_S`, the latest reported, and then cleared.
+
+    Reports that come faster are kept, and the latest recorded once `PROGRESS_S` has passed, so the last isn't lost.
+    """
+    monkeypatch.setattr(browl.jobs, "PROGRESS_S", 0.2)
+    shown: list[tuple[str | None, float | None]] = []
+    runner: JobRunner
+
+    async def loading(context: JobContext) -> None:
+        for number in range(1, 1001):
+            context.report(f"step {number}", number / 1000)
+        await asyncio.sleep(0.3)  # the latest is recorded once 0.2 s have passed since the job started
+        shown.append((runner.state.detail, runner.state.fraction))
+        context.report("last")
+        await asyncio.sleep(0.3)
+
+    runner = await open_runner(data_dir, {Stage.LOADING: loading})
+    writes = recording_writes(runner, monkeypatch)
+    state = await run_job(runner)
+    assert shown == [("step 1000", 1.0)]
+    assert [(write.detail, write.fraction) for write in writes if write.detail is not None] == [
+        ("step 1000", 1.0),
+        ("last", None),
+    ]
+    assert all(write.stage == Stage.LOADING for write in writes if write.detail is not None)
+    assert (state.stage, state.detail, state.fraction) == (Stage.READY, None, None)
+
+
+async def test_progress_dropped_at_stage_end(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that progress not yet recorded when its stage ends is dropped, so it can't show under the next stage."""
+    runner = await open_runner(data_dir, {Stage.IMPORTS: lambda context: asyncio.sleep(0, context.report("soon"))})
+    writes = recording_writes(runner, monkeypatch)
+    await run_job(runner)
+    assert [write.detail for write in writes] == [None] * len(writes)
+    assert runner.state.detail is None
+
+
+async def test_progress_write_fails(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Check that a failed progress write is logged and skipped, and the job carries on to ready."""
+    monkeypatch.setattr(browl.jobs, "PROGRESS_S", 0)
+
+    async def loading(context: JobContext) -> None:
+        context.report("adding triples", 0.5)
+        await asyncio.sleep(0.05)
+
+    runner = await open_runner(data_dir, {Stage.LOADING: loading})
+    writes = recording_writes(runner, monkeypatch, fail=True)
+    state = await run_job(runner)
+    assert [write.detail for write in writes if write.detail is not None] == ["adding triples"]
+    assert state.stage == Stage.READY
+    assert JobStore(data_dir / STATE_DB).read().stage == Stage.READY
+    assert "Couldn't record load job 1's progress" in caplog.text
+
+
+async def test_progress_detail_cut_short(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a detail longer than `MAX_DETAIL_CHARS`, e.g. naming a long IRI, is cut short."""
+    monkeypatch.setattr(browl.jobs, "PROGRESS_S", 0)
+    details: list[str | None] = []
+    runner: JobRunner
+
+    async def imports(context: JobContext) -> None:
+        context.report("x" * 1000)
+        await asyncio.sleep(0.05)
+        details.append(runner.state.detail)
+
+    runner = await open_runner(data_dir, {Stage.IMPORTS: imports})
+    await run_job(runner)
+    assert details == ["x" * browl.jobs.MAX_DETAIL_CHARS + "…"]
+
+
+def test_report_without_runner(data_dir: Path) -> None:
+    """Check that a context no runner made takes reports, and ignores them."""
+    JobContext(1, make_settings()).report("nothing listens")
+
+
+def test_state_entering_and_failed() -> None:
+    """Check that moving on records how long the stage left took, and clears its progress; and a failure likewise."""
+    later = STARTED + timedelta(seconds=7)
+    state = JobState(1, Stage.IMPORTS, STARTED, stage_started_at=STARTED, detail="x", fraction=0.5)
+    moved = state.entering(Stage.REASONING, later)
+    assert (moved.stage, moved.stage_started_at, moved.detail, moved.fraction) == (Stage.REASONING, later, None, None)
+    assert moved.stage_seconds == {Stage.IMPORTS: 7.0}
+    failed = moved.failed("boom")
+    assert failed.stage_seconds.keys() == {Stage.IMPORTS, Stage.REASONING}
+    assert JobState(1, Stage.IMPORTS, STARTED).entering(Stage.LOADING, later).stage_seconds == {}  # start unknown
