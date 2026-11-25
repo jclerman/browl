@@ -475,6 +475,60 @@ def test_upload_from_another_site_refused(
     assert server.call(server.app.state.jobs.current()).stage is None
 
 
+# The in-page upload (P-31)
+
+
+def test_upload_shows_progress(page: Page, status_server: LiveServer) -> None:
+    """Check that, with JS, the button is disabled and progress shows until the response, and the page then loads.
+
+    The form is sent from the page, and can't be sent twice; the response's redirect is followed as the plain form's.
+    """
+    posts: list[Route] = []
+
+    def hold(route: Route) -> None:
+        if route.request.method == "POST":
+            posts.append(route)
+        else:
+            route.continue_()
+
+    watch_policy(page)
+    page.goto(f"{status_server.url}{UPLOAD}")
+    page.route(f"{status_server.url}{UPLOAD}", hold)
+    page.set_input_files("#ontology", DATA / "routing.ttl")
+    button = page.get_by_role("button", name="Upload")
+    button.click()
+    expect(button).to_be_disabled()
+    expect(page.get_by_role("progressbar")).to_be_visible()
+    sending = r"Sending the file: [\d.]+ (bytes|kB) of [\d.]+ kB \(\d+%\)|Sent [\d.]+ kB; waiting for the server…"
+    expect(page.locator(".upload-progress p")).to_have_text(re.compile(sending))
+    page.evaluate("document.querySelector('form.upload').requestSubmit()")  # as a second click would
+    page.wait_for_timeout(POLL_S * 1000)
+    assert len(posts) == 1
+    with page.expect_navigation():
+        posts[0].continue_()
+    expect(page.locator("#job-status .pill")).to_have_text("Ready")
+    expect(page.get_by_role("progressbar")).to_have_count(0)
+    expect(button).to_be_enabled()
+    assert page.url == f"{status_server.url}{UPLOAD}"
+    assert len(posts) == 1
+    assert status_server.call(status_server.app.state.jobs.current()).generation == 1
+    assert violations(page) == []  # the script works under the Content-Security-Policy
+
+
+@NO_JS
+def test_upload_without_javascript(page: Page, status_server: LiveServer) -> None:
+    """Check that, without JS, the plain form posts the upload, and the redirect loads the upload page (U-17)."""
+    page.goto(f"{status_server.url}{UPLOAD}")
+    page.set_input_files("#ontology", DATA / "routing.ttl")
+    with page.expect_response(lambda response: response.request.method == "POST") as response:
+        page.get_by_role("button", name="Upload").click()
+    assert response.value.status == 303
+    expect(page.locator("#job-status .pill")).to_have_text("Ready")
+    assert page.url == f"{status_server.url}{UPLOAD}"
+    expect(page.locator(".upload-progress")).to_be_hidden()
+    assert status_server.call(status_server.app.state.jobs.current()).generation == 1
+
+
 # The page frame (P-14a, DESIGN.md §2.9)
 
 TREES = [tree.label for tree in browl.pages.TREES]

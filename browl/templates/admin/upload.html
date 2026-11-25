@@ -2,13 +2,15 @@
 {# The upload form (A-2, A-3) and the load job's status (A-5, A-6), which htmx polls while a job runs; without JS
    (U-17), the page refreshes itself instead, by a GET, so a refused upload's POST isn't re-sent. While a job runs,
    the form is disabled, as the server would refuse it. The reasoner field comes before the file: the server reads the
-   form as it streams in, and needs the choice when the file starts. #}
-{% block head %}{% if job.running %}<noscript><meta http-equiv="refresh" content="{{ poll_s }}; url={{ url_for('upload_page').path }}"></noscript>{% endif %}{% endblock %}
+   form as it streams in, and needs the choice when the file starts. With JS, `static/upload.js` sends the form from
+   the page, showing how much of the file has been sent below it (P-31). #}
+{% block head %}{% if job.running %}<noscript><meta http-equiv="refresh" content="{{ poll_s }}; url={{ url_for('upload_page').path }}"></noscript>{% endif %}
+  <script src="{{ url_for('static', path='upload.js').path }}" defer></script>{% endblock %}
 {% block title %}Upload an ontology{% endblock %}
 {% block content %}
 <h1>Upload an ontology</h1>
 {% if error %}
-<p class="failure" role="alert">The upload was refused: {{ error }}</p>
+<p id="upload-error" class="failure" role="alert">The upload was refused: {{ error }}</p>
 {% endif %}
 {% if job.running %}
 <p id="upload-wait" class="note">A load is running; you can upload once it ends.</p>
@@ -28,6 +30,10 @@
     <p class="note">Uploading replaces the current ontology; the site shows a "loading" page until the new one is ready.</p>
     <p><button type="submit">Upload</button></p>
   </fieldset>
+  <div class="upload-progress" hidden>
+    <progress class="step-progress" max="100" aria-labelledby="upload-progress-text"></progress>
+    <p id="upload-progress-text"></p>
+  </div>
 </form>
 <h2>Load status</h2>
 {% include "admin/_job_status.html" %}
