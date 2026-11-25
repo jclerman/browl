@@ -1,21 +1,41 @@
 """Tests for admin sign-in and the admin routes' protection (P-22; A-1, O-6, O-7; DESIGN.md §2.11)."""
 
+import importlib
+import logging
+import os
+import pkgutil
 import sqlite3
 import time
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import httpx2
 import pytest
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from joserfc import jwt
 from joserfc.jwk import RSAKey
 
-from browl.auth import GOOGLE_METADATA_URL, SESSION_COOKIE, SESSION_KEY_FILE, callback_url, safe_next, session_key
-from browl.jobs import STATE_DB
-from tests.helpers import AUTH_ON, make_app, make_settings
+import browl
+import browl.auth
+from browl import auth
+from browl.admins import AdminStore
+from browl.auth import (
+    GOOGLE_METADATA_URL,
+    SESSION_COOKIE,
+    SESSION_KEY_CHARS,
+    SESSION_KEY_FILE,
+    ExchangeLimit,
+    callback_url,
+    safe_next,
+    session_key,
+)
+from browl.derived import EntityType
+from browl.jobs import STATE_DB, Stage
+from tests.helpers import AUTH_ON, derived_stage, make_app, session_cookie
 
 ISSUER = "https://accounts.google.com"
 AUTHORIZE = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -27,6 +47,10 @@ SIGN_OUT = "/_browl/admin/sign-out"
 UPLOAD = "/_browl/admin/upload"
 STATUS = "/_browl/admin/status"
 SEED = "seed@example.org"
+VISITOR = "visitor@example.org"
+ADMIN_LINK = 'class="admin-link"'
+PUBLIC_PAGES = ["/onto", "/_browl/tree/classes", "/_browl/search"]
+"""The ontology's home page, a tree page, and the search page, all served once the fixtures' job has run."""
 
 
 @pytest.fixture(scope="session")
@@ -105,10 +129,22 @@ def auth_app(google: FakeGoogle, **overrides: object) -> FastAPI:
     return make_app(oidc_transport=google.transport, **(AUTH_ON | overrides))
 
 
+def run_job(client: TestClient) -> None:
+    """Run a load job that serves an ontology at `/onto`, with a class."""
+    app: FastAPI = client.app  # type: ignore[assignment]
+    stage = derived_stage(
+        [("http://example.org/x", EntityType.CLASS)], "http://example.org/onto", title="Onto", edges=[]
+    )
+    app.state.jobs.register(Stage.PRE_CACHING, stage)
+    client.portal.call(app.state.jobs.start)
+    client.portal.call(app.state.jobs.wait)
+
+
 @pytest.fixture
 def client(data_dir: Path, google: FakeGoogle) -> Iterator[TestClient]:
-    """Yield a client of an app with authentication on; it doesn't follow redirects."""
+    """Yield a client of an app with authentication on, with an ontology loaded; it doesn't follow redirects."""
     with TestClient(auth_app(google), follow_redirects=False) as test_client:
+        run_job(test_client)
         yield test_client
 
 
@@ -166,9 +202,26 @@ def test_admin_post_and_poll_need_sign_in(client: TestClient) -> None:
 
 
 def test_public_pages_need_no_sign_in(client: TestClient) -> None:
-    """Check that only admin routes need sign-in: the site's other pages and routes don't redirect (A-1)."""
-    for path in ["/onto", "/_browl/search", "/_browl/health"]:
-        assert client.get(path).status_code in {200, 503}
+    """Check that only admin routes need sign-in: the site's other pages and routes are served, with "Sign in" (A-1)."""
+    for path in [*PUBLIC_PAGES, "/_browl/health"]:
+        response = client.get(path)
+        assert response.status_code == 200, path
+        assert path == "/_browl/health" or f'href="{SIGN_IN}"' in response.text
+
+
+@pytest.mark.parametrize(("email", "admin"), [(SEED, True), ("listed@example.org", True), (VISITOR, False)])
+def test_public_pages_signed_in(
+    client: TestClient, google: FakeGoogle, data_dir: Path, email: str, admin: bool
+) -> None:
+    """Check that a signed-in user's public pages have "Sign out", and an admin's the admin link (A-1)."""
+    add_admin(data_dir, "listed@example.org")
+    sign_in(client, google, email)
+    for path in PUBLIC_PAGES:
+        page = client.get(path)
+        assert page.status_code == 200, path
+        assert f'action="{SIGN_OUT}"' in page.text
+        assert f'href="{SIGN_IN}"' not in page.text
+        assert (ADMIN_LINK in page.text) is admin, path
 
 
 def test_sign_in_seed_admin(client: TestClient, google: FakeGoogle) -> None:
@@ -184,7 +237,7 @@ def test_sign_in_seed_admin(client: TestClient, google: FakeGoogle) -> None:
     assert google.token_requests[0]["code"] == ["the-code"]
     page = client.get(UPLOAD)
     assert page.status_code == 200
-    assert 'class="admin-link"' in page.text
+    assert ADMIN_LINK in page.text
     assert f'action="{SIGN_OUT}"' in page.text
     assert f'href="{SIGN_IN}"' not in page.text
 
@@ -200,14 +253,24 @@ def test_sign_in_table_admin(client: TestClient, google: FakeGoogle, data_dir: P
 
 
 def test_not_admin(client: TestClient, google: FakeGoogle) -> None:
-    """Check that a signed-in user who isn't an admin gets 403 on admin routes, and no admin link elsewhere."""
-    sign_in(client, google, "visitor@example.org")
+    """Check that a signed-in user who isn't an admin gets 403 on admin routes, and no admin link elsewhere.
+
+    They're offered sign-in with another account, which goes to Google, not back to the refusal. Their htmx poll, e.g.
+    after being removed as an admin, gets `HX-Refresh`, so it doesn't poll on (review C6).
+    """
+    sign_in(client, google, VISITOR)
     for response in [client.get(UPLOAD), client.post(UPLOAD, content=b""), client.get("/_browl/admin/docs")]:
         assert response.status_code == 403
     page = client.get(UPLOAD)
-    assert "visitor@example.org" in page.text
-    assert 'class="admin-link"' not in page.text
+    assert VISITOR in page.text
+    assert ADMIN_LINK not in page.text
     assert f'action="{SIGN_OUT}"' in page.text
+    assert f'<a href="{SIGN_IN}">Sign in</a> with another account' in page.text
+    start_sign_in(client, google)  # 302 to Google
+    poll = client.get(STATUS, headers={"HX-Request": "true"})
+    assert poll.status_code == 403
+    assert poll.headers["HX-Refresh"] == "true"
+    assert poll.headers["Cache-Control"] == "no-store"
 
 
 def test_unverified_email_refused(client: TestClient, google: FakeGoogle) -> None:
@@ -229,6 +292,54 @@ def test_callback_refused(client: TestClient, google: FakeGoogle, params: dict[s
     assert response.status_code == 400
     assert "Sign-in failed" in response.text
     assert client.get(UPLOAD).status_code == 303
+
+
+def test_callback_refused_logs_safely(client: TestClient, google: FakeGoogle, caplog: pytest.LogCaptureFixture) -> None:
+    """Check that Google's error text, which anyone can send, is logged on one line, so it can't forge a log line."""
+    start_sign_in(client, google)
+    with caplog.at_level(logging.WARNING, logger="browl.auth"):
+        response = client.get(CALLBACK, params={"error": "x\nFAKE", "error_description": "a\nFAKE: Signed in: x"})
+    assert response.status_code == 400
+    assert [record.getMessage().count("\n") for record in caplog.records] == [0]
+    assert "FAKE" in caplog.records[0].getMessage()
+
+
+def test_callback_when_signed_in(client: TestClient, google: FakeGoogle) -> None:
+    """Check that an admin back at the callback from an older sign-in, e.g. a second tab, goes to where it leads.
+
+    Authlib keeps only the latest sign-in's state, so the older one's would be refused (review C9).
+    """
+    first = start_sign_in(client, google, next=STATUS)
+    second = start_sign_in(client, google, next=STATUS)
+    assert client.get(CALLBACK, params={"code": "c", "state": second["state"]}).headers["Location"] == STATUS
+    response = client.get(CALLBACK, params={"code": "c", "state": first["state"]})
+    assert response.status_code == 303
+    assert response.headers["Location"] == UPLOAD
+    assert len(google.token_requests) == 1
+
+
+def test_token_exchanges_limited(client: TestClient, google: FakeGoogle) -> None:
+    """Check that past the app-wide limit, the callback answers 429 without calling Google (review C11)."""
+    client.app.state.exchange_limit = ExchangeLimit(per_minute=1)  # type: ignore[attr-defined]
+    assert sign_in(client, google, VISITOR).status_code == 303
+    response = sign_in(client, google, VISITOR)
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "60"
+    assert "Too many sign-ins" in response.text
+    assert len(google.token_requests) == 1
+    assert client.get(CALLBACK, params={"error": "access_denied"}).status_code == 400  # Google isn't called
+
+
+def test_exchange_limit_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that the limit counts exchanges in the last 60 seconds only."""
+    now = [1000.0]
+    monkeypatch.setattr(browl.auth.time, "monotonic", lambda: now[0])
+    limit = ExchangeLimit(per_minute=2)
+    assert [limit.allow(), limit.allow(), limit.allow()] == [True, True, False]
+    now[0] += 59.9
+    assert not limit.allow()
+    now[0] += 0.1
+    assert [limit.allow(), limit.allow(), limit.allow()] == [True, True, False]
 
 
 def test_wrong_nonce_refused(client: TestClient, google: FakeGoogle) -> None:
@@ -276,12 +387,72 @@ def test_sign_out(client: TestClient, google: FakeGoogle) -> None:
     assert client.get(UPLOAD).status_code == 303
 
 
+@pytest.mark.parametrize("email", [SEED, VISITOR])
+def test_sign_out_everywhere(client: TestClient, google: FakeGoogle, email: str) -> None:
+    """Check that signing out ends the account's other sessions, e.g. a copied cookie, and later sign-ins work (C1)."""
+    sign_in(client, google, email)
+    copied = client.cookies[SESSION_COOKIE]
+    client.post(SIGN_OUT)
+    client.cookies.set(SESSION_COOKIE, copied)
+    response = client.get("/onto")
+    assert f'href="{SIGN_IN}"' in response.text
+    assert f"{SESSION_COOKIE}=null" in response.headers["Set-Cookie"]  # cleared
+    assert client.get(UPLOAD).status_code == 303
+    sign_in(client, google, email)
+    assert f'action="{SIGN_OUT}"' in client.get("/onto").text
+
+
+def test_session_without_sign_in_time(client: TestClient, data_dir: Path) -> None:
+    """Check that a session without its sign-in time, which a sign-out can't be checked against, is cleared (C1)."""
+    client.cookies.set(SESSION_COOKIE, session_cookie(data_dir, SEED, signed_in_at=False))
+    response = client.get(UPLOAD)
+    assert response.status_code == 303
+    assert f"{SESSION_COOKIE}=null" in response.headers["Set-Cookie"]
+    client.cookies.set(SESSION_COOKIE, session_cookie(data_dir, SEED))
+    assert client.get(UPLOAD).status_code == 200
+
+
+def test_admins_unreadable(
+    client: TestClient, google: FakeGoogle, data_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Check that if the admins can't be read, pages are still served, and the user counts as not an admin (S2)."""
+    sign_in(client, google)
+    with sqlite3.connect(data_dir / STATE_DB) as connection:
+        connection.execute("DROP TABLE admin")
+    with caplog.at_level(logging.ERROR, logger="browl.auth"):
+        page = client.get("/onto")
+        assert page.status_code == 200
+        assert ADMIN_LINK not in page.text
+        assert f'action="{SIGN_OUT}"' in page.text
+        assert client.get(UPLOAD).status_code == 403
+    assert "Couldn't read the admins" in caplog.text
+
+
+def test_admin_store_missing_file(tmp_path: Path) -> None:
+    """Check that the store doesn't create a missing database, which would hide that it's gone (S2)."""
+    store = AdminStore(tmp_path / STATE_DB)
+    with pytest.raises(sqlite3.OperationalError):
+        store.account(SEED)
+    with pytest.raises(sqlite3.OperationalError):
+        store.sign_out(SEED, datetime.now(UTC))
+    assert not (tmp_path / STATE_DB).exists()
+
+
+def test_sign_out_unrecorded(client: TestClient, google: FakeGoogle, data_dir: Path) -> None:
+    """Check that if the sign-out can't be stored, this browser is still signed out."""
+    sign_in(client, google)
+    with sqlite3.connect(data_dir / STATE_DB) as connection:
+        connection.execute("DROP TABLE sign_out")
+    assert client.post(SIGN_OUT).status_code == 303
+    assert client.get(UPLOAD).status_code == 303
+
+
 def test_signed_out_bar(client: TestClient) -> None:
     """Check that someone not signed in sees the sign-in link, and no sign-out or admin link."""
     page = client.get("/_browl/search").text
     assert f'href="{SIGN_IN}"' in page
     assert "Sign out" not in page
-    assert 'class="admin-link"' not in page
+    assert ADMIN_LINK not in page
 
 
 @pytest.mark.parametrize(("base_url", "secure"), [("http://example.org/", False), ("https://example.org/", True)])
@@ -317,10 +488,76 @@ def test_session_key(tmp_path: Path) -> None:
     assert [file.name for file in path.parent.iterdir()] == [SESSION_KEY_FILE]
 
 
+@pytest.mark.parametrize("stored", ["", " \n", "x" * (SESSION_KEY_CHARS - 1)])
+def test_session_key_too_short(tmp_path: Path, stored: str) -> None:
+    """Check that a stored key that's empty or too short is refused, as anyone could sign a session with it (S1)."""
+    (tmp_path / SESSION_KEY_FILE).write_text(stored)
+    with pytest.raises(RuntimeError, match="delete the file"):
+        session_key(tmp_path)
+
+
+def test_session_key_synced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a new key is synced to disk before it's linked into place, so a crash can't leave it empty (S1)."""
+    calls = []
+    real_link = os.link
+    monkeypatch.setattr(browl.auth.os, "fsync", lambda fd: calls.append("fsync"))
+    monkeypatch.setattr(browl.auth.os, "link", lambda *args: (calls.append("link"), real_link(*args)))
+    session_key(tmp_path)
+    assert calls == ["fsync", "link"]
+
+
 def test_callback_url_from_base_url(data_dir: Path) -> None:
-    """Check that the callback URL comes from `BASE_URL`, its path included, and the reserved prefix."""
-    settings = make_settings(**AUTH_ON, BASE_URL="https://Example.org/onto/", RESERVED_PREFIX="_site")
-    assert callback_url(settings) == "https://example.org/onto/_site/admin/oidc-callback"
+    """Check that the callback URL comes from `BASE_URL`, its path included, and the route's path."""
+    app = make_app(**AUTH_ON, BASE_URL="https://Example.org/onto/", RESERVED_PREFIX="_site")
+    assert callback_url(app) == "https://example.org/onto/_site/admin/oidc-callback"
+
+
+def test_every_admin_route_protected(client: TestClient, google: FakeGoogle) -> None:
+    """Check that every route under the admin prefix, but signing in and out, needs an admin (S8)."""
+    # Every module's routers, as FastAPI doesn't list an app's included routes; each is included under the prefix.
+    routers = [
+        router
+        for info in pkgutil.walk_packages(browl.__path__, "browl.")
+        for router in vars(importlib.import_module(info.name)).values()
+        if isinstance(router, APIRouter) and router is not auth.router
+    ]
+    admin = sorted(
+        {
+            (method, f"/_browl{route.path}")
+            for router in routers
+            for route in router.routes
+            if isinstance(route, APIRoute) and route.path.startswith("/admin/")
+            for method in route.methods
+        }
+    )
+    assert len(admin) >= 6  # upload (GET and POST), status, docs, its OAuth2 redirect, openapi.json
+    assert ("GET", "/_browl/admin/docs/oauth2-redirect") in admin
+    for method, path in admin:
+        assert client.request(method, path).status_code == (303 if method == "GET" else 401), (method, path)
+    sign_in(client, google, VISITOR)
+    for method, path in admin:
+        assert client.request(method, path).status_code == 403, (method, path)
+
+
+def test_under_root_path(data_dir: Path, google: FakeGoogle) -> None:
+    """Check sign-in's links and redirects under a root path, with another reserved prefix (S9)."""
+    app = auth_app(google, BASE_URL="http://example.org/root/", RESERVED_PREFIX="_site")
+    with TestClient(app, root_path="/root", follow_redirects=False) as client:
+        response = client.get("/root/_site/admin/upload")
+        location = urlsplit(response.headers["Location"])
+        assert location.path == "/root/_site/admin/sign-in"
+        assert parse_qs(location.query) == {"next": ["/_site/admin/upload"]}
+        response = client.get("/root/_site/admin/sign-in", params={"next": "/_site/admin/status"})
+        query = {name: values[0] for name, values in parse_qs(urlsplit(response.headers["Location"]).query).items()}
+        assert query["redirect_uri"] == "http://example.org/root/_site/admin/oidc-callback"
+        google.nonce = query["nonce"]
+        response = client.get("/root/_site/admin/oidc-callback", params={"code": "c", "state": query["state"]})
+        assert response.headers["Location"] == "/root/_site/admin/status"
+        page = client.get("/root/_site/admin/upload").text
+        assert 'action="/root/_site/admin/sign-out"' in page
+        assert '<a href="/root/_site/admin/upload">Admin</a>' in page
+        assert client.post("/root/_site/admin/sign-out").headers["Location"] == "/root/"
+        assert 'href="/root/_site/admin/sign-in"' in client.get("/root/_site/search").text
 
 
 def test_auth_disabled(data_dir: Path) -> None:

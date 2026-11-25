@@ -15,9 +15,10 @@ from starlette.middleware.sessions import SessionMiddleware
 
 import browl
 from browl import admin, auth, derived, imports, loading, lookup, owlapi, precache, robot, search, search_page, trees
+from browl.admins import AdminStore
 from browl.derived import DerivedReader, NotCurrentError
 from browl.fuseki import FusekiClient, dataset_clause, ping
-from browl.jobs import JobContext, JobRunner, JobState, Stage, StageFunction
+from browl.jobs import STATE_DB, JobContext, JobRunner, JobState, Stage, StageFunction
 from browl.pages import STATIC_DIR, PageFrame, SiteGate, derived_not_current
 from browl.precache.core import has_loaded_imports
 from browl.settings import Settings, load_settings
@@ -169,8 +170,10 @@ def create_app(
     )
     app.state.settings = settings
     app.state.oidc = auth.oidc_client(settings, oidc_transport)
+    app.state.admins = AdminStore(settings.data_dir / STATE_DB)  # the job runner creates and migrates it
+    app.state.exchange_limit = auth.ExchangeLimit()
     app.include_router(router, prefix=reserved)
-    app.include_router(admin.sign_in_router, prefix=reserved)
+    app.include_router(auth.router, prefix=reserved)
     app.include_router(admin.router, prefix=reserved)
     app.include_router(lookup.reserved_router, prefix=reserved)
     app.include_router(trees.router, prefix=reserved)

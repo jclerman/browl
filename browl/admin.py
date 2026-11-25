@@ -1,29 +1,19 @@
-"""Admin routes, under `/{RESERVED_PREFIX}/admin` (DESIGN.md §2.13): only admins may use them (§2.11), but sign-in."""
+"""Admin routes, under `/{RESERVED_PREFIX}/admin` (DESIGN.md §2.13): only admins may use them (§2.11).
+
+Signing in and out, under the same prefix but open to everyone, is in `browl.auth`.
+"""
 
 import logging
-from typing import Any
 from urllib.parse import urlsplit
 
-import httpx2
-from authlib.integrations.starlette_client import OAuthError, StarletteOAuth2App
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.openapi.docs import get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from joserfc.errors import JoseError
 
-from browl.auth import (
-    CALLBACK_PATH,
-    SESSION_EMAIL,
-    SESSION_NEXT,
-    auth_page,
-    callback_url,
-    require_admin,
-    safe_next,
-)
+from browl.auth import require_admin
 from browl.jobs import JobRunningError, Stage
 from browl.jobtypes import Reasoner
-from browl.pages import href, link_root, templates
-from browl.settings import Settings
+from browl.pages import is_htmx, link_root, same_origin, templates
 from browl.upload import FORMATS, StorageError, UploadError, receive_upload
 
 logger = logging.getLogger(__name__)
@@ -37,9 +27,6 @@ SWAGGER_UI_URL = "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.35.0"
 router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin)])
 """The admin routes; every one needs an admin signed in."""
 
-sign_in_router = APIRouter(prefix="/admin", include_in_schema=False)
-"""Signing in and out, open to everyone."""
-
 
 @router.get("/status", response_class=HTMLResponse)
 async def job_status(request: Request) -> HTMLResponse:
@@ -49,7 +36,7 @@ async def job_status(request: Request) -> HTMLResponse:
     page. A poll that finds the job ended gets `HX-Redirect` to a fresh GET of its page, so the header shows the new
     ontology (#101); a reload would re-send a refused upload's POST. Only a running job's fragment polls, so no loop.
     """
-    htmx = request.headers.get("HX-Request") == "true"
+    htmx = is_htmx(request)
     job = await request.app.state.jobs.current()
     headers = {"Cache-Control": "no-store"}
     if htmx and not job.running:
@@ -77,7 +64,9 @@ REASONER_LABELS = {Reasoner.NONE: "None", Reasoner.ELK: "ELK", Reasoner.HERMIT: 
 """The upload form's reasoner choices (A-3), the first the default."""
 
 
-async def _upload_page(request: Request, error: str | None = None, status_code: int = 200) -> HTMLResponse:
+async def _upload_page(
+    request: Request, error: str | None = None, status_code: int = status.HTTP_200_OK
+) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "admin/upload.html",
@@ -98,77 +87,6 @@ async def _upload_page(request: Request, error: str | None = None, status_code: 
 async def upload_page(request: Request) -> HTMLResponse:
     """Show the upload form (A-2, A-3) and the load job's status (A-5, A-6)."""
     return await _upload_page(request)
-
-
-def _upload_path(request: Request) -> str:
-    """Return the upload page's path relative to the app's root, where signing in leads by default."""
-    return f"/{request.app.state.settings.reserved_prefix}/admin/upload"
-
-
-@sign_in_router.get("/sign-in")
-async def sign_in(request: Request, next: str | None = None) -> Response:
-    """Send the browser to Google to sign in, then back to `next`, a path relative to the app's root (A-1).
-
-    Without `next`, or with one that isn't a path of this app, it returns to the upload page. An admin already
-    signed in, or anyone with `AUTH_DISABLED`, goes straight there.
-    """
-    target = safe_next(next) or _upload_path(request)
-    if request.state.is_admin:
-        return RedirectResponse(href(request, target), status.HTTP_303_SEE_OTHER)
-    client: StarletteOAuth2App = request.app.state.oidc
-    request.session[SESSION_NEXT] = target
-    try:
-        # select_account, so someone signed in to Google with an account that isn't an admin's can pick another.
-        response: Response = await client.authorize_redirect(
-            request, callback_url(request.app.state.settings), prompt="select_account"
-        )
-    except httpx2.HTTPError:
-        logger.exception("Couldn't reach Google to start signing in")
-        return auth_page(request, "Sign-in failed", "Couldn't reach Google. Try again later.", 502)
-    response.headers["Cache-Control"] = "no-store"
-    return response
-
-
-@sign_in_router.get(f"/{CALLBACK_PATH}")
-async def oidc_callback(request: Request) -> Response:
-    """Finish signing in: Google sends the browser back here with an authorization code (A-1).
-
-    The ID token Google returns for the code gives the user's email address, which must be verified. Then the browser
-    returns to the path the sign-in started with; it's refused there if the address isn't an admin's.
-    """
-    settings: Settings = request.app.state.settings
-    if settings.auth_disabled:
-        return RedirectResponse(href(request, _upload_path(request)), status.HTTP_303_SEE_OTHER)
-    client: StarletteOAuth2App = request.app.state.oidc
-    try:
-        token: dict[str, Any] = await client.authorize_access_token(request)
-    except (OAuthError, JoseError) as error:  # JoseError: an ID token that's invalid, e.g. with the wrong nonce
-        logger.warning("Sign-in failed: %s", error)
-        return auth_page(request, "Sign-in failed", "Google didn't confirm the sign-in. Try again.", 400)
-    except httpx2.HTTPError:
-        logger.exception("Couldn't reach Google to finish signing in")
-        return auth_page(request, "Sign-in failed", "Couldn't reach Google. Try again later.", 502)
-    claims: dict[str, Any] = token.get("userinfo") or {}
-    email = claims.get("email")
-    if not isinstance(email, str) or claims.get("email_verified") is not True:
-        return auth_page(request, "Sign-in failed", "Google didn't give a verified email address.", 400)
-    target = safe_next(request.session.pop(SESSION_NEXT, None)) or _upload_path(request)
-    request.session[SESSION_EMAIL] = email.lower()
-    logger.info("Signed in: %s", email.lower())
-    return RedirectResponse(href(request, target), status.HTTP_303_SEE_OTHER, headers={"Cache-Control": "no-store"})
-
-
-def same_origin(request: Request) -> None:
-    """Refuse a request a browser sent from another site's page, e.g. one submitting the upload form (CSRF).
-
-    Browsers say where a request came from in `Sec-Fetch-Site`; a request without it, e.g. from curl, passes. It's
-    checked before the body is read, so it suits the streaming upload.
-
-    Raises:
-        HTTPException: 403, the request came from another site.
-    """
-    if request.headers.get("Sec-Fetch-Site", "none") not in {"same-origin", "none"}:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "requests from other sites are refused")
 
 
 @router.post("/upload", response_class=HTMLResponse, dependencies=[Depends(same_origin)])
@@ -197,13 +115,6 @@ async def upload(request: Request) -> Response:
     except JobRunningError:
         return await _upload_page(request, "a load job is already running", status.HTTP_409_CONFLICT)
     return RedirectResponse(request.url_for("upload_page").path, status.HTTP_303_SEE_OTHER)
-
-
-@sign_in_router.post("/sign-out", dependencies=[Depends(same_origin)])
-async def sign_out(request: Request) -> RedirectResponse:
-    """Sign out, and go to the site's root."""
-    request.session.clear()
-    return RedirectResponse(href(request, "/"), status.HTTP_303_SEE_OTHER)
 
 
 @router.get("/openapi.json", include_in_schema=False)
