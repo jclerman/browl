@@ -27,15 +27,18 @@ Never set it in production.
 In the [Google Cloud console](https://console.cloud.google.com/), no billing or API needs to be enabled.
 
 1. **Create a project**, or pick one of yours.
-2. **Configure the consent screen** (Google Auth Platform → Branding, then Audience):
+2. **Configure the consent screen** in the Google Auth Platform: from the project's welcome page, APIs & Services →
+   OAuth consent screen, or search the console for "Google Auth Platform". In a new project, **Get started** opens a
+   wizard that asks for the app information, audience and contact information; later, the platform's menu has them
+   under Branding and Audience.
    - Give an app name and a support email address. Users see them when they sign in.
    - Leave out the logo: adding one needs Google to verify the app's brand.
    - Audience: **External**, unless every admin is in your Google Workspace organization, when **Internal** limits
      sign-in to it.
-   - Publishing status: in **Testing**, only the test users you list (up to 100) can sign in, to any of the project's
-     clients. Publish the app (**In production**) to drop that list: any Google account can then sign in, and each
-     deployment refuses the admin pages to those who aren't its admins. browl asks only for the `openid` and `email`
-     scopes, which need no review.
+   - Publishing status (under Audience, with the test users): in **Testing**, only the test users you list (up to
+     100) can sign in, to any of the project's clients. Publish the app (**In production**) to drop that list: any
+     Google account can then sign in, and each deployment refuses the admin pages to those who aren't its admins.
+     browl asks only for the `openid` and `email` scopes, which need no review, and nothing under Data Access.
 3. **Create a client for each deployment** (Clients → Create client → **Web application**). Under **Authorized
    redirect URIs**, add the deployment's callback: `BASE_URL` without its trailing `/`, then
    `/{RESERVED_PREFIX}/admin/oidc-callback`. For example `https://ontology.example.org/_browl/admin/oidc-callback`,
