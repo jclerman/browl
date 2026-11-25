@@ -50,11 +50,12 @@ COUNT_TIMEOUT_S = 1800.0
 COUNT_TRIPLES = (Path(__file__).parent / "sparql" / "count-triples.rq").read_text(encoding="utf-8")
 """The query that counts each graph's triples, in one pass over the store."""
 
-_LOADER_MESSAGE = re.compile(r"^\S+ +[A-Z]+ +\S+ +:: (.*)$")
-_ADDED = re.compile(r"Add: ([\d,]+) (\S+)")
-_FINISHED = re.compile(r"Finished: .*: ([\d,]+) tuples in ")
-_INDEX_DONE = re.compile(r"Finish - index (\w+)")
-_INDEX_REPLAY = re.compile(r"Start replay index (\w+)")
+# `tdb2.tdbloader`'s output: a line, then the messages in it.
+_LOADER_MESSAGE = re.compile(r"^\S+ +[A-Z]+ +\S+ +:: (.*)$")  # "01:43:19 INFO  loader          :: <message>"
+_ADDED = re.compile(r"Add: ([\d,]+) (\S+)")  # "Add: 1,000,000 big.nt (Batch: 1,360,544 / Avg: 1,360,544)"
+_FINISHED = re.compile(r"Finished: .*: ([\d,]+) tuples in ")  # "Finished: /jobs/3/big.nt: 1,200,000 tuples in 0.89s"
+_INDEX_DONE = re.compile(r"Finish - index (\w+)")  # "Finish - index SPO"
+_INDEX_REPLAY = re.compile(r"Start replay index (\w+)")  # "Start replay index SPO"
 _REPLAYED = "Index"
 """The name in the `Add:` lines of `tdb2.tdbloader`'s index phase, where a file's name is in its loading phase's."""
 
@@ -250,9 +251,7 @@ async def loading_stage(context: JobContext, http: httpx2.AsyncClient) -> None:
         await remove_stale_stores(settings, admin, name)  # this also deletes any store left at `store`
         await asyncio.to_thread(store.parent.mkdir, parents=True, exist_ok=True)
         files = len(context.import_files)
-        named = files > 0
-        total = context.triple_counts.get(ontology)
-        progress = LoaderProgress("Ontology" if named else None, total, context.report)
+        progress = LoaderProgress("Ontology" if files else None, context.triple_counts.get(ontology), context.report)
         await load_file(settings, store, ontology, progress=progress)
         for number, (iri, file) in enumerate(context.import_files.items(), start=1):
             progress = LoaderProgress(f"Import {number} of {files}", context.triple_counts.get(file), context.report)

@@ -70,9 +70,11 @@ ROBOT_STEPS = {
 SUBCOMMAND_DETAILS = {"reason": None, "materialize": "Materializing", "query": "Removing superclass shortcuts"}
 """The ROBOT subcommands browl runs (`reason_args`), and how a step's detail names each but the first."""
 
+# ROBOT's `-vv` output: a log line, e.g.
+# "2026-11-25 01:40:33,320 WARN  org.obolibrary.robot.CommandManager - <message>", then the messages in it.
 _LOG_MESSAGE = re.compile(r"^\S+ \S+ +[A-Z]+ +\S+ - (.*)$")
-_MATERIALIZING = re.compile(r"Materializing parents of class (\d+)/(\d+)")
-_SUBCOMMAND_TOOK = re.compile(r"Subcommand Timing: (\S+) took")
+_MATERIALIZING = re.compile(r"Materializing parents of class (\d+)/(\d+)")  # "Materializing parents of class 1/44"
+_SUBCOMMAND_TOOK = re.compile(r"Subcommand Timing: (\S+) took")  # "Subcommand Timing: reason took 0.272 seconds"
 
 
 @dataclass
@@ -114,7 +116,7 @@ class RobotProgress:
     def __init__(self, args: Sequence[str], report: Callable[[str, float | None], None]) -> None:
         """Report that the ontology is loading."""
         self._subcommands = [arg for arg in args if arg in SUBCOMMAND_DETAILS]
-        self._subcommand = 0
+        self._name: str | None = None  # how details name the running subcommand; None while it's the first
         self._report = report
         report(LOADING, None)
 
@@ -125,8 +127,9 @@ class RobotProgress:
         message = match[1].strip()
         if match := _SUBCOMMAND_TOOK.match(message):
             if match[1] in self._subcommands:
-                self._subcommand = self._subcommands.index(match[1]) + 1
-                if self._subcommand < len(self._subcommands):
+                after = self._subcommands.index(match[1]) + 1
+                self._name = SUBCOMMAND_DETAILS[self._subcommands[min(after, len(self._subcommands) - 1)]]
+                if after < len(self._subcommands):
                     self._report(self._detail(None), None)
         elif match := _MATERIALIZING.match(message):
             done, total = int(match[1]), int(match[2])
@@ -139,12 +142,10 @@ class RobotProgress:
                     return
 
     def _detail(self, step: str | None) -> str:
-        """Return a step's detail, named for its subcommand, if any, but the first's; or the subcommand's alone."""
-        index = min(self._subcommand, len(self._subcommands) - 1)
-        name = SUBCOMMAND_DETAILS[self._subcommands[index]] if index > 0 else None
-        if name is None:
+        """Return a step's detail, named for the running subcommand unless it's the first; or the subcommand's name."""
+        if self._name is None:
             return step or ""
-        return name if step is None else f"{name}: {step[0].lower()}{step[1:]}"
+        return self._name if step is None else f"{self._name}: {step[0].lower()}{step[1:]}"
 
 
 def failure_reason(completed: Completed, output: RobotOutput, settings: Settings) -> str:
