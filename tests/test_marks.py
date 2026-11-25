@@ -1,5 +1,6 @@
 """Tests for the marks `tests/conftest.py` gives the tests that use the `java`, `fuseki_url` or `browser` fixture."""
 
+import faulthandler
 import re
 
 import jpype
@@ -81,8 +82,11 @@ TEST_COUNT = 8
 """How many tests `TESTS` has, not counting the doctest."""
 
 # The inner runs' options: the marks registered, for `--strict-markers`, and without pytest-playwright, whose own
-# fixtures would clash with the outer run's.
-INI = "[pytest]\naddopts = --strict-markers -p no:randomly -p no:playwright\nmarkers =\n" + "".join(
+# fixtures would clash with the outer run's. Also without pytest's faulthandler plugin: this process's JVM handles
+# SIGSEGV and SIGBUS itself (it turns a null dereference in compiled code into a NullPointerException), and the plugin,
+# on finishing, would put back the handlers from before the JVM started, so the JVM's next routine fault would crash
+# the process (#152).
+INI = "[pytest]\naddopts = --strict-markers -p no:randomly -p no:playwright -p no:faulthandler\nmarkers =\n" + "".join(
     f"    {mark}\n" for mark in FIXTURE_MARKS.values()
 )
 
@@ -220,3 +224,13 @@ def test_java_missing(real: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, ci
     result = real.runpytest("-rs")
     result.assert_outcomes(**({"errors": 1} if ci else {"skipped": 1}))
     result.stdout.fnmatch_lines([line])
+
+
+def test_faulthandler_untouched(inner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that an inner run leaves the faulthandler, and so the JVM's signal handlers, alone; see `INI`."""
+    calls = []
+    monkeypatch.setattr(faulthandler, "enable", lambda *args, **kwargs: calls.append("enable"))
+    monkeypatch.setattr(faulthandler, "disable", lambda: calls.append("disable"))
+    inner.makepyfile("def test_x():\n    pass\n")
+    inner.runpytest().assert_outcomes(passed=1)
+    assert calls == []
