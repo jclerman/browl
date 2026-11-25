@@ -34,11 +34,9 @@ JOB_LOCK = "job.lock"
 STATE_TTL_S = 1.0
 """How long a runner serves the job state it last read before reading the database again."""
 
-UPLOAD_PROGRESS_S = 1.0
-"""How often a running upload's size so far is recorded, for the status to show it growing."""
-
 PROGRESS_S = 2.0
-"""The least time between records of a running stage's progress (`JobContext.report`), as often as the status polls."""
+"""The least time between records of a running upload's size or stage's progress (`JobContext.report`), as often as the
+status polls."""
 
 MAX_DETAIL_CHARS = 300
 """The longest progress detail, or IRI, recorded; a longer one, e.g. a long import IRI, is cut short."""
@@ -802,13 +800,13 @@ class JobRunner:
         await asyncio.gather(*self._writes)
 
     async def record_upload_progress(self, context: JobContext) -> None:
-        """Record the running upload's size so far, if it has grown and `UPLOAD_PROGRESS_S` has passed since last time.
+        """Record the running upload's size so far, if it has grown and `PROGRESS_S` has passed since last time.
 
         The upload handler calls it as data arrives. A failed write is logged and skipped: the status just shows an
         older size.
         """
         now = time.monotonic()
-        if now - self._progress_at < UPLOAD_PROGRESS_S or context.upload_bytes == self._state.upload_bytes:
+        if now - self._progress_at < PROGRESS_S or context.upload_bytes == self._state.upload_bytes:
             return
         self._progress_at = now
         # A cancelled await leaves the write running, so the job's end waits for it (`_store_end`).

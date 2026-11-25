@@ -769,7 +769,7 @@ async def test_long_reason_cut_short(data_dir: Path, caplog: pytest.LogCaptureFi
 
 
 async def test_upload_progress(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Check that a running upload's size so far is recorded once `UPLOAD_PROGRESS_S` has passed, if it has grown."""
+    """Check that a running upload's size so far is recorded once `PROGRESS_S` has passed, if it has grown."""
     runner = await open_runner(data_dir)
     writes: list[JobState] = []
     write = runner._store.write
@@ -778,7 +778,7 @@ async def test_upload_progress(data_dir: Path, monkeypatch: pytest.MonkeyPatch) 
         context.upload_bytes = 5
         await runner.record_upload_progress(context)  # too soon after the claim
         assert runner.state.upload_bytes is None
-        monkeypatch.setattr(browl.jobs, "UPLOAD_PROGRESS_S", 0)
+        monkeypatch.setattr(browl.jobs, "PROGRESS_S", 0)
         await runner.record_upload_progress(context)
         await runner.record_upload_progress(context)  # not grown
         stored = JobStore(data_dir / STATE_DB).read()
@@ -794,7 +794,7 @@ async def test_upload_progress_write_fails(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Check that a failed progress write is logged and skipped, leaving the upload to carry on."""
-    monkeypatch.setattr(browl.jobs, "UPLOAD_PROGRESS_S", 0)
+    monkeypatch.setattr(browl.jobs, "PROGRESS_S", 0)
     runner = await open_runner(data_dir)
     write = runner._store.write
 
@@ -814,7 +814,7 @@ async def test_upload_progress_write_fails(
 
 async def test_upload_progress_write_before_end(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that a progress write still running when the upload is cancelled can't overwrite the job's end."""
-    monkeypatch.setattr(browl.jobs, "UPLOAD_PROGRESS_S", 0)
+    monkeypatch.setattr(browl.jobs, "PROGRESS_S", 0)
     runner = await open_runner(data_dir)
     release = threading.Event()
     write = runner._store.write
