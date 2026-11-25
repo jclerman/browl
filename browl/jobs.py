@@ -233,10 +233,15 @@ class JobState:
         return replace(self._timed(now), stage=stage, stage_started_at=now)
 
     def _timed(self, now: datetime) -> Self:
-        """Return this state with the current stage's time recorded, and its progress cleared."""
+        """Return this state with the current stage's time recorded, and its progress cleared.
+
+        A stage's time ends when the job did, if it has: a rebuild after a restart (`JobRunner.rebuild`) moves an
+        ended job on from "ready", which mustn't count the time it sat ready.
+        """
         seconds = dict(self.stage_seconds)
         if self.stage is not None and self.stage_started_at is not None:
-            seconds[self.stage] = max(0.0, (now - self.stage_started_at).total_seconds())
+            end = now if self.finished_at is None else min(now, self.finished_at)
+            seconds[self.stage] = max(0.0, (end - self.stage_started_at).total_seconds())
         return replace(self, stage_seconds=seconds, detail=None, fraction=None)
 
 

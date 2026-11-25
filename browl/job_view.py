@@ -236,7 +236,17 @@ def format_duration(seconds: float) -> str:
 
 
 def job_elapsed(job: JobState, now: datetime) -> str | None:
-    """Return how long a job ran, or has run so far; None if it hasn't started."""
+    """Return how long a job ran, or has run so far; None if it hasn't started.
+
+    That's its stages' times added up, the running one's so far, so a rebuild after a restart doesn't count the time
+    the job sat ready before it. A state stored before stage times were recorded gives its start to its end.
+    """
     if job.started_at is None:
         return None
-    return format_duration(((job.finished_at or now) - job.started_at).total_seconds())
+    if not job.stage_seconds:
+        return format_duration(((job.finished_at or now) - job.started_at).total_seconds())
+    # While a rebuild redoes a stage, its earlier time is left out for the new one so far.
+    seconds = sum(time for stage, time in job.stage_seconds.items() if not (job.running and stage == job.stage))
+    if job.running and job.stage_started_at is not None:
+        seconds += max(0.0, (now - job.stage_started_at).total_seconds())
+    return format_duration(seconds)

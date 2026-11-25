@@ -1,12 +1,13 @@
 """Tests for how the admin status shows a load job's stages."""
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 
 from browl.admin import status_context
-from browl.job_view import Activity, StepState, job_steps, running_activity, usage_table_activity
+from browl.job_view import Activity, StepState, job_elapsed, job_steps, running_activity, usage_table_activity
 from browl.jobs import JobState, Stage
 from browl.jobtypes import Reasoner
 from browl.pages import templates
@@ -80,3 +81,17 @@ def test_detail_parts_kept_whole() -> None:
     page = templates.get_template("admin/_job_status.html").render(**status_context(state), url_for=url_for)
     expected = '<p class="step-detail"><span>Hook 2 of 7, names</span> · <span>28 s</span> · <span>indexing</span></p>'
     assert expected in page
+
+
+def test_rebuild_times() -> None:
+    """Check that a rebuild after a restart counts neither the time the job sat ready nor the stage it redoes twice."""
+    done = NOW - timedelta(minutes=30)
+    seconds = {Stage.UPLOADING: 8.0, Stage.IMPORTS: 27.0, Stage.LOADING: 78.0, Stage.PRE_CACHING: 450.0}
+    ready = JobState(1, Stage.READY, done - timedelta(seconds=563), done, ready_generation=1, stage_seconds=seconds)
+    ready = replace(ready, stage_started_at=done, stage_seconds={**seconds, Stage.READY: 0.0})
+    rebuilding = replace(ready.entering(Stage.PRE_CACHING, NOW), finished_at=None)
+    assert rebuilding.stage_seconds[Stage.READY] == 0.0  # not the 30 min it sat ready
+    later = NOW + timedelta(seconds=60)
+    assert job_elapsed(rebuilding, later) == "2 min 53 s"  # 8 + 27 + 78 + 0, then 60 s of the rebuild
+    rebuilt = replace(rebuilding.entering(Stage.READY, later), finished_at=later)
+    assert job_elapsed(rebuilt, later) == "2 min 53 s"
