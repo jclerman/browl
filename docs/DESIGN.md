@@ -2025,7 +2025,6 @@ flowchart LR
         P45["P-45 Shared results pager"]
         P46["P-46 Prose search"]
         P21["P-21 Page cache"]
-        P22["P-22 Sign-in"]
         P23["P-23 Admin list"]
         P33["P-33 JSON API"]
     end
@@ -2041,9 +2040,7 @@ flowchart LR
 
     P38 --> P33
     P38 & P39 --> P25
-    P22 --> P44
-    P22 --> P23
-    P22 & P31 --> P36
+    P31 --> P36
     P31 --> P32
 ```
 
@@ -2122,7 +2119,7 @@ go into this document.
 | P-46 | Prose search: an FTS5 index of the prose properties' values, ranked by BM25, searched when chosen; the results page shows its hits apart from name matches, with the matched words marked (2.6, Proposed) | U-50 | P-42 | To do | [#140](https://github.com/jclerman/browl/issues/140) |
 | P-33 | JSON API over the pages' data: routes under `api/` returning the models the pages render (2.8, 2.13) | U-42 | P-16, P-17, P-18, P-19, P-27, P-38 | To do | [#76](https://github.com/jclerman/browl/issues/76) |
 | P-21 | Page cache keyed by generation | O-10, N-3 | P-16 | To do | [#40](https://github.com/jclerman/browl/issues/40) |
-| P-22 | Google sign-in, admin-route protection, dev no-auth mode (cancelling a job: P-36) | A-1, O-6, O-7 | P-6 | To do | [#17](https://github.com/jclerman/browl/issues/17) |
+| P-22 | Google sign-in, admin-route protection, dev no-auth mode (cancelling a job: P-36) | A-1, O-6, O-7 | P-6 | Done | [#17](https://github.com/jclerman/browl/issues/17) |
 | P-23 | Admin list management page and persistence | A-7 | P-22 | To do | [#19](https://github.com/jclerman/browl/issues/19) |
 
 ### Phase 6: Hardening
