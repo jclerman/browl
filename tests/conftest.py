@@ -43,7 +43,7 @@ ROOT = Path(__file__).parent.parent
 DATA = Path(__file__).parent / "data"
 FUSEKI_IMAGE = "browl-fuseki-test"
 FUSEKI_START_TIMEOUT_S = 60
-FUSEKI_PORT_ATTEMPTS = 3
+MAX_FUSEKI_PORT_ATTEMPTS = 3
 FUSEKI_LOGS = ROOT / "test-logs"  # the logs of the Fuseki containers the tests ran; CI keeps them if a test fails
 ROBOT_JAR_CACHE = ROOT / ".cache" / "robot.jar"  # where `make robot-jar` puts it
 JENA_CACHE = ROOT / ".cache" / "jena"  # where `make jena` puts it
@@ -345,8 +345,9 @@ def _start_fuseki(image: str, base: Path, host_network: bool) -> tuple[str, str]
 
     On the host's own network (`host_network`), the container adds no network interface, which would make Chromium
     fail the requests under way in other workers' browser tests (`net::ERR_NETWORK_CHANGED`). Its port is one that was
-    free a moment ago; if something takes it first, Fuseki exits, and another is tried, up to `FUSEKI_PORT_ATTEMPTS`.
-    Otherwise Docker publishes the container's port 3030 on a free local port.
+    free a moment ago; if something takes it first, Fuseki exits, and another port is tried, for at most
+    `MAX_FUSEKI_PORT_ATTEMPTS` attempts in all. Otherwise Docker publishes the container's port 3030 on a free local
+    port.
     """
     run = [
         "run",
@@ -374,7 +375,8 @@ def _start_fuseki(image: str, base: Path, host_network: bool) -> tuple[str, str]
             _wait_for_fuseki(url, container)
         except FusekiExitedError as error:
             _remove_container(container)
-            if not host_network or attempt == FUSEKI_PORT_ATTEMPTS or "Address already in use" not in error.logs:
+            port_taken = "Address already in use" in error.logs
+            if not (host_network and port_taken and attempt < MAX_FUSEKI_PORT_ATTEMPTS):
                 raise
             attempt += 1
             continue
