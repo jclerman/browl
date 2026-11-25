@@ -1879,11 +1879,12 @@ How it works (P-22, `browl.auth`):
   request 403 with `HX-Refresh`, so the status poll of an admin removed meanwhile reloads to the refusal rather than
   polling on. The admin routes' pages and API docs are all covered; sign-in, the callback and sign-out are not.
 - **Sign-out** (`admin/sign-out`) is a POST, refused from another site's page like the upload (`Sec-Fetch-Site`), so
-  another site can't sign you out; it clears the session and goes to the site's root. It also stores the time for the
-  account in the `sign_out` table, beside `admin`, so it covers every account, admin or not. `AdminMark` then clears any
-  session for that account that started at or before it: signing out ends the account's sessions on every device, and
-  a copied cookie stops working. If the time can't be stored, the error is logged, and only this browser is signed
-  out. The table holds a row for each account that has ever signed out.
+  another site can't sign you out; it clears the session and goes to the ontology's home page, or the search page if
+  the ontology has none (the site's root has a page only if an entity's IRI maps there). It also stores the time for
+  the account in the `sign_out` table, beside `admin`, so it covers every account, admin or not. `AdminMark` then
+  clears any session for that account that started at or before it: signing out ends the account's sessions on every
+  device, and a copied cookie stops working. If the time can't be stored, the error is logged, and only this browser
+  is signed out. The table holds a row for each account that has ever signed out.
 
 ### 2.12 Configuration
 

@@ -26,7 +26,7 @@ from starlette.applications import Starlette
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from browl.admins import AdminStore
-from browl.pages import app_path, href, is_htmx, is_under_any, route_href, same_origin, templates
+from browl.pages import NO_LINK, OntologyLink, app_path, href, is_htmx, is_under_any, route_href, same_origin, templates
 from browl.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -374,7 +374,9 @@ async def oidc_callback(request: Request) -> Response:
 
 @router.post("/sign-out", dependencies=[Depends(same_origin)])
 async def sign_out(request: Request) -> RedirectResponse:
-    """Sign out, on every device, and go to the site's root.
+    """Sign out, on every device, and go to the ontology's home page, or the search page if it has none.
+
+    The site's root may have no page: it's an entity's only if one's IRI maps there.
 
     The time is stored for the account, so its other sessions, and any copy of this one's cookie, are refused from
     now on (`AdminMark`). If it can't be stored, this browser is still signed out.
@@ -387,4 +389,9 @@ async def sign_out(request: Request) -> RedirectResponse:
             await asyncio.to_thread(store.sign_out, email, datetime.now(UTC))
         except sqlite3.Error:
             logger.exception("Couldn't record a sign-out in %s; other sessions stay signed in", store.path)
-    return RedirectResponse(href(request, "/"), status.HTTP_303_SEE_OTHER)
+    link: OntologyLink = getattr(request.state, "ontology_link", NO_LINK)
+    if link.path is not None:
+        target = href(request, link.path, link.fragment)
+    else:
+        target = route_href(request, "search_page")
+    return RedirectResponse(target, status.HTTP_303_SEE_OTHER)

@@ -528,7 +528,7 @@ def test_signed_in_bar(page: Page, server: LiveServer, size: dict[str, int]) -> 
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
     sign_out.click()
     expect(nav.get_by_role("link", name="Sign in")).to_be_visible()
-    assert urllib.parse.urlsplit(page.url).path == "/"
+    expect(page.locator("main h1")).to_have_text(TITLE)  # the ontology's home page, not "Not found"
     expect(nav.locator(".admin-link")).to_have_count(0)
 
 

@@ -383,7 +383,8 @@ def test_sign_out(client: TestClient, google: FakeGoogle) -> None:
     assert client.get(UPLOAD).status_code == 200
     response = client.post(SIGN_OUT, headers={"Sec-Fetch-Site": "same-origin"})
     assert response.status_code == 303
-    assert response.headers["Location"] == "/"
+    assert response.headers["Location"] == "/onto"  # the ontology's home page: the site's root may have no page
+    assert client.get("/onto").status_code == 200
     assert client.get(UPLOAD).status_code == 303
 
 
@@ -556,7 +557,8 @@ def test_under_root_path(data_dir: Path, google: FakeGoogle) -> None:
         page = client.get("/root/_site/admin/upload").text
         assert 'action="/root/_site/admin/sign-out"' in page
         assert '<a href="/root/_site/admin/upload">Admin</a>' in page
-        assert client.post("/root/_site/admin/sign-out").headers["Location"] == "/root/"
+        # No ontology is loaded, so it has no home page: sign-out goes to the search page.
+        assert client.post("/root/_site/admin/sign-out").headers["Location"] == "/root/_site/search"
         assert 'href="/root/_site/admin/sign-in"' in client.get("/root/_site/search").text
 
 
