@@ -451,6 +451,7 @@ def test_upload_refused_early(
     with page.expect_response(lambda response: response.request.method == "POST") as response:
         page.click("button[type=submit]")
     assert response.value.status == status
+    assert response.value.request.resource_type == "xhr"  # sent by upload.js, which gets the response, not a reset
     expect(page.get_by_role("alert")).to_have_text(re.compile(f"The upload was refused: {re.escape(reason)}"))
 
 
@@ -513,6 +514,38 @@ def test_upload_shows_progress(page: Page, status_server: LiveServer) -> None:
     assert len(posts) == 1
     assert status_server.call(status_server.app.state.jobs.current()).generation == 1
     assert violations(page) == []  # the script works under the Content-Security-Policy
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        ("abort", "The upload failed: the connection to the server was lost."),
+        ("500", "The upload failed: HTTP 500."),
+    ],
+)
+def test_upload_failure_shown(page: Page, status_server: LiveServer, failure: str, message: str) -> None:
+    """Check that, with JS, an upload that fails without the server's refusal page says so, and can be tried again.
+
+    The connection is lost, or the response is an error page without the refusal's message.
+    """
+
+    def fail(route: Route) -> None:
+        if route.request.method != "POST":
+            route.continue_()
+        elif failure == "abort":
+            route.abort()
+        else:
+            route.fulfill(status=500, body="<html><main><p>Internal Server Error</p></main></html>")
+
+    page.goto(f"{status_server.url}{UPLOAD}")
+    page.route(f"{status_server.url}{UPLOAD}", fail)
+    page.set_input_files("#ontology", DATA / "routing.ttl")
+    button = page.get_by_role("button", name="Upload")
+    button.click()
+    expect(page.get_by_role("alert")).to_have_text(message)
+    expect(button).to_be_enabled()
+    expect(page.locator(".upload-progress")).to_be_hidden()
+    assert page.url == f"{status_server.url}{UPLOAD}"
 
 
 @NO_JS
