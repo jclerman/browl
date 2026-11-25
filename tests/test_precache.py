@@ -183,6 +183,11 @@ async def test_stage_reports_progress(settings: Settings, monkeypatch: pytest.Mo
     assert reports[0] == "Reading the ontology's header"
     assert reports[-1] == "Finishing the database"
     phases = list(dict.fromkeys(report.removeprefix("Hook 1 of 1, fill · 0 s · ") for report in reports[1:-1]))
+    # The insert's changes are counted on the database thread, so the first report while writing can show them, and
+    # the next, as they haven't moved, plain "writing tables" (#157).
+    writing = ["writing tables", "writing tables · 2 database changes"]
+    if phases[2:4] == writing[::-1]:
+        phases[2:4] = writing
     assert phases == [
         "waiting for query results",
         "receiving query results: 1 rows",
