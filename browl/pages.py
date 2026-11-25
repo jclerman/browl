@@ -97,6 +97,9 @@ CONTENT_SECURITY_POLICY = (
 SECURITY_HEADERS = {"X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY"}
 """Headers every response gets, including those the policy exempts."""
 
+PANEL_HEADERS = {"X-Robots-Tag": "noindex"}
+"""The headers of a tab panel served alone, which isn't a page."""
+
 _BIDI_CONTROLS = re.compile("[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 """The bidirectional-text controls `bidi_encoded` encodes."""
 
@@ -235,9 +238,19 @@ def read_offset(value: str | None) -> int | None:
     return int(value) if _OFFSET.fullmatch(value) else None
 
 
+def not_found(request: Request) -> Response:
+    """Return the "not found" page (U-14), with status 404."""
+    return templates.TemplateResponse(request, "not_found.html", {}, status_code=404)
+
+
+def tree_path(prefix: str, tree: TreePage) -> str:
+    """Return a hierarchy's tree page's path, from the app's root, given the reserved prefix."""
+    return f"/{prefix}/tree/{tree.slug}"
+
+
 def tree_href(request: Request, tree: TreePage) -> str:
     """Return the `href` of a hierarchy's tree page."""
-    return href(request, f"/{request.app.state.settings.reserved_prefix}/tree/{tree.slug}")
+    return href(request, tree_path(request.app.state.settings.reserved_prefix, tree))
 
 
 def frame_context(request: Request) -> dict[str, object]:

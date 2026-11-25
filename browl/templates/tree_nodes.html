@@ -14,9 +14,15 @@
 {%- if node.more_equivalents %} ≡ … <small>(+{{ "{:,}".format(node.more_equivalents) }})</small>{% endif %}
 {%- endmacro %}
 
+{# A node, or in the hierarchy column, a reference to one drawn elsewhere in it, which links to its page. #}
 {% macro tree_node(shown) -%}
 {%- set node = shown.node -%}
 {%- set is_open = shown.children is not none -%}
+{%- if shown.drawn is not none -%}
+<li role="none" class="tree-reference"><span class="tree-leaf" aria-hidden="true">↳</span>
+  {#- #}<a role="treeitem" id="{{ shown.id }}" href="{{ node.link.href }}">{{ node_label(node) }}
+  <small>(also {{ shown.drawn }})</small></a></li>
+{%- else -%}
 <li role="none">
   {%- if shown.toggle is not none -%}
   <a class="tree-toggle" href="{{ shown.toggle }}" rel="nofollow" hx-get="{{ shown.load }}" hx-target="next ul" hx-swap="innerHTML"
@@ -24,6 +30,7 @@
      <bdi>{{ node.link.name }}</bdi></span></a>
   {%- else %}<span class="tree-leaf"></span>{% endif -%}
   <a role="treeitem" id="{{ shown.id }}" href="{{ node.link.href }}"
+     {%- if shown.current %} class="tree-current" aria-current="page"{% endif %}
      {%- if node.children %} aria-expanded="{{ 'true' if is_open else 'false' }}" aria-owns="{{ shown.id }}-g"
      aria-describedby="{{ shown.id }}-n"{% endif %}>{{ node_label(node) }}</a>
   {%- if node.children %}
@@ -33,6 +40,7 @@
   </ul>
   {%- endif -%}
 </li>
+{%- endif -%}
 {%- endmacro %}
 
 {# A paging link's label: what it shows, the nodes from `start` (counted from 0), `count` of them, and of how many,

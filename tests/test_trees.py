@@ -237,7 +237,8 @@ def test_navigation_marks_tree(client: TestClient, slug: str) -> None:
     label = {tree.slug: tree.label for tree in TREES}[slug]
     assert marked == [(f"/_browl/tree/{slug}", label)]
     assert f'<span class="current-tree">: {label}</span>' in html
-    assert 'aria-current="page"' not in client.get("/Top").text
+    entity_page = client.get("/Top").text
+    assert not re.findall(r'<a href="[^"]*" aria-current="page">', entity_page.split("</header>")[0])
 
 
 def test_crawlers_kept_out(client: TestClient) -> None:

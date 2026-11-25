@@ -2,10 +2,11 @@
 
 A node is an entity of the hierarchy's type, or a group of equivalent classes, which its representative stands for
 (DESIGN.md §2.5). Children and roots are read a page at a time, by display name, as a node can have tens of thousands
-(NCBITaxon). The tree pages (`browl.trees`) build on this, and so will the hierarchy column (P-38) and the JSON API
-(P-33).
+(NCBITaxon). The tree pages (`browl.trees`) and the hierarchy column (`browl.hierarchy_column`) build on this, and so
+will the JSON API (P-33).
 """
 
+import json
 import sqlite3
 from collections.abc import Iterable
 from itertools import batched
@@ -119,13 +120,28 @@ def read_node(
         prefix: The reserved prefix, for links.
         root: The app's root path, for links (`browl.pages.link_root`).
     """
+    nodes = read_nodes(connection, hierarchy, [node], prefix, root)
+    return nodes[0] if nodes else None
+
+
+def read_nodes(
+    connection: sqlite3.Connection, hierarchy: EntityType, nodes: Iterable[int], prefix: str, root: str
+) -> list[TreeNode]:
+    """Return nodes by their representatives' `entity.id`s, in a node's children's order; those not in it left out.
+
+    Args:
+        connection: The derived database.
+        hierarchy: The hierarchy, by its entities' type.
+        nodes: The nodes' representatives (`node_ids`).
+        prefix: The reserved prefix, for links.
+        root: The app's root path, for links (`browl.pages.link_root`).
+    """
     rows = connection.execute(
         "SELECT c.node, e.iri, c.children, c.descendants FROM counts AS c JOIN entity AS e ON e.id = c.node"
-        " WHERE c.hierarchy = ? AND c.node = ?",
-        (hierarchy, node),
+        f" WHERE c.hierarchy = ? AND c.node IN (SELECT value FROM json_each(?)) ORDER BY {_ORDER}",
+        (hierarchy, json.dumps(list(dict.fromkeys(nodes)))),
     ).fetchall()
-    nodes = _nodes(connection, rows, prefix, root)
-    return nodes[0] if nodes else None
+    return _nodes(connection, rows, prefix, root)
 
 
 def count_roots(connection: sqlite3.Connection, hierarchy: EntityType) -> int:

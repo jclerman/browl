@@ -5,6 +5,7 @@ They drive headless Chromium through Playwright against the app on a live server
 
 import asyncio
 import contextlib
+import itertools
 import re
 import threading
 import urllib.parse
@@ -38,7 +39,7 @@ from tests.conftest import DATA
 from tests.helpers import AUTH_ON, WAIT_S, LiveServer, derived_stage, iso, make_app, no_axioms, session_cookie
 from tests.test_pages import FakeTables
 from tests.test_search_page import SYNONYM, search_stage
-from tests.test_trees import tree_stage
+from tests.test_trees import SUB_CLASS, tree_stage
 
 pytestmark = pytest.mark.usefixtures("data_dir")
 
@@ -2573,6 +2574,151 @@ def test_tree_modifier_click_left_to_browser(page: Page, trees: LiveServer) -> N
     opened.value.wait_for_load_state()
     assert query_of(opened.value.url) == {"open": [f"{EX}/Top"]}
     expect(tree_item(page, "Top")).to_have_attribute("aria-expanded", "false")
+
+
+# The hierarchy column (P-38, U-45, DESIGN.md §2.9 "Hierarchy column")
+
+CHAIN = 60
+"""How many classes `deep` chains, each under the one before, so the last one's column is longer than the window."""
+
+HIERARCHY_KEY = "browl.hierarchyShown"
+"""Where `static/one-page.js` remembers the "Hierarchy" toggle."""
+
+
+def hierarchy_toggle(page: Page) -> Locator:
+    """Return the entity page's "Hierarchy" toggle."""
+    return page.get_by_role("checkbox", name="Hierarchy")
+
+
+def hierarchy_column(page: Page) -> Locator:
+    """Return the entity page's hierarchy column."""
+    return page.get_by_role("navigation", name="Hierarchy")
+
+
+@pytest.mark.parametrize("size", [WIDE, MEDIUM], ids=["wide", "medium"])
+def test_column_beside_panels(page: Page, trees: LiveServer, size: dict[str, int]) -> None:
+    """Check that the column is on the left of the tabs and the panel, and that hiding it gives them its room.
+
+    The panels keep their layout, side by side or stacked, and the page itself doesn't scroll.
+    """
+    watch_policy(page)
+    page.set_viewport_size(size)
+    page.goto(f"{trees.url}/Bottom")
+    column, tab_bar, tab_panel = hierarchy_column(page), page.locator(".tab-bar"), page.get_by_role("tabpanel")
+    expect(column).to_be_visible()
+    shown_column, shown_tabs, shown_panel = box(column), box(tab_bar), box(tab_panel)
+    assert shown_column["x"] + shown_column["width"] <= shown_panel["x"]
+    assert abs(shown_column["y"] - shown_tabs["y"]) < 2  # it starts level with the tabs, below the header
+    assert shown_tabs["x"] == shown_panel["x"]
+    annotations, axioms = panels(page)
+    if size == WIDE:
+        assert annotations["y"] == axioms["y"] and annotations["x"] + annotations["width"] < axioms["x"]
+    else:
+        assert annotations["x"] == axioms["x"] and annotations["y"] + annotations["height"] < axioms["y"]
+    assert not page_scrolls(page)
+    hierarchy_toggle(page).uncheck()
+    expect(column).to_be_hidden()
+    assert box(tab_panel)["x"] == shown_column["x"]
+    assert box(tab_panel)["width"] > shown_panel["width"]
+    assert violations(page) == []
+
+
+def test_column_above_in_one_page_view(page: Page, trees: LiveServer) -> None:
+    """Check that the one-page view, here a narrow window's, puts the column above the tabs, and the toggle hides it."""
+    page.set_viewport_size(NARROW)
+    page.goto(f"{trees.url}/Bottom")
+    column = hierarchy_column(page)
+    shown_column, header = box(column), box(page.locator(".entity-header"))
+    assert header["y"] + header["height"] <= shown_column["y"]
+    assert shown_column["y"] + shown_column["height"] <= box(page.locator(".tab-bar"))["y"]
+    hierarchy_toggle(page).uncheck()
+    expect(column).to_be_hidden()
+
+
+@NO_JS
+def test_column_toggle_without_javascript(page: Page, trees: LiveServer) -> None:
+    """Check that, without JavaScript, the toggle still hides the column, though it isn't remembered."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}/Bottom")
+    hierarchy_toggle(page).uncheck()
+    expect(hierarchy_column(page)).to_be_hidden()
+    page.goto(f"{trees.url}/Top")
+    expect(hierarchy_column(page)).to_be_visible()
+
+
+def test_column_toggle_remembered(page: Page, trees: LiveServer) -> None:
+    """Check that hiding the column is remembered on other pages, apart from the "Scroll as one page" toggle."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}/Bottom")
+    hierarchy_toggle(page).uncheck()
+    assert page.evaluate(f"localStorage.getItem('{HIERARCHY_KEY}')") == "false"
+    page.goto(f"{trees.url}/Top")
+    expect(hierarchy_toggle(page)).not_to_be_checked()
+    expect(hierarchy_column(page)).to_be_hidden()
+    expect(one_page_toggle(page)).not_to_be_checked()
+    hierarchy_toggle(page).check()
+    page.reload()
+    expect(hierarchy_column(page)).to_be_visible()
+
+
+def test_column_tree(page: Page, trees: LiveServer) -> None:
+    """Check that the column's tree opens and closes in place, fetches a child's children, and takes the keys.
+
+    The keys start at the page's entity.
+    """
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}/Left")
+    mark(page)
+    requests = record_fragments(page)
+    column = hierarchy_column(page)
+    left = column.get_by_role("treeitem", name="Left", exact=True)
+    expect(left).to_have_attribute("aria-current", "page")
+    column.get_by_role("link", name="Class hierarchy").focus()
+    page.keyboard.press("Tab")  # into the tree
+    expect(left).to_be_focused()
+    page.keyboard.press("ArrowDown")  # the Alias group, then Bottom
+    page.keyboard.press("ArrowDown")
+    bottom = column.get_by_role("treeitem", name="Bottom", exact=True)
+    expect(bottom).to_be_focused()
+    page.keyboard.press("ArrowRight")  # fetches its children
+    expect(column.get_by_role("treeitem", name="Deep", exact=True)).to_be_visible()
+    assert query_of(requests[0])["at"] == ["hc-0-0-1"]
+    page.keyboard.press("ArrowLeft")  # closes it
+    page.keyboard.press("ArrowLeft")
+    expect(left).to_be_focused()
+    page.keyboard.press("ArrowLeft")  # closes it in place
+    expect(left).to_have_attribute("aria-expanded", "false")
+    expect(bottom).to_be_hidden()
+    assert len(requests) == 1
+    assert marked(page)
+
+
+@pytest.fixture
+def deep(live_server: Callable[[FastAPI], LiveServer]) -> LiveServer:
+    """Return a live server with a chain of `CHAIN` classes, `c0` to `c59`, each under the one before."""
+    names = [f"c{index}" for index in range(CHAIN)]
+    edges = [(f"{EX}/{child}", SUB_CLASS, f"{EX}/{parent}") for parent, child in itertools.pairwise(names)]
+    entities = [(f"{EX}/{name}", EntityType.CLASS) for name in names]
+    server = live_server(make_app())
+    server.app.state.jobs.register(Stage.PRE_CACHING, derived_stage(entities, edges=edges))
+    server.call(server.app.state.jobs.start())
+    server.call(server.app.state.jobs.wait())
+    return server
+
+
+@pytest.mark.parametrize("size", [WIDE, NARROW], ids=["framed", "one-page"])
+def test_column_shows_entity(page: Page, deep: LiveServer, size: dict[str, int]) -> None:
+    """Check that a long column scrolls within itself to show the page's entity, and that the page doesn't scroll."""
+    page.set_viewport_size(size)
+    page.goto(f"{deep.url}/c{CHAIN - 1}")
+    column = hierarchy_column(page)
+    current = column.locator('[aria-current="page"]')
+    wait_until(page, lambda: column.evaluate("(each) => each.scrollTop") > 0, "the column to scroll")
+    shown, item = box(column), box(current)
+    assert item["height"] < 30  # on one line
+    assert shown["y"] <= item["y"] and item["y"] + item["height"] <= shown["y"] + shown["height"]
+    assert shown["x"] <= item["x"] < shown["x"] + shown["width"]
+    assert page.evaluate("window.scrollY") == 0
 
 
 # The search box (P-20, U-10, U-17, DESIGN.md §2.9 "Search")

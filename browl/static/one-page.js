@@ -1,27 +1,34 @@
-// The "Scroll as one page" toggle (DESIGN.md §2.9, U-44). The stylesheet reacts to the checkbox itself, so it works
-// without JS; this only remembers its state in localStorage, across pages, including those the hash-IRI script moves
-// into <main>.
+// An entity page's toggles (DESIGN.md §2.9): "Scroll as one page" (U-44) and "Hierarchy" (U-45). The stylesheet
+// reacts to the checkboxes themselves, so they work without JS; this only remembers their states in localStorage,
+// across pages, including those the hash-IRI script moves into <main>.
 (() => {
   "use strict";
-  const KEY = "browl.onePage";
-  const ID = "one-page";
+  // Each toggle's checkbox id: its storage key, and its state when none is remembered.
+  const TOGGLES = {
+    "one-page": { key: "browl.onePage", checked: false },
+    "hierarchy-shown": { key: "browl.hierarchyShown", checked: true },
+  };
 
   function restore() {
-    const toggle = document.getElementById(ID);
-    if (!toggle) {
-      return;
-    }
-    try {
-      toggle.checked = localStorage.getItem(KEY) === "true";
-    } catch {
-      // not remembered
+    for (const [id, { key, checked }] of Object.entries(TOGGLES)) {
+      const toggle = document.getElementById(id);
+      if (!toggle) {
+        continue;
+      }
+      try {
+        const stored = localStorage.getItem(key);
+        toggle.checked = stored === null ? checked : stored === "true";
+      } catch {
+        // not remembered
+      }
     }
   }
 
   document.addEventListener("change", (event) => {
-    if (event.target.id === ID) {
+    const toggle = TOGGLES[event.target.id];
+    if (toggle) {
       try {
-        localStorage.setItem(KEY, String(event.target.checked));
+        localStorage.setItem(toggle.key, String(event.target.checked));
       } catch {
         // not remembered
       }
@@ -35,7 +42,7 @@
     }
   });
   window.addEventListener("storage", (event) => {
-    if (event.key === KEY) {
+    if (Object.values(TOGGLES).some(({ key }) => key === event.key)) {
       restore();
     }
   });

@@ -65,7 +65,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **U-31** · Property pages show the property's domains and ranges, if any, in the logical-axioms panel. | v1 |
 | **U-32** · The panels are compact: each annotation value or axiom takes one line, wrapping only when it doesn't fit. A property with several values (e.g. 10 synonyms) is named once, with one line per value. | v1 |
 | **U-44** · A one-page view of an entity page, labeled "Scroll as one page": all of its content in one page scroll, with no panel scrolling on its own. Used for printing and on small screens (phones, short windows), and on demand with a toggle. | v1 |
-| **U-45** · An entity page shows where the entity sits in its hierarchy, in a hideable column beside the Overview's panels: its ancestors as one merged tree, each drawn once, with its direct children below it. | v1 |
+| **U-45** · An entity page shows where the entity sits in its hierarchy, in a hideable column beside its tabs: its ancestors as one merged tree, each drawn once, with its direct children below it. A punned IRI gets a tree for each hierarchy it's in. | v1 |
 | **U-46** · In the hierarchy trees and the hierarchy column, deprecated entities (`owl:deprecated true`) are struck through, with a text equivalent for screen readers. | v1 |
 | **U-19** · Autocomplete also matches from the start of any word, ranked after matches from the start of the whole value. _(Q8; was Later; P-41)_ | v1 |
 | **U-47** · Search can cover every annotation property with literal values in the served ontology, not only the name properties. By default it searches the name properties and synonyms, and others when chosen. The full results page lists the properties the ontology has, with their value counts, to filter by. _(P-42)_ | v1 |
@@ -1720,19 +1720,41 @@ CSS nesting gets the one-page view, without the toggle. _(P-16d)_
 - **The panels** have light borders, and their headings stay in view while they scroll. Each panel is a `<section>`,
   named by its heading (`aria-labelledby`), with `tabindex="0"` and a visible focus ring, so the keyboard can scroll
   it.
-- **Hierarchy column** (U-45, P-38): a narrow, hideable column on medium and wide windows shows the entity's place in
-  its hierarchy. The frame's grid has named areas (`header`, `tabs`, `panel`) and sets its columns in one place, so a
-  `tree` area is added on its left, and taken away again by a button, without changing the panels' layout. The
-  one-page view puts the column above the panels.
+- **Hierarchy column** (U-45, P-38): a narrow, hideable column shows the entity's place in its hierarchy, on every
+  tab. The frame's grid has named areas (`header`, `tree`, `tabs`, `panel`), so the column takes the `tree` area
+  without changing the panels' layout. A tab's panel served alone has no column, as the page keeps its own.
+  - **Layout:** on medium and wide windows, on the left, beside the tabs and the panel (`clamp(12rem, 22%, 20rem)`
+    wide), scrolling within itself, its heading staying in view. The one-page view puts it above the tabs, at most
+    `40vh` high on screen, scrolling within itself, so the page's content stays near. Its lines don't wrap and indent
+    `0.75rem` a level, as a deep hierarchy (NCBITaxon's is about 40 levels) would leave a narrow column no room; it
+    scrolls sideways instead. It opens scrolled, within itself, to show the entity (`static/tree.js`).
+  - **The toggle:** a "Hierarchy" checkbox in the tab bar, before "Scroll as one page", checked by default. It works
+    without JS, through `:has`, and `static/one-page.js` remembers it in `localStorage` (`browl.hierarchyShown`) for
+    every page, as it does the other toggle. A browser without `:has` always shows the column, without the toggle.
   - **Shape:** the entity's ancestors as one merged tree, each drawn once. A node with several parents goes under its
-    first parent, by display name. Under each other parent it's a one-line reference that links to it ("↳ organ (also
-    above)"). The entity is highlighted, with its direct children collapsed below it. So the column's size grows with
-    the number of ancestors, not with the number of paths, which multiplies at every join.
+    first parent, by display name. Under each other parent it's a one-line reference to it, which links to its page:
+    "↳ organ (also above)", or "(also below)" where it's drawn further down. The entity is highlighted, with its
+    direct children closed below it, paged as on the tree pages (`CHILD_PAGE`). So the column's size grows with the
+    number of ancestors, not with the number of paths, which multiplies at every join.
   - **Only the column merges:** the tree pages (P-18) show a node under each of its parents.
-  - **Nodes** are the tree pages': counts, links, expansion through `?node=`, keyboard use, and deprecated entities
-    struck through (U-46, P-39). Equivalence groups are one node (U-9). A property's column uses its own property
-    hierarchy. An entity in no hierarchy gets no column.
-  - **Data:** walking up `edge` in SQLite via `edge_child`, with no Fuseki query.
+  - **Nodes** are the tree pages': counts, expansion through `?node=`, keyboard use, and deprecated entities struck
+    through (U-46, P-39). The entity's node is marked as in its axioms (`aria-current="page"`), and the keys start
+    there. Equivalence groups are one node (U-9); a member's page marks its group's node.
+  - **Links name no open nodes,** unlike the tree pages', as each of a node's children's would repeat the path above
+    it: on NCBITaxon_82596 (821 children, most with children of their own, about 40 levels deep) that made 2.7 MB of
+    HTML, and 200 ms to build; without, 0.5 MB and 23 ms. Without JS, a toggle loads its node's page, whose column
+    shows its children. A fragment's URL names no open nodes either: the tree route serves the column's element ids
+    (`at=` with the prefixes `hc`, `ho`, `hd` and `ha`, not `t`) with these links. The link after the entity's first
+    page of children loads the tree page with the nodes above it open, along their first parents, showing the next
+    page; in a fragment, it's the parent's page.
+  - **Which hierarchy:** a class's column uses the class hierarchy, a property's its own property hierarchy, each
+    headed by its name ("Class hierarchy", "Object property hierarchy", …), which links to its tree page. A punned
+    IRI gets a tree for each hierarchy it's in, in the navigation bar's order. An entity with neither parents nor
+    children is in no hierarchy, and gets no tree; with no tree, there's no column and no toggle.
+  - **Data:** from SQLite alone, with no Fuseki query: the ancestors by walking up `edge` a level at a time via
+    `edge_child`, their nodes in one query. Measured (`read_column`, then rendering the column): a few ms on Uberon,
+    e.g. 1 ms and 2 ms for GO_0045829, which has 63 ancestors; on NCBITaxon, 1 ms and 1 ms for Homo sapiens. The
+    slowest is sorting the children of NCBITaxon's widest node (47,783), 87 ms, as on its tree page.
 
 **Tree pages** (U-7–U-9, U-17, P-18): `tree/{hierarchy}` (2.13), one per hierarchy, as nested lists that may use the
 full width. The node component and the reads under it (`browl.hierarchy`, SQLite alone) are the hierarchy column's
@@ -1771,7 +1793,7 @@ too (P-38), and the JSON API's (P-33).
   can't be fetched loads the toggle's page instead, and a click with a modifier key is left to the browser.
 - **Element ids** follow each node's place: the roots `t-0`, `t-1`, …, a node's children its id and their index
   (`t-1-0`). A fragment's request names its node's id, or for the roots their prefix (`at=`), so its ids are unique
-  on the page; P-38's column can use another prefix. `at=` is at most 256 characters (`MAX_AT_CHARS`), as each child
+  on the page; the hierarchy column uses others (P-38). `at=` is at most 256 characters (`MAX_AT_CHARS`), as each child
   repeats it; a deeper node's fragment is a 404, so its toggle loads the page.
 - **Keyboard** (U-17): the WAI-ARIA tree pattern, with roving `tabindex`; a node's link is the `treeitem`, its
   children's list its `group` (by `aria-owns`), and its counts its description. Departures from it: the toggles are
@@ -1970,7 +1992,7 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | Path | Purpose |
 | --- | --- |
 | `search` | The full results page, `q=`, `type=` and `property=` (repeated), `values=direct`, `offset=`; with `suggest=1` (no `offset=`), the autocomplete's fragment; both `noindex`. See [2.9](#29-page-layout), Search (P-20) |
-| `tree/{hierarchy}` | Tree page, `hierarchy` one of `classes`, `object-properties`, `data-properties` and `annotation-properties` (the navigation bar links them). `open=` (repeated), `children-of=`, `offset=`; a fragment: `node=`, `at=` (marked `noindex`). See [2.9](#29-page-layout), Tree pages (P-18) |
+| `tree/{hierarchy}` | Tree page, `hierarchy` one of `classes`, `object-properties`, `data-properties` and `annotation-properties` (the navigation bar links them). `open=` (repeated), `children-of=`, `offset=`; a fragment: `node=`, `at=` (marked `noindex`), also for the hierarchy column, whose `at=` gets its links. See [2.9](#29-page-layout), Tree pages (P-18) and Hierarchy column (P-38) |
 | `iri?iri=…` | Fallback entity URLs (Q1b) |
 | `hash?path=…&fragment=…` | The page for a hash URL's path and fragment, for the hash-IRI script ([2.3](#23-iri--url-mapping), Lookup); marked `noindex`, as its pages are at their hash URLs |
 | `usage-count?iri=…` | An entity's Usage tab label with its count, "Usage (128)", which its page fetches once it renders ([2.8](#28-entity-pages)); marked `noindex`; a 404 for an IRI with no entity (P-27b) |

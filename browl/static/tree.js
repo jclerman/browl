@@ -73,9 +73,31 @@
     }
     tree.dataset.roving = "true";
     tame(tree);
-    const first = firstItem(tree);
+    const first = startItem(tree);
     if (first) {
       first.tabIndex = 0;
+    }
+  }
+
+  // Where the keys start: in the hierarchy column, at the page's own entity.
+  const startItem = (tree) => tree.querySelector(`${ITEM}[aria-current="page"]`) ?? firstItem(tree);
+
+  // The hierarchy column scrolls within itself, not the page, to show the page's entity: a third of the way down, and
+  // its toggle at the left, if it's out of view.
+  function showCurrent() {
+    for (const column of document.querySelectorAll(".hierarchy-column")) {
+      const current = column.querySelector(`${ITEM}[aria-current="page"]`);
+      if (!current) {
+        continue;
+      }
+      const shown = column.getBoundingClientRect();
+      const at = current.parentElement.getBoundingClientRect(); // its line, from its toggle
+      if (at.bottom > shown.top + column.clientHeight) {
+        column.scrollTop += at.top - shown.top - column.clientHeight / 3;
+      }
+      if (at.left + Math.min(at.width, column.clientWidth / 2) > shown.left + column.clientWidth) {
+        column.scrollLeft += at.left - shown.left;
+      }
     }
   }
 
@@ -98,8 +120,12 @@
   }
 
   // A toggle's link (for a modifier-click, or a failed fetch) follows its node's state: once open, it leaves the
-  // node's IRI out of `open=`, and once closed, adds it back after the others.
+  // node's IRI out of `open=`, and once closed, adds it back after the others. The hierarchy column's links are to
+  // the nodes' pages, whatever their state.
   function relink(toggle, open) {
+    if (toggle.closest(".hierarchy-column")) {
+      return;
+    }
     const iri = new URL(toggle.getAttribute("hx-get"), location.href).searchParams.get("node");
     const url = new URL(toggle.href);
     const params = [...url.searchParams].filter(([name, value]) => name !== "open" || value !== iri);
@@ -136,6 +162,11 @@
   for (const tree of document.querySelectorAll(TREE)) {
     setUp(tree);
   }
+  showCurrent();
+  const main = document.querySelector("main");
+  if (main) {
+    new MutationObserver(showCurrent).observe(main, { childList: true }); // a page the hash-IRI script moves in
+  }
 
   // The item focused, e.g. by a click, is the roving one. A toggle a click focuses passes the focus to its item, so
   // the keys work. A tree the page gained later, e.g. through the hash-IRI script, is set up once focus first enters
@@ -149,7 +180,7 @@
     const item = target.matches(TOGGLE) ? itemOf(target.parentElement) : target.closest(ITEM);
     if (!tree.dataset.roving) {
       setUp(tree);
-      const to = item ?? firstItem(tree);
+      const to = item ?? startItem(tree);
       if (to) {
         focusItem(to);
       }

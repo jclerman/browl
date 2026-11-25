@@ -666,13 +666,76 @@ code {
   }
 }
 
-/* An entity page (DESIGN.md §2.9): named grid areas, its columns set here alone, so a hierarchy column can be added
-   later; the window-filling frame, below, sets the rows. */
+/* An entity page (DESIGN.md §2.9): named grid areas, one column; the window-filling frame, below, sets the rows, and
+   adds a column on the left for the hierarchy column (U-45). Here, as in the one-page view, that's above the tabs. */
 
 .entity-page {
   display: grid;
-  grid-template-areas: "header" "tabs" "panel";
+  grid-template-areas: "header" "tree" "tabs" "panel";
   grid-template-columns: minmax(0, 1fr);
+}
+
+/* The hierarchy column (U-45): its trees' nodes are the tree pages', the entity's marked as in its axioms. Its lines
+   don't wrap, and indent less, as a deep hierarchy (NCBITaxon's are about 40 levels) would leave a narrow column no
+   room; it scrolls sideways instead. Above the tabs, it scrolls within itself past a part of the window, so the
+   page's content stays near. */
+
+.hierarchy-column {
+  grid-area: tree;
+  margin-top: var(--space);
+  font-size: 0.9rem;
+  overflow-x: auto;
+}
+
+.hierarchy-column .tree li {
+  white-space: nowrap;
+}
+
+.hierarchy-column .tree [role="group"] {
+  padding-left: 0.75rem;
+}
+
+@media screen {
+  .hierarchy-column {
+    max-height: 40vh;
+    overflow: auto;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+.hierarchy-column h2 {
+  margin: 0 0 calc(var(--space) / 4);
+  font-size: 1rem;
+}
+
+.hierarchy-column h2 + .tree + h2 {
+  margin-top: var(--space);
+}
+
+.tree-current {
+  background: var(--mark-bg);
+  font-weight: bold;
+}
+
+/* The "Hierarchy" toggle hides the column, through `:has`; without it, the column stays. */
+
+.page-toggles {
+  display: flex;
+  gap: 0 var(--space);
+}
+
+.hierarchy-toggle {
+  display: none;
+}
+
+@supports selector(:has(a)) {
+  .hierarchy-toggle {
+    display: inline-flex;
+  }
+
+  .entity-page:has(#hierarchy-shown:not(:checked)) > .hierarchy-column {
+    display: none;
+  }
 }
 
 /* Its header (U-5): its type in muted text, and its IRI and CURIE folded away, opening over the page rather than
@@ -764,6 +827,10 @@ code {
 
 .one-page-toggle {
   display: none; /* where the frame applies, below */
+}
+
+.one-page-toggle,
+.hierarchy-toggle {
   align-items: center;
   gap: calc(var(--space) / 4);
   padding: calc(var(--space) / 4) 0;
@@ -1078,8 +1145,31 @@ code {
       }
 
       & .entity-page {
+        grid-template-areas: "header" "tabs" "panel";
         grid-template-rows: auto auto minmax(0, 1fr);
         min-height: 0;
+      }
+
+      /* The hierarchy column, where shown: on the left, beside the tabs and the panel, scrolling within itself. */
+      & .entity-page:has(#hierarchy-shown:checked) {
+        grid-template-areas: "header header" "tree tabs" "tree panel";
+        grid-template-columns: clamp(12rem, 22%, 20rem) minmax(0, 1fr);
+        column-gap: var(--space);
+      }
+
+      & .hierarchy-column {
+        min-height: 0;
+        max-height: none;
+        padding-right: calc(var(--space) / 2);
+        border-bottom: none;
+        border-right: 1px solid var(--border);
+      }
+
+      & .hierarchy-column h2 {
+        position: sticky;
+        top: 0;
+        left: 0; /* also as the column scrolls sideways */
+        background: var(--bg);
       }
 
       /* Two title lines high whatever the name; a longer one is cut, whole in its tooltip, as are many types. */

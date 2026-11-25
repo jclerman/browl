@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "hierarchy_column.html" import hierarchy_column %}
 {% from "tabs.html" import tab_list, tab_panel %}
 {% block title %}{{ name | isolate }}{% endblock %}
 {% block content %}
@@ -23,9 +24,16 @@
     </div>
     <h1 title="{{ name | isolate }}" dir="auto">{{ name }}</h1>
   </div>
+  {% if column %}{{ hierarchy_column(column) }}{% endif %}
   <div class="tab-bar">
     {{ tab_list(tabs, "Entity") }}
-    <label class="one-page-toggle"><input type="checkbox" id="one-page" autocomplete="off"> Scroll as one page</label>
+    <div class="page-toggles">
+      {% if column %}
+      <label class="hierarchy-toggle"><input type="checkbox" id="hierarchy-shown" checked autocomplete="off">
+        Hierarchy</label>
+      {% endif %}
+      <label class="one-page-toggle"><input type="checkbox" id="one-page" autocomplete="off"> Scroll as one page</label>
+    </div>
   </div>
   {% call tab_panel(tabs) %}{% include "entity_panel.html" %}{% endcall %}
 </div>
