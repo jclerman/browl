@@ -6,6 +6,7 @@ queries can stream on the event loop. The file stores its build keys (`browl.pre
 """
 
 import asyncio
+import functools
 import logging
 import sqlite3
 import time
@@ -163,12 +164,15 @@ async def _hook_progress(
     """Report a hook's progress every `PROGRESS_S` while the block runs: its label, time so far, and phase.
 
     The phase is the rows received while a bulk query streams, else `INDEXING` or `WRITING` while the hook waits for
-    one. Rows written aren't shown: they count every row a hook changes, staging and updates too, so they'd read as
-    more than the rows received (e.g. the names hook's CURIEs), and they only move when a write ends.
+    one. Then the database changes the hook has made, when they've moved since the last report or there's no phase:
+    every row inserted, updated or deleted, staging rows too, so they can be more than the rows received (the names
+    hook sets each entity's CURIE first). They move only when a write ends.
     """
-    started = time.monotonic()
+    await db.run(lambda connection: None)  # so `changes` counts what the build changed before, e.g. `meta`
+    started, before = time.monotonic(), db.changes
 
     async def tick() -> None:
+        last = 0
         while True:
             parts = [label, format_duration(time.monotonic() - started)]
             if sparql.streams:
@@ -176,6 +180,10 @@ async def _hook_progress(
                 parts.append(f"receiving query results: {received:,} rows" if received else "waiting for query results")
             elif db.phase is not None:
                 parts.append(db.phase)
+            changes = db.changes - before
+            if changes != last or len(parts) == 2:
+                parts.append(f"{changes:,} database changes")
+            last = changes
             context.report(" · ".join(parts))
             await asyncio.sleep(PROGRESS_S)
 
@@ -234,14 +242,26 @@ class _CountedStream(BulkSelectStream):
 
 
 class _PhasedWriter(DerivedWriter):
-    """A writer that says, in `phase`, what it's waiting for: `INDEXING`, `WRITING`, or None; for the hooks' progress.
+    """A writer that says what it's waiting for and how much it has changed, for the hooks' progress.
 
     It writes through another, the build's own. The hooks' build keys don't cover it, as it changes no result.
+
+    Attributes:
+        phase: `INDEXING` or `WRITING` while a call runs, else None.
+        changes: The rows the connection had inserted, updated or deleted (`sqlite3.Connection.total_changes`) when
+            the last call ended, staging rows included.
     """
 
     def __init__(self, writer: DerivedWriter) -> None:
         self._writer = writer
         self.phase: str | None = None
+        self.changes = 0
+
+    def _counted[T](self, function: Callable[[sqlite3.Connection], T], connection: sqlite3.Connection) -> T:
+        try:
+            return function(connection)
+        finally:
+            self.changes = connection.total_changes
 
     async def run[T](self, function: Callable[[sqlite3.Connection], T]) -> T:
         """Call a function with the connection on its thread, returning its result (`DerivedWriter.run`)."""
@@ -249,7 +269,7 @@ class _PhasedWriter(DerivedWriter):
         if outer:
             self.phase = WRITING
         try:
-            return await self._writer.run(function)
+            return await self._writer.run(functools.partial(self._counted, function))
         finally:
             if outer:
                 self.phase = None

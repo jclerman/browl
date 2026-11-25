@@ -122,6 +122,7 @@ async def test_stage_builds_database(settings: Settings) -> None:
         )
 
         await context.db.insert("INSERT INTO entity (iri, type, path) VALUES (?, 'class', '/')", [(f"{EX}a",)])
+        await context.db.run(lambda connection: None)  # a turn of the event loop with the changes made
         await context.db.create_indexes("entity")
 
     @hook()
@@ -157,7 +158,8 @@ async def test_stage_builds_database(settings: Settings) -> None:
 async def test_stage_reports_progress(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that the stage reports reading the header, then each hook's number, name, time so far and phase.
 
-    The phase is a bulk query's rows received, or the writing or indexing the hook waits for.
+    The phase is a bulk query's rows received, or the writing or indexing the hook waits for; the database changes
+    are shown when they move, or when there's no phase.
     """
     monkeypatch.setattr(browl.precache.stage, "PROGRESS_S", 0)  # a report each turn of the event loop
 
@@ -184,8 +186,9 @@ async def test_stage_reports_progress(settings: Settings, monkeypatch: pytest.Mo
         "waiting for query results",
         "receiving query results: 1 rows",
         "writing tables",
+        "writing tables · 2 database changes",
         "indexing",
-        "Hook 1 of 1, fill · 0 s",  # no phase: between the hook's calls
+        "2 database changes",
     ]
 
 
