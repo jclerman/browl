@@ -16,7 +16,7 @@ import httpx2
 import pytest
 
 import browl.jobs
-from browl.job_view import format_duration, job_elapsed
+from browl.job_view import job_elapsed
 from browl.jobs import (
     CANCELLED,
     INTERRUPTED_BY_RESTART,
@@ -38,6 +38,7 @@ from browl.jobs import (
     time_limit,
 )
 from browl.jobtypes import ImportResult, Reasoner, StageError
+from browl.progress_text import format_duration
 from tests.helpers import make_settings
 
 pytestmark = pytest.mark.anyio

@@ -8,12 +8,13 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from browl.jobs import JobState, Stage
 from browl.jobtypes import Reasoner
+from browl.progress_text import count_of, format_duration
 
-if TYPE_CHECKING:  # not imported, as pre-caching's stage imports this
+if TYPE_CHECKING:  # not imported: pre-caching imports `browl.pages` (via `browl.loading`), which imports this
     from browl.precache.usage_table import Progress
 
 
@@ -215,34 +216,28 @@ def usage_table_activity(progress: "Progress", now: float | None = None) -> Acti
     return Activity("Building the usage table", format_duration(now - progress.started), detail, percent)
 
 
-def count_of(done: int, total: int | None, noun: str) -> str:
-    """Return a count of a total, with its percentage, or just the count if the total isn't known.
-
-    >>> count_of(640_000, 1_167_135, "triples"), count_of(640_000, None, "triples")
-    ('640,000 of 1,167,135 triples (55%)', '640,000 triples')
-    """
-    if not total:
-        return f"{done:,} {noun}"
-    return f"{done:,} of {total:,} {noun} ({min(100, round(100 * done / total))}%)"
-
-
 def _percent(fraction: float | None) -> float | None:
     return None if fraction is None else round(100 * min(max(fraction, 0.0), 1.0), 1)
 
 
-def format_duration(seconds: float) -> str:
-    """Return a duration, rounded down to whole seconds, in at most its two largest units.
+def progress_context(job: JobState, with_iri: bool = False) -> dict[str, Any]:
+    """Return what a job's progress renders from, for the admin status and the "loading" page.
 
-    >>> [format_duration(s) for s in (0.4, 59, 72, 3600, 3725)]
-    ['0 s', '59 s', '1 min 12 s', '1 h', '1 h 2 min']
+    That's the job, its stages' boxes (`steps`), how long it has run (`elapsed`) and what it's doing (`activity`).
+
+    Args:
+        job: The job state.
+        with_iri: Whether the activity includes the IRI it's working on (`running_activity`); the "loading" page is
+            public, so it leaves it out.
     """
-    whole = int(seconds)
-    hours, minutes, secs = whole // 3600, whole // 60 % 60, whole % 60
-    if hours:
-        return f"{hours} h {minutes} min" if minutes else f"{hours} h"
-    if minutes:
-        return f"{minutes} min {secs} s" if secs else f"{minutes} min"
-    return f"{secs} s"
+    now = datetime.now(UTC)
+    steps = [] if job.stage is None else job_steps(job, now)
+    return {
+        "job": job,
+        "steps": steps,
+        "elapsed": job_elapsed(job, now),
+        "activity": running_activity(job, steps, with_iri),
+    }
 
 
 def job_elapsed(job: JobState, now: datetime) -> str | None:

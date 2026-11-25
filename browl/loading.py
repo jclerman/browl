@@ -24,11 +24,11 @@ import httpx2
 
 from browl.fuseki import FusekiAdmin, FusekiAdminError, FusekiClient, SparqlError
 from browl.imports import CONVERTED
-from browl.job_view import count_of
 from browl.jobs import JobContext
 from browl.jobtypes import StageError
 from browl.prefixes import read_prefixes
 from browl.process import Completed, run_process
+from browl.progress_text import count_of
 from browl.rdf import Literal, RDFSyntaxError, Term, parse_tsv_header, parse_tsv_row
 from browl.settings import Settings
 from browl.upload import STORED_SUFFIXES, Syntax, check_job_file, upload_path

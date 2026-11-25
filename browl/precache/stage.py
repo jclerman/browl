@@ -20,7 +20,6 @@ import httpx2
 from browl import derived
 from browl.derived import Meta
 from browl.fuseki import BulkSelectStream, FusekiClient, SparqlError, ping
-from browl.job_view import format_duration
 from browl.jobs import PROGRESS_S, JobContext
 from browl.jobtypes import StageError
 from browl.loading import dataset_name, read_upload_prefixes
@@ -34,6 +33,7 @@ from browl.precache.names import names
 from browl.precache.owner_map import owner_map
 from browl.precache.search import search
 from browl.precache.values import annotation_values
+from browl.progress_text import format_duration
 from browl.rdf import Term
 
 logger = logging.getLogger(__name__)

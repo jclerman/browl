@@ -12,7 +12,6 @@ import sqlite3
 import urllib.parse
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
 from typing import NamedTuple
@@ -26,7 +25,7 @@ from starlette.templating import Jinja2Templates
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from browl.derived import DerivedReader, EntityType, NotCurrentError, entities_with_iri, read_meta, ready_generation
-from browl.job_view import job_elapsed, job_steps, running_activity
+from browl.job_view import progress_context
 from browl.jobs import JobState, Site
 from browl.search import MAX_QUERY_CHARS
 
@@ -299,18 +298,7 @@ def unavailable_page(request: Request, site: Site, job: JobState) -> Response:
     headers = {"Cache-Control": "no-store"}
     if site == Site.LOADING:
         headers["Retry-After"] = str(RETRY_AFTER_S)
-        now = datetime.now(UTC)
-        steps = [] if job.stage is None else job_steps(job, now)
-        template, context = (
-            "loading.html",
-            {
-                "refresh_s": RETRY_AFTER_S,
-                "job": job,
-                "steps": steps,
-                "elapsed": job_elapsed(job, now),
-                "activity": running_activity(job, steps),
-            },
-        )
+        template, context = "loading.html", {"refresh_s": RETRY_AFTER_S, **progress_context(job)}
     else:
         template, context = "not_available.html", {}
     return templates.TemplateResponse(request, template, context, status_code=503, headers=headers)

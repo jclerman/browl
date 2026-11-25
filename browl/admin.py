@@ -4,7 +4,6 @@ Signing in and out, under the same prefix but open to everyone, is in `browl.aut
 """
 
 import logging
-from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -13,7 +12,7 @@ from fastapi.openapi.docs import get_swagger_ui_html, get_swagger_ui_oauth2_redi
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from browl.auth import require_admin
-from browl.job_view import Activity, job_elapsed, job_steps, running_activity, usage_table_activity
+from browl.job_view import Activity, progress_context, usage_table_activity
 from browl.jobs import JobRunningError, JobState
 from browl.jobtypes import Reasoner
 from browl.pages import is_htmx, link_root, same_origin, templates
@@ -61,14 +60,14 @@ async def job_status(request: Request) -> HTMLResponse:
 
 
 def status_context(job: JobState, tables: UsageTables | None = None) -> dict[str, Any]:
-    """Return what the status fragment (`admin/_job_status.html`) renders: the job, its stages' boxes, and so on.
+    """Return what the status fragment (`admin/_job_status.html`) renders.
+
+    That's the job's progress, with the IRI a stage is working on (`progress_context`), and the background work.
 
     Args:
         job: The job state.
         tables: The usage tables, whose build of the ready generation's table shows once no job is running.
     """
-    now = datetime.now(UTC)
-    steps = [] if job.stage is None else job_steps(job, now)
     background: list[Activity] = []
     background_failed = False
     if tables is not None and not job.running and job.ready_generation is not None:
@@ -76,10 +75,7 @@ def status_context(job: JobState, tables: UsageTables | None = None) -> dict[str
             background.append(usage_table_activity(progress))
         background_failed = tables.failed(job.ready_generation)
     return {
-        "job": job,
-        "steps": steps,
-        "elapsed": job_elapsed(job, now),
-        "activity": running_activity(job, steps, with_iri=True),
+        **progress_context(job, with_iri=True),
         "background": background,
         "background_failed": background_failed,
         "background_poll": BACKGROUND_POLL,
