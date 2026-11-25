@@ -1,4 +1,4 @@
-"""How the admin status shows a load job (A-5, A-6), and its progress (P-31).
+"""How the admin status and the "loading" page show a load job (A-5, A-6), and its progress (P-31).
 
 A box per stage, labelled by its state, with how long it took; what the running stage is doing; and the work that runs
 in the background once the job is ready.
@@ -92,7 +92,7 @@ REASONER_NAMES = {Reasoner.ELK: "ELK", Reasoner.HERMIT: "HermiT"}
 
 @dataclass(frozen=True)
 class Step:
-    """A stage's box in the status.
+    """A stage's box in the stepper.
 
     Attributes:
         stage: The stage.
@@ -113,7 +113,7 @@ class Step:
 
 @dataclass(frozen=True)
 class Activity:
-    """What some work is doing, for the status's details panel: a running stage, or work in the background.
+    """What some work is doing, for a details panel: a running stage, or work in the background.
 
     Attributes:
         label: What the work is, e.g. "Storing Triples".

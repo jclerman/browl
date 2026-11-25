@@ -2,7 +2,7 @@
    doing. #}
 {% macro activity_panel(activity, id) %}
 {# What some work is doing: its label and time so far, what it says it's doing, and a bar if it can tell how far it
-   has got. The home of a stage's sub-steps, once there are any. #}
+   has got. #}
 <div class="step-panel" role="group" aria-labelledby="{{ id }}">
   <p class="step-panel-head"><strong id="{{ id }}">{{ activity.label }}</strong>
     {%- if activity.elapsed is not none %} · running for {{ activity.elapsed }}{% endif %}</p>

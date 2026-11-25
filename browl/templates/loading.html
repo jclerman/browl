@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {# A refresh, not a script, reloads the page: JS is limited to static files, and this page works without it. While a
    job runs, the page shows its progress (A-5), as the admin status does, but not the file, imports (nor the IRI a stage
-   is working on, which `running_activity` leaves out) or reasons. #}
+   is working on, which `progress_context` leaves out) or reasons. #}
 {% from "_load_progress.html" import activity_panel, stepper %}
 {% block head %}<meta http-equiv="refresh" content="{{ refresh_s }}">{% endblock %}
 {% block title %}Loading{% endblock %}
