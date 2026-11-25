@@ -1,12 +1,14 @@
 // The upload form's in-page upload (P-31): sends the form from the page, showing how much of the file has been sent,
 // with the Upload button disabled until the response comes, so the upload can't be sent twice. A successful upload's
 // response is the redirect to the upload page, which then loads, as after the plain form. A refused upload's page
-// takes the place of this one's content, polling while a job runs, as the plain form's would. Without JS, the form
-// posts as usual (U-17).
+// takes the place of this one's content, polling while a job runs, as the plain form's would. The status doesn't poll
+// while the form is sent, so a poll that finds the refused upload's job ended can't load the page afresh, losing the
+// refusal. Without JS, the form posts as usual (U-17).
 (() => {
   "use strict";
   const FORM = "form.upload";
   const UNITS = ["bytes", "kB", "MB", "GB", "TB"];
+  let sending = false; // the form is being sent
 
   // A size in decimal units, as the status shows them (Jinja's `filesizeformat`), e.g. "1.6 GB".
   function formatSize(bytes) {
@@ -51,6 +53,7 @@
       }
       error.textContent = message;
       button.disabled = false;
+      sending = false;
     }
 
     const data = new FormData(form); // in the form's order: the reasoner before the file, as the server needs
@@ -65,6 +68,7 @@
       text.textContent = `Sent ${formatSize(size ?? 0)}; waiting for the server…`;
     });
     request.addEventListener("load", () => {
+      sending = false;
       if (request.status < 400) {
         // The redirect was followed; load its page, as the plain form would.
         window.location.assign(request.responseURL || form.action);
@@ -80,9 +84,17 @@
     });
     request.addEventListener("error", () => fail("The upload failed: the connection to the server was lost."));
     button.disabled = true;
+    sending = true;
     show(0);
     request.send(data);
   }
+
+  // The status's polls wait until the form is sent: htmx tries again at the next poll.
+  document.addEventListener("htmx:beforeRequest", (event) => {
+    if (sending && event.target.closest?.("#job-status")) {
+      event.preventDefault();
+    }
+  });
 
   // On the document, so it serves a form that a refused upload's page put in place.
   document.addEventListener("submit", (event) => {

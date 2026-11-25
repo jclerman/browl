@@ -6,6 +6,7 @@ They drive headless Chromium through Playwright against the app on a live server
 import asyncio
 import contextlib
 import re
+import threading
 import urllib.parse
 from collections.abc import Callable
 from pathlib import Path
@@ -28,11 +29,14 @@ from browl.derived import EntityType
 from browl.jobs import JobContext, Stage, StageFunction
 from browl.jobtypes import StageError
 from browl.links import EntityLink
+from browl.precache.usage_table import Progress
 from browl.rdf import IRI, RDFS, XSD
 from browl.rdf import RDF as RDF_NS
+from browl.upload import UploadError
 from browl.usage_tab import PageNotFoundError, UsageGroup, UsageTab
 from tests.conftest import DATA
 from tests.helpers import AUTH_ON, WAIT_S, LiveServer, derived_stage, iso, make_app, no_axioms, session_cookie
+from tests.test_pages import FakeTables
 from tests.test_search_page import SYNONYM, search_stage
 from tests.test_trees import tree_stage
 
@@ -546,6 +550,41 @@ def test_upload_failure_shown(page: Page, status_server: LiveServer, failure: st
     expect(button).to_be_enabled()
     expect(page.locator(".upload-progress")).to_be_hidden()
     assert page.url == f"{status_server.url}{UPLOAD}"
+
+
+def test_upload_pauses_status_polls(page: Page, status_server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that, with JS, the status doesn't poll while the form is sent, and polls again once it's refused.
+
+    So a poll can't find the refused upload's job ended, and load the page afresh, losing the refusal. The server holds
+    the upload, as a browser holding the request would hold back its others too.
+    """
+    jobs = status_server.app.state.jobs
+    status_server.call(jobs.start())
+    status_server.call(jobs.wait())
+    status_server.app.state.usage_tables = FakeTables(Progress(triples=200, scanned=50))  # so the status polls
+    received, refuse = threading.Event(), threading.Event()
+
+    async def held(request: object, runner: object) -> None:
+        received.set()
+        await asyncio.to_thread(refuse.wait, WAIT_S)
+        raise UploadError("held, then refused")
+
+    monkeypatch.setattr(browl.admin, "receive_upload", held)
+    polls: list[str] = []
+    page.on("request", lambda request: polls.append(request.url) if "?background" in request.url else None)
+    page.goto(f"{status_server.url}{UPLOAD}")
+    page.wait_for_timeout(POLL_S * 2000)
+    assert polls  # it polls before the upload
+    page.set_input_files("#ontology", DATA / "routing.ttl")
+    page.get_by_role("button", name="Upload").click()
+    assert received.wait(WAIT_S)
+    sent = len(polls)
+    page.wait_for_timeout(POLL_S * 4000)
+    assert len(polls) == sent
+    refuse.set()
+    expect(page.get_by_role("alert")).to_have_text("The upload was refused: held, then refused")
+    page.wait_for_timeout(POLL_S * 4000)
+    assert len(polls) > sent
 
 
 @NO_JS
