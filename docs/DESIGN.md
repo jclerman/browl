@@ -1580,7 +1580,7 @@ Every page has the same frame (U-27, U-28, U-29):
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────┐
-│ <ontology name>   [ Search… ]   Classes  Object props        Sign in │  navigation bar
+│ <ontology name>   [ Search… ]   Classes  Object props  Admin sign-in │  navigation bar
 │                    Data props  Annotation props    hosted with browl │
 ├──────────────────────────────────────────────────────────────────────┤
 │  Class  Heart                                                        │  page header
@@ -1601,9 +1601,9 @@ Every page has the same frame (U-27, U-28, U-29):
 - The full search page with type and property filters (U-10) is reached from the search box, by "All results…" or
   Enter (below, Search).
 - An admin link appears only for signed-in admins: the base template shows it when `request.state.is_admin` is true,
-  which `browl.auth.AdminMark` sets (2.11). At the bar's end is a small "Sign in" link, which leads to the upload page
-  once signed in; a signed-in user gets "Sign out" in its place. With `AUTH_DISABLED`, everyone is an admin, and the bar
-  has neither.
+  which `browl.auth.AdminMark` sets (2.11). At the bar's end is a small "Admin sign-in" link, which leads to the upload
+  page once signed in; a signed-in user gets "Sign out" in its place. With `AUTH_DISABLED`, everyone is an admin, and
+  the bar has neither.
   Pages have no footer: an entity page, filling the window, has no room for one.
 - Under the sign-in or sign-out link, browl credits itself: "hosted with" and the wordmark
   (`static/browl-wordmark.svg`), linking to the project's repository (`PROJECT_URL`) until browl has a documentation
@@ -1827,9 +1827,9 @@ the page shows, not the query's `tab`, which some pages ignore (2.9), with the U
 is whether the response is a tab panel alone (`panel=1`, 2.9). A Usage tab showing "Preparing…" (its count over T
 before the usage table is ready, P-27c) isn't cached, as it changes once the table is ready.
 _(Q13)_ Including the generation number in the key means a reload invalidates entries in every worker without
-coordination. Pages differ by user: an admin's have the navigation bar's admin link, and a signed-in user's "Sign out" in
-place of "Sign in" (2.9). So the cache must hold pages without the frame's per-user part and add it after the lookup,
-or else key on whether the user is signed in and whether they're an admin (from P-14a's and P-22's reviews). If
+coordination. Pages differ by user: an admin's have the navigation bar's admin link, and a signed-in user's "Sign out"
+in place of "Admin sign-in" (2.9). So the cache must hold pages without the frame's per-user part and add it after the
+lookup, or else key on whether the user is signed in and whether they're an admin (from P-14a's and P-22's reviews). If
 search pages and fragments (2.9, Search) are cached, key them on the query as
 `search_page._params` gives it, plus `suggest`, not on the raw URL: their `type` and `property` filters are repeated
 parameters, which it gives each once, in a fixed order, so reordered URLs share an entry (from P-20's review). The

@@ -202,7 +202,7 @@ def test_admin_post_and_poll_need_sign_in(client: TestClient) -> None:
 
 
 def test_public_pages_need_no_sign_in(client: TestClient) -> None:
-    """Check that only admin routes need sign-in: the site's other pages and routes are served, with "Sign in" (A-1)."""
+    """Check that only admin routes need sign-in: the other pages and routes are served, with "Admin sign-in" (A-1)."""
     for path in [*PUBLIC_PAGES, "/_browl/health"]:
         response = client.get(path)
         assert response.status_code == 200, path
@@ -571,7 +571,7 @@ def test_auth_disabled(data_dir: Path) -> None:
         assert client.get(CALLBACK).headers["Location"] == UPLOAD
         page = client.get("/_browl/search").text
         assert 'class="admin-link"' in page
-        assert "Sign in" not in page
+        assert "Admin sign-in" not in page
         assert "Sign out" not in page
 
 

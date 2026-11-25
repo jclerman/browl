@@ -43,7 +43,7 @@ TREE_LINKS = [
 ADMIN_LINK = ("/_browl/admin/upload", "Admin")
 """The menu's last link for an admin; the tests' app has authentication off, so everyone is one."""
 ADVANCED = ("/_browl/search", "Advanced search")
-SIGN_IN = ("/_browl/admin/sign-in", "Sign in")
+SIGN_IN = ("/_browl/admin/sign-in", "Admin sign-in")
 CREDIT = (PROJECT_URL, "hosted with")
 
 

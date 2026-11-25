@@ -61,7 +61,8 @@ SEED_ADMINS='["you@example.org"]'
 `SEED_ADMINS` lists the admins' Google account email addresses, as JSON. They can't be removed in the UI. Only
 accounts whose address Google reports as verified can sign in.
 
-Sign in from the "Sign in" link in the navigation bar. A signed-in user who isn't an admin is refused the admin pages.
-Sign-ins last 12 hours. Signing out ends the account's sign-ins on every device. Session cookies are signed with a key
-browl makes on first start and keeps in `DATA_DIR/session.key`. Deleting that file and restarting signs everyone out.
+Sign in from the "Admin sign-in" link in the navigation bar. A signed-in user who isn't an admin is refused the admin
+pages. Sign-ins last 12 hours. Signing out ends the account's sign-ins on every device. Session cookies are signed with
+a key browl makes on first start and keeps in `DATA_DIR/session.key`. Deleting that file and restarting signs everyone
+out.
 If the file is ever emptied or cut short, browl refuses to start, saying so; delete it, and browl makes a new key.
