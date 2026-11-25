@@ -12,7 +12,7 @@ import sqlite3
 import time
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import AbstractContextManager, asynccontextmanager, suppress
+from contextlib import AbstractAsyncContextManager, AbstractContextManager, asynccontextmanager, suppress
 from pathlib import Path
 
 import httpx2
@@ -98,6 +98,7 @@ async def pre_cache(context: JobContext, http: httpx2.AsyncClient, hooks: Sequen
         meta = await header_meta(context, sparql, dataset)
         async with build(context.settings.data_dir, meta, keys) as built:
             db = _PhasedWriter(built)
+            await db.run(lambda connection: None)  # so `changes` starts from what the build wrote, e.g. `meta`
             hook_context = PreCacheContext(context, sparql, dataset, db)
             for number, hook in enumerate(hooks, start=1):
                 logger.info("Load job %d: pre-caching hook %s", context.generation, hook.name)
@@ -151,28 +152,22 @@ async def wait_for_fuseki(http: httpx2.AsyncClient, limit_s: float | None = None
         pause = min(pause * 2, longest)
 
 
-@asynccontextmanager
-async def build(data_dir: Path, meta: Meta, keys: Mapping[str, str]) -> AsyncIterator[DerivedWriter]:
+def build(data_dir: Path, meta: Meta, keys: Mapping[str, str]) -> AbstractAsyncContextManager[DerivedWriter]:
     """Build a generation's derived database on a thread of its own (`browl.derived.build`, `on_thread`).
 
     On a clean exit the database is swapped in; if the block fails or is cancelled, the temporary file is deleted.
     """
-    async with on_thread(derived.build(data_dir, meta, keys), "derived-build") as db:
-        yield db
+    return on_thread(derived.build(data_dir, meta, keys), "derived-build")
 
 
 @asynccontextmanager
 async def _hook_progress(
     context: JobContext, sparql: "_CountingClient", db: "_PhasedWriter", label: str
 ) -> AsyncIterator[None]:
-    """Report a hook's progress every `PROGRESS_S` while the block runs: its label, time so far, and phase.
+    """Report a hook's progress every `PROGRESS_S` while the block runs (DESIGN.md §2.4, Progress).
 
-    The phase is the rows received while a bulk query streams, else `INDEXING` or `WRITING` while the hook waits for
-    one. Then the database changes the hook has made, when they've moved since the last report or there's no phase:
-    every row inserted, updated or deleted, staging rows too, so they can be more than the rows received (the names
-    hook sets each entity's CURIE first). They move only when a write ends.
+    That's its label, time so far and phase, then its database changes if they've moved or there's no phase.
     """
-    await db.run(lambda connection: None)  # so `changes` counts what the build changed before, e.g. `meta`
     started, before = time.monotonic(), db.changes
 
     async def tick() -> None:
@@ -252,8 +247,7 @@ class _PhasedWriter(DerivedWriter):
 
     Attributes:
         phase: `INDEXING` or `WRITING` while a call runs, else None.
-        changes: The rows the connection had inserted, updated or deleted (`sqlite3.Connection.total_changes`) when
-            the last call ended, staging rows included.
+        changes: The connection's `total_changes` when the last call ended.
     """
 
     def __init__(self, writer: DerivedWriter) -> None:
@@ -289,9 +283,7 @@ class _PhasedWriter(DerivedWriter):
 
 @asynccontextmanager
 async def on_thread(
-    manager: AbstractContextManager[sqlite3.Connection],
-    name: str,
-    interrupt: bool = False,
+    manager: AbstractContextManager[sqlite3.Connection], name: str, interrupt: bool = False
 ) -> AsyncIterator[DerivedWriter]:
     """Enter a database build's context manager on a thread of its own, yielding a writer for its connection.
 
