@@ -119,12 +119,14 @@ class Activity:
         elapsed: How long it has run so far; None if not known.
         detail: What it's doing now, e.g. "Checking for unsatisfiable classes"; None if it hasn't said.
         percent: How far it has got, from 0 to 100; None if it can't tell.
+        iri: The IRI it's working on, e.g. the import being fetched, for admins only; None if none.
     """
 
     label: str
     elapsed: str | None = None
     detail: str | None = None
     percent: float | None = None
+    iri: str | None = None
 
 
 def job_steps(job: JobState, now: datetime | None = None) -> list[Step]:
@@ -172,13 +174,21 @@ def _step_time(job: JobState, stage: Stage, state: StepState, now: datetime) -> 
     return None
 
 
-def running_activity(job: JobState, steps: list[Step]) -> Activity | None:
-    """Return what the running job's current stage is doing; None if the job isn't running."""
+def running_activity(job: JobState, steps: list[Step], with_iri: bool = False) -> Activity | None:
+    """Return what the running job's current stage is doing; None if the job isn't running.
+
+    Args:
+        job: The job state.
+        steps: Its stages' boxes (`job_steps`).
+        with_iri: Whether to include the IRI the stage is working on (`JobState.detail_iri`), for the admin status;
+            the "loading" page is public, so it leaves the IRI out.
+    """
     if not job.running:
         return None
     for step in steps:
         if step.state is StepState.CURRENT:
-            return Activity(step.label, step.time, job.detail, _percent(job.fraction))
+            iri = job.detail_iri if with_iri else None
+            return Activity(step.label, step.time, job.detail, _percent(job.fraction), iri)
     return None
 
 

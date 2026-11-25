@@ -41,7 +41,7 @@ PROGRESS_S = 2.0
 """The least time between records of a running stage's progress (`JobContext.report`), as often as the status polls."""
 
 MAX_DETAIL_CHARS = 300
-"""The longest progress detail recorded; a longer one, e.g. naming a long import IRI, is cut short."""
+"""The longest progress detail, or IRI, recorded; a longer one, e.g. a long import IRI, is cut short."""
 
 INTERRUPTED_BY_RESTART = "interrupted by restart"
 REBUILDING = "rebuilding after a restart"
@@ -107,13 +107,17 @@ MIGRATIONS: list[str] = [
     ALTER TABLE job ADD COLUMN detail TEXT;
     ALTER TABLE job ADD COLUMN fraction REAL;
     """,
+    # Version 8: the IRI the running stage is working on, which only admins see (P-31).
+    """
+    ALTER TABLE job ADD COLUMN detail_iri TEXT;
+    """,
 ]
 """The persistent database's schema migrations: entry n migrates from version n to n + 1."""
 
 _COLUMNS = (
     "generation, stage, started_at, finished_at, failed_stage, reason, ready_generation, reasoner,"
     " upload_name, upload_syntax, upload_bytes, imports, triples, prefixes, stage_started_at, stage_seconds, detail,"
-    " fraction"
+    " fraction, detail_iri"
 )
 """The job table's columns but its id, in `JobState`'s order."""
 
@@ -175,6 +179,8 @@ class JobState:
         stage_seconds: How long each stage that ended took, in seconds, the stage the job failed in included.
         detail: What the running stage is doing, e.g. "Checking for unsatisfiable classes"; None if it hasn't said.
         fraction: How far it has got, from 0 to 1; None if it can't tell.
+        detail_iri: The IRI it's working on, e.g. the import being fetched, which only the admin status shows, as the
+            "loading" page is public; None if none.
     """
 
     generation: int | None = None
@@ -195,6 +201,7 @@ class JobState:
     stage_seconds: Mapping[Stage, float] = field(default_factory=dict)
     detail: str | None = None
     fraction: float | None = None
+    detail_iri: str | None = None
 
     @property
     def dropped_imports(self) -> list[ImportResult]:
@@ -242,11 +249,15 @@ class JobState:
         if self.stage is not None and self.stage_started_at is not None:
             end = now if self.finished_at is None else min(now, self.finished_at)
             seconds[self.stage] = max(0.0, (end - self.stage_started_at).total_seconds())
-        return replace(self, stage_seconds=seconds, detail=None, fraction=None)
+        return replace(self, stage_seconds=seconds, detail=None, fraction=None, detail_iri=None)
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _cut_short(text: str) -> str:
+    return f"{text[:MAX_DETAIL_CHARS]}…" if len(text) > MAX_DETAIL_CHARS else text
 
 
 class JobStore:
@@ -360,6 +371,7 @@ class JobStore:
             stage_seconds,
             detail,
             fraction,
+            detail_iri,
         ) = row
         return JobState(
             generation=generation,
@@ -380,6 +392,7 @@ class JobStore:
             stage_seconds={Stage(stage): seconds for stage, seconds in json.loads(stage_seconds).items()},
             detail=detail,
             fraction=fraction,
+            detail_iri=detail_iri,
         )
 
     @staticmethod
@@ -407,6 +420,7 @@ class JobStore:
                 json.dumps(state.stage_seconds),
                 state.detail,
                 state.fraction,
+                state.detail_iri,
             ),
         )
 
@@ -482,16 +496,19 @@ class JobContext:
     prefixes: dict[str, str] = field(default_factory=dict)
     started_at: datetime = field(default_factory=_now)
     triple_counts: dict[Path, int] = field(default_factory=dict)
-    on_progress: Callable[[str, float | None], None] | None = field(default=None, repr=False)
+    on_progress: Callable[[str, float | None, str | None], None] | None = field(default=None, repr=False)
 
-    def report(self, detail: str, fraction: float | None = None) -> None:
-        """Say what the running stage is doing, and how far it has got, from 0 to 1, if it can tell.
+    def report(self, detail: str, fraction: float | None = None, iri: str | None = None) -> None:
+        """Say what the running stage is doing, how far it has got, from 0 to 1, if it can tell, and on what IRI.
+
+        The detail is public, as the "loading" page shows it; an IRI it works on, e.g. an import's, which may name an
+        intranet host or carry a token, goes in `iri`, which only the admin status shows.
 
         Call it as often as is handy, e.g. per line of a tool's output: the runner records the latest at most every
         `PROGRESS_S`, and a failed record doesn't fail the job.
         """
         if self.on_progress is not None:
-            self.on_progress(detail, fraction)
+            self.on_progress(detail, fraction, iri)
 
     @property
     def ontology(self) -> Path | None:
@@ -594,7 +611,7 @@ class JobRunner:
         self._unstored: JobState | None = None  # the end of this runner's last job, if it couldn't be stored
         self._progress_write: asyncio.Future[None] | None = None  # the last progress write
         self._progress_at = 0.0  # when progress was last recorded
-        self._progress: tuple[str, float | None] | None = None  # the stage's progress reported, not yet recorded
+        self._progress: tuple[str, float | None, str | None] | None = None  # reported, not yet recorded
         self._progress_flush: asyncio.TimerHandle | None = None  # when it will be
         self._refreshing = asyncio.Lock()
         self._changes = 0
@@ -795,11 +812,11 @@ class JobRunner:
         # A cancelled await leaves the write running, so the job's end waits for it (`_store_end`).
         await asyncio.shield(self._write_progress(replace(self._state, upload_bytes=context.upload_bytes)))
 
-    def _report(self, detail: str, fraction: float | None) -> None:
+    def _report(self, detail: str, fraction: float | None, iri: str | None) -> None:
         """Keep the running stage's progress, to record once `PROGRESS_S` has passed since the last record."""
         if not self._state.running:
             return
-        self._progress = (detail, fraction)
+        self._progress = (detail, fraction, iri)
         if self._progress_flush is None:
             delay = max(0.0, self._progress_at + PROGRESS_S - time.monotonic())
             self._progress_flush = asyncio.get_running_loop().call_later(delay, self._flush_progress)
@@ -810,10 +827,15 @@ class JobRunner:
         if progress is None or not self._state.running:
             return
         self._progress_at = time.monotonic()
-        detail, fraction = progress
-        if len(detail) > MAX_DETAIL_CHARS:
-            detail = f"{detail[:MAX_DETAIL_CHARS]}…"
-        self._write_progress(replace(self._state, detail=detail, fraction=fraction))
+        detail, fraction, iri = progress
+        self._write_progress(
+            replace(
+                self._state,
+                detail=_cut_short(detail),
+                fraction=fraction,
+                detail_iri=None if iri is None else _cut_short(iri),
+            )
+        )
 
     def _drop_progress(self) -> None:
         """Forget progress not yet recorded, as the stage it belongs to has ended."""

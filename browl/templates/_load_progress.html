@@ -10,6 +10,7 @@
   {% if activity.detail is not none %}<p class="step-detail">
     {%- for part in activity.detail.split(" · ") %}{% if not loop.first %} · {% endif %}<span>{{ part }}</span>{% endfor -%}
   </p>{% endif %}
+  {% if activity.iri is not none %}<p class="step-detail"><span><code>{{ activity.iri }}</code></span></p>{% endif %}
   {% if activity.percent is not none %}
   <progress class="step-progress" max="100" value="{{ activity.percent }}" aria-labelledby="{{ id }}">{{ activity.percent | round | int }}%</progress>
   {% endif %}

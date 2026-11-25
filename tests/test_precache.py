@@ -177,7 +177,7 @@ async def test_stage_reports_progress(settings: Settings, monkeypatch: pytest.Mo
 
     reports: list[str] = []
     context = job(settings, 9)
-    context.on_progress = lambda detail, fraction: reports.append(detail)
+    context.on_progress = lambda detail, fraction, iri: reports.append(detail)
     async with fuseki() as http:
         await pre_caching_stage(context, http, hooks=[fill])
     assert reports[0] == "Reading the ontology's header"

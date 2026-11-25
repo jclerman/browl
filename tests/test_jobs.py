@@ -66,7 +66,7 @@ def schema_version(path: Path) -> int:
 def test_store_migrates_new_database(data_dir: Path) -> None:
     """Check that a new database is created at the latest schema version, with no job."""
     store = JobStore(data_dir / "sub" / STATE_DB)
-    assert schema_version(store.path) == len(browl.jobs.MIGRATIONS) == 7
+    assert schema_version(store.path) == len(browl.jobs.MIGRATIONS) == 8
     assert store.read() == JobState()
 
 

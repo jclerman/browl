@@ -124,6 +124,12 @@
           "type": "REAL",
           "nullable": true,
           "comment": "How far the running stage has got, from 0 to 1; NULL if it can't tell, and once it ends."
+        },
+        {
+          "name": "detail_iri",
+          "type": "TEXT",
+          "nullable": true,
+          "comment": "The IRI the running stage is working on, e.g. the import being fetched (P-31), kept apart from detail because only the admin status shows it, as the \"loading\" page is public; NULL if none, and once the stage ends."
         }
       ],
       "constraints": [
@@ -146,7 +152,7 @@
           ]
         }
       ],
-      "def": "CREATE TABLE job (\n        id INTEGER PRIMARY KEY CHECK (id = 1),\n        generation INTEGER NOT NULL,\n        stage TEXT NOT NULL,\n        started_at TEXT NOT NULL,\n        finished_at TEXT,\n        failed_stage TEXT,\n        reason TEXT,\n        ready_generation INTEGER\n    , reasoner TEXT NOT NULL DEFAULT 'none', upload_name TEXT, upload_syntax TEXT, upload_bytes INTEGER, imports TEXT NOT NULL DEFAULT '[]', triples INTEGER, prefixes TEXT NOT NULL DEFAULT '{}', stage_started_at TEXT, stage_seconds TEXT NOT NULL DEFAULT '{}', detail TEXT, fraction REAL)"
+      "def": "CREATE TABLE job (\n        id INTEGER PRIMARY KEY CHECK (id = 1),\n        generation INTEGER NOT NULL,\n        stage TEXT NOT NULL,\n        started_at TEXT NOT NULL,\n        finished_at TEXT,\n        failed_stage TEXT,\n        reason TEXT,\n        ready_generation INTEGER\n    , reasoner TEXT NOT NULL DEFAULT 'none', upload_name TEXT, upload_syntax TEXT, upload_bytes INTEGER, imports TEXT NOT NULL DEFAULT '[]', triples INTEGER, prefixes TEXT NOT NULL DEFAULT '{}', stage_started_at TEXT, stage_seconds TEXT NOT NULL DEFAULT '{}', detail TEXT, fraction REAL, detail_iri TEXT)"
     },
     {
       "name": "admin",

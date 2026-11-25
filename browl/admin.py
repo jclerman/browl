@@ -79,7 +79,7 @@ def status_context(job: JobState, tables: UsageTables | None = None) -> dict[str
         "job": job,
         "steps": steps,
         "elapsed": job_elapsed(job, now),
-        "activity": running_activity(job, steps),
+        "activity": running_activity(job, steps, with_iri=True),
         "background": background,
         "background_failed": background_failed,
         "background_poll": BACKGROUND_POLL,

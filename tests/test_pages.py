@@ -185,6 +185,30 @@ def test_loading_shows_progress(client: TestClient, app: FastAPI) -> None:
     assert "upload-file" not in html and "Load 1" not in html
 
 
+def test_loading_leaves_out_iri(client: TestClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that the "loading" page leaves out the IRI a stage is working on, and escapes its detail.
+
+    The page is public, and an import's IRI may name an intranet host or carry a token; the admin status shows it.
+    """
+    monkeypatch.setattr(browl.jobs, "PROGRESS_S", 0)
+    reported = threading.Event()
+    iri = "http://intranet.example/o.ttl?access_token=hunter2"
+
+    async def imports(context: JobContext) -> None:
+        context.report("Fetching <import> 1", None, iri)
+        await asyncio.sleep(0.05)  # the report is recorded
+        reported.set()
+        await asyncio.Event().wait()
+
+    app.state.jobs.register(Stage.IMPORTS, imports)
+    client.portal.call(app.state.jobs.start)
+    assert reported.wait(timeout=5)
+    html = " ".join(client.get("/example.org/onto").text.split())
+    assert '<p class="step-detail"><span>Fetching &lt;import&gt; 1</span></p>' in html
+    assert "intranet.example" not in html and "hunter2" not in html
+    assert f'<p class="step-detail"><span><code>{iri}</code></span></p>' in fragment(client)
+
+
 def test_loading_without_job_progress(client: TestClient, app: FastAPI) -> None:
     """Check that a "loading" page served while no job runs (another worker's rebuild) shows no progress."""
     run_job(client, app)

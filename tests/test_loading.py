@@ -79,7 +79,7 @@ async def test_load_and_replace(settings: Settings, http: httpx2.AsyncClient) ->
     imported = f"<{EX}a> <{EX}p> <{EX}b> .\n<{EX}x> <{EX}p> <{EX}y> .\n"  # one triple the ontology also states
     first = job(settings, 101, ontology, {f"{EX}imported": imported})
     reports: list[tuple[str, float | None]] = []
-    first.on_progress = lambda detail, fraction: reports.append((detail, fraction))
+    first.on_progress = lambda detail, fraction, iri: reports.append((detail, fraction))
     assert first.ontology is not None
     first.triple_counts = {first.ontology: 2}
     await loading_stage(first, http)

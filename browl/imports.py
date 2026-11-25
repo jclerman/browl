@@ -453,10 +453,10 @@ class _Closure:
         directory: Path,
         settings: Settings,
         client: httpx2.AsyncClient,
-        report: Callable[[str, float | None], None] | None = None,
+        report: Callable[[str, float | None, str | None], None] | None = None,
     ) -> None:
         self.directory = directory
-        self.report = report or (lambda detail, fraction: None)
+        self.report = report or (lambda detail, fraction, iri: None)
         self.counts: dict[Path, int] = {}  # each RDF document's triples, by its file
         self.read = 0  # the imports read so far
         self.settings = settings
@@ -482,11 +482,11 @@ class _Closure:
                 doing = "Parsing the uploaded file"
             else:
                 self.read += 1
-                doing = f"Reading import {self.read} of {len(self.files)} fetched so far: {document.iri}"
-            self.report(doing, None)
+                doing = f"Reading import {self.read} of {len(self.files)} fetched so far"
+            self.report(doing, None, document.iri)
 
-            def on_count(triples: int, doing: str = doing) -> None:
-                self.report(f"{doing} · {triples:,} triples so far", None)
+            def on_count(triples: int, doing: str = doing, iri: str | None = document.iri) -> None:
+                self.report(f"{doing} · {triples:,} triples so far", None, iri)
 
             try:
                 listing = await list_imports(document, self.settings, on_count)
@@ -522,7 +522,7 @@ class _Closure:
             self.attempts += 1
             path = self.directory / str(len(self.results) + 1)
             logger.info("Fetching import %s", iri)
-            self.report(f"Fetching import {self.attempts}: {iri}", None)
+            self.report(f"Fetching import {self.attempts}", None, iri)
             timeout_s = min(FETCH_TIMEOUT_S, remaining_s)
             try:
                 syntax = await fetch(self.client, iri, path, self.settings, self.budget, timeout_s)

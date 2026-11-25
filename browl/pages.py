@@ -293,8 +293,8 @@ templates.env.globals.update(
 def unavailable_page(request: Request, site: Site, job: JobState) -> Response:
     """Return the "loading" or "not available" page, as the gate serves it.
 
-    While a job runs, the "loading" page shows its progress, as the admin status does, but not the file, imports or
-    reasons.
+    While a job runs, the "loading" page shows its progress, as the admin status does, but not the file, imports (nor
+    the IRI a stage is working on) or reasons.
     """
     headers = {"Cache-Control": "no-store"}
     if site == Site.LOADING:

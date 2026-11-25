@@ -446,8 +446,10 @@ async def test_stage(site: StaticServer, settings: Settings, data_dir: Path) -> 
     )
     missing = site.url + "/missing.ttl"
     upload = store_upload(data_dir, turtle(f"{EX}o", a, missing))
-    reports: list[str] = []
-    context = JobContext(1, settings, upload=upload, on_progress=lambda detail, fraction: reports.append(detail))
+    reports: list[tuple[str, str | None]] = []
+    context = JobContext(
+        1, settings, upload=upload, on_progress=lambda detail, fraction, iri: reports.append((detail, iri))
+    )
     await imports_stage(context, allow_all)
     assert context.imports == [
         ImportResult(a),
@@ -455,18 +457,19 @@ async def test_stage(site: StaticServer, settings: Settings, data_dir: Path) -> 
         ImportResult(b, a),
         ImportResult("file:///etc/passwd", a, "only http and https imports are fetched"),
     ]
-    # The document being fetched or read, with the count so far; each read's triples as they arrive.
-    steps = [detail for detail in dict.fromkeys(reports) if " · " not in detail]
+    # The document being fetched or read, its IRI apart from the public detail, with the count so far; each read's
+    # triples as they arrive.
+    steps = [report for report in dict.fromkeys(reports) if " · " not in report[0]]
     assert steps == [
-        "Parsing the uploaded file",
-        f"Fetching import 1: {a}",
-        f"Fetching import 2: {missing}",
-        f"Reading import 1 of 1 fetched so far: {a}",
-        f"Fetching import 3: {b}",
-        "Fetching import 4: file:///etc/passwd",  # tried, and dropped
-        f"Reading import 2 of 2 fetched so far: {b}",
+        ("Parsing the uploaded file", None),
+        ("Fetching import 1", a),
+        ("Fetching import 2", missing),
+        ("Reading import 1 of 1 fetched so far", a),
+        ("Fetching import 3", b),
+        ("Fetching import 4", "file:///etc/passwd"),  # tried, and dropped
+        ("Reading import 2 of 2 fetched so far", b),
     ]
-    assert f"Reading import 2 of 2 fetched so far: {b} · 2 triples so far" in reports
+    assert ("Reading import 2 of 2 fetched so far · 2 triples so far", b) in reports
     assert sorted(site.requested) == ["/a.ttl", "/b.rdf", "/missing.ttl"]
     imports_dir = upload.parent / "imports"
     assert context.import_files == {a: imports_dir / "1.ttl", b: imports_dir / "3.rdf"}
