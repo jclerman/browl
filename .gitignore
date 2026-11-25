@@ -22,6 +22,8 @@ __pycache__/
 htmlcov/
 # Playwright traces of failed browser tests (--tracing)
 /test-results/
+# The logs of the tests' Fuseki containers
+/test-logs/
 
 # IDE settings
 # PyCharm and other JetBrains IDEs

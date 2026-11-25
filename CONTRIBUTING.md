@@ -16,7 +16,7 @@ Optional locally. CI has them all, and there the tests that need them fail inste
 | Tool | Version | For |
 | --- | --- | --- |
 | Java | 21 | Tests marked `java`: those that run ROBOT, the OFN conversion or the OWLAPI (through JPype). On macOS the tests find an installed Java 21 when `JAVA_HOME` is unset; elsewhere, set `JAVA_HOME`. |
-| Docker, with Compose | | Tests marked `fuseki`, which start Fuseki in Docker unless `BROWL_TEST_FUSEKI_URL` points at one; running the app |
+| Docker, with Compose | | Tests marked `fuseki`, which start Fuseki in Docker unless `BROWL_TEST_FUSEKI_URL` points at one, saving its logs in `test-logs/`; running the app |
 | [ShellCheck](https://www.shellcheck.net/) | | actionlint checks the workflows' `run:` steps with it |
 
 pre-commit fetches the linters it runs, with their own runtimes, the first time it runs them.

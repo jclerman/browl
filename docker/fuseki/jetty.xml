@@ -54,7 +54,10 @@
             </Item>
           </Array>
         </Arg>
-        <Set name="port">3030</Set>
+        <!-- The address and port: FUSEKI_HOST, if set, else every address; FUSEKI_PORT, else 3030. The tests set both
+             to run a Fuseki on the host's own network (tests/conftest.py). -->
+        <Set name="host"><Env name="FUSEKI_HOST"/></Set>
+        <Set name="port"><Env name="FUSEKI_PORT" default="3030"/></Set>
       </New>
     </Arg>
   </Call>

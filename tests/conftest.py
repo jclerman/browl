@@ -4,7 +4,8 @@
   a child process. On macOS, when `JAVA_HOME` is unset, it's set to Java 21 if that's installed. `jvm` also starts the
   JVM in the test process, for the OWLAPI.
 - `fuseki_url`: the Fuseki at `BROWL_TEST_FUSEKI_URL`, or one started from `docker/fuseki` with Docker, built unless
-  `BROWL_TEST_FUSEKI_IMAGE` names an image (as CI does). `fuseki_base` also needs Jena's tools (`JENA_HOME`, else
+  `BROWL_TEST_FUSEKI_IMAGE` names an image (as CI does): one per worker, on the host's own network on Linux, its logs
+  saved in `test-logs/`. `fuseki_base` also needs Jena's tools (`JENA_HOME`, else
   `make jena`'s) and the Fuseki's base directory: a temporary one for a Fuseki the tests start, else
   `BROWL_TEST_FUSEKI_BASE`.
 - `browser`, which pytest-playwright's `page` uses: Playwright's headless Chromium (`make browser`).
@@ -17,7 +18,9 @@ import json
 import os
 import shlex
 import shutil
+import socket
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -40,6 +43,8 @@ ROOT = Path(__file__).parent.parent
 DATA = Path(__file__).parent / "data"
 FUSEKI_IMAGE = "browl-fuseki-test"
 FUSEKI_START_TIMEOUT_S = 60
+FUSEKI_PORT_ATTEMPTS = 3
+FUSEKI_LOGS = ROOT / "test-logs"  # the logs of the Fuseki containers the tests ran; CI keeps them if a test fails
 ROBOT_JAR_CACHE = ROOT / ".cache" / "robot.jar"  # where `make robot-jar` puts it
 JENA_CACHE = ROOT / ".cache" / "jena"  # where `make jena` puts it
 MACOS_JAVA_HOME = "/usr/libexec/java_home"
@@ -295,7 +300,17 @@ def _docker(*args: str) -> str:
     return result.stdout.strip()
 
 
-def _wait_for_fuseki(url: str) -> None:
+class FusekiExitedError(RuntimeError):
+    """A Fuseki container the tests started stopped before it answered."""
+
+    def __init__(self, container: str) -> None:
+        """Record the container's logs, which say why."""
+        self.logs = _container_logs(container)
+        super().__init__(f"the Fuseki container stopped before it answered; its logs:\n{self.logs}")
+
+
+def _wait_for_fuseki(url: str, container: str | None = None) -> None:
+    """Wait until the Fuseki at a URL answers; raise `FusekiExitedError` if its container, if given, stops first."""
     deadline = time.monotonic() + FUSEKI_START_TIMEOUT_S
     while time.monotonic() < deadline:
         try:
@@ -303,53 +318,120 @@ def _wait_for_fuseki(url: str) -> None:
                 return
         except httpx2.HTTPError:
             pass
+        if container is not None and _docker("inspect", "--format", "{{.State.Running}}", container) != "true":
+            raise FusekiExitedError(container)
         time.sleep(0.5)
     raise TimeoutError(f"Fuseki at {url} didn't answer within {FUSEKI_START_TIMEOUT_S} s")
+
+
+def _container_logs(container: str) -> str:
+    """Return a container's output, stdout and stderr together, or why it couldn't be read."""
+    result = subprocess.run(
+        ["docker", "logs", container], check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+    )
+    return result.stdout if result.returncode == 0 else f"(`docker logs` failed: {result.stdout.strip()})"
+
+
+def _free_port() -> int:
+    """Return a local port that's free now; something else may take it before it's used."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port: int = probe.getsockname()[1]
+        return port
+
+
+def _start_fuseki(image: str, base: Path, host_network: bool) -> tuple[str, str]:
+    """Start a Fuseki container from an image, with `base` as its base directory; return the container and its URL.
+
+    On the host's own network (`host_network`), the container adds no network interface, which would make Chromium
+    fail the requests under way in other workers' browser tests (`net::ERR_NETWORK_CHANGED`). Its port is one that was
+    free a moment ago; if something takes it first, Fuseki exits, and another is tried, up to `FUSEKI_PORT_ATTEMPTS`.
+    Otherwise Docker publishes the container's port 3030 on a free local port.
+    """
+    run = [
+        "run",
+        "--detach",
+        "--pull",
+        "never",
+        "--user",
+        f"{os.getuid()}:{os.getgid()}",
+        "--volume",
+        f"{base}:/fuseki",
+    ]
+    attempt = 1
+    while True:
+        port = _free_port() if host_network else None
+        if port is None:
+            network = ["--publish", "127.0.0.1::3030"]
+        else:
+            network = ["--network", "host", "--env", f"FUSEKI_PORT={port}", "--env", "FUSEKI_HOST=127.0.0.1"]
+        container = _docker(*run, *network, image)
+        try:
+            address = (
+                f"127.0.0.1:{port}" if port is not None else _docker("port", container, "3030/tcp").splitlines()[0]
+            )
+            url = f"http://{address}"
+            _wait_for_fuseki(url, container)
+        except FusekiExitedError as error:
+            _remove_container(container)
+            if not host_network or attempt == FUSEKI_PORT_ATTEMPTS or "Address already in use" not in error.logs:
+                raise
+            attempt += 1
+            continue
+        except BaseException:
+            _remove_container(container)
+            raise
+        return container, url
+
+
+def _remove_container(container: str) -> None:
+    subprocess.run(["docker", "rm", "--force", container], check=False, capture_output=True)
+
+
+def fuseki_docker() -> tuple[str, bool]:
+    """Return the Fuseki image for the tests, and whether its containers can run on the host's own network.
+
+    The image is `BROWL_TEST_FUSEKI_IMAGE`, else one built from `docker/fuseki`. The host's network is the tests' own
+    where Docker runs containers on this machine: on Linux, but not in Docker Desktop's VM.
+    """
+    info = None
+    if shutil.which("docker") is not None:
+        info = subprocess.run(
+            ["docker", "info", "--format", "{{.OperatingSystem}}"], check=False, capture_output=True, text=True
+        )
+    if info is None or info.returncode:
+        skip_or_fail("no Fuseki: set BROWL_TEST_FUSEKI_URL, or make Docker available")
+    assert info is not None
+    image = os.environ.get("BROWL_TEST_FUSEKI_IMAGE")
+    if not image:
+        image = FUSEKI_IMAGE
+        _docker("build", "--quiet", "--tag", image, str(ROOT / "docker" / "fuseki"))
+    return image, sys.platform == "linux" and "Docker Desktop" not in info.stdout
 
 
 @pytest.fixture(scope="session")
 def fuseki_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[str, Path | None]]:
     """Yield a Fuseki's URL and its base directory as the tests see it, None if unknown.
 
-    That's `BROWL_TEST_FUSEKI_URL` and `BROWL_TEST_FUSEKI_BASE`, or a Fuseki started in Docker from browl's image,
-    whose base is a temporary directory, and which runs as the tests' user, so it can open and delete the stores the
-    tests build there.
+    That's `BROWL_TEST_FUSEKI_URL` and `BROWL_TEST_FUSEKI_BASE`, or a Fuseki started in Docker (`fuseki_docker`,
+    `_start_fuseki`), whose base is a temporary directory, and which runs as the tests' user, so it can open and delete
+    the stores the tests build there. Its logs are saved in `FUSEKI_LOGS` when it's removed, one file per worker.
     """
     if url := os.environ.get("BROWL_TEST_FUSEKI_URL", "").rstrip("/"):
         _wait_for_fuseki(url)
         base = os.environ.get("BROWL_TEST_FUSEKI_BASE")
         yield url, Path(base) if base else None
         return
-    if (
-        shutil.which("docker") is None
-        or subprocess.run(["docker", "info"], check=False, capture_output=True).returncode
-    ):
-        skip_or_fail("no Fuseki: set BROWL_TEST_FUSEKI_URL, or make Docker available")
-    base = tmp_path_factory.mktemp("fuseki")
-    image = os.environ.get("BROWL_TEST_FUSEKI_IMAGE")
-    if not image:
-        image = FUSEKI_IMAGE
-        _docker("build", "--quiet", "--tag", image, str(ROOT / "docker" / "fuseki"))
-    container = _docker(
-        "run",
-        "--detach",
-        "--pull",
-        "never",
-        "--rm",
-        "--publish",
-        "127.0.0.1::3030",
-        "--user",
-        f"{os.getuid()}:{os.getgid()}",
-        "--volume",
-        f"{base}:/fuseki",
-        image,
-    )
+    image, host_network = fuseki_docker()
+    base_dir = tmp_path_factory.mktemp("fuseki")
+    container, url = _start_fuseki(image, base_dir, host_network)
     try:
-        url = f"http://{_docker('port', container, '3030/tcp').splitlines()[0]}"
-        _wait_for_fuseki(url)
-        yield url, base
+        yield url, base_dir
     finally:
-        subprocess.run(["docker", "rm", "--force", container], check=False, capture_output=True)
+        FUSEKI_LOGS.mkdir(parents=True, exist_ok=True)
+        worker = os.environ.get("PYTEST_XDIST_WORKER", "main")
+        (FUSEKI_LOGS / f"fuseki-{worker}.log").write_text(_container_logs(container))
+        _remove_container(container)
 
 
 @pytest.fixture(scope="session")
