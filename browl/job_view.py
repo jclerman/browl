@@ -28,7 +28,10 @@ class StepState(StrEnum):
 
 
 class StageLabels(NamedTuple):
-    """A stage's labels, one per state but skipped, and the tooltip that says what the stage does."""
+    """A stage's labels, one per state but skipped, and the tooltip that says what the stage does.
+
+    The tooltip is a command ("Receive the ontology file."), so it reads the same whatever the stage's state.
+    """
 
     pending: str
     current: str
@@ -38,44 +41,44 @@ class StageLabels(NamedTuple):
 
 
 STAGE_LABELS = {
-    Stage.UPLOADING: StageLabels("Upload", "Uploading", "Uploaded", "Upload Failed", "Receiving the ontology file"),
+    Stage.UPLOADING: StageLabels("Upload", "Uploading", "Uploaded", "Upload Failed", "Receive the ontology file."),
     Stage.IMPORTS: StageLabels(
         "Fetch Imports",
         "Fetching Imports",
         "Imports Fetched",
         "Import Fetch Failed",
-        "Fetching the ontologies it imports and listing their triples",
+        "Fetch the ontologies it imports and list their triples.",
     ),
     Stage.REASONING: StageLabels(
         "Infer Axioms",
         "Inferring Axioms",
         "Axioms Inferred",
         "Inference Failed",
-        "Adding the axioms the chosen reasoner infers",
+        "Add the axioms the chosen reasoner infers.",
     ),
     Stage.LOADING: StageLabels(
         "Store Triples",
         "Storing Triples",
         "Triples Stored",
         "Storing Failed",
-        "Writing the triples into a new Fuseki store and indexing them",
+        "Write the triples into a new Fuseki store and index them.",
     ),
     Stage.PRE_CACHING: StageLabels(
         "Pre-Cache",
         "Pre-Caching",
         "Pre-Cached",
         "Pre-Caching Failed",
-        "Computing whole-ontology data and the search index",
+        "Compute whole-ontology data and the search index.",
     ),
     Stage.READY: StageLabels(
-        "Publish", "Publishing", "Published", "Publishing Failed", "Switching the site over to this load"
+        "Publish", "Publishing", "Published", "Publishing Failed", "Switch the site over to this load."
     ),
 }
 """Each stage's labels: the labels read as what's to do, being done, or done (the internal names, e.g. "loading",
 would clash with "Load status")."""
 
 NO_REASONER = StageLabels(
-    "No Reasoner", "No Reasoner", "No Reasoner", "No Reasoner", "No reasoner was chosen, so no axioms are inferred"
+    "No Reasoner", "No Reasoner", "No Reasoner", "No Reasoner", "No reasoner was chosen, so no axioms are inferred."
 )
 """The reasoning stage's labels when the job has no reasoner: it's skipped."""
 
