@@ -43,11 +43,11 @@ class StageLabels(NamedTuple):
 STAGE_LABELS = {
     Stage.UPLOADING: StageLabels("Upload", "Uploading", "Uploaded", "Upload Failed", "Receive the ontology file."),
     Stage.IMPORTS: StageLabels(
-        "Fetch Imports",
-        "Fetching Imports",
-        "Imports Fetched",
-        "Import Fetch Failed",
-        "Fetch the ontologies it imports and list their triples.",
+        "Read Ontology",
+        "Reading Ontology",
+        "Ontology Read",
+        "Ontology Read Failed",
+        "Parse the ontology, count its triples, and fetch its imports.",
     ),
     Stage.REASONING: StageLabels(
         "Infer Axioms",

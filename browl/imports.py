@@ -479,14 +479,14 @@ class _Closure:
         while self.queue:
             document = self.queue.popleft()
             if document.iri is None:
-                doing = "Reading the ontology"
+                doing = "Parsing the uploaded file"
             else:
                 self.read += 1
                 doing = f"Reading import {self.read} of {len(self.files)} fetched so far: {document.iri}"
             self.report(doing, None)
 
             def on_count(triples: int, doing: str = doing) -> None:
-                self.report(f"{doing} · {triples:,} triples", None)
+                self.report(f"{doing} · {triples:,} triples so far", None)
 
             try:
                 listing = await list_imports(document, self.settings, on_count)

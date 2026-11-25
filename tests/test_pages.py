@@ -287,7 +287,7 @@ def test_status_running(client: TestClient, app: FastAPI) -> None:
     assert 'hx-get="/_browl/admin/status" hx-trigger="every 2s" hx-swap="outerHTML"' in html
     assert steps(html) == [
         ("done", "", "Uploaded"),
-        ("done", "", "Imports Fetched"),
+        ("done", "", "Ontology Read"),
         ("skipped", "", "No Reasoner"),
         ("current", ' aria-current="step"', "Storing Triples"),
         ("pending", "", "Pre-Cache"),
@@ -316,7 +316,7 @@ def test_status_failed(client: TestClient, app: FastAPI) -> None:
     assert "hx-trigger" not in html
     assert steps(html) == [
         ("done", "", "Uploaded"),
-        ("done", "", "Imports Fetched"),
+        ("done", "", "Ontology Read"),
         ("failed", ' aria-current="step"', "Inference Failed"),
         ("pending", "", "Store Triples"),
         ("pending", "", "Pre-Cache"),

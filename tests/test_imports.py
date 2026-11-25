@@ -458,7 +458,7 @@ async def test_stage(site: StaticServer, settings: Settings, data_dir: Path) -> 
     # The document being fetched or read, with the count so far; each read's triples as they arrive.
     steps = [detail for detail in dict.fromkeys(reports) if " · " not in detail]
     assert steps == [
-        "Reading the ontology",
+        "Parsing the uploaded file",
         f"Fetching import 1: {a}",
         f"Fetching import 2: {missing}",
         f"Reading import 1 of 1 fetched so far: {a}",
@@ -466,7 +466,7 @@ async def test_stage(site: StaticServer, settings: Settings, data_dir: Path) -> 
         "Fetching import 4: file:///etc/passwd",  # tried, and dropped
         f"Reading import 2 of 2 fetched so far: {b}",
     ]
-    assert f"Reading import 2 of 2 fetched so far: {b} · 2 triples" in reports
+    assert f"Reading import 2 of 2 fetched so far: {b} · 2 triples so far" in reports
     assert sorted(site.requested) == ["/a.ttl", "/b.rdf", "/missing.ttl"]
     imports_dir = upload.parent / "imports"
     assert context.import_files == {a: imports_dir / "1.ttl", b: imports_dir / "3.rdf"}
