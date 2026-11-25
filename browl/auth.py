@@ -343,8 +343,10 @@ async def oidc_callback(request: Request) -> Response:
     limit: ExchangeLimit = request.app.state.exchange_limit
     if "code" in request.query_params and "error" not in request.query_params and not limit.allow():
         logger.warning("Refused a sign-in: over %d a minute", limit.per_minute)
-        message = "Too many sign-ins right now. Try again in a minute."
-        return auth_page(request, "Sign-in failed", message, status.HTTP_429_TOO_MANY_REQUESTS, {"Retry-After": "60"})
+        message = "More people are signing in than browl allows right now. Try again in a minute."
+        return auth_page(
+            request, "Too many sign-ins", message, status.HTTP_429_TOO_MANY_REQUESTS, {"Retry-After": "60"}
+        )
     client: StarletteOAuth2App = request.app.state.oidc
     try:
         token: dict[str, Any] = await client.authorize_access_token(request)

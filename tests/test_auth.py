@@ -325,7 +325,7 @@ def test_token_exchanges_limited(client: TestClient, google: FakeGoogle) -> None
     response = sign_in(client, google, VISITOR)
     assert response.status_code == 429
     assert response.headers["Retry-After"] == "60"
-    assert "Too many sign-ins" in response.text
+    assert "<h1>Too many sign-ins</h1>" in response.text
     assert len(google.token_requests) == 1
     assert client.get(CALLBACK, params={"error": "access_denied"}).status_code == 400  # Google isn't called
 
