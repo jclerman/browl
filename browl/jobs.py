@@ -611,6 +611,7 @@ class JobRunner:
         self._writes: set[asyncio.Task[None]] = set()
         self._unstored: JobState | None = None  # the end of this runner's last job, if it couldn't be stored
         self._progress_write: asyncio.Future[None] | None = None  # the last progress write
+        self._progress_pending: JobState | None = None  # the state the last write stores, until it starts
         self._progress_at = 0.0  # when progress was last recorded
         self._progress: tuple[str, float | None, str | None] | None = None  # reported, not yet recorded
         self._progress_flush: asyncio.TimerHandle | None = None  # when it will be
@@ -846,15 +847,24 @@ class JobRunner:
         self._progress = None
 
     def _write_progress(self, state: JobState) -> asyncio.Future[None]:
-        """Show a state with new progress at once, and store it after any earlier progress write; return the write."""
+        """Show a state with new progress at once, and store it after any earlier progress write; return the write.
+
+        A write still waiting for an earlier one stores this state instead of its own, so writes slower than the
+        reports can't queue up: at most one runs and one waits.
+        """
         self._set(state)
-        write = self._progress_write = asyncio.ensure_future(self._store_progress(self._progress_write, state))
+        write = self._progress_write
+        if self._progress_pending is None or write is None or write.done():
+            write = self._progress_write = asyncio.ensure_future(self._store_progress(write))
+        self._progress_pending = state
         return write
 
-    async def _store_progress(self, previous: asyncio.Future[None] | None, state: JobState) -> None:
-        """Store a state with new progress, once the previous write is done; a failure is logged and skipped."""
+    async def _store_progress(self, previous: asyncio.Future[None] | None) -> None:
+        """Store the latest progress state, once the previous write is done; a failure is logged and skipped."""
         if previous is not None:
             await asyncio.wait({previous})
+        state, self._progress_pending = self._progress_pending, None
+        assert state is not None  # set when this write was made, and taken only by it
         try:
             await asyncio.to_thread(self._store.write, state)
         except Exception:

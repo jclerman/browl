@@ -355,7 +355,9 @@ code reports progress through `JobContext.report` as often as is handy, e.g. per
 keeps the latest, and records and shows it at most every `PROGRESS_S` (2 s, the status's poll), a report that comes
 sooner being recorded once that time has passed, so the last isn't lost. Progress not yet recorded
 when its stage ends is dropped, a change of stage or the job's end waits for a progress write still running, so none
-overwrites it, and a failed progress write is logged and skipped. What each stage reports:
+overwrites it, and a failed progress write is logged and skipped.
+While a progress write runs, only the latest progress waits for it, so slow writes can't queue up. What each stage
+reports:
 
 - **imports** (shown as "Read Ontology", as for most ontologies parsing the upload is all it does): the document being
   read or fetched ("Parsing the uploaded file", "Fetching import 3", "Reading import 2 of 3 fetched so far"), with the

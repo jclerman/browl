@@ -1368,6 +1368,35 @@ async def test_stage_change_waits_for_progress_write(data_dir: Path, monkeypatch
     assert JobStore(data_dir / STATE_DB).read().stage == Stage.READY
 
 
+async def test_progress_writes_dont_queue(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that while a progress write runs, only the latest progress waits to be written, so slow writes can't queue.
+
+    The latest is still recorded.
+    """
+    monkeypatch.setattr(browl.jobs, "PROGRESS_S", 0)
+
+    async def loading(context: JobContext) -> None:
+        for number in range(1, 11):
+            context.report(f"step {number}")
+            await asyncio.sleep(0.02)
+
+    runner = await open_runner(data_dir, {Stage.LOADING: loading})
+    written: list[str] = []
+    write = runner._store.write
+
+    def slow(state: JobState) -> None:
+        if state.detail is not None:
+            threading.Event().wait(0.1)
+            written.append(state.detail)
+        write(state)
+
+    monkeypatch.setattr(runner._store, "write", slow)
+    await run_job(runner)
+    assert written[0] == "step 1"
+    assert written[-1] == "step 10"
+    assert len(written) <= 4  # not one a report
+
+
 async def test_progress_write_fails(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
