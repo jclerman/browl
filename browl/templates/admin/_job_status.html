@@ -6,7 +6,10 @@
 <div class="step-panel" role="group" aria-labelledby="{{ id }}">
   <p class="step-panel-head"><strong id="{{ id }}">{{ activity.label }}</strong>
     {%- if activity.elapsed is not none %} · running for {{ activity.elapsed }}{% endif %}</p>
-  {% if activity.detail is not none %}<p class="step-detail">{{ activity.detail }}</p>{% endif %}
+  {# Each " · " part is kept whole, so a long line wraps between parts. #}
+  {% if activity.detail is not none %}<p class="step-detail">
+    {%- for part in activity.detail.split(" · ") %}{% if not loop.first %} · {% endif %}<span>{{ part }}</span>{% endfor -%}
+  </p>{% endif %}
   {% if activity.percent is not none %}
   <progress class="step-progress" max="100" value="{{ activity.percent }}" aria-labelledby="{{ id }}">{{ activity.percent | round | int }}%</progress>
   {% endif %}

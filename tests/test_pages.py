@@ -354,7 +354,7 @@ def test_status_running_progress(client: TestClient, app: FastAPI, monkeypatch: 
     assert (
         '<div class="step-panel" role="group" aria-labelledby="step-panel-current">'
         ' <p class="step-panel-head"><strong id="step-panel-current">Storing Triples</strong> · running for 0 s</p>'
-        ' <p class="step-detail">Added 640,000 of 1,167,135 triples (55%)</p>'
+        ' <p class="step-detail"><span>Added 640,000 of 1,167,135 triples (55%)</span></p>'
         ' <progress class="step-progress" max="100" value="54.8" aria-labelledby="step-panel-current">55%</progress>'
     ) in html
     stored = JobStore(app.state.settings.data_dir / STATE_DB).read()
@@ -396,7 +396,7 @@ def test_status_background_build(client: TestClient, app: FastAPI) -> None:
     assert f'hx-get="{STATUS}?background" hx-trigger="every 2s" hx-swap="outerHTML"' in html
     assert '<h2 class="background-title">After publishing</h2>' in html
     assert '<strong id="background-1">Building the usage table</strong> · running for 0 s</p>' in html
-    assert '<p class="step-detail">Step 2 of 3: Scanned 50 of 200 triples (25%)</p>' in html
+    assert '<p class="step-detail"><span>Step 2 of 3: Scanned 50 of 200 triples (25%)</span></p>' in html
     assert 'max="100" value="25.0"' in html
     assert "HX-Redirect" in client.get(STATUS, headers=HTMX).headers  # a poll from when the job ran
     app.state.usage_tables = FakeTables()

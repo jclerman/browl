@@ -1,12 +1,15 @@
 """Tests for how the admin status shows a load job's stages."""
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
+from browl.admin import status_context
 from browl.job_view import Activity, StepState, job_steps, running_activity, usage_table_activity
 from browl.jobs import JobState, Stage
 from browl.jobtypes import Reasoner
+from browl.pages import templates
 from browl.precache.usage_table import Progress
 
 NOW = datetime.now(UTC)
@@ -68,3 +71,12 @@ def test_running_activity() -> None:
 def test_usage_table_activity(progress: Progress, detail: str, percent: float | None) -> None:
     """Check the usage table build's activity in each of its phases."""
     assert usage_table_activity(progress, now=3.0) == Activity("Building the usage table", "3 s", detail, percent)
+
+
+def test_detail_parts_kept_whole() -> None:
+    """Check that the panel's detail line puts each " · " part in a span of its own, so it wraps between parts."""
+    state = JobState(1, Stage.PRE_CACHING, NOW, stage_started_at=NOW, detail="Hook 2 of 7, names · 28 s · indexing")
+    url_for = lambda name: SimpleNamespace(path="/status")  # noqa: E731
+    page = templates.get_template("admin/_job_status.html").render(**status_context(state), url_for=url_for)
+    expected = '<p class="step-detail"><span>Hook 2 of 7, names</span> · <span>28 s</span> · <span>indexing</span></p>'
+    assert expected in page
