@@ -212,6 +212,9 @@ containers' own file systems hold only what's lost harmlessly (last row).
 | --- | --- | --- | --- | --- |
 | Job state: generation numbers, the latest job's stage, reason, imports, triple counts and the ontology file's prefixes | `DATA_DIR/state.sqlite3` (`/data`) | `data` volume | app | Authoritative. Lost, the site shows no ontology until an admin uploads again; Fuseki's store is then orphaned, and replaced by the next load (2.4) |
 | Job lock (`flock`) | `DATA_DIR/job.lock` | `data` volume | app | No; recreated |
+| Admins added in the UI (`admin` table, [2.11](#211-authentication-and-admins)) | `DATA_DIR/state.sqlite3` | `data` volume | app | Authoritative. Lost, only the seed admins remain, and must add the others again (P-23) |
+| When each account last signed out (`sign_out` table, [2.11](#211-authentication-and-admins)) | `DATA_DIR/state.sqlite3` | `data` volume | app | Authoritative. Lost, sessions signed out in the last 12 hours, on other devices or copied, work again until they expire |
+| The key that signs session cookies ([2.11](#211-authentication-and-admins)) | `DATA_DIR/session.key` | `data` volume | app | No: made again at the next start. Lost, everyone signed in is signed out; emptied or cut short, startup fails until it's deleted |
 | Derived database: whole-ontology data and the ontology's `meta` row ([2.5](#25-derived-data-pre-caching)) | `DATA_DIR/derived/{generation}.sqlite3` | `data` volume | app | No: rebuilt from Fuseki's store. Lost, the next start rebuilds it, with the site on "loading" meanwhile (2.4) |
 | Usage tables: every usage of every entity, in the Usage tab's order ([2.5](#25-derived-data-pre-caching)) | `DATA_DIR/usages/{generation}.sqlite3` | `data` volume | app | No: rebuilt from Fuseki's store and the derived database. Lost, the next start builds it again in the background, with the largest entities' Usage tabs on "Preparing…" meanwhile |
 | The latest job's files: the upload, fetched imports, `catalog.xml`, converted and reasoned ontology | `DATA_DIR/uploads/{generation}/` | `jobs` volume | app, sandbox (both read-write) | No: nothing reads them once the job ends, and each upload deletes the previous job's. Lost, nothing changes |
@@ -1577,7 +1580,7 @@ Every page has the same frame (U-27, U-28, U-29):
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────┐
-│ <ontology name>   [ Search… ]   Classes  Object props        Sign in │  navigation bar
+│ <ontology name>   [ Search… ]   Classes  Object props  Admin sign-in │  navigation bar
 │                    Data props  Annotation props    hosted with browl │
 ├──────────────────────────────────────────────────────────────────────┤
 │  Class  Heart                                                        │  page header
@@ -1598,11 +1601,14 @@ Every page has the same frame (U-27, U-28, U-29):
 - The full search page with type and property filters (U-10) is reached from the search box, by "All results…" or
   Enter (below, Search).
 - An admin link appears only for signed-in admins: the base template shows it when `request.state.is_admin` is true,
-  which P-22 sets. Sign-in itself is a small link at the bar's end, to the admin upload page, whose sign-in P-22 adds.
+  which `browl.auth.AdminMark` sets (2.11). At the bar's end is a small "Admin sign-in" link, which leads to the upload
+  page once signed in; a signed-in user gets "Sign out" in its place. With `AUTH_DISABLED`, everyone is an admin, and
+  the bar has neither.
   Pages have no footer: an entity page, filling the window, has no room for one.
-- Under the sign-in link, browl credits itself: "hosted with" and the wordmark (`static/browl-wordmark.svg`), linking to
-  the project's repository (`PROJECT_URL`) until browl has a documentation site. It is smaller and muted, so the
-  ontology's name leads the bar. The logo (`static/browl-logo.svg`) is every page's favicon.
+- Under the sign-in or sign-out link, browl credits itself: "hosted with" and the wordmark
+  (`static/browl-wordmark.svg`), linking to the project's repository (`PROJECT_URL`) until browl has a documentation
+  site. It is smaller and muted, so the ontology's name leads the bar. The logo (`static/browl-logo.svg`) is every
+  page's favicon.
 - On narrow screens, the tree links collapse into a menu: a `<details>` element, so it opens without JS.
 - On a tree page, that tree's link is marked (`aria-current="page"`, bold and underlined), and the narrow screens'
   menu button names it ("Browse: Classes"), so the page is clear when scrolled.
@@ -1821,9 +1827,10 @@ the page shows, not the query's `tab`, which some pages ignore (2.9), with the U
 is whether the response is a tab panel alone (`panel=1`, 2.9). A Usage tab showing "Preparing…" (its count over T
 before the usage table is ready, P-27c) isn't cached, as it changes once the table is ready.
 _(Q13)_ Including the generation number in the key means a reload invalidates entries in every worker without
-coordination. Pages differ for admins (the navigation bar's admin link, 2.9), so the key must also include whether
-the user is an admin, or the cache must hold pages without the frame's per-user part and add it after the lookup
-(from P-14a's review). If search pages and fragments (2.9, Search) are cached, key them on the query as
+coordination. Pages differ by user: an admin's have the navigation bar's admin link, and a signed-in user's "Sign out"
+in place of "Admin sign-in" (2.9). So the cache must hold pages without the frame's per-user part and add it after the
+lookup, or else key on whether the user is signed in and whether they're an admin (from P-14a's and P-22's reviews). If
+search pages and fragments (2.9, Search) are cached, key them on the query as
 `search_page._params` gives it, plus `suggest`, not on the raw URL: their `type` and `property` filters are repeated
 parameters, which it gives each once, in a fixed order, so reordered URLs share an entry (from P-20's review). The
 cache wraps a plain function that stores rendered strings. `functools.lru_cache` is not
@@ -1837,6 +1844,47 @@ applied to `async` handlers, because it would store unrun coroutine objects rath
   a persistent SQLite file. Seed admins can't be removed in the UI. Whole-domain rules are not supported. _(Q16a)_
 - `AUTH_DISABLED=true` turns authentication off for development. It logs a prominent warning at startup and is never the
   default. _(Q16)_
+
+How it works (P-22, `browl.auth`):
+
+- **Sign-in** (`admin/sign-in?next=…`) redirects to Google with the scope `openid email` and `prompt=select_account`, so
+  someone signed in to Google with the wrong account can pick another. Google returns to `admin/oidc-callback`, whose
+  URL is `BASE_URL` joined to the route's path, not built from the request, since a proxy may change the request's
+  scheme or host; it's the redirect URI each operator registers with their OAuth client
+  ([`AUTHENTICATION.md`](AUTHENTICATION.md)). Authlib checks the state and the ID token's signature, issuer, audience
+  and nonce. The token's email must be verified; it's lowercased, and the browser returns to `next`, which must be a
+  path of this app (no open redirect), else to the upload page. Authlib keeps only the latest sign-in's state, so an
+  admin already signed in who reaches the callback again (a second sign-in tab, or Back) goes straight to `next` rather
+  than to "Sign-in failed". The routes are in `browl.auth`, beside the admin routes' guard.
+- **Token exchanges are capped**: anyone can send the browser's half of a sign-in, and each callback with a code makes
+  browl call Google's token endpoint. So the callback makes at most `TOKEN_EXCHANGES_PER_MINUTE` (30) in any minute,
+  across the app, counted in memory (one worker); past that it answers 429 with `Retry-After`, without calling Google.
+  There's no per-client count, so a flood also holds back real sign-ins, for a minute at most.
+- **The session** is Starlette's signed cookie, `browl_session`: HttpOnly, `SameSite=Lax` (so it comes back with
+  Google's redirect), `Secure` when `BASE_URL` is `https`, for 12 hours. It holds the email address and when the user
+  signed in, and while signing in, the return path and Authlib's state. Its key is made on first start, synced to disk,
+  and kept in `DATA_DIR/session.key` (mode 600), so sign-ins survive restarts; deleting it signs everyone out at the
+  next start. A stored key shorter than the 43 characters browl makes (e.g. a file emptied by `touch`, or a truncated
+  restore) fails startup with an error saying to delete it: anyone can sign a session with an empty key, and failing,
+  rather than making a new key, brings the damaged file to the operator's notice, when other files may be damaged too.
+- **Each request** is marked by `AdminMark`: `request.state.user` is the signed-in email, and `request.state.is_admin`
+  whether it's an admin's, from the seed list and the `admin` table. Every request with a session reads the database
+  once (`browl.admins.AdminStore`), seed admins' too: the `admin` table and the account's sign-out time (below), in one
+  query, so removing an admin (P-23) or signing out elsewhere takes effect at once. Requests with no session cost no
+  read. The database is opened read-only, so a missing file isn't created; if it can't be read, the error is logged and
+  the user counts as signed in but not an admin, so pages are still served.
+- **Admin routes** depend on `require_admin`. Someone not signed in is redirected (303) to sign in and back, on a GET;
+  an htmx request, such as the status poll after the session expired, gets 401 with `HX-Refresh`, so the page reloads
+  and its GET is redirected; any other request gets 401. A signed-in user who isn't an admin gets 403, and an htmx
+  request 403 with `HX-Refresh`, so the status poll of an admin removed meanwhile reloads to the refusal rather than
+  polling on. The admin routes' pages and API docs are all covered; sign-in, the callback and sign-out are not.
+- **Sign-out** (`admin/sign-out`) is a POST, refused from another site's page like the upload (`Sec-Fetch-Site`), so
+  another site can't sign you out; it clears the session and goes to the ontology's home page, or the search page if
+  the ontology has none (the site's root has a page only if an entity's IRI maps there). It also stores the time for
+  the account in the `sign_out` table, beside `admin`, so it covers every account, admin or not. `AdminMark` then
+  clears any session for that account that started at or before it: signing out ends the account's sessions on every
+  device, and a copied cookie stops working. If the time can't be stored, the error is logged, and only this browser
+  is signed out. The table holds a row for each account that has ever signed out.
 
 ### 2.12 Configuration
 
@@ -1888,7 +1936,8 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | `hash?path=…&fragment=…` | The page for a hash URL's path and fragment, for the hash-IRI script ([2.3](#23-iri--url-mapping), Lookup); marked `noindex`, as its pages are at their hash URLs |
 | `usage-count?iri=…` | An entity's Usage tab label with its count, "Usage (128)", which its page fetches once it renders ([2.8](#28-entity-pages)); marked `noindex`; a 404 for an IRI with no entity (P-27b) |
 | `static/…` | CSS, htmx, hash-IRI script, page-tabs, tree and search-box scripts |
-| `admin/…` | Upload, status, admin list, sign-in/out |
+| `admin/…` | Upload, status, admin list, sign-in and sign-out |
+| `admin/sign-in?next=…`, `admin/oidc-callback`, `admin/sign-out` | Sign-in with Google, Google's redirect back, and sign-out (a POST): the admin routes anyone may use ([2.11](#211-authentication-and-admins), P-22) |
 | `admin/upload` | The upload form (A-2, A-3) and the load job's status. The form is parsed as it streams in, the file written straight to the jobs volume, never held whole in memory or spooled to a temporary file; its reasoner field must come before its file. The job is claimed only once the file's name has been checked and its first 8 KiB found to look like the syntax the name says, so a malformed request or a mislabelled, OWL/XML or compressed file leaves the served ontology alone. A post a browser sent from another site's page (by `Sec-Fetch-Site`) is refused, against CSRF (P-6). While a job runs, the form is disabled, and a post (e.g. from a page loaded earlier) is refused with 409 |
 | `admin/status` | The load job's stage, start time, uploaded file (name, syntax, size), and failed stage and reason (A-5, A-6): an HTML fragment for htmx requests (`HX-Request`), which polls itself while a job runs (a poll that finds the job ended gets `HX-Redirect` to a fresh GET of the page it's on, the upload page if `HX-Current-URL` has its path, else the status page), else a page, which polls the same way, or refreshes itself while a job runs if JS is off (P-5) |
 | `admin/docs`, `admin/openapi.json` | FastAPI's API docs (Swagger UI only, no ReDoc), as admin routes, so admin sign-in covers them; moved from FastAPI's default root paths, where they would shadow ontology entities. Swagger UI loads its assets from a CDN at an exact pinned version: an accepted exception to the no-CDN rule ([2.2](#22-libraries-and-components)), for admin pages only (P-5) |
@@ -1937,7 +1986,7 @@ To settle when it's built:
 | A Fuseki response that fails partway returns a truncated result with HTTP 200 | Seen in P-3 and S-6: once Fuseki has sent the status, it appends the error as plain text and ends the response normally. It sends it as soon as a SPARQL JSON or TSV result is cut short (the writer flushes what it has), and once any other response outgrows the 2 MB output buffer (2.4). So browl treats any status other than 2xx as a failed query, and never discards the HTTP client's error for a body that ends early (Fuseki exiting or restarting mid-response drops the connection before the last chunk). It parses every Fuseki response strictly, as SPARQL JSON results or N-Triples, and parses each TSV cell as an RDF term, so the appended error text can't pass as a one-column row. N-Triples results may hold only triples, since Jena writes no comments or blank lines and the appended text can start with `#`, which N-Triples reads as a comment (P-4); a parse error is a failed query, never a short result. Every bulk query (P-9) goes through `FusekiClient.bulk_select`, which also catches a result that breaks off cleanly at a row boundary, or an error with no text appended: it runs the query as `{ { query } } UNION { BIND(true AS ?browl_end) }`, and fails a result whose last row isn't that end marker, or that binds `browl_end` on any other row; bulk queries mustn't use the variable. ARQ evaluates a `UNION`'s branches in order, streaming the first's rows before the second's, so the marker comes last: on Fuseki 6.2.0, in memory and on TDB2, after a result of over 20,000 rows, and after ordered, distinct and grouped ones. It costs nothing, unlike a second query that counts the rows, which would double each bulk query's time. The loading stage already checks that Fuseki serves as many triples as the store holds (P-8). |
 | Fuseki pauses for full garbage collections under page load | Resolved by S-6: the `System.gc()` calls P-3 saw came from Fuseki 6.2.0 allocating an unpooled 5 MB direct output buffer per response (Jena GH-4084). Fuseki's `jetty.xml` pools a 2 MB buffer instead, which removed them; pages went from 302 to 528 a second at 1 client, and from 573 to 769 at 16 (2.4). |
 | JPype quirks: thread safety of concurrent OWLAPI calls; Python–Java call overhead | Resolved by S-1: concurrent calls were safe but gave no extra throughput, so OWLAPI calls run on one thread (2.1). Call overhead is small ([S-1 findings](../research/S-1/README.md)). P-4 found three more, each handled: the JVM must start on the main thread, its signal handlers bypassed Uvicorn's graceful shutdown (`-Xrs`), and the OWLAPI fetched a fragment's `owl:imports` from their IRIs, web or `file:`, so the bridge refuses every document load but the fragment's own (2.1). |
-| An upload's `owl:imports` make ROBOT read local files (`file:`) or send requests from the app container (`http:`), and its errors can quote what it read | Found in P-7's review; narrowed by P-8: browl lists every import, fetches only `http` and `https` from public addresses, and gives ROBOT a catalog covering every import (2.4). Tested with a `file:` import and one at a local address. P-8's review showed that a crafted file can get an import past the listing; P-30 runs ROBOT and the OFN lister in a sandbox with no network and nothing secret, so such an import fails the job (2.4, [load flow](LOAD-FLOW.md)), checked in CI. Not deployed before P-22 protects the upload. |
+| An upload's `owl:imports` make ROBOT read local files (`file:`) or send requests from the app container (`http:`), and its errors can quote what it read | Found in P-7's review; narrowed by P-8: browl lists every import, fetches only `http` and `https` from public addresses, and gives ROBOT a catalog covering every import (2.4). Tested with a `file:` import and one at a local address. P-8's review showed that a crafted file can get an import past the listing; P-30 runs ROBOT and the OFN lister in a sandbox with no network and nothing secret, so such an import fails the job (2.4, [load flow](LOAD-FLOW.md)), checked in CI. P-22 protects the upload. |
 | Code run by a tool in the sandbox (through a JVM or OWLAPI flaw) acts as the runner's user | Accepted residual risk of P-30, beyond its threat (an import browl didn't list): the tools run as the runner's uid, so such code could replace the socket, kill the runner, or leave its process group, and forge later runs' output and status. It still has no network, none of the app's settings or volumes but the jobs volume, and the app loads only regular files on that volume. Running the tools under a second uid would close it. |
 | Memory limit can't be reported reliably | Resolved by S-2: with `-XX:+ExitOnOutOfMemoryError`, a heap breach in any thread exits with status 3 and a fixed message; each other failure kind has its own ROBOT log line (2.4). |
 | Descendant counts too slow or memory-hungry at millions of classes | Resolved by S-3 for trees: roaring bitmaps, 4.2 s for NCBITaxon ([S-3 findings](../research/S-3/README.md)). |

@@ -30,6 +30,9 @@ python-multipart = ">=0.0.34,<0.1"
 pyroaring = "^1.2.0"
 numpy = "^2.5.5"
 scipy = "^1.18.1"
+authlib = "^1.9.10"
+itsdangerous = "^2.2.0"
+joserfc = "^1.8.0"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^2.4.1"
@@ -41,6 +44,7 @@ pytest-sugar = "^1.1.1"
 pytest-xdist = "^3.8.0"
 rdflib = "^7.6.0"
 scipy-stubs = "^1.18.1.1"
+types-authlib = "^1.9.10.20261123"
 
 [tool.pytest]
 # An xfail test that unexpectedly passes is a failure, not a silent pass.

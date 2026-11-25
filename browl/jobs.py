@@ -26,7 +26,7 @@ from browl.settings import Settings
 logger = logging.getLogger(__name__)
 
 STATE_DB = "state.sqlite3"
-"""The persistent database's file name in `DATA_DIR`: job state, and later admins (§2.11)."""
+"""The persistent database's file name in `DATA_DIR`: job state, the admins, and sign-outs (§2.11)."""
 
 JOB_LOCK = "job.lock"
 """The job lock's file name in `DATA_DIR` (`JobLock`)."""
@@ -78,6 +78,20 @@ MIGRATIONS: list[str] = [
     # Version 4: the prefixes the ontology file declares, as a JSON object, for CURIEs (P-11).
     """
     ALTER TABLE job ADD COLUMN prefixes TEXT NOT NULL DEFAULT '{}';
+    """,
+    # Version 5: the admins added in the UI (§2.11; P-22 creates the table, P-23 manages it), beside the seed list.
+    """
+    CREATE TABLE admin (
+        email TEXT PRIMARY KEY CHECK (email = lower(email)),
+        added_at TEXT NOT NULL
+    );
+    """,
+    # Version 6: when each account last signed out, which ends its sessions on every device (§2.11).
+    """
+    CREATE TABLE sign_out (
+        email TEXT PRIMARY KEY CHECK (email = lower(email)),
+        signed_out_at TEXT NOT NULL
+    );
     """,
 ]
 """The persistent database's schema migrations: entry n migrates from version n to n + 1."""

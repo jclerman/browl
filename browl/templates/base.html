@@ -61,7 +61,12 @@
       {# In the bar, not a footer, so it stays in view on an entity page, which fills the window (DESIGN.md §2.9). #}
       {# Under it, browl's credit, quieter than the ontology's name. #}
       <div class="site-end">
-        <a class="sign-in" href="{{ frame.admin }}">Sign in</a>
+        {# Sign out is a POST, so another site can't sign you out. With AUTH_DISABLED, neither link. #}
+        {% if frame.user %}
+        <form class="sign-out" method="post" action="{{ frame.sign_out }}"><button type="submit">Sign out</button></form>
+        {% elif not frame.is_admin %}
+        <a class="sign-in" href="{{ frame.sign_in }}">Admin sign-in</a>
+        {% endif %}
         <a class="hosted-with" href="{{ frame.project }}">hosted with
           <img src="{{ url_for('static', path='browl-wordmark.svg').path }}" alt="browl" width="43" height="18"></a>
       </div>

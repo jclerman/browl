@@ -10,13 +10,14 @@ import logging
 import re
 import sqlite3
 import urllib.parse
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
 from typing import NamedTuple
 
 import jinja2
+from fastapi import HTTPException, status
 from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
 from starlette.responses import Response
@@ -185,6 +186,30 @@ def href(request: Request, path: str, fragment: str | None = None) -> str:
     return join_link(link_root(request.scope), path, fragment)
 
 
+def route_href(request: Request, name: str, query: Mapping[str, str] | None = None) -> str:
+    """Return a root-relative link to a named route, with query parameters if given."""
+    link = href(request, request.app.url_path_for(name))
+    return f"{link}?{urllib.parse.urlencode(query)}" if query else link
+
+
+def is_htmx(request: Request) -> bool:
+    """Return whether htmx sent a request (`HX-Request`), which then gets a fragment or an htmx header, not a page."""
+    return request.headers.get("HX-Request") == "true"
+
+
+def same_origin(request: Request) -> None:
+    """Refuse a request a browser sent from another site's page, e.g. one submitting the upload form (CSRF).
+
+    Browsers say where a request came from in `Sec-Fetch-Site`; a request without it, e.g. from curl, passes. It's
+    checked before the body is read, so it suits the streaming upload.
+
+    Raises:
+        HTTPException: 403, the request came from another site.
+    """
+    if request.headers.get("Sec-Fetch-Site", "none") not in {"same-origin", "none"}:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "requests from other sites are refused")
+
+
 def single_params(request: Request, names: Iterable[str]) -> dict[str, str | None] | None:
     """Return the values of parameters that may be given once, each None if it's absent; None if one is repeated."""
     single: dict[str, str | None] = {}
@@ -218,7 +243,8 @@ def frame_context(request: Request) -> dict[str, object]:
 
     Page titles end with the ontology's title, isolated, else `SITE_NAME` (`site_name`).
 
-    The ontology's link comes from `PageFrame`. P-22 marks requests from admins by setting `request.state.is_admin`.
+    The ontology's link comes from `PageFrame`; who's signed in, and whether they're an admin, from `browl.auth`
+    (`request.state.user` and `request.state.is_admin`).
     A tree page sets `request.state.current_tree` to its slug, so the bar marks its link.
     """
     reserved = f"/{request.app.state.settings.reserved_prefix}"
@@ -233,8 +259,11 @@ def frame_context(request: Request) -> dict[str, object]:
             "search": href(request, f"{reserved}/{SEARCH_PATH}"),
             "suggest": href(request, f"{reserved}/{SEARCH_PATH}?{SUGGEST_PARAM}=1"),
             "max_query_chars": MAX_QUERY_CHARS,
-            "admin": href(request, f"{reserved}/admin/upload"),
+            "admin": route_href(request, "upload_page"),
             "is_admin": getattr(request.state, "is_admin", False) is True,
+            "user": getattr(request.state, "user", None),
+            "sign_in": route_href(request, "sign_in"),
+            "sign_out": route_href(request, "sign_out"),
             "title_end": isolate(link.title) if link.title is not None else SITE_NAME,
             "site_name": SITE_NAME,
             "project": PROJECT_URL,

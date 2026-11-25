@@ -23,6 +23,7 @@ import browl.overview
 import browl.pages
 from browl import owl
 from browl.annotations import AnnotationValue, IRIValue, LiteralValue
+from browl.auth import SESSION_COOKIE
 from browl.derived import EntityType
 from browl.jobs import JobContext, Stage, StageFunction
 from browl.jobtypes import StageError
@@ -31,7 +32,7 @@ from browl.rdf import IRI, RDFS, XSD
 from browl.rdf import RDF as RDF_NS
 from browl.usage_tab import PageNotFoundError, UsageGroup, UsageTab
 from tests.conftest import DATA
-from tests.helpers import WAIT_S, LiveServer, derived_stage, iso, make_app, no_axioms
+from tests.helpers import AUTH_ON, WAIT_S, LiveServer, derived_stage, iso, make_app, no_axioms, session_cookie
 from tests.test_search_page import SYNONYM, search_stage
 from tests.test_trees import tree_stage
 
@@ -90,9 +91,10 @@ def start_endless_job(server: LiveServer) -> None:
 def server(live_server: Callable[[FastAPI], LiveServer]) -> LiveServer:
     """Return a live server for an app whose entity URLs are all proxied, at /example.org/…, with the entities loaded.
 
-    That's the manual setup `tests/data/routing.ttl` describes.
+    That's the manual setup `tests/data/routing.ttl` describes. Authentication is on, so the bar shows "Admin sign-in",
+    as to a visitor.
     """
-    server = live_server(make_app(BASE_URL="http://localhost:8000/"))
+    server = live_server(make_app(BASE_URL="http://localhost:8000/", **AUTH_ON))
     run_job(server)
     return server
 
@@ -501,12 +503,33 @@ def test_navigation_bar_wide(page: Page, server: LiveServer) -> None:
     for label in TREES:
         expect(nav.get_by_role("link", name=label)).to_be_visible()
     expect(nav.locator("summary")).to_be_hidden()
-    sign_in = box(nav.get_by_role("link", name="Sign in"))
+    sign_in = box(nav.get_by_role("link", name="Admin sign-in"))
     credit = box(nav.get_by_role("link", name="hosted with browl"))
     assert credit["y"] >= sign_in["y"] + sign_in["height"]  # under it, both at the bar's end
     assert abs(credit["x"] + credit["width"] - sign_in["x"] - sign_in["width"]) < 2
     nav.get_by_role("link", name=TITLE).click()
     expect(page.locator("main h1")).to_have_text(TITLE)
+
+
+@pytest.mark.parametrize("size", [WIDE, NARROW], ids=["wide", "narrow"])
+def test_signed_in_bar(page: Page, server: LiveServer, size: dict[str, int]) -> None:
+    """Check that, signed in, "Sign out" sits over the credit at the bar's end, and signs out (review S11)."""
+    cookie = session_cookie(server.app.state.settings.data_dir, AUTH_ON["SEED_ADMINS"][0])
+    page.context.add_cookies([{"name": SESSION_COOKIE, "value": cookie, "url": server.url}])
+    page.set_viewport_size(size)
+    page.goto(f"{server.url}/example.org/thing")
+    nav = page.get_by_role("navigation", name="Site")
+    expect(nav.get_by_role("link", name="Admin sign-in")).to_have_count(0)
+    expect(nav.locator(".admin-link")).to_have_count(1)  # hidden in the closed menu on a narrow screen
+    sign_out = nav.get_by_role("button", name="Sign out")
+    button, credit = box(sign_out), box(nav.get_by_role("link", name="hosted with browl"))
+    assert credit["y"] >= button["y"] + button["height"]  # under it, both at the bar's end
+    assert abs(credit["x"] + credit["width"] - button["x"] - button["width"]) < 2
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    sign_out.click()
+    expect(nav.get_by_role("link", name="Admin sign-in")).to_be_visible()
+    expect(page.locator("main h1")).to_have_text(TITLE)  # the ontology's home page, not "Not found"
+    expect(nav.locator(".admin-link")).to_have_count(0)
 
 
 @NO_JS
@@ -567,14 +590,14 @@ def test_hash_script_refuses_non_html(page: Page, server: LiveServer, content_ty
 
 
 def test_narrow_bar_one_row(page: Page, server: LiveServer) -> None:
-    """Check that, on a narrow screen, the name, Sign in (over the credit) and the menu button share a row.
+    """Check that, on a narrow screen, the name, Admin sign-in (over the credit) and the menu button share a row.
 
     The menu opens below them.
     """
     page.set_viewport_size(NARROW)
     page.goto(f"{server.url}/example.org/thing")
     bar, name, button = page.locator(".site-bar"), page.locator(".site-name"), page.locator(".site-menu summary")
-    sign_in = page.get_by_role("link", name="Sign in")
+    sign_in = page.get_by_role("link", name="Admin sign-in")
     expect(sign_in).to_be_visible()
     height = box(bar)["height"]
     middle = box(name)["y"] + box(name)["height"] / 2
@@ -1467,7 +1490,7 @@ def test_sign_in_in_view(page: Page, varied: LiveServer) -> None:
     """Check that the sign-in link is in the navigation bar, in view on an entity page, which has no footer."""
     page.set_viewport_size(WIDE)
     page.goto(f"{varied.url}/example.org/{MANY}")
-    expect(page.get_by_role("navigation", name="Site").get_by_role("link", name="Sign in")).to_be_in_viewport()
+    expect(page.get_by_role("navigation", name="Site").get_by_role("link", name="Admin sign-in")).to_be_in_viewport()
     expect(page.locator("footer")).to_have_count(0)
 
 

@@ -11,7 +11,6 @@ from time import monotonic
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from starlette.types import ASGIApp, Receive, Scope, Send
 
 import browl.pages
 from browl.derived import EntityType, NotCurrentError
@@ -24,7 +23,7 @@ from browl.pages import (
     STATIC_DIR,
     TREES,
 )
-from tests.helpers import derived_stage, make_app
+from tests.helpers import AUTH_ON, derived_stage, make_app
 
 pytestmark = pytest.mark.usefixtures("data_dir")
 
@@ -42,8 +41,9 @@ TREE_LINKS = [
     ("/_browl/tree/annotation-properties", "Annotation properties"),
 ]
 ADMIN_LINK = ("/_browl/admin/upload", "Admin")
+"""The menu's last link for an admin; the tests' app has authentication off, so everyone is one."""
 ADVANCED = ("/_browl/search", "Advanced search")
-SIGN_IN = ("/_browl/admin/upload", "Sign in")
+SIGN_IN = ("/_browl/admin/sign-in", "Admin sign-in")
 CREDIT = (PROJECT_URL, "hosted with")
 
 
@@ -144,12 +144,12 @@ def client(app: FastAPI) -> Iterator[TestClient]:
     ],
 )
 def test_frame_on_every_page(client: TestClient, path: str) -> None:
-    """Check that every kind of page has the navigation bar and its links, sign-in last, and no in-page links or footer.
+    """Check that every kind of page has the navigation bar and its links, admin last, and no in-page links or footer.
 
     An in-page link (`#…`) would be looked up as an entity by the hash-IRI script on a path hash entities share.
     """
     page = frame(client, path)
-    assert page.nav == [("/onto", "The <Onto>"), ADVANCED, *TREE_LINKS, SIGN_IN, CREDIT]
+    assert page.nav == [("/onto", "The <Onto>"), ADVANCED, *TREE_LINKS, ADMIN_LINK, CREDIT]
     assert not page.footer
     assert not [link for link, _ in page.nav if link.startswith("#")]
 
@@ -171,31 +171,22 @@ def test_frame_on_unavailable_pages(app: FastAPI, loaded: bool) -> None:
         assert ("Retry-After" in response.headers) is loaded
         assert response.headers["Content-Security-Policy"] == CONTENT_SECURITY_POLICY
         page = Frame(response.text)
-        assert page.nav[-len(TREE_LINKS) - 3 :] == [ADVANCED, *TREE_LINKS, SIGN_IN, CREDIT]
+        assert page.nav[-len(TREE_LINKS) - 3 :] == [ADVANCED, *TREE_LINKS, ADMIN_LINK, CREDIT]
         assert ("The <Onto>" in page.nav_text) is loaded
 
 
-def admin_marker(value: object) -> type:
-    """Return a middleware class that marks every request with `request.state.is_admin = value`, as P-22 will."""
+@pytest.mark.parametrize("auth_disabled", [True, False])
+def test_admin_link(auth_disabled: bool) -> None:
+    """Check that with `AUTH_DISABLED` the bar has the admin link and no sign-in; else, signed out, the reverse.
 
-    class Marker:
-        def __init__(self, app: ASGIApp) -> None:
-            self.app = app
-
-        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-            scope.setdefault("state", {})["is_admin"] = value
-            await self.app(scope, receive, send)
-
-    return Marker
-
-
-@pytest.mark.parametrize(("value", "shown"), [(True, True), (False, False), (1, False), ("yes", False)])
-def test_admin_link(app: FastAPI, value: object, shown: bool) -> None:
-    """Check that the navigation bar has the admin link only when the request is marked with `is_admin` True."""
-    app.add_middleware(admin_marker(value))
+    `tests/test_auth.py` checks the bar of a signed-in user.
+    """
+    app = make_app(**({} if auth_disabled else AUTH_ON))
     with TestClient(app) as client:
         run(client, app)
-        assert (ADMIN_LINK in frame(client).nav) is shown
+        nav = frame(client).nav
+        assert (ADMIN_LINK in nav) is auth_disabled
+        assert (SIGN_IN in nav) is not auth_disabled
 
 
 def test_no_ontology_iri(app: FastAPI) -> None:
@@ -203,9 +194,9 @@ def test_no_ontology_iri(app: FastAPI) -> None:
     with TestClient(app) as client:
         run(client, app, ontology=None, title=None)
         page = frame(client)
-        assert page.nav == [ADVANCED, *TREE_LINKS, SIGN_IN, CREDIT]
+        assert page.nav == [ADVANCED, *TREE_LINKS, ADMIN_LINK, CREDIT]
         labels = " ".join(tree.label for tree in TREES).split()
-        words = ["Search", "the", "ontology", "Advanced", "search", "Browse", *labels, "Sign", "in", "hosted", "with"]
+        words = ["Search", "the", "ontology", "Advanced", "search", "Browse", *labels, "Admin", "hosted", "with"]
         assert page.nav_text.split() == words
 
 
@@ -215,7 +206,7 @@ def test_ontology_without_page(client: TestClient, monkeypatch: pytest.MonkeyPat
     client.app.state.derived.close()  # type: ignore[attr-defined]
     run(client, client.app, title="Unlinked")  # type: ignore[arg-type]
     page = frame(client)
-    assert page.nav == [ADVANCED, *TREE_LINKS, SIGN_IN, CREDIT]
+    assert page.nav == [ADVANCED, *TREE_LINKS, ADMIN_LINK, CREDIT]
     assert "Unlinked" in page.nav_text
     assert title(client).endswith(" · \u2068Unlinked\u2069")
 
@@ -252,7 +243,7 @@ def test_under_root_path(app: FastAPI) -> None:
         page = frame(client, "/site/example.org/x")
         assert page.nav == [
             ("/site/onto", "The <Onto>"),
-            *[(f"/site{link}", text) for link, text in [ADVANCED, *TREE_LINKS, SIGN_IN]],
+            *[(f"/site{link}", text) for link, text in [ADVANCED, *TREE_LINKS, ADMIN_LINK]],
             CREDIT,
         ]
 
@@ -282,7 +273,7 @@ def test_unreadable_name(
         for path in ["/_browl/admin/upload", "/_browl/admin/status"]:
             response = client.get(path)
             assert response.status_code == 200
-            assert Frame(response.text).nav == [ADVANCED, *TREE_LINKS, SIGN_IN, CREDIT]
+            assert Frame(response.text).nav == [ADVANCED, *TREE_LINKS, ADMIN_LINK, CREDIT]
             assert " · browl</title>" in response.text
     assert len(calls) == 1  # the failure is kept until RETRY_AFTER_S has passed
     assert bool(caplog.records) is not isinstance(error, NotCurrentError)

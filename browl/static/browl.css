@@ -151,7 +151,7 @@ code {
   list-style: none;
 }
 
-/* At the bar's end: sign-in, and under it browl's credit, small and muted beside the ontology's name. */
+/* At the bar's end: sign-in or sign-out, and under it browl's credit, small and muted beside the ontology's name. */
 .site-end {
   display: flex;
   flex-direction: column;
@@ -164,8 +164,24 @@ code {
   padding: 0;
 }
 
-.sign-in {
+.sign-in,
+.sign-out button {
   font-size: 0.875rem;
+}
+
+/* Sign-out is a form's button, so it can POST; it looks like the sign-in link. */
+.sign-out {
+  margin: 0;
+}
+
+.sign-out button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-family: inherit;
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .hosted-with {

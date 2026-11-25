@@ -1,8 +1,10 @@
 """Helpers shared by the tests."""
 
 import asyncio
+import base64
 import contextlib
 import http.server
+import json
 import os
 import sqlite3
 import subprocess
@@ -18,11 +20,12 @@ from pathlib import Path
 from typing import Any
 
 import httpx2
+import itsdangerous
 import jpype
 import uvicorn
 from fastapi import FastAPI
 
-from browl import derived, search
+from browl import auth, derived, search
 from browl.app import create_app
 from browl.derived import DerivedReader
 from browl.fuseki import END_VARIABLE, TSV, FusekiClient
@@ -42,6 +45,14 @@ from browl.settings import Settings
 from browl.urls import URLMapper
 from browl.usages import UsageStore
 
+AUTH_ON = {
+    "AUTH_DISABLED": False,
+    "OIDC_CLIENT_ID": "browl-test",
+    "OIDC_CLIENT_SECRET": "test-secret",
+    "SEED_ADMINS": ["seed@example.org"],
+}
+"""Overrides for `make_settings` and `make_app` that turn authentication on, with a seed admin."""
+
 
 def make_settings(**overrides: object) -> Settings:
     """Return settings for tests: authentication off, DATA_DIR from the environment, and any overrides."""
@@ -51,11 +62,12 @@ def make_settings(**overrides: object) -> Settings:
 
 def make_app(
     fuseki_transport: httpx2.AsyncBaseTransport | None = None,
+    oidc_transport: httpx2.AsyncBaseTransport | None = None,
     real_stages: bool = False,
     usage_tables: bool = False,
     **overrides: object,
 ) -> FastAPI:
-    """Return an app that doesn't start the JVM, with `make_settings(**overrides)` and the Fuseki transport given.
+    """Return an app that doesn't start the JVM, with `make_settings(**overrides)` and the transports given.
 
     Its load jobs run no background stages, unless `real_stages`, when they run the app's own; it builds no usage
     tables unless `usage_tables`.
@@ -63,10 +75,24 @@ def make_app(
     return create_app(
         make_settings(**overrides),
         fuseki_transport=fuseki_transport,
+        oidc_transport=oidc_transport,
         start_jvm=False,
         stages=None if real_stages else {},
         usage_tables=usage_tables,
     )
+
+
+def session_cookie(data_dir: Path, email: str, signed_in_at: bool = True) -> str:
+    """Return a session cookie's value that signs in an email address now, as the sign-in callback would.
+
+    It's signed as Starlette's `SessionMiddleware` signs one, with the key in `DATA_DIR`. Without `signed_in_at`, it
+    lacks the sign-in time, as sessions made before it was kept did.
+    """
+    session = {auth._SESSION_EMAIL: email}
+    if signed_in_at:
+        session[auth._SESSION_SIGNED_IN_AT] = datetime.now(UTC).isoformat()
+    signer = itsdangerous.TimestampSigner(auth.session_key(data_dir))
+    return signer.sign(base64.b64encode(json.dumps(session).encode())).decode()
 
 
 class StaticServer:

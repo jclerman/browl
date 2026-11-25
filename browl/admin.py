@@ -1,15 +1,22 @@
-"""Admin routes, under `/{RESERVED_PREFIX}/admin` (DESIGN.md §2.13). Authentication isn't enforced yet (P-22)."""
+"""Admin routes, under `/{RESERVED_PREFIX}/admin` (DESIGN.md §2.13): only admins may use them (§2.11).
 
+Signing in and out, under the same prefix but open to everyone, is in `browl.auth`.
+"""
+
+import logging
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.openapi.docs import get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from browl.auth import require_admin
 from browl.jobs import JobRunningError, Stage
 from browl.jobtypes import Reasoner
-from browl.pages import link_root, templates
+from browl.pages import is_htmx, link_root, same_origin, templates
 from browl.upload import FORMATS, StorageError, UploadError, receive_upload
+
+logger = logging.getLogger(__name__)
 
 STATUS_POLL_S = 2
 """How often the status fragment polls itself while a job runs."""
@@ -17,7 +24,8 @@ STATUS_POLL_S = 2
 SWAGGER_UI_URL = "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.35.0"
 """Swagger UI for the API docs, pinned to an exact version: an accepted exception to the no-CDN rule (§2.13)."""
 
-router = APIRouter(prefix="/admin")
+router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin)])
+"""The admin routes; every one needs an admin signed in."""
 
 
 @router.get("/status", response_class=HTMLResponse)
@@ -28,7 +36,7 @@ async def job_status(request: Request) -> HTMLResponse:
     page. A poll that finds the job ended gets `HX-Redirect` to a fresh GET of its page, so the header shows the new
     ontology (#101); a reload would re-send a refused upload's POST. Only a running job's fragment polls, so no loop.
     """
-    htmx = request.headers.get("HX-Request") == "true"
+    htmx = is_htmx(request)
     job = await request.app.state.jobs.current()
     headers = {"Cache-Control": "no-store"}
     if htmx and not job.running:
@@ -56,7 +64,9 @@ REASONER_LABELS = {Reasoner.NONE: "None", Reasoner.ELK: "ELK", Reasoner.HERMIT: 
 """The upload form's reasoner choices (A-3), the first the default."""
 
 
-async def _upload_page(request: Request, error: str | None = None, status_code: int = 200) -> HTMLResponse:
+async def _upload_page(
+    request: Request, error: str | None = None, status_code: int = status.HTTP_200_OK
+) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "admin/upload.html",
@@ -77,19 +87,6 @@ async def _upload_page(request: Request, error: str | None = None, status_code: 
 async def upload_page(request: Request) -> HTMLResponse:
     """Show the upload form (A-2, A-3) and the load job's status (A-5, A-6)."""
     return await _upload_page(request)
-
-
-def same_origin(request: Request) -> None:
-    """Refuse a request a browser sent from another site's page, e.g. one submitting the upload form (CSRF).
-
-    Browsers say where a request came from in `Sec-Fetch-Site`; a request without it, e.g. from curl, passes. It's
-    checked before the body is read, so it suits the streaming upload.
-
-    Raises:
-        HTTPException: 403, the request came from another site.
-    """
-    if request.headers.get("Sec-Fetch-Site", "none") not in {"same-origin", "none"}:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "requests from other sites are refused")
 
 
 @router.post("/upload", response_class=HTMLResponse, dependencies=[Depends(same_origin)])
