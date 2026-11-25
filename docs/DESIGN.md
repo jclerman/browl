@@ -368,9 +368,14 @@ overwrites it, and a failed progress write is logged and skipped. What each stag
   stage counted them (the upload when no reasoner ran, and each RDF import; not a reasoned file, which would need a
   second parse), then its index phases by name, the second with its own count against the total the loader reports;
   then counting the store, opening it in Fuseki, and counting again.
-- **pre-caching:** reading the ontology header, then each hook's number and name, its time so far and the rows it has
-  written (`DerivedWriter.rows`, from SQLite's `total_changes`), every `PROGRESS_S`. Hooks run open-ended bulk queries,
-  so no total is known without extra queries, and none is shown.
+- **pre-caching:** reading the ontology header, then every `PROGRESS_S` each hook's number and name, its time so far
+  and its phase: while a bulk query streams, the rows received so far ("receiving query results: 1,234,567 rows");
+  else "indexing" or "writing tables" while it waits for the database, as a hook's last write, e.g. filling its tables
+  from staging or building the search index, can be one long statement. The rows it has written
+  (`DerivedWriter.rows`, from SQLite's `total_changes`) follow when they've changed since the last report, or when
+  there's no phase. The stage counts the rows and phases with its own Fuseki client and writer, which wrap the usual
+  ones, so the hooks' code and build keys needn't change. Hooks run open-ended bulk queries, so no total is known
+  without extra queries, and none is shown.
 
 The usage table's build after a load (P-27c) isn't part of the job: the status shows it, from the build's own progress
 in the server worker that runs it, once the job has ended.

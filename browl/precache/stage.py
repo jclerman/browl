@@ -9,7 +9,7 @@ import asyncio
 import logging
 import sqlite3
 import time
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, asynccontextmanager, suppress
 from pathlib import Path
@@ -18,7 +18,7 @@ import httpx2
 
 from browl import derived
 from browl.derived import Meta
-from browl.fuseki import FusekiClient, SparqlError, ping
+from browl.fuseki import BulkSelectStream, FusekiClient, SparqlError, ping
 from browl.job_view import format_duration
 from browl.jobs import PROGRESS_S, JobContext
 from browl.jobtypes import StageError
@@ -33,6 +33,7 @@ from browl.precache.names import names
 from browl.precache.owner_map import owner_map
 from browl.precache.search import search
 from browl.precache.values import annotation_values
+from browl.rdf import Term
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,12 @@ HOOKS: tuple[Hook, ...] = (entities, names, annotation_values, search, hierarchi
 A hook creates the indexes of each table it fills once it's done (`DerivedWriter.create_indexes`), so later hooks can
 use them; the build creates any left at its end. Where it can, it inserts into a `WITHOUT ROWID` table in its primary
 key's order, as such a table is stored in that order."""
+
+WRITING = "writing tables"
+"""A hook's phase, in its progress, while it waits for a database write, unless it's `INDEXING`."""
+
+INDEXING = "indexing"
+"""A hook's phase, in its progress, while it creates indexes (`DerivedWriter.create_indexes`)."""
 
 
 async def pre_caching_stage(context: JobContext, http: httpx2.AsyncClient, hooks: Sequence[Hook] = HOOKS) -> None:
@@ -79,18 +86,20 @@ async def pre_cache(context: JobContext, http: httpx2.AsyncClient, hooks: Sequen
     Raises:
         StageError: A query failed or returned an incomplete result, or the header query too many rows.
     """
-    sparql = FusekiClient(http)
+    sparql = _CountingClient(http)
     dataset = dataset_name(context.generation)
     keys = build_keys(context.settings, hooks)
     try:
         context.report("Reading the ontology's header")
         meta = await header_meta(context, sparql, dataset)
-        async with build(context.settings.data_dir, meta, keys) as db:
+        async with build(context.settings.data_dir, meta, keys) as built:
+            db = _PhasedWriter(built)
             hook_context = PreCacheContext(context, sparql, dataset, db)
             for number, hook in enumerate(hooks, start=1):
                 logger.info("Load job %d: pre-caching hook %s", context.generation, hook.name)
+                label = f"Hook {number} of {len(hooks)}, {hook.name}"
                 try:
-                    async with _hook_progress(context, db, f"Hook {number} of {len(hooks)}, {hook.name}"):
+                    async with _hook_progress(context, sparql, db, label):
                         await hook(hook_context)
                 except SparqlError as error:
                     raise StageError(f"pre-caching query failed ({hook.name}): {error}") from error
@@ -148,15 +157,31 @@ async def build(data_dir: Path, meta: Meta, keys: Mapping[str, str]) -> AsyncIte
 
 
 @asynccontextmanager
-async def _hook_progress(context: JobContext, db: DerivedWriter, label: str) -> AsyncIterator[None]:
-    """Report a hook's progress every `PROGRESS_S` while the block runs: its label, time so far and rows written."""
+async def _hook_progress(
+    context: JobContext, sparql: "_CountingClient", db: "_PhasedWriter", label: str
+) -> AsyncIterator[None]:
+    """Report a hook's progress every `PROGRESS_S` while the block runs: its label, time so far, and phase.
+
+    The phase is the rows received while a bulk query streams, else `INDEXING` or `WRITING` while the hook waits for
+    one; then the rows written, if that has changed since the last report, or if there's no phase to show.
+    """
     await db.run(lambda connection: None)  # so `rows` counts what the build wrote before, e.g. `meta`
     started, rows = time.monotonic(), db.rows
 
     async def tick() -> None:
+        last = 0
         while True:
-            elapsed = format_duration(time.monotonic() - started)
-            context.report(f"{label} · {elapsed} · {db.rows - rows:,} rows written")
+            parts = [label, format_duration(time.monotonic() - started)]
+            if sparql.streams:
+                received = sparql.received
+                parts.append(f"receiving query results: {received:,} rows" if received else "waiting for query results")
+            elif db.phase is not None:
+                parts.append(db.phase)
+            written = db.rows - rows
+            if written != last or len(parts) == 2:
+                parts.append(f"{written:,} rows written")
+            last = written
+            context.report(" · ".join(parts))
             await asyncio.sleep(PROGRESS_S)
 
     ticker = asyncio.create_task(tick())
@@ -164,6 +189,85 @@ async def _hook_progress(context: JobContext, db: DerivedWriter, label: str) -> 
         yield
     finally:
         ticker.cancel()
+
+
+class _CountingClient(FusekiClient):
+    """A Fuseki client that counts the rows of the bulk queries' results as they arrive, for the hooks' progress.
+
+    The hooks' build keys don't cover it, as it changes no result: the build-key coverage tests run the hooks without
+    it.
+
+    Attributes:
+        streams: How many bulk queries are open.
+        received: How many rows the latest one to open has yielded.
+    """
+
+    def __init__(self, http: httpx2.AsyncClient) -> None:
+        """Use an HTTP client whose base URL is Fuseki's (`FUSEKI_URL`)."""
+        super().__init__(http)
+        self.streams = 0
+        self.received = 0
+
+    @asynccontextmanager
+    async def bulk_select(
+        self, dataset: str, query: str, prologue: str = "", dataset_clause: str = ""
+    ) -> AsyncIterator[BulkSelectStream]:
+        """Run a bulk SELECT query, counting its rows (`FusekiClient.bulk_select`)."""
+        self.streams += 1
+        self.received = 0
+        try:
+            async with super().bulk_select(dataset, query, prologue, dataset_clause) as stream:
+                yield _CountedStream(stream, self)
+        finally:
+            self.streams -= 1
+
+
+class _CountedStream(BulkSelectStream):
+    """A bulk query's result that counts its rows in its client's `received`."""
+
+    def __init__(self, stream: BulkSelectStream, client: _CountingClient) -> None:
+        self.variables = stream.variables
+        self._rows = stream
+        self._client = client
+
+    async def __aiter__(self) -> AsyncIterator[tuple[Term | None, ...]]:
+        """Yield each row, counting it."""
+        client = self._client
+        async for row in self._rows:
+            client.received += 1
+            yield row
+
+
+class _PhasedWriter(DerivedWriter):
+    """A writer that says, in `phase`, what it's waiting for: `INDEXING`, `WRITING`, or None; for the hooks' progress.
+
+    It writes through another, the build's own. The hooks' build keys don't cover it, as it changes no result.
+    """
+
+    def __init__(self, writer: DerivedWriter) -> None:
+        self._writer = writer
+        self.rows = writer.rows
+        self.phase: str | None = None
+
+    async def run[T](self, function: Callable[[sqlite3.Connection], T]) -> T:
+        """Call a function with the connection on its thread, returning its result (`DerivedWriter.run`)."""
+        outer = self.phase is None
+        if outer:
+            self.phase = WRITING
+        try:
+            return await self._writer.run(function)
+        finally:
+            self.rows = self._writer.rows
+            if outer:
+                self.phase = None
+
+    async def create_indexes(self, table: str) -> None:
+        """Create a table's secondary indexes (`DerivedWriter.create_indexes`)."""
+        self.phase = INDEXING
+        try:
+            await super().create_indexes(table)
+        finally:
+            self.phase = None
 
 
 @asynccontextmanager

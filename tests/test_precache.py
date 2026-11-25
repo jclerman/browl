@@ -155,15 +155,25 @@ async def test_stage_builds_database(settings: Settings) -> None:
 
 
 async def test_stage_reports_progress(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Check that the stage reports reading the header, then each hook's number, name, time so far and rows written."""
+    """Check that the stage reports reading the header, then each hook's number, name, time so far and phase.
+
+    The phase is a bulk query's rows received, or the writing or indexing the hook waits for; the rows written are
+    shown when they change, or when there's no phase.
+    """
     monkeypatch.setattr(browl.precache.stage, "PROGRESS_S", 0)  # a report each turn of the event loop
 
     @hook()
     async def fill(context: PreCacheContext) -> None:
+        async with context.bulk_select("SELECT ?entity ?type WHERE { ?entity a ?type }") as stream:
+            await asyncio.sleep(0)  # as if no row had arrived yet
+            async for _ in stream:
+                await asyncio.sleep(0)  # a turn of the event loop per row
         await context.db.insert(
             "INSERT INTO prefix VALUES (?, ?)", [("ex", EX), ("owl", "http://www.w3.org/2002/07/owl#")]
         )
         await context.db.run(lambda connection: None)  # a turn of the event loop with the rows written
+        await context.db.create_indexes("entity")
+        await asyncio.sleep(0)
 
     reports: list[str] = []
     context = job(settings, 9)
@@ -171,8 +181,15 @@ async def test_stage_reports_progress(settings: Settings, monkeypatch: pytest.Mo
     async with fuseki() as http:
         await pre_caching_stage(context, http, hooks=[fill])
     assert reports[0] == "Reading the ontology's header"
-    assert reports[1] == "Hook 1 of 1, fill · 0 s · 0 rows written"
-    assert "Hook 1 of 1, fill · 0 s · 2 rows written" in reports
+    phases = list(dict.fromkeys(report.removeprefix("Hook 1 of 1, fill · 0 s · ") for report in reports[1:]))
+    assert phases == [
+        "waiting for query results",
+        "receiving query results: 1 rows",
+        "writing tables",
+        "writing tables · 2 rows written",
+        "indexing",
+        "2 rows written",
+    ]
 
 
 async def test_stage_hook_fails(settings: Settings) -> None:
