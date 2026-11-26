@@ -6,10 +6,11 @@
 {% macro annotation_value(value, links, mark=none) -%}
 {%- if value.type == "iri" -%}
 {%- set link = links.get(value.iri) -%}
-{%- if mark is not none and value.iri == mark %}<mark>{% endif -%}
+{%- set marked = mark is not none and value.iri == mark -%}
+{%- if marked %}<mark>{% endif -%}
 {%- if link is not none and link.href is not none %}{{ entity_link(link) }}
 {%- else %}{{ web_iri(value.iri) }}{% endif -%}
-{%- if mark is not none and value.iri == mark %}</mark>{% endif -%}
+{%- if marked %}</mark>{% endif -%}
 {%- else -%}
 <bdi class="value"
   {%- if value.language is not none and value.language | length <= MAX_LANGUAGE_CHARS %} lang="{{ value.language }}"{% endif %}
@@ -25,6 +26,7 @@
    copied text. The boxes are markup, outside each value's `<bdi>`, so a value can't pass for an annotation. The IRI
    `mark`, the page's entity, is highlighted, as in an axiom. #}
 {% macro axiom_annotations(annotations, links, mark=none) -%}
+{%- if annotations -%}
 {%- set groups = page_annotations(annotations, links) -%}
 {%- if groups %} <span class="axiom-annotations">
 {%- for group in groups -%}
@@ -36,6 +38,7 @@
 {{- axiom_annotations(value.annotations, links, mark) }}{% endfor -%}
 <span class="visually-hidden">]</span></span>
 {%- endfor %}</span>
+{%- endif -%}
 {%- endif -%}
 {%- endmacro %}
 
