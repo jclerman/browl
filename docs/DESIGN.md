@@ -2272,6 +2272,7 @@ flowchart LR
         P32["P-32 Reasoner progress"]
         P36["P-36 Cancel a load"]
         P37["P-37 Axiom line breaks"]
+        P50["P-50 Load step history"]
     end
     S5b["S-5b OLS4 comparison"]
 
@@ -2373,6 +2374,7 @@ go into this document.
 | P-31 | Show load progress: each stage's elapsed time, ROBOT's current step, triples loaded of the total, the import being handled; for pre-caching, each hook's name, elapsed time and phase, with the rows received while a query streams and the database changes made; and background builds after a load (P-27c's usage table), with their progress | A-5 | P-8 | Done | [#73](https://github.com/jclerman/browl/issues/73) |
 | P-32 | Show the reasoner's own progress (per task, as Protégé does), running ROBOT's reasoning through its Java API with a progress monitor | A-5 | P-31, P-30 | To do | [#74](https://github.com/jclerman/browl/issues/74) |
 | P-36 | Cancel from the admin status page: a running load or rebuild (the job stops, its new store and derived files are removed, and the served ontology is unchanged) or a background build after a load; and a time limit on pre-caching | A-10 | P-22, P-31 | To do | [#111](https://github.com/jclerman/browl/issues/111) |
+| P-50 | Load step history on the admin status page: each stage's sub-steps kept with their times, in expandable stage boxes, and a box for the background builds after a load, with how long they took (2.13) | A-5 | P-31 | To do | [#155](https://github.com/jclerman/browl/issues/155) |
 | P-37 | Axioms broken across lines by their structure, with leading operators indented by depth, where they have more than one set of parentheses; axiom keywords bold and class-expression constructors in an accent color; on the Overview's Logical axioms panel and the Usage tab (2.8, 2.9); amends U-32 | U-32 | P-15, P-16, P-27 | To do | [#114](https://github.com/jclerman/browl/issues/114) |
 | P-26 | Update README: remove Owlready2 and Fuseki (now the OWLAPI via JPype); replace "cached once built" with the bounded cache | | | Done | [#7](https://github.com/jclerman/browl/pull/7) |
 
