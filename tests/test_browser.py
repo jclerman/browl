@@ -1658,8 +1658,33 @@ def on_top(page: Page, x: float, y: float, selector: str) -> bool:
     return result
 
 
+COVERING = """(element) => {
+  const rect = element.getBoundingClientRect();
+  const width = document.documentElement.clientWidth;
+  const height = document.documentElement.clientHeight;
+  const found = new Set();
+  // Every 16px across and 5px down, finer than a heading or a tree row; 1px in from the edges, which round.
+  for (let x = rect.left + 1; x < Math.min(rect.right, width) - 1; x += 16) {
+    for (let y = rect.top + 1; y < Math.min(rect.bottom, height) - 1; y += 5) {
+      const shown = document.elementFromPoint(x, y);
+      if (shown && !element.contains(shown) && !shown.closest(".site-bar")) {
+        found.add(`<${shown.localName}${[...shown.classList].map((each) => "." + each).join("")}>`);
+      }
+    }
+  }
+  return [...found].sort();
+}"""
+"""JS returning what's drawn over an element where it's in the window, but for the navigation bar, which may be."""
+
+
+def covered_by(locator: Locator) -> list[str]:
+    """Return what's drawn over an element anywhere it's in the window, but for the navigation bar, as tags."""
+    result: list[str] = locator.evaluate(COVERING)
+    return result
+
+
 def test_iri_box_stacking(page: Page, varied: LiveServer) -> None:
-    """Check that the opened IRI box is drawn under the navigation bar when scrolled there, and over a panel heading."""
+    """Check that the opened IRI box is drawn under the navigation bar when scrolled there, and over all else."""
     page.set_viewport_size(NARROW)  # the one-page view, so the page scrolls
     page.goto(f"{varied.url}/example.org/{MANY}")
     page.locator(".entity-iri summary").click()
@@ -1671,7 +1696,7 @@ def test_iri_box_stacking(page: Page, varied: LiveServer) -> None:
     page.locator(".entity-iri dd code").first.evaluate("(each) => { each.textContent = 'segment/'.repeat(200); }")
     heading = box(page.locator(".annotations h2"))
     assert box(page.locator(".entity-iri dl"))["y"] + box(page.locator(".entity-iri dl"))["height"] > heading["y"]
-    assert on_top(page, heading["x"] + 4, heading["y"] + heading["height"] / 2, ".entity-iri dl")
+    assert covered_by(page.locator(".entity-iri dl")) == []
 
 
 def test_other_tab_fills_frame(page: Page, varied: LiveServer) -> None:
@@ -2678,6 +2703,21 @@ def test_column_beside_panels(page: Page, trees: LiveServer, size: dict[str, int
     fold_control(page).click()
     expect(column).to_be_visible()
     assert violations(page) == []
+
+
+@pytest.mark.parametrize("size", [WIDE, NARROW], ids=["beside", "above"])
+def test_iri_box_over_column(page: Page, trees: LiveServer, size: dict[str, int]) -> None:
+    """Check that the opened IRI box is drawn over the hierarchy column, whose sticky heading it overlaps."""
+    page.set_viewport_size(size)
+    page.goto(f"{trees.url}/Bottom")
+    page.locator(".entity-iri summary").click()
+    details = page.locator(".entity-iri dl")
+    details.evaluate("(each) => each.insertAdjacentHTML('beforeend', '<dt>more</dt><dd>line</dd>'.repeat(20))")
+    heading = box(hierarchy_column(page).locator("h2").first)
+    shown = box(details)
+    assert shown["x"] < heading["x"] + 8 < shown["x"] + shown["width"]
+    assert shown["y"] < heading["y"] and heading["y"] + heading["height"] < shown["y"] + shown["height"]
+    assert covered_by(details) == []
 
 
 @pytest.mark.parametrize("size", [NARROW, WIDE], ids=["narrow", "toggled"])
