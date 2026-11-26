@@ -2,7 +2,7 @@
 
 ## Description
 
-The ontology itself and every declared class and property, with the URL its IRI implies (DESIGN.md 2.3, browl.urls), filled by the entities pre-caching hook. An IRI declared with several types (punning) has a row for each. Several IRIs can share a URL, e.g. the http and https forms of one (U-15).
+The ontology itself and every declared class, property and named individual, with the URL its IRI implies (DESIGN.md 2.3, browl.urls), filled by the entities pre-caching hook. An IRI declared with several types (punning) has a row for each. Several IRIs can share a URL, e.g. the http and https forms of one (U-15).
 
 <details>
 <summary><strong>Table Definition</strong></summary>
@@ -27,7 +27,7 @@ CREATE TABLE entity (
 | ------------ | ------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | id           | INTEGER |         | true     | [name_value](name_value.md) [annotation_value](annotation_value.md) [search_value](search_value.md) [edge](edge.md) [equiv_group](equiv_group.md) [counts](counts.md) [root](root.md) [usage_root](usage_root.md) [usage_ref](usage_ref.md) [usage_blank](usage_blank.md) |         | The entity's number, dense, in the order the entity list returned it; the other tables refer to it.                                                                                                    |
 | iri          | TEXT    |         | false    |                                                                                                                                                                                                                                                                           |         | The entity's IRI, as the ontology has it.                                                                                                                                                              |
-| type         | TEXT    |         | false    |                                                                                                                                                                                                                                                                           |         | "Its type (browl.derived.EntityType): ontology, class, object_property, data_property or annotation_property."                                                                                         |
+| type         | TEXT    |         | false    |                                                                                                                                                                                                                                                                           |         | Its type (browl.derived.EntityType): ontology, class, object_property, data_property, annotation_property or named_individual.                                                                         |
 | path         | TEXT    |         | false    |                                                                                                                                                                                                                                                                           |         | Its URL's path from the site's root (BASE_URL), in URI form (non-ASCII percent-encoded as UTF-8). For a fallback URL, the path and query string, /{RESERVED_PREFIX}/iri?iri={the percent-encoded IRI}. |
 | fragment     | TEXT    |         | true     |                                                                                                                                                                                                                                                                           |         | The fragment of a hash IRI's URL, in URI form; NULL for any other, and for every fallback URL.                                                                                                         |
 | display_name | TEXT    |         | true     |                                                                                                                                                                                                                                                                           |         | Its display name (DESIGN.md 2.7): its best name value, else its CURIE, else its IRI; for the ontology, its title (meta.title) if it has one.                                                           |
@@ -127,6 +127,7 @@ erDiagram
   INTEGER owner
   TEXT owner_iri
   TEXT predicate
+  TEXT object
 }
 "usage_ref" {
   INTEGER entity PK

@@ -5,6 +5,7 @@ HTTP 200, it appends the error as plain text and ends the response normally (DES
 as RDF terms or N-Triples.
 """
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -167,6 +168,15 @@ class Literal:
 
 
 Term = IRI | BlankNode | Literal
+
+
+def literal_digest(literal: Literal) -> str:
+    """Return a literal's digest, as a SPARQL query computes it, so a query can match a literal without holding it.
+
+    That's the SHA-256 of its lexical form, language tag and datatype, separated by spaces, in lowercase hex:
+    `SHA256(CONCAT(STR(?v), " ", LCASE(LANG(?v)), " ", STR(DATATYPE(?v))))` (`sparql/usage-annotations.rq`).
+    """
+    return hashlib.sha256(f"{literal.value} {literal.language or ''} {literal.datatype}".encode()).hexdigest()
 
 
 def _unescape(text: str) -> str:

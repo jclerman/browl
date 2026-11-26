@@ -1126,9 +1126,9 @@ async def test_entities_warning_shortens_iris(settings: Settings, caplog: pytest
 
 
 async def test_entities_on_real_fuseki(fuseki_url: str, settings: Settings) -> None:
-    """Check the entities hook on a real Fuseki: the ontology, and the classes and properties of it and its imports.
+    """Check the entities hook on a real Fuseki: the ontology, and its and its imports' declared entities.
 
-    Blank-node classes and named individuals are left out. The ontology is under `BASE_URL`, so its URLs are native.
+    Blank-node classes are left out. The ontology is under `BASE_URL`, so its URLs are native.
     """
     generation = 900_000 + uuid.uuid4().int % 100_000
     name = dataset_name(generation)
@@ -1160,6 +1160,7 @@ async def test_entities_on_real_fuseki(fuseki_url: str, settings: Settings) -> N
         (f"{family}#Parent", "class", "/family", "Parent"),
         (f"{family}#Person", "class", "/family", "Person"),
         (f"{family}#age", "data_property", "/family", "age"),
+        (f"{family}#alice", "named_individual", "/family", "alice"),
         (f"{family}#hasChild", "object_property", "/family", "hasChild"),
         (f"{family}#rank", "annotation_property", "/family", "rank"),
         ("https://example.org/family#Person", "class", "/family", "Person"),

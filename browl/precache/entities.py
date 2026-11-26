@@ -21,18 +21,20 @@ ENTITY_TYPES = {
     f"{OWL}ObjectProperty": EntityType.OBJECT_PROPERTY,
     f"{OWL}DatatypeProperty": EntityType.DATA_PROPERTY,
     f"{OWL}AnnotationProperty": EntityType.ANNOTATION_PROPERTY,
+    f"{OWL}NamedIndividual": EntityType.NAMED_INDIVIDUAL,
 }
 """The entity types the entity list (`entity-list.rq`) has, by their OWL classes; the ontology itself comes from the
-header (`entities`). Named individuals come later (U-18)."""
+header (`entities`)."""
 
 
 @hook("base_url", "reserved_prefix")
 async def entities(context: PreCacheContext) -> None:
     """Fill `entity`, with each entity's URL path and fragment (`browl.urls.URLMapper`), `hash_prefix` and `type_count`.
 
-    The entities are the ontology itself, whose IRI the `meta` row holds, and every declared class and property, from
-    one bulk query (`entity-list.rq`). The URLs are computed on the database's thread, off the event loop. IRIs whose
-    native or proxied URL would be under the reserved prefix get the fallback URL, and a warning lists them (O-3).
+    The entities are the ontology itself, whose IRI the `meta` row holds, and every declared class, property and named
+    individual, from one bulk query (`entity-list.rq`). The URLs are computed on the database's thread, off the event
+    loop. IRIs whose native or proxied URL would be under the reserved prefix get the fallback URL, and a warning lists
+    them (O-3).
     `display_name` and `curie` are left NULL, for the names hook (`browl.precache.names`).
     """
     settings = context.job.settings

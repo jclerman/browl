@@ -10,8 +10,9 @@ subjects (`usage-count.rq`), less the entity's triples about itself and the trip
 map's `usage_blank`), plus the roots. Counts that take longer than `CACHED_COUNT_S` are kept per generation
 (`UsageCounts`).
 
-Blank nodes the owner map doesn't hold, such as anonymous individuals (U-18), are in the count but not the usages: an
-axiom with one as subject, or within one, is counted and not listed.
+Blank nodes the owner map doesn't hold are in the count but not the usages: an axiom with one as subject, or within
+one, is counted and not listed. The owner map finds anonymous individuals by their assertions (P-47), so only one with
+annotation assertions alone is missed.
 """
 
 import logging
@@ -79,12 +80,16 @@ class UsageRoot:
     Attributes:
         id: Its number in `usage_root`.
         kind: What it is.
-        label: Its blank node's label in the store, which a query can name as `<_:label>`.
+        label: Its blank node's label in the store, which a query can name as `<_:label>`; for an anonymous
+            individual's assertion, the individual's.
+        object: For an anonymous individual's assertion, its object, as the Usage tab's query names it
+            (`usage_root.object`); else None.
     """
 
     id: int
     kind: UsageRootKind
     label: BlankNode
+    object: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -288,7 +293,7 @@ def _root_usages(connection: sqlite3.Connection, iri: str, limit: int) -> list[U
     if entity is None:
         return []
     rows = connection.execute(
-        "SELECT r.id, r.kind, r.label, coalesce(o.iri, r.owner_iri), r.predicate FROM usage_ref AS f"
+        "SELECT r.id, r.kind, r.label, r.object, coalesce(o.iri, r.owner_iri), r.predicate FROM usage_ref AS f"
         " JOIN usage_root AS r ON r.id = f.root LEFT JOIN entity AS o ON o.id = r.owner WHERE f.entity = ? LIMIT ?",
         (entity, limit),
     )
@@ -297,9 +302,9 @@ def _root_usages(connection: sqlite3.Connection, iri: str, limit: int) -> list[U
             UsageSource.ROOT,
             None if owner is None else IRI(owner),
             predicate=None if predicate is None else IRI(predicate),
-            root=UsageRoot(number, UsageRootKind(kind), BlankNode(label)),
+            root=UsageRoot(number, UsageRootKind(kind), BlankNode(label), object_),
         )
-        for number, kind, label, owner, predicate in rows
+        for number, kind, label, object_, owner, predicate in rows
     ]
 
 
@@ -455,7 +460,7 @@ def _table_usages(connection: sqlite3.Connection, rows: list[_TableRow]) -> list
     subjects = _by_id(connection, "SELECT id, iri FROM entity", {row[1] for row in rows if row[1] is not None})
     roots = _by_id(
         connection,
-        "SELECT id, kind, label FROM usage_root",
+        "SELECT id, kind, label, object FROM usage_root",
         {row[5] for row in rows if row[3] == Source.ROOT},
     )
     usages = []
@@ -469,8 +474,8 @@ def _table_usages(connection: sqlite3.Connection, rows: list[_TableRow]) -> list
         elif source == Source.PREDICATE:
             usages.append(Usage(UsageSource.PREDICATE, subject, index=detail))
         else:
-            kind, label = roots[detail]
-            root = UsageRoot(detail, UsageRootKind(kind), BlankNode(label))
+            kind, label, object_ = roots[detail]
+            root = UsageRoot(detail, UsageRootKind(kind), BlankNode(label), object_)
             usages.append(Usage(UsageSource.ROOT, subject, predicate=iri, root=root))
     return usages
 

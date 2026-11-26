@@ -66,6 +66,7 @@ erDiagram
   INTEGER owner
   TEXT owner_iri
   TEXT predicate
+  TEXT object
 }
 ```
 

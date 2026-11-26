@@ -152,7 +152,8 @@ CREATE TABLE usage_root (
     label TEXT NOT NULL,
     owner INTEGER,
     owner_iri TEXT,
-    predicate TEXT
+    predicate TEXT,
+    object TEXT
 );
 CREATE TABLE usage_ref (
     entity INTEGER NOT NULL,
@@ -235,6 +236,7 @@ class EntityType(StrEnum):
     OBJECT_PROPERTY = "object_property"
     DATA_PROPERTY = "data_property"
     ANNOTATION_PROPERTY = "annotation_property"
+    NAMED_INDIVIDUAL = "named_individual"
 
 
 PROPERTY_TYPES = frozenset({EntityType.OBJECT_PROPERTY, EntityType.DATA_PROPERTY, EntityType.ANNOTATION_PROPERTY})
@@ -265,11 +267,13 @@ class UsageRootKind(StrEnum):
         AXIOM: A reified axiom (`_:label a owl:Axiom`), owned by its `owl:annotatedSource` if that's an IRI.
         GENERAL: A blank node nothing links to, with no owner: a general class axiom, an n-ary axiom, a negative
             property assertion, a SWRL rule.
+        ASSERTION: A triple whose subject is an anonymous individual (`_:label predicate object`), with no owner.
     """
 
     TRIPLE = "triple"
     AXIOM = "axiom"
     GENERAL = "general"
+    ASSERTION = "assertion"
 
 
 TYPE_LABELS = {
@@ -278,6 +282,7 @@ TYPE_LABELS = {
     EntityType.OBJECT_PROPERTY: "Object property",
     EntityType.DATA_PROPERTY: "Data property",
     EntityType.ANNOTATION_PROPERTY: "Annotation property",
+    EntityType.NAMED_INDIVIDUAL: "Named individual",
 }
 """Each entity type's name, as pages show it."""
 

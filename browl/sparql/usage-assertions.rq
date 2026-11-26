@@ -1,0 +1,25 @@
+# The anonymous individuals' assertions among a Usage tab page's usages, each a triple with a blank subject, the
+# individual, named by its store's label, `<_:label>`, which Jena accepts; with the reified axioms that annotate it,
+# and their nested annotations, by their own triples, not their blank-node closures, which would bring the individual's
+# other assertions (browl.usage_tab; DESIGN.md §2.8). Its object is an IRI or a blank node, or a literal, by the first
+# hex digits of its digest (browl.rdf.literal_digest, browl.precache.owner_map.DIGEST_CHARS), so a long value isn't
+# written into the query. A class expression's closure is fetched apart (usage-closures.rq). browl.usage_tab fills in
+# the rows, an UNDEF object for a literal and an UNDEF digest for any other, and adds the dataset clause before WHERE.
+CONSTRUCT { ?subject ?predicate ?value . ?node ?annotation ?term }
+WHERE {
+  VALUES (?subject ?predicate ?object ?digest) { }
+  ?subject ?predicate ?value
+  FILTER (
+    IF(BOUND(?object), sameTerm(?value, ?object),
+       isLiteral(?value)
+       && SUBSTR(SHA256(CONCAT(STR(?value), " ", LCASE(LANG(?value)), " ", STR(DATATYPE(?value)))), 1, STRLEN(?digest))
+          = ?digest)
+  )
+  OPTIONAL {
+    ?axiom owl:annotatedSource ?subject ;
+      owl:annotatedProperty ?predicate ;
+      owl:annotatedTarget ?value .
+    ?node owl:annotatedSource* ?axiom ;
+      ?annotation ?term
+  }
+}
