@@ -40,6 +40,7 @@ from browl.fuseki import CONSTRUCT_MAX_BYTES, ResultTooLargeError, SparqlError, 
 from browl.jobs import JobState
 from browl.links import LOOKUP_BATCH, EntityLink, read_entity_links
 from browl.owlapi import FragmentError, check_java_thread, ntriples_ontology, run_java
+from browl.pager import page_count
 from browl.pages import link_root, read_derived
 from browl.precache.core import PREFIXES, logged_iri, sparql_file
 from browl.precache.usage_table import SubjectGroup, sort_name
@@ -217,7 +218,8 @@ async def read_usage_tab(request: Request, state: JobState, iri: str, page: int)
     count = table.count if table is not None else await _read_count(request, store, iri)
     if count is None:
         return UsageTab(count=None, page=page, pages=None, groups=None)
-    pages = _pages(table.listed if table is not None else count)  # with the table, no blank pages (below)
+    listed = table.listed if table is not None else count  # with the table, no blank pages (below)
+    pages = page_count(listed, PAGE_USAGES)
     if page > pages:
         raise PageNotFoundError(f"page {page} of {pages}")
 
@@ -249,7 +251,7 @@ async def read_usage_tab(request: Request, state: JobState, iri: str, page: int)
         except (SparqlError, RDFSyntaxError):
             logger.exception("Couldn't read the usages of %s", logged_iri(iri))
             return unshown()
-        pages = _pages(len(usages))  # no blank pages for usages counted but not listed
+        pages = page_count(len(usages), PAGE_USAGES)  # no blank pages for usages counted but not listed
         if page > pages:
             raise PageNotFoundError(f"page {page} of {pages} listed")
         ordered = await read_derived(request, lambda connection: sorted_usages(connection, usages), state)
@@ -271,11 +273,6 @@ async def read_usage_tab(request: Request, state: JobState, iri: str, page: int)
         request, lambda connection: read_entity_links(connection, mentioned, prefix, root), state
     )
     return UsageTab(count=count, page=page, pages=pages, groups=shown, annotations_left_out=left_out, links=links)
-
-
-def _pages(usages: int) -> int:
-    """Return how many pages that many usages take: at least one, which says if there are none."""
-    return max(1, math.ceil(usages / PAGE_USAGES))
 
 
 class UsagePage(NamedTuple):

@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from browl.derived import TYPE_LABELS, EntityType, ready_generation
 from browl.links import EntityLink, read_entity_links
 from browl.names import name_properties, normalize
+from browl.pager import PAGE_PARAM, make_pager, page_count, read_page
 from browl.pages import (
     MAX_IRI_CHARS,
     PANEL_HEADERS,
@@ -25,7 +26,6 @@ from browl.pages import (
     link_root,
     not_found,
     read_derived,
-    read_offset,
     single_params,
     templates,
 )
@@ -55,11 +55,15 @@ PROPERTY_PARAM = "property"
 VALUES_PARAM = "values"
 """The query parameter that says which values count: `all`, the default, or `direct`, without entailed ones."""
 
-OFFSET_PARAM = "offset"
-"""The query parameter that says how many results come before those shown; absent for none."""
-
 PAGE_SIZE = 50
 """How many results the full results page shows at once."""
+
+LAST_PAGE = MAX_OFFSET // PAGE_SIZE + 1
+"""The deepest page of results the results page shows, as deep as a query may skip."""
+
+COUNT_TO = MAX_OFFSET + PAGE_SIZE + 1
+"""How many results the results page counts, at most: those of its deepest page, and one more, to tell whether there
+are more than it shows. An exact count would read every match."""
 
 _VALUES = ("all", "direct")
 """What `values=` may give."""
@@ -88,7 +92,7 @@ class SearchRequest:
             checked against the served ontology's (`_choices`), in their walk order
             (`browl.search.SearchBackend.properties`).
         direct: Whether only direct values count.
-        offset: How many results come before those shown.
+        page: The page of results it shows, from 1.
         suggest: Whether it asks for the autocomplete fragment.
     """
 
@@ -96,8 +100,13 @@ class SearchRequest:
     types: tuple[EntityType, ...]
     properties: tuple[str, ...]
     direct: bool
-    offset: int
+    page: int
     suggest: bool
+
+    @property
+    def offset(self) -> int:
+        """Return how many results come before those shown."""
+        return (self.page - 1) * PAGE_SIZE
 
 
 class Marked(NamedTuple):
@@ -163,14 +172,14 @@ def read_request(request: Request) -> SearchRequest | None:
     The properties `property=` names are checked once the served ontology's are read (`_choices`).
     """
     params = request.query_params
-    single = single_params(request, (QUERY_PARAM, VALUES_PARAM, OFFSET_PARAM, SUGGEST_PARAM))
+    single = single_params(request, (QUERY_PARAM, VALUES_PARAM, SUGGEST_PARAM))
     if single is None:
         return None
     text, values, suggest = single[QUERY_PARAM] or "", single[VALUES_PARAM], single[SUGGEST_PARAM]
     if len(text) > MAX_QUERY_CHARS or (values is not None and values not in _VALUES) or suggest not in (None, "1"):
         return None
-    offset = read_offset(single[OFFSET_PARAM])
-    if offset is None or offset > MAX_OFFSET or (offset and suggest):  # the fragment isn't paged
+    page = read_page(request)
+    if page is None or page > LAST_PAGE or (PAGE_PARAM in params and suggest):  # the fragment isn't paged
         return None
     try:
         kinds = {EntityType(kind) for kind in params.getlist(TYPE_PARAM)}
@@ -180,7 +189,7 @@ def read_request(request: Request) -> SearchRequest | None:
     # the URL's.
     types = tuple(kind for kind in EntityType if kind in kinds)
     named = tuple(sorted(set(params.getlist(PROPERTY_PARAM))))
-    return SearchRequest(text, types, named, values == "direct", offset, suggest == "1")
+    return SearchRequest(text, types, named, values == "direct", page, suggest == "1")
 
 
 def _normalized_length(value: str, end: int) -> int:
@@ -373,16 +382,29 @@ def shown_common(common: Sequence[CommonValue], labels: Mapping[str, str]) -> li
     ]
 
 
-def _params(asked: SearchRequest, offset: int = 0) -> list[tuple[str, str]]:
-    """Return a search URL's parameters for the same query and filters, from an offset."""
-    params = [(QUERY_PARAM, asked.text)]
+def _params(asked: SearchRequest) -> list[tuple[str, str]]:
+    """Return a search URL's parameters for the same query and filters, without the page; without `q=` if it's empty."""
+    params = [(QUERY_PARAM, asked.text)] if asked.text else []
     params += [(TYPE_PARAM, kind.value) for kind in asked.types]
     params += [(PROPERTY_PARAM, iri) for iri in asked.properties]
     if asked.direct:
         params.append((VALUES_PARAM, "direct"))
-    if offset:
-        params.append((OFFSET_PARAM, str(offset)))
     return params
+
+
+def _pages(count: int | None) -> tuple[int, bool]:
+    """Return how many pages of results the results page can show, and whether there are more results past them.
+
+    Args:
+        count: How many results there are, up to `COUNT_TO`; None if they weren't counted, as for a blank query.
+
+    Examples:
+        >>> _pages(0), _pages(51), _pages(COUNT_TO - 1), _pages(COUNT_TO)
+        ((1, False), (2, False), (21, False), (21, True))
+    """
+    if count is None or count < COUNT_TO:
+        return page_count(count or 0, PAGE_SIZE), False
+    return LAST_PAGE, True
 
 
 @router.api_route(f"/{SEARCH_PATH}", methods=["GET", "HEAD"], include_in_schema=False)
@@ -404,7 +426,8 @@ async def search_page(request: Request) -> Response:
             order=tuple(names),
             entailed=not asked.direct,
             limit=SEARCH_LIMIT if asked.suggest else PAGE_SIZE,
-            offset=0 if asked.suggest else asked.offset,
+            offset=asked.offset,
+            count_to=0 if asked.suggest else COUNT_TO,
         )
     except ValidationError:
         return not_found(request)  # e.g. a lone surrogate
@@ -419,10 +442,14 @@ async def search_page(request: Request) -> Response:
     if not set(asked.properties) <= set(offered):
         return not_found(request)
     asked = replace(asked, properties=tuple(iri for iri in offered if iri in asked.properties))
+    prefix = settings.reserved_prefix
+    page_path = f"/{prefix}/{SEARCH_PATH}"
+    if PAGE_PARAM in request.query_params and asked.page == 1:
+        # The first page's URL is without `page`, so each page has one URL.
+        return Response(status_code=301, headers={"Location": href(request, with_query(page_path, _params(asked)))})
     results = SearchResults((), more=False)  # the page's form alone
     if normalized:
         results = await backend.search(generation, query)
-    prefix = settings.reserved_prefix
     root = link_root(request.scope)
 
     labels = {choice.iri: choice.label for choice in choices}
@@ -436,15 +463,14 @@ async def search_page(request: Request) -> Response:
         ]
 
     hits = await read_derived(request, read, state)
-    page_path = f"/{prefix}/{SEARCH_PATH}"
     if asked.suggest:
         context = {"hits": hits, "blank": False, "all_results": href(request, with_query(page_path, _params(asked)))}
         return templates.TemplateResponse(request, "search_suggestions.html", context, headers=PANEL_HEADERS)
-    previous = next_ = None
-    if asked.offset:
-        previous = href(request, with_query(page_path, _params(asked, max(asked.offset - PAGE_SIZE, 0))))
-    if results.more and asked.offset + PAGE_SIZE <= MAX_OFFSET:
-        next_ = href(request, with_query(page_path, _params(asked, asked.offset + PAGE_SIZE)))
+    pages, more = _pages(results.count)
+    # None past the last page, which has no more results.
+    pager = None
+    if asked.page <= pages:
+        pager = make_pager(request, "Result", asked.page, pages, page_path, _params(asked), more=more, nofollow=True)
     context = {
         "noindex": True,
         "text": asked.text,
@@ -453,8 +479,10 @@ async def search_page(request: Request) -> Response:
         "hits": hits,
         "common": shown_common(results.common, labels),
         "offset": asked.offset,
-        "previous": previous,
-        "next": next_,
+        "count": results.count,
+        "more": more,
+        "shown_cap": COUNT_TO - 1,  # with `more`, there are more results than this
+        "pager": pager,
         "action": href(request, page_path),
         "types": [(kind.value, TYPE_LABELS[kind], kind in asked.types) for kind in EntityType],
         "properties": choices,

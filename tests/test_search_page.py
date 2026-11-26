@@ -4,6 +4,7 @@ import html.parser
 import re
 import urllib.parse
 from collections.abc import Iterator
+from dataclasses import replace
 from typing import NamedTuple
 
 import pytest
@@ -13,8 +14,8 @@ from fastapi.testclient import TestClient
 from browl import search, search_page
 from browl.derived import EntityType, NotCurrentError
 from browl.pages import MAX_NAME_CHARS
-from browl.search import MAX_OFFSET, MAX_QUERY_CHARS
-from browl.search_page import PAGE_SIZE, Marked, _split, marked_length, value_offset
+from browl.search import MAX_QUERY_CHARS, SearchQuery, SearchResults
+from browl.search_page import COUNT_TO, LAST_PAGE, PAGE_SIZE, Marked, _split, marked_length, value_offset
 from tests.helpers import derived_stage, make_app
 from tests.test_trees import loaded
 
@@ -464,9 +465,9 @@ def test_paging(client: TestClient) -> None:
     links = dict(first.links)
     assert "Previous" not in links
     params = urllib.parse.parse_qsl(urllib.parse.urlsplit(links["Next"]).query)
-    assert params == [("q", "item"), ("type", "class"), ("values", "direct"), ("offset", str(PAGE_SIZE))]
+    assert params == [("q", "item"), ("type", "class"), ("values", "direct"), ("page", "2")]
     response = client.get(SEARCH, params=params)
-    assert f"Showing {PAGE_SIZE + 1}–{MANY}" in response.text
+    assert re.search(rf"Showing {PAGE_SIZE + 1}–{MANY} of\s+{MANY}<", response.text)
     second = Hits(response.text)
     assert [hit.name for hit in second.hits] == [f"item {n:03}" for n in range(PAGE_SIZE, MANY)]
     assert "Next" not in dict(second.links)
@@ -475,14 +476,15 @@ def test_paging(client: TestClient) -> None:
 
 
 @pytest.mark.parametrize(
-    ("text", "offset", "note"), [("qqq", None, "No matches."), ("item", MAX_OFFSET, "No more results.")]
+    ("text", "page", "note"), [("qqq", None, "No matches."), ("item", LAST_PAGE, "No more results.")]
 )
-def test_no_results_note(client: TestClient, text: str, offset: int | None, note: str) -> None:
-    """Check that a page with no results says there are none, or past the first page, no more."""
-    params = [("q", text)] + ([("offset", str(offset))] if offset else [])
+def test_no_results_note(client: TestClient, text: str, page: int | None, note: str) -> None:
+    """Check that a page with no results says there are none, or past the last page, no more, without a pager."""
+    params = [("q", text)] + ([("page", str(page))] if page else [])
     response = client.get(SEARCH, params=params)
     assert Hits(response.text).hits == []
     assert f'<p class="note">{note}</p>' in response.text
+    assert '<nav class="pager"' not in response.text
 
 
 def test_filters_in_fixed_order(client: TestClient) -> None:
@@ -495,22 +497,105 @@ def test_filters_in_fixed_order(client: TestClient) -> None:
         ("type", "object_property"),
         ("property", LABEL),
         ("property", SYNONYM),
-        ("offset", str(PAGE_SIZE)),
+        ("page", "2"),
     ]
 
 
-def test_previous_from_between_pages(client: TestClient) -> None:
-    """Check that Previous from an offset under a page goes to the first page, which has no offset."""
-    links = dict(results(client, [("q", "item"), ("offset", "10")]).links)
-    assert urllib.parse.parse_qsl(urllib.parse.urlsplit(links["Previous"]).query) == [("q", "item")]
+@pytest.mark.parametrize(
+    ("params", "location"),
+    [
+        ([("type", "class"), ("page", "1"), ("q", "item")], f"{SEARCH}?q=item&type=class"),
+        ([("page", "1")], SEARCH),  # the blank page's URL is without `q=`
+        ([("q", ""), ("type", "class"), ("page", "1")], f"{SEARCH}?type=class"),
+    ],
+)
+def test_first_page_redirected(client: TestClient, params: list[tuple[str, str]], location: str) -> None:
+    """Check that `page=1` is redirected to the first page's URL, without it, so each page has one URL."""
+    response = client.get(SEARCH, params=params, follow_redirects=False)
+    assert response.status_code == 301
+    assert response.headers["Location"] == location
 
 
-def test_paging_stops_at_max_offset(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Check that `MAX_OFFSET` is a valid offset, and that no Next link goes past it, though there are more results."""
-    monkeypatch.setattr(search_page, "MAX_OFFSET", PAGE_SIZE - 1)
-    assert "Next" not in dict(results(client, [("q", "item")]).links)
-    assert len(results(client, [("q", "item"), ("offset", str(PAGE_SIZE - 1))]).hits) == MANY - PAGE_SIZE + 1
-    assert client.get(SEARCH, params=[("q", "item"), ("offset", str(PAGE_SIZE))]).status_code == 404
+def test_pager(client: TestClient) -> None:
+    """Check the results page's pager (`pager.html`): at the top of the results, without htmx.
+
+    Its form keeps the query and filters. A results page with one page has none.
+    """
+    text = client.get(SEARCH, params=[("q", "item"), ("type", "class")]).text
+    start = text.index('<nav class="pager" aria-label="Result pages">')
+    nav = text[start : text.index("</nav>", start)]
+    assert start < text.index('<table class="hits">')
+    assert "hx-" not in nav
+    assert f'action="{SEARCH}"' in nav
+    hidden = re.findall(r'<input type="hidden" name="([^"]+)" value="([^"]*)">', nav)
+    assert hidden == [("q", "item"), ("type", "class")]
+    assert re.search(r'max="2" value="1"\s+id="result-page" required> of 2</label>', nav)
+    assert '<span class="pager-off" aria-disabled="true">Previous</span>' in nav
+    assert 'rel="next nofollow"' in nav
+    assert '<nav class="pager"' not in client.get(SEARCH, params=[("q", "myo")]).text  # one page: no pager
+
+
+def test_paging_stops_at_last_page(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that the pager stops at `LAST_PAGE`, though there are more results, which count as more than shown.
+
+    A page past it is "not found".
+    """
+    monkeypatch.setattr(search_page, "LAST_PAGE", 2)
+    monkeypatch.setattr(search_page, "COUNT_TO", PAGE_SIZE + 2)  # under MANY
+    first = client.get(SEARCH, params=[("q", "item")]).text
+    assert re.search(rf"Showing 1–{PAGE_SIZE} of\s+more than {PAGE_SIZE + 1}<", first)
+    assert re.search(r"of 2\+</label>", first)
+    last = client.get(SEARCH, params=[("q", "item"), ("page", "2")]).text
+    assert len(Hits(last).hits) == MANY - PAGE_SIZE
+    assert "Next" not in dict(Hits(last).links)
+    assert client.get(SEARCH, params=[("q", "item"), ("page", "3")]).status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("count_to", "count", "pages"),
+    [(MANY + 1, f"{MANY}", "2"), (MANY, f"more than {MANY - 1}", r"2\+")],
+    ids=["exact under the cap", "more than at the cap"],
+)
+def test_count_at_cap(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, count_to: int, count: str, pages: str
+) -> None:
+    """Check the count the results page shows either side of the cap: exact below `COUNT_TO`, else "more than"."""
+    monkeypatch.setattr(search_page, "LAST_PAGE", 2)
+    monkeypatch.setattr(search_page, "COUNT_TO", count_to)
+    text = client.get(SEARCH, params=[("q", "item")]).text
+    assert re.search(rf"Showing 1–{PAGE_SIZE} of\s+{count}<", text)
+    assert re.search(rf"of {pages}</label>", text)
+
+
+def test_count_past_cap_shown(app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check the text with the real constants once the count reaches `COUNT_TO`: "more than 1,050" and "of 21+"."""
+    real = app.state.search.search
+
+    async def capped(generation: int, query: SearchQuery) -> SearchResults:
+        return replace(await real(generation, query), count=COUNT_TO)
+
+    monkeypatch.setattr(app.state.search, "search", capped)
+    text = client.get(SEARCH, params=[("q", "item")]).text
+    assert re.search(rf"Showing 1–{PAGE_SIZE} of\s+more than 1,050<", text)
+    assert re.search(r"of 21\+</label>", text)
+
+
+@pytest.mark.parametrize(("suggest", "count_to"), [(True, 0), (False, COUNT_TO)], ids=["autocomplete", "results"])
+def test_only_results_page_counts(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch, suggest: bool, count_to: int
+) -> None:
+    """Check that the results page counts its results up to `COUNT_TO`, and the autocomplete counts none."""
+    real = app.state.search.search
+    queries: list[SearchQuery] = []
+
+    async def spy(generation: int, query: SearchQuery) -> SearchResults:
+        queries.append(query)
+        return await real(generation, query)
+
+    monkeypatch.setattr(app.state.search, "search", spy)
+    params = [("q", "item")] + ([("suggest", "1")] if suggest else [])
+    assert client.get(SEARCH, params=params).status_code == 200
+    assert [query.count_to for query in queries] == [count_to]
 
 
 @pytest.mark.parametrize(
@@ -518,22 +603,23 @@ def test_paging_stops_at_max_offset(client: TestClient, monkeypatch: pytest.Monk
     [
         [("q", "a"), ("q", "b")],
         [("q", "a"), ("values", "all"), ("values", "all")],
-        [("q", "a"), ("offset", "50"), ("offset", "50")],
+        [("q", "a"), ("page", "2"), ("page", "2")],
         [("q", "a"), ("suggest", "1"), ("suggest", "1")],
         [("q", "a"), ("type", "individual")],
         [("q", "a"), ("property", f"{EX}notAName")],
         [("q", "a"), ("property", "http://www.w3.org/2004/02/skos/core#prefLabel")],  # a default, but without values
         [("q", "a"), ("values", "some")],
-        [("q", "a"), ("offset", "0")],
-        [("q", "a"), ("offset", "01")],
-        [("q", "a"), ("offset", "-5")],
-        [("q", "a"), ("offset", "+5")],
-        [("q", "a"), ("offset", "\u0665\u0660")],  # 50 in Arabic-Indic digits
-        [("q", "a"), ("offset", " 5")],
-        [("q", "a"), ("offset", str(MAX_OFFSET + 1))],
-        [("q", "a"), ("offset", "1" * 5_000)],  # past int()'s digit limit
+        [("q", "a"), ("page", "0")],
+        [("q", "a"), ("page", "01")],
+        [("q", "a"), ("page", "-5")],
+        [("q", "a"), ("page", "+5")],
+        [("q", "a"), ("page", "\u0665")],  # 5 in Arabic-Indic digits
+        [("q", "a"), ("page", " 5")],
+        [("q", "a"), ("page", str(LAST_PAGE + 1))],
+        [("q", "a"), ("page", "1" * 5_000)],  # past int()'s digit limit
         [("q", "a"), ("suggest", "yes")],
-        [("q", "a"), ("suggest", "1"), ("offset", "50")],
+        [("q", "a"), ("suggest", "1"), ("page", "2")],
+        [("q", "a"), ("suggest", "1"), ("page", "1")],  # not redirected: the fragment isn't paged
         [("q", "a" * (MAX_QUERY_CHARS + 1))],
     ],
 )
@@ -567,6 +653,8 @@ def test_under_root_path(app: FastAPI) -> None:
         page = Hits(response.text)
         assert [hit.href for hit in page.hits] == ["/root/myoblast", "/root/heart"]
         assert page.links[-1][1].startswith(f"/root{SEARCH}?")
+        redirect = client.get(SEARCH, params=[("q", "myo"), ("page", "1")], follow_redirects=False)
+        assert (redirect.status_code, redirect.headers["Location"]) == (301, f"/root{SEARCH}?q=myo")
 
 
 @pytest.mark.parametrize(
@@ -631,7 +719,7 @@ def test_common_value_note(monkeypatch: pytest.MonkeyPatch) -> None:
         response = client.get(SEARCH, params=[("q", "gc_id"), ("property", XREF)])
         default = client.get(SEARCH, params=[("q", "gc_id")])
         only_common = client.get(SEARCH, params=[("q", "gc_id:1"), ("property", XREF)])
-        later = client.get(SEARCH, params=[("q", "gc_id"), ("property", XREF), ("offset", "50")])
+        later = client.get(SEARCH, params=[("q", "gc_id"), ("property", XREF), ("page", "2")])
     assert response.status_code == 200
     notes = re.findall(r'<ul class="common-values">(.*?)</ul>', response.text, re.DOTALL)
     assert [" ".join(re.sub("<[^>]+>", "", note).split()) for note in notes] == [

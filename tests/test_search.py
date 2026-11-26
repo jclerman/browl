@@ -20,6 +20,7 @@ from browl.precache.stage import HOOKS, pre_caching_stage
 from browl.precache.values import annotation_values
 from browl.search import (
     KEY_CHARS,
+    MAX_COUNT,
     MAX_LIMIT,
     MAX_OFFSET,
     MAX_QUERY_CHARS,
@@ -552,6 +553,21 @@ async def test_paging(data_dir: Path) -> None:
     assert find(settings, "m", offset=5) == SearchResults((), more=False)
 
 
+async def test_count(data_dir: Path) -> None:
+    """Check that `count_to` counts the results up to it, past the page, and that a query without it counts none."""
+    settings = make_settings()
+    await build(settings, [(f"e{n}", LABEL, LABEL, f'"m{n}"@en') for n in range(5)])
+    assert find(settings, "m", limit=1).count is None
+    assert [find(settings, "m", limit=1, count_to=to).count for to in (3, 5, 6)] == [3, 5, 5]
+    assert find(settings, "m", limit=2, offset=4, count_to=6).count == 5
+    counted = find(settings, "m", limit=1, count_to=3)
+    assert ([hit.value for hit in counted.hits], counted.more) == (["m0"], True)  # the page is the same
+    under_page = find(settings, "m", limit=4, count_to=2)  # the page, and one more, are still read
+    assert (len(under_page.hits), under_page.more, under_page.count) == (4, True, 2)
+    assert find(settings, "q", count_to=3).count == 0
+    assert find(settings, " ", count_to=3) == SearchResults((), more=False, count=0)
+
+
 async def test_paging_across_exact_matches(data_dir: Path) -> None:
     """Check paging from the exact matches into the prefix matches.
 
@@ -675,10 +691,21 @@ async def test_cursors_closed_per_length(data_dir: Path, monkeypatch: pytest.Mon
         {"limit": MAX_LIMIT + 1},
         {"offset": -1},
         {"offset": MAX_OFFSET + 1},
+        {"count_to": -1},
+        {"count_to": MAX_COUNT + 1},
         {"text": "x" * (MAX_QUERY_CHARS + 1)},
         {"text": "a\ud800"},
     ],
-    ids=["no results", "too many results", "negative offset", "offset too deep", "text too long", "lone surrogate"],
+    ids=[
+        "no results",
+        "too many results",
+        "negative offset",
+        "offset too deep",
+        "negative count",
+        "count too high",
+        "text too long",
+        "lone surrogate",
+    ],
 )
 def test_query_checked(fields: dict[str, object]) -> None:
     """Check the bounds of a query's fields, checked when it's made."""

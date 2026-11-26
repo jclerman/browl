@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "pager.html" import pager_nav %}
 {% from "search_hits.html" import hit_text %}
 {% block title %}{% if blank %}Search{% else %}Search: {{ text | isolate }}{% endif %}{% endblock %}
 {% block content %}
@@ -46,8 +47,11 @@
     <div class="results-head">
       <h2 id="results-heading">Results</h2>
       {% if hits %}
-      <p class="note">Showing {{ "{:,}".format(offset + 1) }}–{{ "{:,}".format(offset + hits | length) }}</p>
+      <p class="note">Showing {{ "{:,}".format(offset + 1) }}–{{ "{:,}".format(offset + hits | length) }} of
+        {% if more %}more than {{ "{:,}".format(shown_cap) }}{% else %}{{ "{:,}".format(count) }}{% endif %}</p>
       {% endif %}
+      {# In the heading's row, outside the panel, so it stays in view as the hits scroll. #}
+      {% if pager is not none %}{{ pager_nav(pager) }}{% endif %}
     </div>
     <div class="results-body" tabindex="0" aria-labelledby="results-heading">
     {% if blank %}
@@ -79,12 +83,6 @@
     </table>
     {% elif not common %}
     <p class="note">{% if offset %}No more results.{% else %}No matches.{% endif %}</p>
-    {% endif %}
-    {% if previous is not none or next is not none %}
-    <nav class="search-paging" aria-label="Result pages">
-      {% if previous is not none %}<a href="{{ previous }}" rel="prev nofollow">Previous</a>{% endif %}
-      {% if next is not none %}<a href="{{ next }}" rel="next nofollow">Next</a>{% endif %}
-    </nav>
     {% endif %}
     {% endif %}
     </div>

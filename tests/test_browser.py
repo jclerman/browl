@@ -38,6 +38,7 @@ from browl.overview import ReadAxioms
 from browl.precache.usage_table import Progress
 from browl.rdf import IRI, RDFS, XSD
 from browl.rdf import RDF as RDF_NS
+from browl.search_page import PAGE_SIZE
 from browl.upload import UploadError
 from browl.usage_tab import PageNotFoundError, UsageGroup, UsageTab
 from tests.conftest import DATA
@@ -53,6 +54,7 @@ from tests.helpers import (
     session_cookie,
 )
 from tests.test_pages import FakeTables
+from tests.test_search_page import MANY as MANY_ITEMS
 from tests.test_search_page import SYNONYM, search_stage
 from tests.test_trees import KIDS, SUB_CLASS, kid, tree_stage
 
@@ -3488,6 +3490,27 @@ def test_search_without_javascript(page: Page, searchable: LiveServer) -> None:
     expect(page.locator(".hits .hit")).to_have_count(2)
 
 
+@pytest.mark.parametrize("javascript", [True, pytest.param(False, marks=NO_JS)])
+def test_search_pager(page: Page, searchable: LiveServer, javascript: bool) -> None:
+    """Check that the results page's pager (P-45) loads whole pages, with or without JS.
+
+    Go to page 1 loads the first page's URL, without `page`.
+    """
+    search = f"{searchable.url}/_browl/search"
+    page.goto(f"{search}?q=item&type=class")
+    results_pager = page.get_by_role("navigation", name="Result pages")
+    expect(results_pager).to_have_text(re.compile(r"^\s*Previous\s+Page\s+of\s+2\s+Go\s+Next\s*$"))
+    expect(page.locator(".results-head")).to_contain_text(f"Showing 1–{PAGE_SIZE} of {MANY_ITEMS}")
+    results_pager.get_by_role("link", name="Next").click()
+    expect(page).to_have_url(f"{search}?q=item&type=class&page=2")
+    expect(results_pager.get_by_role("spinbutton")).to_have_value("2")
+    expect(page.locator(".hits .hit")).to_have_count(MANY_ITEMS - PAGE_SIZE)
+    results_pager.get_by_role("spinbutton").fill("1")
+    results_pager.get_by_role("button", name="Go").click()
+    expect(page).to_have_url(f"{search}?q=item&type=class")
+    expect(page.locator(".hits .hit")).to_have_count(PAGE_SIZE)
+
+
 @pytest.mark.parametrize(("width", "one_line"), [(1000, True), (360, False)])
 def test_search_hit_one_line(page: Page, searchable: LiveServer, width: int, one_line: bool) -> None:
     """Check that a results-page hit, with its CURIE and property, takes one line on a wide screen, else wraps."""
@@ -3579,7 +3602,7 @@ def test_search_page_side_by_side(page: Page, searchable: LiveServer) -> None:
     assert abs((heading["y"] + heading["height"]) - (title["y"] + title["height"])) < title["height"] / 2  # one row
     expect(page.locator("#results-heading")).to_be_in_viewport()  # it doesn't scroll with the hits
     expect(page.locator("input[name=type]").first).to_be_in_viewport()
-    expect(page.get_by_role("link", name="Next")).to_be_in_viewport()
+    expect(page.get_by_role("navigation", name="Result pages")).to_be_in_viewport()  # in the heading's row
 
 
 @pytest.mark.parametrize("query", ["?q=item", ""], ids=["results", "blank"])
