@@ -1,0 +1,19 @@
+# The axiom annotations on an entity's annotations (DESIGN.md §2.8, Axiom annotations): the annotations of the reified
+# axioms (owl:Axiom) whose owl:annotatedSource is the entity and whose target isn't blank, and of the owl:Annotations
+# nested on them, at any depth. One row per annotation: the node it's on; that node's source, property and target,
+# which say what it annotates; and the annotation's property and value. browl.annotations matches the reified axioms
+# to the entity's annotations, so those of its logical axioms are dropped there, and drops repeats (no DISTINCT, which
+# can slow Fuseki), blank values, cycles and nesting past browl.axioms.MAX_ANNOTATION_DEPTH. `$entity` stands for the
+# entity's IRI, and browl.annotations adds the dataset clause before WHERE and a LIMIT.
+SELECT ?node ?source ?about ?target ?property ?value
+WHERE {
+  ?axiom owl:annotatedSource $entity ;
+    owl:annotatedTarget ?annotated .
+  FILTER (!isBlank(?annotated))
+  ?node owl:annotatedSource* ?axiom ;
+    owl:annotatedSource ?source ;
+    owl:annotatedProperty ?about ;
+    owl:annotatedTarget ?target ;
+    ?property ?value .
+  FILTER (?property NOT IN (rdf:type, owl:annotatedSource, owl:annotatedProperty, owl:annotatedTarget))
+}

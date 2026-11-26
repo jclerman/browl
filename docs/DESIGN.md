@@ -1229,33 +1229,36 @@ Tabs (U-28; see [2.9](#29-page-layout)):
       keyword spans both columns: a property chain, which the property it implies owns
       (`p o q SubPropertyOf: r`); a characteristic (`Functional: p`); an n-ary axiom written as a list
       (`DisjointClasses: A, B, C`); a negative assertion (`not (…)`); an `OtherAxiom`; and every line with no
-      subject. An axiom's annotations stay beneath it, indented, under both columns (inline after it from
-      P-49). On a phone the subject goes above its lines, which keep the two columns.
+      subject. An axiom's annotations follow it on its line, in the rest's column (P-49). On a phone the subject goes
+      above its lines, which keep the two columns.
     - **Symmetric axioms subject first:** `EquivalentTo`, `DisjointWith`, `SameAs`, `DifferentFrom`, equivalent and
       disjoint properties and `InverseOf`, in their two-member form, are written with their members sorted, so the
       subject could be on the right. A line has its subject first (`browl.owl.Axiom.with_first`): on Y's tab,
       `X DisjointWith Y`, stated on X, is under X as `X DisjointWith Y`, though Y sorts first. Only the order it's
       written in changes, not the axiom; the page data holds it so.
-    - **The entity highlighted:** wherever the page's entity is in a line, its keyword column and the annotations
-      beneath it included, it's in a `<mark>`, with a background and bold, so not by color alone (WCAG AA in light
+    - **The entity highlighted:** wherever the page's entity is in a line, its keyword column and its annotations
+      included, it's in a `<mark>`, with a background and bold, so not by color alone (WCAG AA in light
       and dark: `--mark-bg`); a link stays a link. The macros compare IRIs, not names. Not in the subject column.
   - **Annotation assertions** _(P-27b)_: most usages are annotation assertions (`S P <entity>`, or `S <entity> V` for
     an annotation property), so they have a node of their own (`browl.owl.AnnotationAssertion`), shown
     `subject property value`, as a property assertion is, and as the OWLAPI's renderer writes it. The Overview's
     axioms still leave them out.
-  - **Axiom annotations** _(P-27b)_: a line shows its axiom's annotations only where the usage is found through them
-    alone: the entity is in them and not in the rest of the axiom. That's a reified axiom's root (a synonym annotated
-    with a synonym type, a definition with a `hasDbXref`), and a root with no subject whose only mention is in its
-    annotations (an annotated general class axiom, an n-ary `DisjointClasses`). Then all its annotations are shown,
-    beneath the line in small text, `property value`; an annotation's own annotations, nested on an
-    `owl:Annotation`, are a level further in, as a list within its item. Every other line has none, as on the
-    Overview. The nodes (`browl.owl.Annotation`, `Axiom.annotations`, which `convert_axioms` fills from an annotated
-    OWLAPI axiom) are general, so U-35 (P-49) can show annotations on the Overview too.
-    - _(Proposed, P-49)_ Every line shows its axiom's annotations, inline as on the Overview (Axiom annotations,
-      below), in place of beneath it; a line found through them alone keeps the entity marked in them. A usage whose
-      terms are known is written, not fetched (A page fetches, below), so a page also fetches the reified
-      `owl:Axiom`s whose source, property and target match its written usages, with their nested annotations. That
-      query is capped by `CONSTRUCT_MAX_BYTES`, and its IRIs count toward `MAX_FRAGMENT_IRIS`.
+  - **Axiom annotations** _(P-27b, P-49)_: every line shows its axiom's annotations after it, as on the Overview
+    (Axiom annotations, below). A usage can be found through them alone: the entity is in them and not in the rest
+    of the axiom. That's a reified axiom's root (a synonym annotated with a synonym type, a definition with a
+    `hasDbXref`), and a root with no subject whose only mention is in its annotations (an annotated general class
+    axiom, an n-ary `DisjointClasses`); such a line keeps the entity marked in them. The nodes (`browl.owl.Annotation`,
+    `Axiom.annotations`, which `convert_axioms` fills from an annotated OWLAPI axiom) are the Overview's too.
+    - **Fetched for the page** _(P-49)_: a usage whose terms are known is written, not fetched (A page fetches,
+      below), so a page also fetches the reified `owl:Axiom`s, with their nested annotations, that may annotate its
+      usages with a subject (`usage-annotations.rq`): by the triple's subject and predicate, and its object, an IRI;
+      a literal, by a SHA-256 digest of its lexical form, language tag and datatype, so a long value isn't written
+      into the query; or any blank node, as a reified axiom's blank target can be a copy of the triple's node. The
+      OWLAPI makes an axiom of a reified one even without its triple, and the query can find a subject's others with
+      a blank object and the same predicate, so these are parsed apart, and each adds its annotations only to the
+      page's axiom that is the same without them (`browl.usage_tab.usage_axioms`). Their triples count toward the
+      page's `CONSTRUCT_MAX_BYTES` and `MAX_FRAGMENT_IRIS`, and every fragment is pruned as the Overview's is (Axiom
+      annotations, below).
   - **Before the usage table is ready** (about 4 minutes after a NCBITaxon load; seconds for Uberon and HPO): an
     entity with up to T = 20,000 usages streams them all, sorts and slices, per request: at most 0.21 s on NCBITaxon
     (8–11 µs per usage) and 0.1 s on Uberon and HPO (2–4 µs). That's every entity but 28 in NCBITaxon, 7 in Uberon and
@@ -1376,7 +1379,7 @@ fallback). The page's data is typed models, as every entity page's is (below).
     as an annotation property, as the OWLAPI reads one. No `DISTINCT`, which can slow Fuseki: repeats, which only the
     imports' merge could give, are dropped in Python. Like the axioms' queries, it sees the imports when the
     ontology has any. A blank value (an anonymous individual) is left out. Axiom annotations on the assertions (such as
-    a definition's references) aren't shown yet; P-49 shows them (Axiom annotations, below).
+    a definition's references) are read by a second query (Axiom annotations, below).
   - **Why not from the axioms' fragment:** the OWLAPI could list the annotation assertions of the fragment it parses,
     but then the annotations would fail with the axioms, and an entity with too many axioms (below) would lose its
     label and definition too. A separate query costs one more round trip, run at the same time.
@@ -1436,30 +1439,50 @@ fallback). The page's data is typed models, as every entity page's is (below).
     panel and the Usage tab.
   - **Data:** each section (`AxiomGroup`) holds its label and lines; a line (`FrameLine`) its axiom, None for an
     implied equivalent, and the operands it shows, so the JSON API (U-42) returns the frame as the page shows it.
-- **Axiom annotations** _(Proposed, P-49; U-35)_: an annotation value or a logical axiom shows its axiom's
-  annotations after it, on its line, muted and in brackets, each as `property: value`, several values of one property
-  named once and separated by commas: `A hollow, muscular organ … [database cross reference: PMID:1234, ZFA:0000114]`.
-  The line wraps as a long value does, the brackets staying with the text before them; an annotation's own annotations
-  are in brackets within its value's. Values and links render as an annotation's do, and a blank value (an anonymous
-  individual) is left out, as in the panel. The brackets and the muting are the template's markup, outside each
-  value's `<bdi>`, so a value's own text can't pass for an annotation; the muted text keeps WCAG AA contrast in both
-  themes.
-  - **Annotations panel:** a second query, run alongside the panel's, reads the reified `owl:Axiom`s whose source,
-    property and target match the entity's annotation triples, repeats dropped in Python, not by `DISTINCT`. Its rows
-    have a cap of their own (`MAX_AXIOM_ANNOTATIONS`, 2,000; their characters count toward `MAX_ANNOTATIONS_CHARS`),
-    so an entity whose values carry many annotations doesn't lose a panel that renders today: past the cap the values
-    are shown without them, with a note. Nesting is read to at most `MAX_DEPTH` levels, as the OWLAPI conversion's is
-    (`browl.axioms`), and a node already on the path is dropped, so a cycle of `owl:Annotation`s ends.
-  - **Logical-axioms panel:** the fragment holds no axiom annotations today. `entity-axioms.rq` describes the entity
-    and its blank roots, and a reified `owl:Axiom` points at them (`owl:annotatedSource`), not from them, so
-    `entity_closure`'s dropping of annotations changes nothing on a page. P-49 extends the fragment queries to fetch
-    the `owl:Axiom`s whose source is the entity or one of its roots, with their nested annotations, within the
-    fragment's caps (`CONSTRUCT_MAX_BYTES`, `MAX_FRAGMENT_IRIS`), measured first; if they'd exceed them, the axioms
-    are shown without annotations, with a note, rather than not at all. `entity_closure` then keeps the annotations.
+- **Axiom annotations** _(P-49; U-35)_: an annotation value or a logical axiom shows its axiom's annotations after
+  it, on its line, muted and in brackets, each as `property: value`, several values of one property named once and
+  separated by commas, properties by semicolons: `A hollow, muscular organ … [database cross reference: PMID:1234,
+  ZFA:0000114]`. Properties and values are sorted as the annotations panel's are, with no language ranking
+  (`browl.annotations.shown_annotations`). The line wraps as a long value does, a no-break space keeping the opening
+  bracket with the text before it; an annotation's own annotations are in brackets within its value's. Values and
+  links render as an annotation's do, and a blank value (an anonymous individual) is left out, as in the panel. The
+  brackets and the muting are the template's markup (`annotations.html`'s `axiom_annotations`), outside each value's
+  `<bdi>`, so a value's own text can't pass for an annotation; the muted text is `--muted`, AA on both themes'
+  backgrounds, and the page's entity, marked where it's in them, is `--fg` on `--mark-bg`, where `--muted` isn't AA in
+  the dark theme.
+  - **Annotations panel:** a second query (`entity-value-annotations.rq`), run alongside the panel's, reads the
+    annotations of the reified `owl:Axiom`s whose source is the entity and whose target isn't blank, and of the
+    `owl:Annotation`s nested on them, one row per annotation with the node it's on and what that node annotates.
+    Python matches them to the entity's annotation values, so a logical axiom's never show here, and drops repeats,
+    not `DISTINCT`. Its rows have a cap of their own (`MAX_AXIOM_ANNOTATIONS`, 2,000), and so do its characters
+    (`MAX_ANNOTATIONS_CHARS`), so an entity whose values carry many annotations doesn't lose a panel that renders
+    without them: past either cap, or if the query fails, the values are shown without them, with a note, and the
+    error's logged only if the panel's own query succeeded. Each node is placed once, on one source and what it
+    annotates (`browl.axioms.annotation_sources`): on the shallowest path to it, so a cycle of `owl:Annotation`s ends,
+    and no deeper than `MAX_ANNOTATION_DEPTH` (49, `MAX_DEPTH` - 1, so an annotation's nodes stay within `MAX_DEPTH`).
+    A literal's base direction is lost in a nested annotation's value, as the nodes don't hold it.
+  - **Logical-axioms panel:** a reified `owl:Axiom` points at the entity or a root (`owl:annotatedSource`), not from
+    them, so `entity-axioms.rq` holds none. A third fragment query (`entity-axiom-annotations.rq`), run alongside the
+    other two, describes the reified axioms whose source is the entity or one of its roots, or that annotate a
+    symmetric axiom another entity states with it, and the `owl:Annotation`s nested on them. If they'd take the
+    fragment past `CONSTRUCT_MAX_BYTES` or `MAX_FRAGMENT_IRIS`, or the query fails, the axioms are shown without
+    annotations, with a note, rather than not at all (`browl.axioms.Fragment`). It also holds the reified axioms of
+    the entity's annotation assertions, which the page leaves out with them; filtering those would repeat
+    `entity-annotations.rq`'s test for an annotation property, and they're small ([P-49
+    findings](../research/P-49/README.md)). `entity_closure` keeps the annotations; the fragment-to-whole comparison
+    test checks them too.
+  - **Pruned before parsing:** the OWLAPI's parser overflows its stack on a cycle of `owl:Annotation`s, and follows
+    nesting as deep as it goes. So every fragment, the Overview's and the Usage tab's, keeps each annotation node's one
+    source, as above, and drops the nodes left out (`browl.axioms.pruned_annotations`). Converting an annotation
+    leaves out its own annotations past `MAX_ANNOTATION_DEPTH`, so deep annotations never fail the panel.
   - **Merged lines:** two axioms that differ only in their annotations are distinct OWLAPI axioms, so frame lines are
-    deduplicated by the axiom without its annotations, and a line shows the union of their annotations, each once.
-  - **Data:** each value (`IRIValue`, `LiteralValue`) and `FrameLine` holds its `Annotation`s, so the JSON API
-    returns them too.
+    deduplicated by the axiom without its annotations, as are equivalents stated by several axioms, and a line shows
+    the union of their annotations, each once.
+  - **Cost** ([P-49 findings](../research/P-49/README.md)): on Uberon and HPO, the Overview's p95 went from 7 to
+    10 ms for random classes; the most annotated entity took 41 ms, far inside N-3, with 147 annotations on its values
+    and a 139 KB fragment.
+  - **Data:** each value (`IRIValue`, `LiteralValue`) and `FrameLine` holds its `Annotation`s (a line's axiom without
+    them), and each panel why they're left out, if they are (`annotations_left_out`), so the JSON API returns them too.
 - **Compact layout** (U-32): label column and value column in a two-column grid; tight line spacing within a group and a
   little more between groups. Multi-column values for long lists are Later (U-33). Each panel is a `<dl class="frame">`,
   one `<dt>` per group and one `<dd>` per value; on a phone the values go below their label. The label column fits
@@ -1603,6 +1626,7 @@ fetch nor the renderer does that work. Both are far above what the entities P-15
 pydantic-core's JSON parser stops at about 200 levels (two per node in a list). An axiom whose nodes nest more than
 50 deep (`MAX_DEPTH`, the axiom being depth 1) fails conversion with a `FragmentError`, so only the panel fails, as
 below, and every tree browl makes round-trips through JSON. Ontologies seldom nest more than a few levels.
+Annotations nested past `MAX_ANNOTATION_DEPTH` are left out instead, so the axiom still shows (Axiom annotations).
 
 **When the axioms can't be read** (from P-4's review): a fragment the OWLAPI can't parse, or any other Java exception
 while reading or rendering it (both `FragmentError`), or a query that fails, fails only the axioms panel. The full
@@ -2187,7 +2211,7 @@ To settle when it's built:
 | Descendant counts too slow or memory-hungry at millions of classes | Resolved by S-3 for trees: roaring bitmaps, 4.2 s for NCBITaxon ([S-3 findings](../research/S-3/README.md)). |
 | A dense or adversarial hierarchy makes descendant counting hold too much memory | Found in P-12's review: merging a node's children only once it had them all held memory quadratic in a chain whose members all share one more parent, which a few MB of upload (or a host serving an import) can supply; the build runs in the app process, with no memory limit. P-12 merges each set into its parents as soon as it's complete, which makes that shape linear, and fails the stage once the sets hold more than `DESCENDANT_BUDGET` members (2.5, Distinct descendant counts). |
 | An ontology's anonymous individuals form a graph the owner map walks many times | Proposed for P-47: OWL's blank class expressions and lists are trees, but anonymous individuals can link each other freely, and each root's walk keeps its own visited set under one `WALK_BUDGET`, so 10 K referrers of a shared 1 K-node component would fail the load. A walk stops at an anonymous individual, a root of its own, so each is walked once; an adversarial test checks it (2.5). |
-| Deep or cyclic nested axiom annotations | Proposed for P-49: nesting is read to at most `MAX_DEPTH` levels, and a node already on the path is dropped (2.8, Axiom annotations). |
+| Deep or cyclic nested axiom annotations | Resolved by P-49: each annotation node keeps one source, on the shallowest path to it, at most `MAX_ANNOTATION_DEPTH` deep, in the Overview's query and in every fragment before the OWLAPI parses it, whose parser overflows its stack on a cycle (2.8, Axiom annotations). |
 | An individual with very many types | Proposed for P-47 and P-48: a member line shows at most `MAX_MEMBER_TYPES` other types, and an individual's hierarchy column counts its types toward `MAX_ANCESTORS` (2.8, 2.9). |
 | Loading a very large ontology takes minutes | Accepted for uploads (Q14a), shown on the status page. Restarts don't reload (2.4). NCBITaxon: about 5 minutes, estimated; Uberon: 7 s, measured ([S-4 findings](../research/S-4/README.md)). P-24 checks whether extracting the dictionary and edges by streaming the upload file, in parallel with the TDB2 load, is worth it; P-24a whether running pre-caching's bulk queries in parallel is ([#127](https://github.com/jclerman/browl/issues/127)). |
 | Fragment rendering misses axioms a full-ontology render would show | Resolved by P-15: a fragment adds the axioms rooted at blank nodes that reach the entity (n-ary disjointness and difference, negative property assertions, general class axioms), and the symmetric axioms other entities state. A test compares fragment with full-ontology rendering for every entity of a test ontology holding every kind of OWL 2 axiom; 598 of 598 Uberon entities and 305 of 305 NCBITaxon ones matched too (2.8). |
@@ -2310,7 +2334,7 @@ go into this document.
 | P-45 | Shared results pager: one pager model and macro for the Usage tab and the search results page, htmx optional; on the results page at the top, with "Page n of N", a form to go to any page, and the number of results counted up to `MAX_OFFSET + PAGE_SIZE + 1` IRIs, not by the autocomplete; measure the count's cost on NCBITaxon (2.6, 2.9) | U-10, U-17, U-26 | P-20, P-27, P-41 | To do | [#139](https://github.com/jclerman/browl/issues/139) |
 | P-47 | Individuals' pages: named individuals as entities, searchable, with their Overview sections, Usage tab and hierarchy column; anonymous individuals' assertions listed (2.5, 2.8, 2.9, Proposed) | U-10, U-18 | P-16, P-27, P-38, P-42 | To do | [#162](https://github.com/jclerman/browl/issues/162) |
 | P-48 | Individuals tab on class pages and the navigation bar's list of all individuals, by name with P-45's pager, from one `member` table filled at pre-caching (2.5, 2.8, 2.9, Proposed) | U-18, U-27, U-28 | P-47, P-45 | To do | [#164](https://github.com/jclerman/browl/issues/164) |
-| P-49 | Axiom annotations inline, muted and in brackets, after the annotation value or axiom they annotate: on the Overview's panels and every Usage tab line (2.8, Proposed) | U-35 | P-16, P-27 | To do | [#163](https://github.com/jclerman/browl/issues/163) |
+| P-49 | Axiom annotations inline, muted and in brackets, after the annotation value or axiom they annotate: on the Overview's panels and every Usage tab line (2.8) | U-35 | P-16, P-27 | Done | [#163](https://github.com/jclerman/browl/issues/163) |
 
 ### Phase 5: Search, caching, auth
 

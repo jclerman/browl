@@ -81,8 +81,8 @@ async def read_home(request: Request, state: JobState, meta: Meta) -> Home:
     """
     assert meta.ontology_iri is not None  # the home page is the ontology's
     generation, clause = ready_store(state)
-    annotations, too_many = await read_annotations(request, dataset_name(generation), meta.ontology_iri, clause)
-    mentioned = annotation_iris(annotations)
+    annotations = await read_annotations(request, dataset_name(generation), meta.ontology_iri, clause)
+    mentioned = annotation_iris(annotations.pairs)
     settings: Settings = request.app.state.settings
     prefix, root = settings.reserved_prefix, link_root(request.scope)
 
@@ -109,7 +109,7 @@ async def read_home(request: Request, state: JobState, meta: Meta) -> Home:
         prefix_count=prefix_count,
         triples=state.triples if current else None,
         imports=state.imports if current else None,
-        annotations=annotations_panel(annotations, too_many, links, settings),
+        annotations=annotations_panel(annotations, links, settings),
         links=links,
     )
 

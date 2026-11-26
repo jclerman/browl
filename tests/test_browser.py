@@ -34,13 +34,24 @@ from browl.hierarchy_column import MAX_COLUMN_DEPTH
 from browl.jobs import JobContext, Stage, StageFunction
 from browl.jobtypes import StageError
 from browl.links import EntityLink
+from browl.overview import ReadAxioms
 from browl.precache.usage_table import Progress
 from browl.rdf import IRI, RDFS, XSD
 from browl.rdf import RDF as RDF_NS
 from browl.upload import UploadError
 from browl.usage_tab import PageNotFoundError, UsageGroup, UsageTab
 from tests.conftest import DATA
-from tests.helpers import AUTH_ON, WAIT_S, LiveServer, derived_stage, iso, make_app, no_axioms, session_cookie
+from tests.helpers import (
+    AUTH_ON,
+    WAIT_S,
+    LiveServer,
+    derived_stage,
+    iso,
+    make_app,
+    no_axioms,
+    no_value_annotations,
+    session_cookie,
+)
 from tests.test_pages import FakeTables
 from tests.test_search_page import SYNONYM, search_stage
 from tests.test_trees import KIDS, SUB_CLASS, kid, tree_stage
@@ -1218,6 +1229,7 @@ def annotated(server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> LiveServer
         return pairs
 
     monkeypatch.setattr(browl.overview, "fetch_annotations", fetched)
+    monkeypatch.setattr(browl.overview, "fetch_value_annotations", no_value_annotations)
     monkeypatch.setattr(browl.overview, "_read_axioms", no_axioms)
     return server
 
@@ -1320,14 +1332,15 @@ def varied(server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> LiveServer:
             pairs += [(comment, LiteralValue(lexical=f"comment {i}", datatype=string)) for i in range(MANY_VALUES)]
         return pairs
 
-    async def read_axioms(request: object, dataset: object, iri: str, *args: object) -> tuple[list[owl.AnyAxiom], bool]:
+    async def read_axioms(request: object, dataset: object, iri: str, *args: object) -> ReadAxioms:
         if not iri.endswith(f"/{MANY}"):
-            return [], False
+            return ReadAxioms([])
         entity = owl.Entity(kind=owl.EntityKind.CLASS, iri=iri)
         supers = (owl.Entity(kind=owl.EntityKind.CLASS, iri=f"{EX}/super{i}") for i in range(MANY_VALUES))
-        return [owl.SubClassOf(sub=entity, super=each) for each in supers], False
+        return ReadAxioms([owl.SubClassOf(sub=entity, super=each) for each in supers])
 
     monkeypatch.setattr(browl.overview, "fetch_annotations", fetched)
+    monkeypatch.setattr(browl.overview, "fetch_value_annotations", no_value_annotations)
     monkeypatch.setattr(browl.overview, "_read_axioms", read_axioms)
     return server
 

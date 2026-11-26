@@ -21,7 +21,7 @@ from browl.jobs import JobContext, JobState, Stage, StageFunction
 from browl.jobtypes import ImportResult, Reasoner
 from browl.pages import MAX_IRI_CHARS, MAX_LITERAL_CHARS
 from browl.rdf import IRI, OWL, RDF, RDFS
-from tests.helpers import connect, derived_stage, fuseki_dataset, make_app
+from tests.helpers import connect, derived_stage, fuseki_dataset, make_app, no_value_annotations
 
 pytestmark = pytest.mark.usefixtures("data_dir")
 
@@ -98,6 +98,7 @@ def annotations(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         return list(ANNOTATIONS)
 
     monkeypatch.setattr(browl.overview, "fetch_annotations", fetched)
+    monkeypatch.setattr(browl.overview, "fetch_value_annotations", no_value_annotations)
     return asked
 
 
@@ -174,6 +175,7 @@ def test_annotations_fail(
         raise SparqlError("Fuseki is down")
 
     monkeypatch.setattr(browl.overview, "fetch_annotations", failed)
+    monkeypatch.setattr(browl.overview, "fetch_value_annotations", no_value_annotations)
     with caplog.at_level(logging.ERROR, logger="browl.overview"):
         response = client.get("/onto")
     assert response.status_code == 200

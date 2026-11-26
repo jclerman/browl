@@ -3,11 +3,13 @@
    it; an `http` or `https` IRI as a link to itself (DESIGN.md §2.9), without a referrer, unless it's too long to show
    whole, as a cut one could hide where it goes; any other as text, its bidirectional-text controls encoded. A literal is isolated from the text around it, in its language and base
    direction, cut short if long, with its language tag small and muted. #}
-{% macro annotation_value(value, links) -%}
+{% macro annotation_value(value, links, mark=none) -%}
 {%- if value.type == "iri" -%}
 {%- set link = links.get(value.iri) -%}
+{%- if mark is not none and value.iri == mark %}<mark>{% endif -%}
 {%- if link is not none and link.href is not none %}{{ entity_link(link) }}
 {%- else %}{{ web_iri(value.iri) }}{% endif -%}
+{%- if mark is not none and value.iri == mark %}</mark>{% endif -%}
 {%- else -%}
 <bdi class="value"
   {%- if value.language is not none and value.language | length <= MAX_LANGUAGE_CHARS %} lang="{{ value.language }}"{% endif %}
@@ -16,8 +18,27 @@
 {%- endif -%}
 {%- endmacro %}
 
+{# The axiom annotations on a value or an axiom (`browl.owl.Annotation`), from `links`, after it on its line, muted
+   and in brackets (DESIGN.md §2.8, Axiom annotations): `[property: value, value; property: value]`, grouped and
+   sorted as `browl.overview.page_annotations` does, each value's own in brackets after it. The brackets and the
+   muting are markup, outside each value's `<bdi>`, so a value can't pass for an annotation; a no-break space keeps
+   the opening one with the text before it. The IRI `mark`, the page's entity, is highlighted, as in an axiom. #}
+{% macro axiom_annotations(annotations, links, mark=none) -%}
+{%- set groups = page_annotations(annotations, links) -%}
+{%- if groups -%}
+&nbsp;<span class="axiom-annotations">[
+{%- for group in groups -%}
+{%- if not loop.first %}; {% endif -%}
+{%- if mark is not none and group.property == mark %}<mark>{{ named_iri(group.property, links) }}</mark>
+{%- else %}{{ named_iri(group.property, links) }}{% endif %}:
+{%- for value in group.values %}{% if not loop.first %},{% endif %} {{ annotation_value(value, links, mark) }}
+{{- axiom_annotations(value.annotations, links, mark) }}{% endfor -%}
+{%- endfor %}]</span>
+{%- endif -%}
+{%- endmacro %}
+
 {# An entity's annotations (`browl.overview.AnnotationsPanel`), from `links`, in a two-column grid (U-32): each
-   property's name once, then one line per value. #}
+   property's name once, then one line per value, with its axiom annotations. #}
 {% macro annotation_list(panel, links) -%}
 <section class="annotations panel" tabindex="0" aria-labelledby="annotations-heading">
   <h2 id="annotations-heading">Annotations</h2>
@@ -32,10 +53,15 @@
     {% for group in panel.groups %}
     <dt>{{ named_iri(group.property, links) }}</dt>
     {% for value in group.values %}
-    <dd>{{ annotation_value(value, links) }}</dd>
+    <dd>{{ annotation_value(value, links) }}{{ axiom_annotations(value.annotations, links) }}</dd>
     {% endfor %}
     {% endfor %}
   </dl>
+  {% if panel.annotations_left_out == "too_many" %}
+  <p class="note">These annotations' own annotations are too many to show here.</p>
+  {% elif panel.annotations_left_out == "failed" %}
+  <p class="note">These annotations' own annotations can't be shown just now.</p>
+  {% endif %}
   {% endif %}
 </section>
 {%- endmacro %}

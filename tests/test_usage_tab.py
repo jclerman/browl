@@ -36,6 +36,7 @@ from browl.precache.stage import pre_cache
 from browl.rdf import IRI
 from browl.settings import Settings
 from browl.usage_tab import (
+    UsageFragments,
     UsageGroup,
     UsageTab,
     fetch_usage_fragments,
@@ -218,10 +219,26 @@ def subjects_shown(page: str) -> list[str]:
     return [html.unescape(re.sub(r"<[^>]+>", "", heading)).strip() for heading in found]
 
 
-LINE = re.compile(
-    r'<dd dir="ltr" class="usage-line( usage-whole)?">(.*?)(?:<ul class="axiom-annotations">|</dd>)', re.DOTALL
-)
-"""A Usage tab line: whether it spans the keyword's and the rest's columns, and its markup, without annotations."""
+LINE = re.compile(r'<dd dir="ltr" class="usage-line( usage-whole)?">(.*?)</dd>', re.DOTALL)
+"""A Usage tab line: whether it spans the keyword's and the rest's columns, and its markup."""
+ANNOTATIONS = '&nbsp;<span class="axiom-annotations">'
+"""Where a line's annotations start (`templates/annotations.html`'s `axiom_annotations`)."""
+
+
+def split_annotations(line: str) -> tuple[str, str]:
+    """Return a line's markup without its axiom annotations, and theirs: the outermost span, nested ones within it."""
+    start = line.find(ANNOTATIONS)
+    if start < 0:
+        return line, ""
+    depth, end = 0, start
+    for tag in re.finditer(r"<span\b|</span>", line[start:]):
+        depth += 1 if tag[0] == "<span" else -1
+        if depth == 0:
+            end = start + tag.end()
+            break
+    return line[:start] + line[end:], line[start:end]
+
+
 SPLIT = re.compile(
     r'<span class="visually-hidden">(.*?)</span>\s*<span class="usage-keyword">(.*?)</span>\s*'
     r'<span class="usage-axiom">(.*)</span>\s*$',
@@ -237,32 +254,28 @@ def plain(markup: str) -> str:
 
 def lines_shown(page: str) -> list[str]:
     """Return the text of a Usage tab panel's axiom lines, in order, without their annotations or markup."""
-    return [plain(line) for _, line in LINE.findall(page)]
+    return [plain(split_annotations(line)[0]) for _, line in LINE.findall(page)]
 
 
 def columns_shown(page: str) -> list[tuple[str, str] | str]:
     """Return a Usage tab panel's lines: each in columns as its keyword and the rest, or whole, as text."""
     found: list[tuple[str, str] | str] = []
-    for whole, line in LINE.findall(page):
+    for whole, marked in LINE.findall(page):
+        line = split_annotations(marked)[0]
         split = SPLIT.match(line)
         assert (split is None) == bool(whole), line
         found.append(plain(line) if split is None else (plain(split[2]), plain(split[3])))
     return found
 
 
+def annotated_lines(page: str) -> list[tuple[str, str]]:
+    """Return a panel's lines, each as its text without annotations, and its annotations' text, if any."""
+    return [tuple(map(plain, split_annotations(line))) for _, line in LINE.findall(page)]  # type: ignore[misc]
+
+
 def annotations_shown(page: str) -> list[str]:
-    """Return a panel's annotation lists' items, nested ones by depth (`>`), without markup, in order."""
-    found = []
-    depth = 0
-    for token in re.findall(r'<ul class="axiom-annotations">|</ul>|<li>.*?(?=<ul|</li>)', page, re.DOTALL):
-        if token.startswith("<ul"):
-            depth += 1
-        elif token == "</ul>":
-            depth -= 1
-        else:
-            text = html.unescape(re.sub(r"<[^>]+>", "", token)).replace(NS, ":").strip()
-            found.append(">" * (depth - 1) + text)
-    return found
+    """Return the text of each of a panel's lines' axiom annotations that has some, in order, without markup."""
+    return [plain(annotations) for _, line in LINE.findall(page) if (annotations := split_annotations(line)[1])]
 
 
 def test_subjects(client: TestClient) -> None:
@@ -303,23 +316,42 @@ def test_subjects(client: TestClient) -> None:
 
 
 def test_annotations(client: TestClient) -> None:
-    """Check that an axiom shows its annotations only when the usage is found through them alone, nested by depth."""
-    assert annotations_shown(panel(client, "Fungus").text) == [":remark :Fungus"]  # on Tricky SubClassOf Animal
+    """Check that every line shows its axiom's annotations after it, nested ones in brackets within their value's.
+
+    Those of a written usage (Cat SubClassOf Animal) are fetched for the page, as are those of a usage found only
+    through them (Tricky SubClassOf Animal, annotated with Fungus).
+    """
+    assert annotations_shown(panel(client, "Fungus").text) == ["[:remark: :Fungus]"]
     plant = panel(client, "Plant").text
-    assert annotations_shown(plant) == [':note "nested"', ">:remark :Plant"]
+    assert annotations_shown(plant) == ["[:note: nested [:remark: :Plant]]"]
     assert lines_shown(plant)[1] == ":Liver SubClassOf :Organ"
-    # On Cat's and Liver's axioms, the general class axiom, and the n-ary DisjointClasses.
+    # On Bladder's, Cat's, Kidney's and Liver's axioms, the n-ary DisjointClasses, the general class axiom, and carol's.
     assert annotations_shown(panel(client, "note").text) == [
-        ':note "annotated"',
-        ':note "nested"',
-        ">:remark :Plant",
-        ':note "n-ary"',
-        ":remark :Mineral",
-        ':note "general"',
+        "[:note: apart]",
+        "[:note: annotated]",
+        "[:note: a source [:remark: :Bladder], second]",
+        "[:note: en français]",
+        "[:note: restricted]",
+        "[:note: nested [:remark: :Plant]]",
+        "[:note: n-ary; :remark: :Mineral]",
+        "[:note: general]",
+        "[:note: known]",
     ]
-    animal = panel(client, "Animal").text  # Cat SubClassOf Animal is annotated, but it's a usage by its own terms
+    # Written usages: literals matched by their digest, a tagged one too, nested annotations within.
+    assert annotated_lines(panel(client, "comment").text)[:2] == [
+        (':Kidney :comment "filters blood"', "[:note: a source [:remark: :Bladder], second]"),
+        (':Kidney :comment "rein"@fr', "[:note: en français]"),
+    ]
+    # Kidney's restriction of partOf to Organ isn't annotated, though the page fetches its other one's annotations.
+    organ = annotated_lines(panel(client, "Organ").text)
+    assert (":Kidney SubClassOf part of some :Organ", "") in organ
+    assert (":Kidney rdfs:seeAlso :Bladder", "[:remark: :Organ]") in organ
+    assert "restricted" not in str(organ)
+    animal = panel(client, "Animal").text
+    assert annotations_shown(animal) == ["[:remark: :Fungus]", "[:note: annotated]"]
     assert ":Cat SubClassOf :Animal" in lines_shown(animal)
-    assert "axiom-annotations" not in animal
+    # An annotated declaration, and axioms annotated with an entity they name too.
+    assert annotations_shown(panel(client, "Seed").text) == ["[rdfs:seeAlso: :Seed]"] * 3
 
 
 def test_label(client: TestClient) -> None:
@@ -629,8 +661,8 @@ def test_unclaimed_on_page(monkeypatch: pytest.MonkeyPatch) -> None:
     claimed = owl.SubClassOf(sub=subject, super=entity)
     stray = owl.SubClassOf(sub=owl.Entity(kind=owl.EntityKind.CLASS, iri=f"{NS}C"), super=entity)
 
-    async def fragments(*args: object) -> tuple[bytes, bytes]:
-        return b"", b""
+    async def fragments(*args: object) -> UsageFragments:
+        return UsageFragments(b"", b"")
 
     async def parsed(*args: object) -> tuple[dict[str, list[owl.AnyAxiom]], list[owl.AnyAxiom]]:
         return {subject.iri: [claimed]}, [stray]
@@ -660,8 +692,7 @@ async def test_fragment_types(store: UsageStore) -> None:
     Another entity's class assertions or characteristics would add axioms to the page.
     """
     usages = await read_usages(store, f"{NS}Animal")
-    subject_triples, _ = await fetch_usage_fragments(store, f"{NS}Animal", usages)
-    lines = subject_triples.decode().splitlines()
+    lines = (await fetch_usage_fragments(store, f"{NS}Animal", usages)).subject.decode().splitlines()
     part_of = f"<{NS}partOf> {RDF_TYPE}"
     assert f"{part_of} <{OWL_NS}ObjectProperty> ." in lines  # in Heart's and Liver's superclasses
     assert f"{part_of} <{OWL_NS}TransitiveProperty> ." not in lines
@@ -826,11 +857,12 @@ def test_columns(client: TestClient) -> None:
         ("SubClassOf", ":hasParent min 1 :Person"),
     ]
     assert lines_shown(has_parent)[1:3] == [":hasChild InverseOf :hasParent", ":hasMother SubPropertyOf: :hasParent"]
-    assert columns_shown(panel(client, "note").text)[2:] == [
+    note = panel(client, "note").text
+    assert [line for line in columns_shown(note) if isinstance(line, str)] == [
         "DisjointClasses: :Animal, :Fungus, :Plant",
         ':hasPart some <b>Heart</b> & "soul" SubClassOf :Vertebrate',
     ]
-    assert subjects_shown(panel(client, "note").text)[2:] == ["No single subject"]
+    assert "No single subject" in subjects_shown(note)
 
 
 OBJECT_PROPERTY = "ObjectProperty"
@@ -873,7 +905,7 @@ async def test_symmetric_on_both_tabs(jvm: None, fuseki_url: str, settings: Sett
         fragment = await fetch_fragment(small.sparql, small.dataset, f"{NS}A", small.dataset_clause)
     assert group.subject == f"{NS}Z"
     assert [axiom.manchester for axiom in group.axioms] == [f"<{NS}Z> DisjointWith <{NS}A>"]
-    axioms = await owlapi.run_java(entity_axioms, fragment, f"{NS}A")
+    axioms = await owlapi.run_java(entity_axioms, fragment.ntriples, f"{NS}A")
     [section] = frame_groups(axioms, f"{NS}A", [], str)
     assert section.label == "Disjoint With"
     assert [owl.manchester_text(line.manchester_tokens()) for line in section.lines] == [f"<{NS}Z>"]
@@ -921,7 +953,7 @@ def test_highlight_and_columns_rendered() -> None:
     assert page.count(mark) == 3  # on Z's disjointness, its annotation, and the general class axiom
     assert "<mark>" not in "".join(re.findall(r"<dt>.*?</dt>", page, re.DOTALL))
     assert '<span class="visually-hidden"><bdi>a</bdi> </span>' in page
-    assert mark in page.split('<ul class="axiom-annotations">')[1]
+    assert f'<span class="axiom-annotations">[<code dir="ltr">{NS}note</code>: {mark}]</span>' in page
 
 
 def test_highlight(client: TestClient) -> None:
@@ -934,7 +966,7 @@ def test_highlight(client: TestClient) -> None:
     assert dog.count(mark) == 4  # once in each line but the SWRL rule's, in functional syntax, as text
     assert "<mark>" not in "".join(re.findall(r"<dt>.*?</dt>", dog, re.DOTALL))
     mineral = panel(client, "Mineral").text  # in an n-ary axiom's annotations
-    assert mark.replace("Dog", "Mineral") in mineral.split('<ul class="axiom-annotations">')[1]
+    assert mark.replace("Dog", "Mineral") in mineral.split(ANNOTATIONS)[1]
 
 
 def test_table_failure(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:

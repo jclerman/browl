@@ -1,0 +1,36 @@
+# The reified axioms (owl:Axiom) that annotate an entity's axioms, with the owl:Annotations nested on them, for its
+# fragment (browl.axioms.fetch_fragment; DESIGN.md §2.8, Axiom annotations): those whose owl:annotatedSource is the
+# entity, or one of the blank-node roots entity-axioms.rq finds (the same path); and those of the symmetric axioms
+# other entities state with it as the object (entity-symmetric.rq). DESCRIBE adds each node's closure, so a blank
+# owl:annotatedTarget comes with its class expression. The entity's annotation assertions' reified axioms come too,
+# which the page leaves out with the assertions (browl.axioms.entity_closure); filtering them here would repeat
+# entity-annotations.rq's test for an annotation property. `$entity` stands for the entity's IRI, and browl.axioms
+# adds the dataset clause before WHERE.
+DESCRIBE ?node
+WHERE {
+  {
+    ?axiom owl:annotatedSource $entity
+  }
+  UNION
+  {
+    ?root (rdfs:subClassOf|owl:equivalentClass|owl:disjointWith|owl:equivalentProperty|owl:propertyDisjointWith
+          |owl:sameAs|owl:differentFrom|owl:members|owl:distinctMembers|owl:sourceIndividual)?
+          /(owl:intersectionOf|owl:unionOf|owl:complementOf|owl:someValuesFrom|owl:allValuesFrom|owl:onClass
+            |rdf:first|rdf:rest)* $entity
+    FILTER isBlank(?root)
+    FILTER NOT EXISTS { ?parent ?link ?root FILTER (?link NOT IN (owl:annotatedSource, owl:annotatedTarget)) }
+    ?axiom owl:annotatedSource ?root
+  }
+  UNION
+  {
+    VALUES ?predicate {
+      owl:disjointWith owl:equivalentClass owl:equivalentProperty owl:propertyDisjointWith owl:inverseOf owl:sameAs
+      owl:differentFrom
+    }
+    ?axiom owl:annotatedTarget $entity ;
+      owl:annotatedProperty ?predicate ;
+      owl:annotatedSource ?subject .
+    FILTER isIRI(?subject)
+  }
+  ?node owl:annotatedSource* ?axiom
+}

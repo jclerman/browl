@@ -115,16 +115,19 @@ class FrameLine(BaseModel):
     """A line of a frame's section: an axiom, by the operands that aren't the entity, or whole.
 
     Attributes:
-        axiom: The axiom; None for an equivalent class that only the class's equivalence group implies, through a chain
-            of equivalences or a cycle of subclass axioms (DESIGN.md §2.5), which the page marks as implied.
+        axiom: The axiom, without its annotations; None for an equivalent class that only the class's equivalence group
+            implies, through a chain of equivalences or a cycle of subclass axioms (DESIGN.md §2.5), which the page
+            marks as implied.
         operands: What the line shows of the axiom, in order; empty to show it whole, or a characteristic by its
             keyword.
+        annotations: The annotations of the axioms the line shows, each once (DESIGN.md §2.8, Axiom annotations).
     """
 
     model_config = ConfigDict(frozen=True)
 
     axiom: AnyAxiom | None
     operands: tuple[Operand, ...] = ()
+    annotations: tuple[owl.Annotation, ...] = ()
 
     def manchester_tokens(self) -> tuple[Token, ...]:
         """Return the line in Manchester syntax, as tokens with their spacing (`browl.owl.Node.manchester_tokens`).
@@ -169,29 +172,29 @@ def frame_groups(
 ) -> list[AxiomGroup]:
     """Return an entity's axioms as a frame's sections, in the order the page shows them (DESIGN.md §2.8).
 
+    Axioms that differ only in their annotations are one line, as are those that state one equivalent; a line holds the
+    annotations of each, each once.
+
     Args:
-        axioms: The entity's axioms (`browl.axioms.entity_axioms`).
+        axioms: The entity's axioms (`browl.axioms.entity_axioms`), with their annotations.
         iri: The entity's IRI.
         equivalents: The other members of the class's equivalence group, if it's in one (the `equiv_group` table), not
             the entity itself.
         shown_name: The name the page shows for an IRI.
     """
-    sections: dict[tuple[EntityKind | None, Section], list[FrameLine]] = {}
-    # Each kind's equivalents, so each is shown once, though several axioms, or the equivalence group, may state it.
-    stated: set[tuple[EntityKind | None, owl.Node]] = set()
+    # Each section's lines, by what makes them one: the line without annotations, or under Equivalent To its
+    # equivalent, which several axioms, or the equivalence group, may state; with their annotations.
+    sections: dict[tuple[EntityKind | None, Section], dict[object, tuple[FrameLine, dict[owl.Annotation, None]]]] = {}
     for axiom in axioms:
-        for kind, section, line in _place(axiom, iri):
-            if section is Section.EQUIVALENT_TO:
-                if (kind, line.operands[0]) in stated:
-                    continue
-                stated.add((kind, line.operands[0]))
-            sections.setdefault((kind, section), []).append(line)
+        for kind, section, line in _place(axiom.without_annotations(), iri):
+            same = line.operands[0] if section is Section.EQUIVALENT_TO else line
+            _, annotations = sections.setdefault((kind, section), {}).setdefault(same, (line, {}))
+            annotations.update(dict.fromkeys(axiom.annotations))
     for each in equivalents:
         entity = Entity(kind=EntityKind.CLASS, iri=each)
-        if (EntityKind.CLASS, entity) not in stated:
-            sections.setdefault((EntityKind.CLASS, Section.EQUIVALENT_TO), []).append(
-                FrameLine(axiom=None, operands=(entity,))
-            )
+        sections.setdefault((EntityKind.CLASS, Section.EQUIVALENT_TO), {}).setdefault(
+            entity, (FrameLine(axiom=None, operands=(entity,)), {})
+        )
 
     def line_key(line: FrameLine) -> tuple[bool, str, str]:
         tokens = line.manchester_tokens()
@@ -206,7 +209,15 @@ def frame_groups(
             section=section,
             kind=kind,
             label=label if counts[label] == 1 or kind is None else f"{label} ({_KIND_WORDS[kind]})",
-            lines=tuple(sorted(sections[kind, section], key=line_key)),
+            lines=tuple(
+                sorted(
+                    (
+                        line.model_copy(update={"annotations": tuple(annotations)}) if annotations else line
+                        for line, annotations in sections[kind, section].values()
+                    ),
+                    key=line_key,
+                )
+            ),
         )
         for (kind, section), label in zip(keys, labels, strict=True)
     ]

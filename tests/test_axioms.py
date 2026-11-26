@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from pydantic import TypeAdapter
 
 import browl.overview
-from browl import axioms, owl, owlapi
+from browl import axioms, frames, owl, owlapi
 from browl.derived import EntityType
 from browl.fuseki import UNION_FROM, FusekiClient
 from browl.jobs import Stage
@@ -685,10 +685,15 @@ def annotated_twice() -> list[owl.Axiom]:
 
 
 def test_annotations_collapse() -> None:
-    """Check that an axiom stated with an annotation and without is one of the entity's axioms."""
-    assert [axiom.manchester for axiom in asyncio.run(owlapi.run_java(annotated_twice))] == [
-        f"<{NS}Cat> SubClassOf <{NS}Animal>"
+    """Check that an axiom stated with an annotation and without is the entity's twice, and one line of its frame."""
+    found = asyncio.run(owlapi.run_java(annotated_twice))
+    assert [(axiom.manchester, len(axiom.annotations)) for axiom in found] == [
+        (f"<{NS}Cat> SubClassOf <{NS}Animal>", 0),
+        (f"<{NS}Cat> SubClassOf <{NS}Animal>", 1),
     ]
+    [group] = frames.frame_groups(found, f"{NS}Cat", [], str)
+    [line] = group.lines
+    assert line.axiom == found[0] and line.annotations == found[1].annotations
 
 
 ANNOTATED = "".join(
@@ -753,8 +758,8 @@ async def test_empty_fragment(fuseki_url: str, dataset: str) -> None:
     """Check that an IRI the store doesn't hold has an empty fragment, and no axioms."""
     async with httpx2.AsyncClient(base_url=fuseki_url) as http:
         fragment = await axioms.fetch_fragment(FusekiClient(http), dataset, f"{NS}Nobody")
-    assert fragment == b""
-    assert await owlapi.run_java(axioms.entity_axioms, fragment, f"{NS}Nobody") == []
+    assert fragment == axioms.Fragment(b"")
+    assert await owlapi.run_java(axioms.entity_axioms, fragment.ntriples, f"{NS}Nobody") == []
 
 
 @pytest.mark.anyio
@@ -779,7 +784,8 @@ async def test_fragment_matches_whole(
         sparql = FusekiClient(http)
         for iri, expected in closures.items():
             fragment = await axioms.fetch_fragment(sparql, dataset, iri, clause)
-            assert await owlapi.run_java(axioms.entity_axioms, fragment, iri) == expected, iri
+            assert fragment.annotations_left_out is None
+            assert await owlapi.run_java(axioms.entity_axioms, fragment.ntriples, iri) == expected, iri
 
 
 ENTITIES = [
@@ -825,7 +831,9 @@ def test_page(data_dir: Path, fuseki_url: str, dataset: str, monkeypatch: pytest
     assert re.search(r'<dt>SubClass Of</dt>\s*<dd dir="ltr"><a href="/axioms#Organ"><bdi>organ</bdi></a></dd>', page)
     assert (
         f'<dd dir="ltr"><a href="/axioms#hasPart"><bdi>http://example.org/axioms#hasPart</bdi></a> {keyword("some")} '
-        f'<mark>{heart_link}</mark> {keyword("SubClassOf")} <code dir="ltr">&lt;{NS}Vertebrate&gt;</code></dd>'
+        f'<mark>{heart_link}</mark> {keyword("SubClassOf")} <code dir="ltr">&lt;{NS}Vertebrate&gt;</code>&nbsp;'
+        f'<span class="axiom-annotations">[<code dir="ltr">{NS}note</code>: '
+        '<bdi class="value">general</bdi>]</span></dd>'
     ) in page  # a general class axiom, shown whole, the entity highlighted
     assert f"{keyword('value')} <bdi>&#34;see &lt;{NS}Dog&gt; &amp; \\&#34;friends\\&#34;&#34;@en</bdi>" in person
     label = re.escape('<bdi class="value">&lt;b&gt;Heart&lt;/b&gt; &amp; &#34;soul&#34;</bdi>')
@@ -843,7 +851,12 @@ def test_page(data_dir: Path, fuseki_url: str, dataset: str, monkeypatch: pytest
     # Sections from n-ary and symmetric axioms, as the OWLAPI converts them.
     assert '<dl class="frame">' in animal
     disjoint = f'<a href="/axioms#Plant"><bdi>{NS}Plant</bdi></a>'
-    assert re.search(rf'<dt>Disjoint With</dt>\s*<dd dir="ltr">{code(f"{NS}Fungus")}, {disjoint}</dd>', animal)
+    n_ary = (
+        f'&nbsp;<span class="axiom-annotations">[<code dir="ltr">{NS}note</code>: <bdi class="value">n-ary</bdi>; '
+        f'<code dir="ltr">{NS}remark</code>: <a href="/axioms#Mineral"><bdi>{NS}Mineral</bdi></a>]</span>'
+    )
+    disjoint_line = f'<dd dir="ltr">{code(f"{NS}Fungus")}, {disjoint}{n_ary}</dd>'
+    assert re.search(rf"<dt>Disjoint With</dt>\s*{re.escape(disjoint_line)}", animal)
     # The store holds a three-way equivalence as pairwise triples, so only one is Adult's; the other member comes
     # from the equivalence group, which this test's derived database doesn't have.
     living = f'<dd dir="ltr">{code(f"{NS}LivingThing")}</dd>'

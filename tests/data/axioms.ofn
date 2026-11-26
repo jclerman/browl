@@ -29,6 +29,8 @@ Declaration(Class(:Adult))
 Declaration(Class(:Tricky))
 Declaration(Class(:LivingThing))
 Declaration(Class(:Seed))
+Declaration(Class(:Kidney))
+Declaration(Class(:Bladder))
 # An annotated declaration: a usage of the entity its annotation names.
 Declaration(Annotation(rdfs:seeAlso :Seed) Class(:Fruit))
 Declaration(ObjectProperty(:partOf))
@@ -73,6 +75,17 @@ AnnotationAssertion(rdfs:label :partOf "part of")
 AnnotationAssertion(:remark :Cat :Dog)
 AnnotationAssertion(rdfs:seeAlso :Mineral :Mineral)
 AnnotationAssertion(:remark :remark :remark)
+
+# Axiom annotations (U-35): on annotation assertions, an annotation's own annotated in turn, values literal and IRI, one
+# tagged; on a symmetric axiom, which both members' pages show; on one of a subject's two restrictions of a property,
+# which the other's Usage tab line mustn't take.
+AnnotationAssertion(Annotation(Annotation(:remark :Bladder) :note "a source") Annotation(:note "second") :comment :Kidney "filters blood")
+AnnotationAssertion(Annotation(:note "en français") :comment :Kidney "rein"@fr)
+AnnotationAssertion(Annotation(:remark :Organ) rdfs:seeAlso :Kidney :Bladder)
+DisjointClasses(Annotation(:note "apart") :Bladder :Kidney)
+SubClassOf(Annotation(:note "restricted") :Kidney ObjectSomeValuesFrom(:partOf :Bladder))
+SubClassOf(:Kidney ObjectSomeValuesFrom(:partOf :Organ))
+ObjectPropertyAssertion(Annotation(:note "known") :knows :carol :dave)
 
 # Class axioms.
 SubClassOf(:Dog :Animal)
