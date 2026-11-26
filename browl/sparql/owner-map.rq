@@ -2,8 +2,8 @@
 # the blank-node owner map (browl.precache.owner_map; DESIGN.md §2.5, which says why they're found by type and
 # predicate, not isBlank). An anonymous individual is found as the subject of a class assertion (a type outside OWL's,
 # RDF's, RDFS's and SWRL's vocabularies but owl:Thing, or a class expression), of owl:sameAs or owl:differentFrom, or
-# of a declared object or data property's assertion; a type is tested before its subject is, so TDB2 decodes only the
-# subjects of the few triples left. A blank node's label is its store's (Jena's afn:bnode), which holds across
+# of a declared object or data property's assertion; a type is tested before its subject is, in one IF, so TDB2 decodes
+# only the subjects of the few triples left. A blank node's label is its store's (Jena's afn:bnode), which holds across
 # queries. A node found in several ways gives its rows several times. Each row is a node's triple (?predicate, and
 # ?object or the blank ?blank) or a triple from an IRI ?parent to it. The prologue (browl.precache.core.PREFIXES) and
 # the dataset clause are added when it's run.
@@ -29,22 +29,27 @@ WHERE {
     { ?list rdf:first ?b }
     UNION
     {
-      ?b rdf:type ?class
-      FILTER (
-        isBlank(?class) || ?class = owl:Thing
-        || !(STRSTARTS(STR(?class), "http://www.w3.org/2002/07/owl#")
-             || STRSTARTS(STR(?class), "http://www.w3.org/1999/02/22-rdf-syntax-ns#")
-             || STRSTARTS(STR(?class), "http://www.w3.org/2000/01/rdf-schema#")
-             || STRSTARTS(STR(?class), "http://www.w3.org/2003/11/swrl#"))
-      )
-    }
-    UNION
-    {
       VALUES ?propertyType { owl:ObjectProperty owl:DatatypeProperty }
       ?property rdf:type ?propertyType .
       ?b ?property ?any
     }
     FILTER isBlank(?b)
+  }
+  UNION
+  {
+    # One expression, as Jena would test a separate isBlank(?b) first, which takes 18 s on NCBITaxon, not 1 s.
+    ?b rdf:type ?class
+    FILTER (
+      IF(
+        isBlank(?class) || ?class = owl:Thing
+        || !(STRSTARTS(STR(?class), "http://www.w3.org/2002/07/owl#")
+             || STRSTARTS(STR(?class), "http://www.w3.org/1999/02/22-rdf-syntax-ns#")
+             || STRSTARTS(STR(?class), "http://www.w3.org/2000/01/rdf-schema#")
+             || STRSTARTS(STR(?class), "http://www.w3.org/2003/11/swrl#")),
+        isBlank(?b),
+        false
+      )
+    )
   }
   BIND (<http://jena.apache.org/ARQ/function#bnode>(?b) AS ?node)
   {
