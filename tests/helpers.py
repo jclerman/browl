@@ -503,7 +503,7 @@ async def loaded(
             await http.delete(f"/$/datasets/{name}")
 
 
-def brackets(*texts: str) -> str:
+def boxed(*texts: str) -> str:
     """Return axiom annotations' markup around each property's HTML: a box each, with visually hidden brackets."""
     hidden = '<span class="visually-hidden">{}</span>'.format
     shown = " ".join(f'<span class="axiom-annotation">{hidden("[")}{text}{hidden("]")}</span>' for text in texts)

@@ -45,7 +45,7 @@ from browl.usage_tab import (
     usage_label,
 )
 from browl.usages import Usage, UsageSource, UsageStore, read_usages
-from tests.helpers import brackets, connect, fuseki_dataset, loaded, make_app, make_settings, ontology_ntriples
+from tests.helpers import boxed, connect, fuseki_dataset, loaded, make_app, make_settings, ontology_ntriples
 from tests.test_usages import usage_triples
 
 pytestmark = pytest.mark.anyio
@@ -316,7 +316,7 @@ def test_subjects(client: TestClient) -> None:
 
 
 def test_annotations(client: TestClient) -> None:
-    """Check that every line shows its axiom's annotations after it, nested ones in brackets within their value's.
+    """Check that every line shows its axiom's annotations after it, nested ones in boxes within their value's.
 
     Those of a written usage (Cat SubClassOf Animal) are fetched for the page, as are those of a usage found only
     through them (Tricky SubClassOf Animal, annotated with Fungus).
@@ -1028,7 +1028,7 @@ def test_highlight_and_columns_rendered() -> None:
     assert page.count(mark) == 3  # on Z's disjointness, its annotation, and the general class axiom
     assert "<mark>" not in "".join(re.findall(r"<dt>.*?</dt>", page, re.DOTALL))
     assert '<span class="visually-hidden"><bdi>a</bdi> </span>' in page
-    assert brackets(f'<code dir="ltr">{NS}note</code>: {mark}') in page
+    assert boxed(f'<code dir="ltr">{NS}note</code>: {mark}') in page
 
 
 def test_highlight(client: TestClient) -> None:

@@ -20,7 +20,7 @@ from browl.fuseki import UNION_FROM, FusekiClient
 from browl.jobs import Stage
 from browl.owl import TokenKind
 from browl.rdf import OWL, RDF, RDFS, XSD, XSD_LEXICAL_FORMS
-from tests.helpers import brackets, derived_stage, fuseki_dataset, make_app
+from tests.helpers import boxed, derived_stage, fuseki_dataset, make_app
 
 pytestmark = pytest.mark.usefixtures("jvm")
 
@@ -832,7 +832,7 @@ def test_page(data_dir: Path, fuseki_url: str, dataset: str, monkeypatch: pytest
     assert (
         f'<dd dir="ltr"><a href="/axioms#hasPart"><bdi>http://example.org/axioms#hasPart</bdi></a> {keyword("some")} '
         f'<mark>{heart_link}</mark> {keyword("SubClassOf")} <code dir="ltr">&lt;{NS}Vertebrate&gt;</code>'
-        f"{brackets(f'<code dir="ltr">{NS}note</code>: <bdi class="value">general</bdi>')}</dd>"
+        f"{boxed(f'<code dir="ltr">{NS}note</code>: <bdi class="value">general</bdi>')}</dd>"
     ) in page  # a general class axiom, shown whole, the entity highlighted
     assert f"{keyword('value')} <bdi>&#34;see &lt;{NS}Dog&gt; &amp; \\&#34;friends\\&#34;&#34;@en</bdi>" in person
     label = re.escape('<bdi class="value">&lt;b&gt;Heart&lt;/b&gt; &amp; &#34;soul&#34;</bdi>')
@@ -850,7 +850,7 @@ def test_page(data_dir: Path, fuseki_url: str, dataset: str, monkeypatch: pytest
     # Sections from n-ary and symmetric axioms, as the OWLAPI converts them.
     assert '<dl class="frame">' in animal
     disjoint = f'<a href="/axioms#Plant"><bdi>{NS}Plant</bdi></a>'
-    n_ary = brackets(
+    n_ary = boxed(
         f'<code dir="ltr">{NS}note</code>: <bdi class="value">n-ary</bdi>',
         f'<code dir="ltr">{NS}remark</code>: <a href="/axioms#Mineral"><bdi>{NS}Mineral</bdi></a>',
     )

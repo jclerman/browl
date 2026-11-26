@@ -35,7 +35,7 @@ from browl.links import EntityLink
 from browl.nesting import annotation_sources
 from browl.pages import templates
 from browl.rdf import IRI, OWL, RDF, RDFS, XSD, BlankNode, Literal
-from tests.helpers import brackets, derived_stage, fuseki_dataset, make_app, ontology_ntriples
+from tests.helpers import boxed, derived_stage, fuseki_dataset, make_app, ontology_ntriples
 
 NS = "http://example.org/axioms#"
 NOTE, REMARK, COMMENT = (IRI(f"{NS}{name}") for name in ("note", "remark", "comment"))
@@ -436,7 +436,7 @@ def link(name: str) -> str:
 
 
 def test_page(data_dir: Path, dataset: str, fuseki_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Check the Overview's axiom annotations: after their value or axiom, muted and in brackets, nested ones within.
+    """Check the Overview's axiom annotations: after their value or axiom, in boxes, nested ones within.
 
     A symmetric axiom stated on Bladder shows its annotations on Kidney's page too.
     """
@@ -450,16 +450,16 @@ def test_page(data_dir: Path, dataset: str, fuseki_url: str, monkeypatch: pytest
         bladder = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "Bladder", "panel": "1"}).text
     note_link = '<a href="/axioms#note"><bdi>note</bdi></a>'
     remark_link = '<a href="/axioms#remark"><bdi>remark</bdi></a>'
-    nested = brackets(f"{remark_link}: {link('bladder')}")
+    nested = boxed(f"{remark_link}: {link('bladder')}")
     value = '<bdi class="value">{}</bdi>'.format
-    filters = brackets(f"{note_link}: {value('a source')}{nested}, {value('second')}")
+    filters = boxed(f"{note_link}: {value('a source')}{nested}, {value('second')}")
     assert f"<dd>{value('filters blood')}{filters}</dd>" in kidney
     assert '<dd><bdi class="value" lang="fr">rein</bdi> <small class="lang">fr</small>' in kidney
-    assert brackets(f'{remark_link}: <a href="/axioms#Organ"><bdi>{NS}Organ</bdi></a>') in kidney
-    apart = brackets(f"{note_link}: {value('apart')}")
+    assert boxed(f'{remark_link}: <a href="/axioms#Organ"><bdi>{NS}Organ</bdi></a>') in kidney
+    apart = boxed(f"{note_link}: {value('apart')}")
     assert re.search(rf'<dt>Disjoint With</dt>\s*<dd dir="ltr">{re.escape(link("bladder") + apart)}</dd>', kidney)
     assert re.search(rf'<dt>Disjoint With</dt>\s*<dd dir="ltr">{re.escape(link("kidney") + apart)}</dd>', bladder)
-    assert brackets(f"{note_link}: {value('restricted')}") in kidney
+    assert boxed(f"{note_link}: {value('restricted')}") in kidney
     assert "too many to show" not in kidney and "can't be shown" not in kidney
 
 
@@ -483,7 +483,7 @@ def test_left_out_notes() -> None:
 
 
 def test_rendering() -> None:
-    """Check the markup: brackets outside each value's `<bdi>`, blank values left out, the entity marked."""
+    """Check the markup: boxes outside each value's `<bdi>`, blank values left out, the entity marked."""
     anonymous = owl.Annotation(
         property=owl.Entity(kind=owl.EntityKind.ANNOTATION_PROPERTY, iri=REMARK),
         value=owl.AnonymousIndividual(id="_:b1"),
@@ -495,7 +495,7 @@ def test_rendering() -> None:
     links = {KIDNEY: EntityLink(KIDNEY, "kidney", "/axioms#Kidney")}
     assert render(template, a=(anonymous,), links=links, mark=None) == ""
     shown = render(template, a=(note("]evil["), anonymous, marked), links=links, mark=KIDNEY)
-    assert shown == brackets(
+    assert shown == boxed(
         f'<code dir="ltr">{NOTE}</code>: <bdi class="value">]evil[</bdi>',
         f'<code dir="ltr">{REMARK}</code>: <mark><a href="/axioms#Kidney"><bdi>kidney</bdi></a></mark>',
     )
