@@ -2680,6 +2680,21 @@ def test_column_beside_panels(page: Page, trees: LiveServer, size: dict[str, int
     assert violations(page) == []
 
 
+@pytest.mark.parametrize("size", [WIDE, NARROW], ids=["beside", "above"])
+def test_iri_box_over_column(page: Page, trees: LiveServer, size: dict[str, int]) -> None:
+    """Check that the opened IRI box is drawn over the hierarchy column, whose sticky heading and rows it overlaps."""
+    page.set_viewport_size(size)
+    page.goto(f"{trees.url}/Bottom")
+    page.locator(".entity-iri summary").click()
+    details = page.locator(".entity-iri dl")
+    details.evaluate("(each) => each.insertAdjacentHTML('beforeend', '<dt>more</dt><dd>line</dd>'.repeat(20))")
+    heading = box(hierarchy_column(page).locator("h2").first)
+    shown = box(details)
+    assert shown["x"] < heading["x"] + 8 < shown["x"] + shown["width"]
+    assert shown["y"] < heading["y"] and heading["y"] + heading["height"] < shown["y"] + shown["height"]
+    assert on_top(page, heading["x"] + 8, heading["y"] + heading["height"] / 2, ".entity-iri dl")
+
+
 @pytest.mark.parametrize("size", [NARROW, WIDE], ids=["narrow", "toggled"])
 def test_column_above_in_one_page_view(page: Page, trees: LiveServer, size: dict[str, int]) -> None:
     """Check that the one-page view puts the column above the tabs, and the "Hierarchy" toggle hides it.

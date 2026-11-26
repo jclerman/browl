@@ -705,6 +705,7 @@ code {
   grid-area: tree;
   font-size: 0.9rem;
   overflow-x: auto;
+  isolation: isolate; /* its sticky heading's and rows' layers stay within it, under the opened IRI */
 }
 
 .hierarchy-column .tree {
