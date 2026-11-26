@@ -45,7 +45,7 @@ from browl.usage_tab import (
     usage_label,
 )
 from browl.usages import Usage, UsageSource, UsageStore, read_usages
-from tests.helpers import connect, fuseki_dataset, loaded, make_app, make_settings, ontology_ntriples
+from tests.helpers import brackets, connect, fuseki_dataset, loaded, make_app, make_settings, ontology_ntriples
 from tests.test_usages import usage_triples
 
 pytestmark = pytest.mark.anyio
@@ -221,7 +221,7 @@ def subjects_shown(page: str) -> list[str]:
 
 LINE = re.compile(r'<dd dir="ltr" class="usage-line( usage-whole)?">(.*?)</dd>', re.DOTALL)
 """A Usage tab line: whether it spans the keyword's and the rest's columns, and its markup."""
-ANNOTATIONS = '&nbsp;<span class="axiom-annotations">'
+ANNOTATIONS = ' <span class="axiom-annotations">'
 """Where a line's annotations start (`templates/annotations.html`'s `axiom_annotations`)."""
 
 
@@ -333,7 +333,7 @@ def test_annotations(client: TestClient) -> None:
         "[:note: en français]",
         "[:note: restricted]",
         "[:note: nested [:remark: :Plant]]",
-        "[:note: n-ary; :remark: :Mineral]",
+        "[:note: n-ary] [:remark: :Mineral]",
         "[:note: general]",
         "[:note: known]",
     ]
@@ -953,7 +953,7 @@ def test_highlight_and_columns_rendered() -> None:
     assert page.count(mark) == 3  # on Z's disjointness, its annotation, and the general class axiom
     assert "<mark>" not in "".join(re.findall(r"<dt>.*?</dt>", page, re.DOTALL))
     assert '<span class="visually-hidden"><bdi>a</bdi> </span>' in page
-    assert f'<span class="axiom-annotations">[<code dir="ltr">{NS}note</code>: {mark}]</span>' in page
+    assert brackets(f'<code dir="ltr">{NS}note</code>: {mark}') in page
 
 
 def test_highlight(client: TestClient) -> None:

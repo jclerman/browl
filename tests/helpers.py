@@ -501,3 +501,10 @@ async def loaded(
                 reader.close()
         finally:
             await http.delete(f"/$/datasets/{name}")
+
+
+def brackets(*texts: str) -> str:
+    """Return axiom annotations' markup around each property's HTML: a box each, with visually hidden brackets."""
+    hidden = '<span class="visually-hidden">{}</span>'.format
+    shown = " ".join(f'<span class="axiom-annotation">{hidden("[")}{text}{hidden("]")}</span>' for text in texts)
+    return f' <span class="axiom-annotations">{shown}</span>'

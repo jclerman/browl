@@ -34,7 +34,7 @@ from browl.jobs import Stage
 from browl.links import EntityLink
 from browl.pages import templates
 from browl.rdf import IRI, OWL, RDF, RDFS, XSD, BlankNode, Literal
-from tests.helpers import derived_stage, fuseki_dataset, make_app, ontology_ntriples
+from tests.helpers import brackets, derived_stage, fuseki_dataset, make_app, ontology_ntriples
 
 NS = "http://example.org/axioms#"
 NOTE, REMARK, COMMENT = (IRI(f"{NS}{name}") for name in ("note", "remark", "comment"))
@@ -363,11 +363,6 @@ def link(name: str) -> str:
     return f'<a href="/axioms#{name.capitalize()}"><bdi>{name}</bdi></a>'
 
 
-def brackets(text: str) -> str:
-    """Return axiom annotations' markup around their HTML."""
-    return f'&nbsp;<span class="axiom-annotations">[{text}]</span>'
-
-
 def test_page(data_dir: Path, dataset: str, fuseki_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check the Overview's axiom annotations: after their value or axiom, muted and in brackets, nested ones within.
 
@@ -429,8 +424,8 @@ def test_rendering() -> None:
     assert render(template, a=(anonymous,), links=links, mark=None) == ""
     shown = render(template, a=(note("]evil["), anonymous, marked), links=links, mark=KIDNEY)
     assert shown == brackets(
-        f'<code dir="ltr">{NOTE}</code>: <bdi class="value">]evil[</bdi>; '
-        f'<code dir="ltr">{REMARK}</code>: <mark><a href="/axioms#Kidney"><bdi>kidney</bdi></a></mark>'
+        f'<code dir="ltr">{NOTE}</code>: <bdi class="value">]evil[</bdi>',
+        f'<code dir="ltr">{REMARK}</code>: <mark><a href="/axioms#Kidney"><bdi>kidney</bdi></a></mark>',
     )
 
 

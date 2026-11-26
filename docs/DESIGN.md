@@ -1440,16 +1440,19 @@ fallback). The page's data is typed models, as every entity page's is (below).
   - **Data:** each section (`AxiomGroup`) holds its label and lines; a line (`FrameLine`) its axiom, None for an
     implied equivalent, and the operands it shows, so the JSON API (U-42) returns the frame as the page shows it.
 - **Axiom annotations** _(P-49; U-35)_: an annotation value or a logical axiom shows its axiom's annotations after
-  it, on its line, muted and in brackets, each as `property: value`, several values of one property named once and
-  separated by commas, properties by semicolons: `A hollow, muscular organ … [database cross reference: PMID:1234,
-  ZFA:0000114]`. Properties and values are sorted as the annotations panel's are, with no language ranking
-  (`browl.annotations.shown_annotations`). The line wraps as a long value does, a no-break space keeping the opening
-  bracket with the text before it; an annotation's own annotations are in brackets within its value's. Values and
+  it, on its line: a box per property, `property: value, value`, small and muted, tinted teal with a stronger teal
+  border (`--annotation-bg`, `--annotation-border`): `A hollow, muscular organ … ⟨database cross reference:
+  PMID:1234, ZFA:0000114⟩ ⟨has synonym type: plural form⟩`. Boxes, not brackets, set them apart from the value, as
+  brackets in the value's own color didn't. Properties and values are sorted as the annotations panel's are, with no
+  language ranking (`browl.annotations.shown_annotations`). A box doesn't split across lines: it moves to the next
+  if it doesn't fit, and one wider than its line wraps within it; its padding keeps the border off the text, and its
+  margin off the lines above and below. An annotation's own annotations are boxes within its value's box. Values and
   links render as an annotation's do, and a blank value (an anonymous individual) is left out, as in the panel. The
-  brackets and the muting are the template's markup (`annotations.html`'s `axiom_annotations`), outside each value's
-  `<bdi>`, so a value's own text can't pass for an annotation; the muted text is `--muted`, AA on both themes'
-  backgrounds, and the page's entity, marked where it's in them, is `--fg` on `--mark-bg`, where `--muted` isn't AA in
-  the dark theme.
+  boxes are the template's markup (`annotations.html`'s `axiom_annotations`), outside each value's `<bdi>`, so a
+  value's own text can't pass for an annotation; visually hidden brackets around each keep where it starts and ends
+  in what screen readers read and in copied text. `--muted` and `--accent` are AA on the tint in both themes, and the
+  border is 3:1 or more against the page; the page's entity, marked where it's in them, is `--fg` on `--mark-bg`,
+  where `--muted` isn't AA in the dark theme.
   - **Annotations panel:** a second query (`entity-value-annotations.rq`), run alongside the panel's, reads the
     annotations of the reified `owl:Axiom`s whose source is the entity and whose target isn't blank, and of the
     `owl:Annotation`s nested on them, one row per annotation with the node it's on and what that node annotates.

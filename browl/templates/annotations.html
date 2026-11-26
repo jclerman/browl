@@ -18,22 +18,24 @@
 {%- endif -%}
 {%- endmacro %}
 
-{# The axiom annotations on a value or an axiom (`browl.owl.Annotation`), from `links`, after it on its line, muted
-   and in brackets (DESIGN.md §2.8, Axiom annotations): `[property: value, value; property: value]`, grouped and
-   sorted as `browl.overview.page_annotations` does, each value's own in brackets after it. The brackets and the
-   muting are markup, outside each value's `<bdi>`, so a value can't pass for an annotation; a no-break space keeps
-   the opening one with the text before it. The IRI `mark`, the page's entity, is highlighted, as in an axiom. #}
+{# The axiom annotations on a value or an axiom (`browl.owl.Annotation`), from `links`, after it on its line (DESIGN.md
+   §2.8, Axiom annotations): a bordered, tinted box per property, `property: value, value`, grouped and sorted as
+   `browl.overview.page_annotations` does, each value's own in boxes within its box. A box doesn't split across
+   lines. Brackets around each, visually hidden, keep where it starts and ends in what screen readers read and in
+   copied text. The boxes are markup, outside each value's `<bdi>`, so a value can't pass for an annotation. The IRI
+   `mark`, the page's entity, is highlighted, as in an axiom. #}
 {% macro axiom_annotations(annotations, links, mark=none) -%}
 {%- set groups = page_annotations(annotations, links) -%}
-{%- if groups -%}
-&nbsp;<span class="axiom-annotations">[
+{%- if groups %} <span class="axiom-annotations">
 {%- for group in groups -%}
-{%- if not loop.first %}; {% endif -%}
+{%- if not loop.first %} {% endif -%}
+<span class="axiom-annotation"><span class="visually-hidden">[</span>
 {%- if mark is not none and group.property == mark %}<mark>{{ named_iri(group.property, links) }}</mark>
 {%- else %}{{ named_iri(group.property, links) }}{% endif %}:
 {%- for value in group.values %}{% if not loop.first %},{% endif %} {{ annotation_value(value, links, mark) }}
 {{- axiom_annotations(value.annotations, links, mark) }}{% endfor -%}
-{%- endfor %}]</span>
+<span class="visually-hidden">]</span></span>
+{%- endfor %}</span>
 {%- endif -%}
 {%- endmacro %}
 
