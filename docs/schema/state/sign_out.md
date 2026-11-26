@@ -8,7 +8,7 @@ When each account last signed out (DESIGN.md 2.11), admin or not: a session for 
 <summary><strong>Table Definition</strong></summary>
 
 ```sql
-CREATE TABLE sign_out (
+CREATE TABLE "sign_out" (
         email TEXT PRIMARY KEY CHECK (email = lower(email)),
         signed_out_at TEXT NOT NULL
     )
@@ -18,10 +18,10 @@ CREATE TABLE sign_out (
 
 ## Columns
 
-| Name          | Type | Default | Nullable | Children | Parents | Comment                                                               |
-| ------------- | ---- | ------- | -------- | -------- | ------- | --------------------------------------------------------------------- |
-| email         | TEXT |         | true     |          |         | The account's email address, lowercased, as Google gives it verified. |
-| signed_out_at | TEXT |         | false    |          |         | When it last signed out, ISO 8601 with a time zone.                   |
+| Name          | Type | Default | Nullable | Children | Parents | Comment                                                                           |
+| ------------- | ---- | ------- | -------- | -------- | ------- | --------------------------------------------------------------------------------- |
+| email         | TEXT |         | true     |          |         | The account's email address in its canonical form (browl.admins.canonical_email). |
+| signed_out_at | TEXT |         | false    |          |         | When it last signed out, ISO 8601 with a time zone.                               |
 
 ## Constraints
 

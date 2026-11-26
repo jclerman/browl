@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{# The admins (A-7): seed admins, who can't be removed here, then those added here. Removing goes through htmx
+   (`hx-boost`) for its confirmation; without JS (U-17), the form posts at once. #}
+{% block title %}Admins{% endblock %}
+{% block content %}
+{% set current = "admins_page" %}{% include "admin/_nav.html" %}
+<h1>Admins</h1>
+{% if auth_disabled %}
+<p class="note">Sign-in is off (<code>AUTH_DISABLED</code>), so everyone is an admin: this list takes effect once it's on.</p>
+{% endif %}
+{% if error %}
+<p id="admins-error" class="failure" role="alert">{{ error }}</p>
+{% endif %}
+<table class="admins">
+  <thead><tr><th scope="col">Email address</th><th scope="col">Added</th><th scope="col"><span class="visually-hidden">Remove</span></th></tr></thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.email }}{% if row.email == you %} <span class="note">(you)</span>{% endif %}</td>
+      {% if row.seed %}
+      <td class="note">Seed admin, set in <code>SEED_ADMINS</code></td>
+      <td></td>
+      {% else %}
+      <td><time datetime="{{ row.added_at.isoformat() }}">{{ row.added_at.strftime("%Y-%m-%d") }}</time>
+        {%- if row.added_by %} by {{ row.added_by }}{% endif %}</td>
+      <td>
+        {% if row.email == you %}
+        {% set question = "Remove yourself as an admin? You'll lose access to the admin pages at once." %}
+        {% else %}
+        {% set question = "Remove " ~ row.email ~ " as an admin?" %}
+        {% endif %}
+        <form method="post" action="{{ url_for('remove_admin').path }}" hx-boost="true" hx-confirm="{{ question }}">
+          <input type="hidden" name="email" value="{{ row.email }}">
+          <button type="submit" aria-label="Remove {{ row.email }}">Remove</button>
+        </form>
+      </td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<h2>Add an admin</h2>
+<form class="add-admin" method="post" action="{{ url_for('add_admin').path }}">
+  <p>
+    <label for="admin-email">Email address of their Google account</label>
+    <input type="email" id="admin-email" name="email" value="{{ entered }}" required autocomplete="off"
+           {%- if error %} aria-describedby="admins-error"{% endif %}>
+    <button type="submit">Add</button>
+  </p>
+  <p class="note">They can sign in as an admin at once. In a Gmail address, dots before the <code>@</code> don't matter.</p>
+</form>
+{% endblock %}

@@ -157,19 +157,25 @@
     {
       "name": "admin",
       "type": "table",
-      "comment": "Admins added in the UI (DESIGN.md 2.11): a signed-in user whose verified email is here, or in SEED_ADMINS, is an admin. P-22 creates the table; P-23 adds the page that manages it.",
+      "comment": "Admins added in the UI (DESIGN.md 2.11): a signed-in user whose verified email is here, or in SEED_ADMINS, is an admin. P-22 creates the table; P-23's admins page manages it.",
       "columns": [
         {
           "name": "email",
           "type": "TEXT",
           "nullable": true,
-          "comment": "The admin's email address, lowercased, as Google gives it verified."
+          "comment": "The admin's email address in its canonical form (browl.admins.canonical_email): lowercased, and for Gmail without the dots in its local part."
         },
         {
           "name": "added_at",
           "type": "TEXT",
           "nullable": false,
-          "comment": "When the admin was added."
+          "comment": "When the admin was added, ISO 8601 with a time zone."
+        },
+        {
+          "name": "added_by",
+          "type": "TEXT",
+          "nullable": true,
+          "comment": "The email address of the admin who added them; NULL if added with AUTH_DISABLED, or before P-23."
         }
       ],
       "indexes": [
@@ -211,7 +217,7 @@
           ]
         }
       ],
-      "def": "CREATE TABLE admin (\n        email TEXT PRIMARY KEY CHECK (email = lower(email)),\n        added_at TEXT NOT NULL\n    )"
+      "def": "CREATE TABLE \"admin\" (\n        email TEXT PRIMARY KEY CHECK (email = lower(email)),\n        added_at TEXT NOT NULL,\n        added_by TEXT\n    )"
     },
     {
       "name": "sign_out",
@@ -222,7 +228,7 @@
           "name": "email",
           "type": "TEXT",
           "nullable": true,
-          "comment": "The account's email address, lowercased, as Google gives it verified."
+          "comment": "The account's email address in its canonical form (browl.admins.canonical_email)."
         },
         {
           "name": "signed_out_at",
@@ -270,7 +276,7 @@
           ]
         }
       ],
-      "def": "CREATE TABLE sign_out (\n        email TEXT PRIMARY KEY CHECK (email = lower(email)),\n        signed_out_at TEXT NOT NULL\n    )"
+      "def": "CREATE TABLE \"sign_out\" (\n        email TEXT PRIMARY KEY CHECK (email = lower(email)),\n        signed_out_at TEXT NOT NULL\n    )"
     }
   ],
   "driver": {

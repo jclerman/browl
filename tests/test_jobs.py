@@ -68,7 +68,7 @@ def schema_version(path: Path) -> int:
 def test_store_migrates_new_database(data_dir: Path) -> None:
     """Check that a new database is created at the latest schema version, with no job."""
     store = JobStore(data_dir / "sub" / STATE_DB)
-    assert schema_version(store.path) == len(browl.jobs.MIGRATIONS) == 8
+    assert schema_version(store.path) == len(browl.jobs.MIGRATIONS) == 9
     assert store.read() == JobState()
 
 
@@ -341,6 +341,36 @@ def test_store_migrates_version_6(data_dir: Path) -> None:
     assert (state.detail, state.fraction, state.detail_iri) == (None, None, None)
     assert job_elapsed(state, datetime.now(UTC)) == "1 min 12 s"
     assert schema_version(path) == len(browl.jobs.MIGRATIONS)
+
+
+def test_store_migrates_version_8(data_dir: Path) -> None:
+    """Check that a version 8 database migrates: admins get no adder, and Gmail addresses lose their dots (P-23).
+
+    Rows that then coincide merge into the earliest addition and the latest sign-out.
+    """
+    path = data_dir / STATE_DB
+    with closing(sqlite3.connect(path)) as connection:
+        connection.executescript(
+            f"BEGIN;\n{';'.join(browl.jobs.MIGRATIONS[:8])}\nPRAGMA user_version = 8;\n"
+            "INSERT INTO admin VALUES ('j.doe@gmail.com', '2026-01-02T00:00:00+00:00'),"
+            " ('jdoe@gmail.com', '2026-01-01T00:00:00+00:00'), ('a.b@example.org', '2026-01-03T00:00:00+00:00');\n"
+            "INSERT INTO sign_out VALUES ('j.doe@gmail.com', '2026-02-02T00:00:00+00:00'),"
+            " ('jdoe@gmail.com', '2026-02-01T00:00:00+00:00'), ('a.b@example.org', '2026-02-03T00:00:00+00:00');\n"
+            "COMMIT;"
+        )
+    JobStore(path)
+    assert schema_version(path) == len(browl.jobs.MIGRATIONS)
+    with closing(sqlite3.connect(path)) as connection:
+        admins = connection.execute("SELECT * FROM admin ORDER BY email").fetchall()
+        sign_outs = connection.execute("SELECT * FROM sign_out ORDER BY email").fetchall()
+    assert admins == [
+        ("a.b@example.org", "2026-01-03T00:00:00+00:00", None),
+        ("jdoe@gmail.com", "2026-01-01T00:00:00+00:00", None),
+    ]
+    assert sign_outs == [
+        ("a.b@example.org", "2026-02-03T00:00:00+00:00"),
+        ("jdoe@gmail.com", "2026-02-02T00:00:00+00:00"),
+    ]
 
 
 async def test_stage_results_recorded(data_dir: Path) -> None:

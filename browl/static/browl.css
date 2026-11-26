@@ -580,6 +580,49 @@ code {
   }
 }
 
+/* The admin pages' links (`admin/_nav.html`), the page shown in bold. */
+.admin-nav ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space);
+  list-style: none;
+  margin: 0 0 var(--space);
+  padding: 0;
+}
+
+.admin-nav a[aria-current="page"] {
+  color: inherit;
+  font-weight: bold;
+  text-decoration: none;
+}
+
+/* The admins page (A-7). */
+.admins {
+  border-collapse: collapse;
+}
+
+.admins th {
+  color: var(--muted);
+  font-size: 0.85em;
+  font-weight: normal;
+  text-align: start;
+}
+
+.admins th,
+.admins td {
+  border-bottom: 1px solid var(--border);
+  padding: calc(var(--space) / 4) calc(var(--space) / 2);
+  vertical-align: baseline;
+}
+
+.admins form {
+  margin: 0;
+}
+
+.add-admin input[type="email"] {
+  width: min(30ch, 100%);
+}
+
 .upload {
   max-width: var(--measure);
 }

@@ -8,6 +8,7 @@ import langcodes
 from pydantic import AliasGenerator, Field, HttpUrl, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from browl.admins import parse_email
 from browl.rdf import PREFIX_NAME
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,8 @@ class Settings(BaseSettings):
             it, they run in the app's container.
         oidc_client_id: Google OAuth client ID (O-6).
         oidc_client_secret: Google OAuth client secret (O-6).
-        seed_admins: Admin email addresses, lowercased; they can't be removed in the UI (O-6).
+        seed_admins: Admin email addresses, in their canonical form (`browl.admins.canonical_email`); they can't be
+            removed in the UI (O-6).
         auth_disabled: Turns authentication off, for development only (O-7).
     """
 
@@ -177,11 +179,16 @@ class Settings(BaseSettings):
     @field_validator("seed_admins")
     @classmethod
     def check_seed_admins(cls, value: list[str]) -> list[str]:
-        """Check and lowercase the seed admin email addresses."""
-        invalid = [address for address in value if not re.fullmatch(r"[^@\s]+@[^@\s]+", address)]
+        """Check the seed admin email addresses, and put them in their canonical form (`canonical_email`)."""
+        addresses, invalid = [], []
+        for text in value:
+            try:
+                addresses.append(parse_email(text))
+            except ValueError:
+                invalid.append(text)
         if invalid:
             raise ValueError(f"not email addresses: {', '.join(invalid)}")
-        return [address.lower() for address in value]
+        return addresses
 
     # After the validators above: pydantic runs a field's validators in the order they're defined, so this sees the
     # normalized values, and e.g. "EN" and "en" count as duplicates.

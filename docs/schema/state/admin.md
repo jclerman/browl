@@ -2,15 +2,16 @@
 
 ## Description
 
-Admins added in the UI (DESIGN.md 2.11): a signed-in user whose verified email is here, or in SEED_ADMINS, is an admin. P-22 creates the table; P-23 adds the page that manages it.
+Admins added in the UI (DESIGN.md 2.11): a signed-in user whose verified email is here, or in SEED_ADMINS, is an admin. P-22 creates the table; P-23's admins page manages it.
 
 <details>
 <summary><strong>Table Definition</strong></summary>
 
 ```sql
-CREATE TABLE admin (
+CREATE TABLE "admin" (
         email TEXT PRIMARY KEY CHECK (email = lower(email)),
-        added_at TEXT NOT NULL
+        added_at TEXT NOT NULL,
+        added_by TEXT
     )
 ```
 
@@ -18,10 +19,11 @@ CREATE TABLE admin (
 
 ## Columns
 
-| Name     | Type | Default | Nullable | Children | Parents | Comment                                                             |
-| -------- | ---- | ------- | -------- | -------- | ------- | ------------------------------------------------------------------- |
-| email    | TEXT |         | true     |          |         | The admin's email address, lowercased, as Google gives it verified. |
-| added_at | TEXT |         | false    |          |         | When the admin was added.                                           |
+| Name     | Type | Default | Nullable | Children | Parents | Comment                                                                                                                                       |
+| -------- | ---- | ------- | -------- | -------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| email    | TEXT |         | true     |          |         | The admin's email address in its canonical form (browl.admins.canonical_email): lowercased, and for Gmail without the dots in its local part. |
+| added_at | TEXT |         | false    |          |         | When the admin was added, ISO 8601 with a time zone.                                                                                          |
+| added_by | TEXT |         | true     |          |         | The email address of the admin who added them; NULL if added with AUTH_DISABLED, or before P-23.                                              |
 
 ## Constraints
 
@@ -46,6 +48,7 @@ erDiagram
 "admin" {
   TEXT email PK
   TEXT added_at
+  TEXT added_by
 }
 ```
 

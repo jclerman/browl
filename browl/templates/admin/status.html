@@ -3,6 +3,7 @@
 {% block head %}{% if job.running %}<noscript><meta http-equiv="refresh" content="{{ poll_s }}; url={{ url_for('job_status').path }}"></noscript>{% endif %}{% endblock %}
 {% block title %}Load status{% endblock %}
 {% block content %}
+{% set current = "job_status" %}{% include "admin/_nav.html" %}
 <h1>Load status</h1>
 {% include "admin/_job_status.html" %}
 {% endblock %}

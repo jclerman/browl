@@ -20,6 +20,7 @@ from typing import IO, Self
 
 import httpx2
 
+from browl.admins import CANONICAL_EMAIL_SQL
 from browl.jobtypes import ImportResult, Reasoner, StageError
 from browl.settings import Settings
 
@@ -108,6 +109,26 @@ MIGRATIONS: list[str] = [
     # Version 8: the IRI the running stage is working on, which only admins see (P-31).
     """
     ALTER TABLE job ADD COLUMN detail_iri TEXT;
+    """,
+    # Version 9: who added each admin (P-23); and Gmail addresses without the dots in their local part, which Gmail
+    # ignores (`browl.admins.canonical_email`), so an address with and one without match. Rows that then coincide
+    # are merged: the earliest addition, the latest sign-out.
+    f"""
+    CREATE TABLE admin_new (
+        email TEXT PRIMARY KEY CHECK (email = lower(email)),
+        added_at TEXT NOT NULL,
+        added_by TEXT
+    );
+    INSERT INTO admin_new (email, added_at) SELECT {CANONICAL_EMAIL_SQL}, min(added_at) FROM admin GROUP BY 1;
+    DROP TABLE admin;
+    ALTER TABLE admin_new RENAME TO admin;
+    CREATE TABLE sign_out_new (
+        email TEXT PRIMARY KEY CHECK (email = lower(email)),
+        signed_out_at TEXT NOT NULL
+    );
+    INSERT INTO sign_out_new SELECT {CANONICAL_EMAIL_SQL}, max(signed_out_at) FROM sign_out GROUP BY 1;
+    DROP TABLE sign_out;
+    ALTER TABLE sign_out_new RENAME TO sign_out;
     """,
 ]
 """The persistent database's schema migrations: entry n migrates from version n to n + 1."""

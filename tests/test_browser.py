@@ -10,13 +10,14 @@ import re
 import threading
 import urllib.parse
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 import rdflib
 from fastapi import FastAPI
+from playwright.sync_api import Dialog, FloatRect, Locator, Page, Request, Route, expect
 from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import FloatRect, Locator, Page, Request, Route, expect
 from rdflib.namespace import OWL, RDF
 
 import browl.admin
@@ -3522,3 +3523,32 @@ def test_search_page_filters_the_box(page: Page, searchable: LiveServer) -> None
     expect(page).to_have_url(re.compile(r"[?&]property=" + re.escape(urllib.parse.quote(SYNONYM, safe=""))))
     expect(search_box(page)).to_have_value("myo")  # the page's query, in the box
     expect(page.locator(f"input[name=property][value='{SYNONYM}']")).to_be_checked()
+
+
+@pytest.mark.parametrize("accept", [True, False])
+def test_remove_admin_confirmed(page: Page, live_server: Callable[[FastAPI], LiveServer], accept: bool) -> None:
+    """Check that removing an admin asks first, and removes them only if confirmed, without breaking the CSP (A-7)."""
+    server = live_server(make_app())
+    server.app.state.admins.add("other@example.org", None, datetime.now(UTC))
+    questions: list[str] = []
+
+    def answer(dialog: Dialog) -> None:
+        questions.append(dialog.message)
+        if accept:
+            dialog.accept()
+        else:
+            dialog.dismiss()
+
+    page.on("dialog", answer)
+    watch_policy(page)
+    page.goto(f"{server.url}/_browl/admin/admins")
+    page.get_by_role("button", name="Remove other@example.org").click()
+    removed = page.get_by_role("button", name="Remove other@example.org")
+    if accept:
+        expect(removed).to_have_count(0)
+    else:
+        page.wait_for_timeout(500)
+        expect(removed).to_have_count(1)
+    assert questions == ["Remove other@example.org as an admin?"]
+    assert [admin.email for admin in server.app.state.admins.admins()] == ([] if accept else ["other@example.org"])
+    assert violations(page) == []

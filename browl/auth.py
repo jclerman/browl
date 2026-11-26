@@ -25,7 +25,7 @@ from joserfc.errors import JoseError
 from starlette.applications import Starlette
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from browl.admins import AdminStore
+from browl.admins import AdminStore, canonical_email
 from browl.pages import NO_LINK, OntologyLink, app_path, href, is_htmx, is_under_any, route_href, same_origin, templates
 from browl.settings import Settings
 
@@ -220,6 +220,7 @@ class AdminMark:
         email = request.session.get(_SESSION_EMAIL)
         if email is None:
             return  # no database read
+        email = canonical_email(email)  # already, but for a session from before Gmail's dots were dropped
         signed_in_at = request.session.get(_SESSION_SIGNED_IN_AT)
         if signed_in_at is None:  # a session from before sign-in times were kept
             request.session.clear()
@@ -364,7 +365,7 @@ async def oidc_callback(request: Request) -> Response:
     if not isinstance(email, str) or claims.get("email_verified") is not True:
         message = "Google didn't give a verified email address."
         return auth_page(request, "Sign-in failed", message, status.HTTP_400_BAD_REQUEST)
-    email = email.lower()
+    email = canonical_email(email)
     target = safe_next(request.session.pop(_SESSION_NEXT, None)) or _upload_path(request)
     request.session[_SESSION_EMAIL] = email
     request.session[_SESSION_SIGNED_IN_AT] = datetime.now(UTC).isoformat()
