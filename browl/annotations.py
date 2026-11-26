@@ -11,9 +11,9 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
 from browl import owl, rdf
-from browl.axioms import annotation_sources
 from browl.fuseki import FusekiClient, ResultTooLargeError, SparqlError, filled_query
 from browl.names import language_rank
+from browl.nesting import annotation_sources
 from browl.precache.core import PREFIXES, sparql_file
 from browl.rdf import IRI, BlankNode, Term
 
@@ -186,14 +186,14 @@ def value_annotations(entity: IRI, rows: Iterable[Sequence[Term | None]]) -> Val
 
     The reified axioms whose source is the entity give its values' annotations; the `owl:Annotation`s on a node, by
     their property and target, those of its annotations. Each node is placed once, on the source
-    `browl.axioms.annotation_sources` keeps and its first property and target, so a cycle ends and nesting stops at
-    `browl.axioms.MAX_ANNOTATION_DEPTH`; repeats are dropped, and so are blank values (anonymous individuals), as on
-    the panel. The annotations of the entity's logical axioms come too, and are never looked up.
+    `browl.nesting.annotation_sources` keeps and its first property and target, so a cycle ends and nesting stops at
+    `browl.nesting.MAX_ANNOTATION_DEPTH`; repeats are dropped, and so are blank values (anonymous individuals), as on
+    the panel.
 
     Raises:
         SparqlError: A row has a term missing, or a property that isn't an IRI.
     """
-    sources: dict[Term, list[Term]] = {}
+    sources: dict[Term, dict[Term, None]] = {}
     annotates: dict[Term, set[tuple[IRI, Term]]] = {}
     values: dict[Term, dict[tuple[IRI, IRI | rdf.Literal], None]] = {}
     for row in rows:
@@ -202,7 +202,7 @@ def value_annotations(entity: IRI, rows: Iterable[Sequence[Term | None]]) -> Val
             raise SparqlError(f"an axiom annotation's row with a term missing: {row!r:.200}")
         if not isinstance(about, IRI) or not isinstance(property_, IRI):
             raise SparqlError(f"an axiom annotation's row with a property that isn't an IRI: {row!r:.200}")
-        sources.setdefault(node, []).append(source)
+        sources.setdefault(node, {})[source] = None
         annotates.setdefault(node, set()).add((about, target))
         if not isinstance(value, BlankNode):
             values.setdefault(node, {})[property_, value] = None

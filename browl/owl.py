@@ -3,7 +3,7 @@
 Node types follow the OWL 2 structural specification's names (`SubClassOf`, `ObjectSomeValuesFrom`, …), and an
 axiom's fields name its roles (`SubClassOf.sub`, `ClassAssertion.individual`). Each node is a frozen Pydantic model with
 a `type` field that discriminates the unions of nodes (`ClassExpression`, `AnyAxiom`, …), so nodes round-trip through
-JSON (U-42), those `browl.axioms` makes at least, which nest at most `browl.axioms.MAX_DEPTH` deep. A field holding
+JSON (U-42), those `browl.axioms` makes at least, which nest at most `browl.nesting.MAX_DEPTH` deep. A field holding
 axioms is typed `AnyAxiom`: Pydantic serializes by the declared type, so `Axiom` would drop the subclass's fields.
 
 A node renders in Manchester syntax as a stream of typed tokens (`Node.manchester_tokens`): keywords, IRIs, literals

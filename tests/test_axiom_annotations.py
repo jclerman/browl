@@ -7,7 +7,7 @@ nested annotations; the caps that leave them out with a note. The Usage tab's ar
 import asyncio
 import logging
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import httpx2
@@ -18,7 +18,7 @@ from pydantic import TypeAdapter
 
 import browl.annotations
 import browl.overview
-from browl import axioms, frames, owl, owlapi
+from browl import axioms, frames, nesting, owl, owlapi
 from browl.annotations import (
     IRIValue,
     LiteralValue,
@@ -27,11 +27,12 @@ from browl.annotations import (
     fetch_value_annotations,
     value_annotations,
 )
-from browl.axioms import LeftOut, annotation_sources, fetch_fragment, pruned_annotations
+from browl.axioms import LeftOut, fetch_fragment, pruned_annotations
 from browl.derived import EntityType
 from browl.fuseki import FusekiClient
 from browl.jobs import Stage
 from browl.links import EntityLink
+from browl.nesting import annotation_sources
 from browl.pages import templates
 from browl.rdf import IRI, OWL, RDF, RDFS, XSD, BlankNode, Literal
 from tests.helpers import brackets, derived_stage, fuseki_dataset, make_app, ontology_ntriples
@@ -85,7 +86,7 @@ def test_sources_shared() -> None:
 
 def test_sources_depth(monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that nodes deeper than `MAX_ANNOTATION_DEPTH` are left out."""
-    monkeypatch.setattr(axioms, "MAX_ANNOTATION_DEPTH", 3)
+    monkeypatch.setattr(nesting, "MAX_ANNOTATION_DEPTH", 3)
     sources = {f"n{i}": [f"n{i - 1}" if i else "E"] for i in range(6)}
     assert sorted(annotation_sources(sources)) == ["n0", "n1", "n2"]
 
@@ -126,17 +127,31 @@ CYCLE = (
 
 def test_pruned() -> None:
     """Check that pruning drops a cycle's back link and leaves well-formed N-Triples as they are."""
-    pruned = pruned_annotations(CYCLE.encode()).decode()
+    pruned = pruned_annotations(CYCLE.encode())[0].decode()
     assert f"_:n1 <{OWL}annotatedSource> _:n2 ." not in pruned
     assert f"_:n1 <{OWL}annotatedSource> _:ax ." in pruned
     assert len(pruned.splitlines()) == len(CYCLE.splitlines()) - 1
     well_formed = (AXIOM + nested_chain(3)).encode()
-    assert pruned_annotations(well_formed) is well_formed
+    assert pruned_annotations(well_formed)[0] is well_formed
+
+
+def many_annotations(count: int) -> str:
+    """Return `AXIOM`'s reification with `count` `:note`s in all, as an uploaded ontology could hold."""
+    return AXIOM + "".join(f'_:ax <{NOTE}> "{i}" .\n' for i in range(1, count))
+
+
+def test_annotation_count() -> None:
+    """Check that pruning counts the annotations the kept nodes hold, nested ones too, not their links or type."""
+    assert pruned_annotations(AXIOM.encode())[1] == 1
+    assert pruned_annotations((AXIOM + nested_chain(3)).encode())[1] == 4
+    assert pruned_annotations(CYCLE.encode())[1] == 3
+    assert pruned_annotations(many_annotations(3_000).encode())[1] == 3_000
+    assert pruned_annotations(OWN.encode()) == (OWN.encode(), 0)
 
 
 def parsed(ntriples: bytes) -> list[owl.AnyAxiom]:
     """Return `A`'s axioms in N-Triples, pruned as a page's fragment is."""
-    return asyncio.run(owlapi.run_java(axioms.entity_axioms, pruned_annotations(ntriples), f"{NS}A"))
+    return asyncio.run(owlapi.run_java(axioms.entity_axioms, pruned_annotations(ntriples)[0], f"{NS}A"))
 
 
 @pytest.mark.usefixtures("jvm")
@@ -151,8 +166,8 @@ def test_cycle_parses() -> None:
 @pytest.mark.usefixtures("jvm")
 def test_deep_fragment() -> None:
     """Check that annotations nested past `MAX_ANNOTATION_DEPTH` are left out, and the axiom still shows."""
-    [axiom] = parsed((AXIOM + nested_chain(axioms.MAX_DEPTH + 10)).encode())
-    assert depth(axiom.annotations) == axioms.MAX_ANNOTATION_DEPTH
+    [axiom] = parsed((AXIOM + nested_chain(nesting.MAX_DEPTH + 10)).encode())
+    assert depth(axiom.annotations) == nesting.MAX_ANNOTATION_DEPTH
 
 
 def deep_axiom() -> list[owl.AnyAxiom]:
@@ -162,7 +177,7 @@ def deep_axiom() -> list[owl.AnyAxiom]:
     singleton = jpype.JClass("java.util.Collections").singleton
     prop = factory.getOWLAnnotationProperty(create(NOTE))
     annotation = factory.getOWLAnnotation(prop, factory.getOWLLiteral("deepest"))
-    for i in range(axioms.MAX_DEPTH + 10):
+    for i in range(nesting.MAX_DEPTH + 10):
         annotation = factory.getOWLAnnotation(prop, factory.getOWLLiteral(str(i)), singleton(annotation))
     a, b = (factory.getOWLClass(create(f"{NS}{name}")) for name in "AB")
     return axioms.convert_axioms([factory.getOWLSubClassOfAxiom(a, b, singleton(annotation))])
@@ -172,7 +187,7 @@ def deep_axiom() -> list[owl.AnyAxiom]:
 def test_deep_conversion() -> None:
     """Check that converting stops at `MAX_ANNOTATION_DEPTH`, rather than failing the axiom at `MAX_DEPTH`."""
     [axiom] = asyncio.run(owlapi.run_java(deep_axiom))
-    assert depth(axiom.annotations) == axioms.MAX_ANNOTATION_DEPTH
+    assert depth(axiom.annotations) == nesting.MAX_ANNOTATION_DEPTH
     TypeAdapter(owl.AnyAxiom).validate_json(TypeAdapter(owl.AnyAxiom).dump_json(axiom))  # within JSON's depth
 
 
@@ -230,7 +245,7 @@ def test_value_annotations_cycle(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     value = LiteralValue(lexical="x", datatype=IRI(XSD_STRING))
     assert value_annotations(KIDNEY, cycle)[COMMENT, value] == (note("1", note("2", note("1"))),)
-    monkeypatch.setattr(axioms, "MAX_ANNOTATION_DEPTH", 2)
+    monkeypatch.setattr(nesting, "MAX_ANNOTATION_DEPTH", 2)
     assert value_annotations(KIDNEY, cycle)[COMMENT, value] == (note("1", note("2")),)
 
 
@@ -285,6 +300,20 @@ async def test_fetch(fuseki_url: str, dataset: str) -> None:
     assert [(each.property.iri, each.value) for each in see_also] == [(REMARK, owl.IRIReference(iri=f"{NS}Organ"))]
 
 
+@pytest.mark.anyio
+async def test_panels_own_annotations(fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that each Overview panel's query reads only its own axioms' annotations, so neither counts the other's.
+
+    Cat's one annotated axiom is logical; Kidney's comment is annotated, and so is its restriction.
+    """
+    monkeypatch.setattr(browl.annotations, "MAX_AXIOM_ANNOTATIONS", 0)
+    async with httpx2.AsyncClient(base_url=fuseki_url) as http:
+        assert await fetch_value_annotations(FusekiClient(http), dataset, f"{NS}Cat") == {}
+        fragment = await fetch_fragment(FusekiClient(http), dataset, KIDNEY)
+    assert b'"restricted"' in fragment.annotations
+    assert b'"a source"' not in fragment.ntriples and b'"en fran' not in fragment.ntriples
+
+
 def fuseki_stub(answers: dict[str, httpx2.Response]) -> FusekiClient:
     """Return a client of a stubbed Fuseki that answers a query holding a key's text with its response."""
 
@@ -328,6 +357,49 @@ async def test_fragment_caps(
     fragment = await fetch_fragment(sparql, "ds", f"{NS}A")
     assert fragment.annotations_left_out == left_out
     assert (f"<{NOTE}>".encode() in fragment.ntriples) == (left_out is None)
+
+
+@pytest.mark.anyio
+async def test_fragment_too_many_annotations(caplog: pytest.LogCaptureFixture) -> None:
+    """Check that more annotations than `MAX_FRAGMENT_ANNOTATIONS`, on one axiom, within the other caps, are left out.
+
+    The OWLAPI's parse of them grows with the square of their number.
+    """
+    assert axioms.MAX_FRAGMENT_ANNOTATIONS < 3_000
+    annotations = many_annotations(3_000)
+    sparql = fuseki_stub(
+        {ANNOTATIONS_QUERY: ntriples(annotations), TYPES_QUERY: ntriples(""), "DESCRIBE": ntriples(OWN)}
+    )
+    fragment = await fetch_fragment(sparql, "ds", f"{NS}A")
+    assert fragment == axioms.Fragment(OWN.encode(), annotations_left_out=LeftOut.TOO_MANY)
+    assert "without their annotations, which are too many" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_fragment_scans_off_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a fragment's scans, of its IRIs and its annotations, run off the event loop."""
+    on_loop = []
+
+    def recorded(function: Callable[..., object]) -> Callable[..., object]:
+        def call(*args: object) -> object:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                on_loop.append(False)
+            else:
+                on_loop.append(True)
+            return function(*args)
+
+        return call
+
+    for name in ("pruned_annotations", "ntriples_iris"):
+        monkeypatch.setattr(axioms, name, recorded(getattr(axioms, name)))
+    sparql = fuseki_stub(
+        {ANNOTATIONS_QUERY: ntriples(ANNOTATION), TYPES_QUERY: ntriples(""), "DESCRIBE": ntriples(OWN)}
+    )
+    fragment = await fetch_fragment(sparql, "ds", f"{NS}A")
+    assert fragment.annotations
+    assert on_loop and not any(on_loop)
 
 
 @pytest.mark.anyio

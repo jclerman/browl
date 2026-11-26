@@ -6,7 +6,7 @@ import math
 import re
 import sqlite3
 from collections import Counter
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from contextlib import closing, contextmanager
 from typing import Any
 
@@ -123,7 +123,7 @@ async def test_every_usage_once(
         for page in range(1, pages + 1):
             chunk = ordered[(page - 1) * size : page * size]
             continued = page > 1 and bool(chunk) and ordered[(page - 1) * size - 1].subject == chunk[0].subject
-            groups = await read_usage_page(store, iri, chunk, continued)
+            groups = (await read_usage_page(store, iri, chunk, continued)).groups
             assert [group.subject for group in groups] == list(dict.fromkeys(usage.subject for usage in chunk))
             for group in groups:
                 on_page = sum(usage.subject == group.subject for usage in chunk)
@@ -575,6 +575,81 @@ def test_too_large(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: 
     assert "the page's values are too large: the result is longer than 40 characters" in caplog.text
 
 
+ANNOTATIONS_TOO_MANY = "These usages' annotations are too many to show here."
+ANNOTATIONS_FAILED = "These usages' annotations can't be shown just now."
+
+
+def answer_annotations(monkeypatch: pytest.MonkeyPatch, answer: Callable[[], bytes]) -> None:
+    """Make the Usage tab's annotations query answer with what `answer` returns, or raises; the others as they are."""
+    construct = browl.usage_tab._construct
+
+    async def patched(store: UsageStore, query: str, empty: str, rows: Sequence[str]) -> bytes:
+        if query == browl.usage_tab._ANNOTATIONS:
+            return answer()
+        return await construct(store, query, empty, rows)
+
+    monkeypatch.setattr(browl.usage_tab, "_construct", patched)
+
+
+def test_too_many_annotations(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Check that 3,000 annotations on one usage's reified axiom are left out, with a note, and the page shown.
+
+    The OWLAPI's parse of them grows with the square of their number (`browl.axioms.MAX_FRAGMENT_ANNOTATIONS`).
+    """
+    assert browl.usage_tab.MAX_FRAGMENT_ANNOTATIONS < 3_000
+    sub_class_of = "<http://www.w3.org/2000/01/rdf-schema#subClassOf>"
+    reified = (
+        f"_:big {RDF_TYPE} <{OWL_NS}Axiom> .\n_:big <{OWL_NS}annotatedSource> <{NS}Cat> .\n"
+        f"_:big <{OWL_NS}annotatedProperty> {sub_class_of} .\n_:big <{OWL_NS}annotatedTarget> <{NS}Animal> .\n"
+    )
+    notes = "".join(f'_:big <{NS}note> "{i}" .\n' for i in range(3_000))
+    answer_annotations(monkeypatch, lambda: (reified + notes).encode())
+    page = panel(client, "Animal").text
+    assert ":Cat SubClassOf :Animal" in lines_shown(page)
+    assert "[:note: annotated]" not in annotations_shown(page)
+    assert ANNOTATIONS_TOO_MANY in page
+    assert "without their annotations, which are too many" in caplog.text
+
+
+def test_too_many_own_annotations(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a page whose usages' own fragment holds too many annotations says it's too large."""
+    monkeypatch.setattr(browl.usage_tab, "MAX_FRAGMENT_ANNOTATIONS", 0)
+    assert TOO_LARGE in panel(client, "Fungus").text  # a usage found through its annotations alone
+
+
+@pytest.mark.parametrize(
+    ("error", "note", "level"),
+    [
+        (browl.fuseki.SparqlError("no luck"), ANNOTATIONS_FAILED, "ERROR"),
+        (browl.fuseki.ResultTooLargeError("too long"), ANNOTATIONS_TOO_MANY, "WARNING"),
+    ],
+    ids=["failed", "too-large"],
+)
+def test_annotations_query_fails(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    error: Exception,
+    note: str,
+    level: str,
+) -> None:
+    """Check that a failed or too large annotations query leaves only the annotations out, with a note, logged."""
+
+    def fail() -> bytes:
+        raise error
+
+    answer_annotations(monkeypatch, fail)
+    page = panel(client, "Animal")
+    assert page.status_code == 200
+    assert ":Cat SubClassOf :Animal" in lines_shown(page.text)
+    assert "[:note: annotated]" not in annotations_shown(page.text)
+    assert note in page.text
+    [record] = [record for record in caplog.records if record.name == "browl.usage_tab"]
+    assert record.levelname == level
+
+
 def test_unlisted(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that usages counted but not listed, such as anonymous individuals', make no pages past those listed.
 
@@ -670,7 +745,7 @@ def test_unclaimed_on_page(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(browl.usage_tab, "fetch_usage_fragments", fragments)
     monkeypatch.setattr(browl.usage_tab, "run_java", parsed)
     usage = Usage(UsageSource.OBJECT, subject.iri, predicate=IRI(f"{NS}p"))
-    groups = asyncio.run(read_usage_page(None, entity.iri, [usage], False))  # type: ignore[arg-type]
+    groups = asyncio.run(read_usage_page(None, entity.iri, [usage], False)).groups  # type: ignore[arg-type]
     assert groups == [UsageGroup(subject=subject.iri, axioms=[claimed]), UsageGroup(subject=None, axioms=[stray])]
 
 
@@ -732,7 +807,7 @@ async def test_blank_object(jvm: None, fuseki_url: str, settings: Settings) -> N
     triples = f"{CLASSES}{remark} {RDF_TYPE} <{OWL_NS}AnnotationProperty> .\n<{NS}A> {remark} _:x .\n"
     async with loaded(fuseki_url, settings, {None: triples.encode()}, "") as blank:
         [usage] = await read_usages(blank, f"{NS}remark")
-        [group] = await read_usage_page(blank, f"{NS}remark", [usage], False)
+        [group] = (await read_usage_page(blank, f"{NS}remark", [usage], False)).groups
     assert group.subject == f"{NS}A"
     assert [axiom.manchester for axiom in group.axioms] == [f"<{NS}A> <{NS}remark> _:b1"]
 
@@ -755,7 +830,7 @@ async def test_imports(fuseki_url: str, ntriples: bytes, settings: Settings, sto
             for each in (store, split):
                 usages = await read_usages(each, iri)
                 ordered = await each.derived.read(each.generation, lambda c, found=usages: sorted_usages(c, found))
-                pages.append(await read_usage_page(each, iri, ordered[: browl.usage_tab.PAGE_USAGES], False))
+                pages.append((await read_usage_page(each, iri, ordered[: browl.usage_tab.PAGE_USAGES], False)).groups)
             assert pages[0] == pages[1], name
             assert pages[0]
 
@@ -901,7 +976,7 @@ async def test_symmetric_on_both_tabs(jvm: None, fuseki_url: str, settings: Sett
     triples = symmetric_triples("disjointWith", "Class")
     async with loaded(fuseki_url, settings, {None: triples}, "") as small:
         [usage] = await read_usages(small, f"{NS}A")
-        [group] = await read_usage_page(small, f"{NS}A", [usage], False)
+        [group] = (await read_usage_page(small, f"{NS}A", [usage], False)).groups
         fragment = await fetch_fragment(small.sparql, small.dataset, f"{NS}A", small.dataset_clause)
     assert group.subject == f"{NS}Z"
     assert [axiom.manchester for axiom in group.axioms] == [f"<{NS}Z> DisjointWith <{NS}A>"]
@@ -984,6 +1059,6 @@ def test_table_failure(client: TestClient, monkeypatch: pytest.MonkeyPatch, capl
 async def test_missing_value(store: UsageStore, caplog: pytest.LogCaptureFixture) -> None:
     """Check that a property's usage past its subject's values, which can't happen, is logged and left out."""
     usage = Usage(UsageSource.PREDICATE, IRI(f"{NS}Cat"), index=5)
-    [group] = await read_usage_page(store, f"{NS}remark", [usage], False)
+    [group] = (await read_usage_page(store, f"{NS}remark", [usage], False)).groups
     assert group.axioms == []
     assert f"No value 5 of {NS}remark for {NS}Cat" in caplog.text

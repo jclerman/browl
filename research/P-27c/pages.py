@@ -65,7 +65,7 @@ async def page_with_count(store: UsageStore, iri: str, page: int) -> dict:
     assert table is not None
     times["table"] = time.perf_counter()
     continued = table.previous is not None and bool(table.usages) and table.previous.subject == table.usages[0].subject
-    groups = await read_usage_page(store, iri, table.usages, continued)
+    groups = (await read_usage_page(store, iri, table.usages, continued)).groups
     times["page"] = time.perf_counter()
     mentioned = [g.subject for g in groups if g.subject] + [i for g in groups for a in g.axioms for i in a.iris()]
     links = await store.derived.read(GENERATION, lambda c: read_entity_links(c, mentioned, "_browl", ""))

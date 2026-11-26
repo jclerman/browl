@@ -18,7 +18,6 @@ from browl.annotations import (
     IRIValue,
     TooManyAnnotationsError,
     TooManyAxiomAnnotationsError,
-    ValueAnnotations,
     annotated,
     fetch_annotations,
     fetch_value_annotations,
@@ -39,7 +38,7 @@ from browl.pages import link_root, read_derived, templates
 from browl.precache.core import logged_iri
 from browl.rdf import IRI, RDFSyntaxError
 from browl.settings import Settings
-from browl.tasks import task_group
+from browl.tasks import caught, task_group
 from browl.usages import ready_store
 
 logger = logging.getLogger(__name__)
@@ -176,7 +175,8 @@ async def read_overview(request: Request, state: JobState, iri: str) -> Overview
         annotations_task = group.create_task(read_annotations(request, dataset, iri, clause))
         axioms_task = group.create_task(_read_axioms(request, dataset, iri, clause))
     annotations = annotations_task.result()
-    axioms, too_many_axioms, axiom_annotations_left_out = axioms_task.result()
+    read_axioms = axioms_task.result()
+    axioms = read_axioms.axioms
     mentioned = [each for axiom in axioms or () for each in axiom.iris()] + annotation_iris(annotations.pairs)
     settings: Settings = request.app.state.settings
     prefix = settings.reserved_prefix
@@ -197,9 +197,9 @@ async def read_overview(request: Request, state: JobState, iri: str) -> Overview
         annotations=annotations_panel(annotations, links, settings),
         axioms=AxiomsPanel(
             groups=axiom_groups,
-            too_many=too_many_axioms,
+            too_many=read_axioms.too_many,
             more_equivalents=more_equivalents,
-            annotations_left_out=axiom_annotations_left_out if axiom_groups is not None else None,
+            annotations_left_out=read_axioms.annotations_left_out,
         ),
         links=links,
     )
@@ -214,7 +214,14 @@ async def read_annotations(request: Request, dataset: str, iri: str, clause: str
     """
     async with task_group() as group:
         pairs_task = group.create_task(_read_pairs(request, dataset, iri, clause))
-        annotations_task = group.create_task(_read_value_annotations(request, dataset, iri, clause))
+        annotations_task = group.create_task(
+            caught(
+                fetch_value_annotations(request.app.state.sparql, dataset, iri, clause),
+                TooManyAxiomAnnotationsError,
+                SparqlError,
+                RDFSyntaxError,
+            )
+        )
     pairs, too_many = pairs_task.result()
     if pairs is None:
         return ReadAnnotations(None, too_many=too_many)
@@ -246,19 +253,6 @@ async def _read_pairs(
         return None, False
 
 
-async def _read_value_annotations(
-    request: Request, dataset: str, iri: str, clause: str
-) -> ValueAnnotations | TooManyAxiomAnnotationsError | SparqlError | RDFSyntaxError:
-    """Return the axiom annotations on an entity's annotations, or the error that keeps them from being shown.
-
-    The error is returned, not raised, so it doesn't cancel the annotations' query, and is logged only if that succeeds.
-    """
-    try:
-        return await fetch_value_annotations(request.app.state.sparql, dataset, iri, clause)
-    except (TooManyAxiomAnnotationsError, SparqlError, RDFSyntaxError) as error:
-        return error
-
-
 def annotation_iris(annotations: Iterable[tuple[IRI, AnnotationValue]] | None) -> list[str]:
     """Return the IRIs annotations mention, their properties', IRI values' and axiom annotations', for their links."""
     mentioned: list[str] = []
@@ -283,18 +277,30 @@ def annotations_panel(read: ReadAnnotations, links: Mapping[str, EntityLink], se
 async def _read_axioms(request: Request, dataset: str, iri: str, clause: str) -> ReadAxioms:
     """Return an entity's axioms (`browl.axioms.entity_axioms`), whether they're too many, and why not annotated.
 
-    The axioms are None if they can't be shown: too many, or reading them failed, which is logged.
+    The axioms are None if they can't be shown: too many, or reading them failed, which is logged. If the OWLAPI fails
+    on the fragment with its annotations, such as a malformed annotation, it's read again without them, which is
+    logged too.
     """
     try:
         fragment = await fetch_fragment(request.app.state.sparql, dataset, iri, clause)
-        axioms = await run_java(entity_axioms, fragment.ntriples, iri)
+        left_out = fragment.annotations_left_out
+        try:
+            axioms = await run_java(entity_axioms, fragment.ntriples, iri)
+        except FragmentError:
+            if not fragment.annotations:
+                raise
+            logger.exception(
+                "Showing the axioms of %s without their annotations, which couldn't be read", logged_iri(iri)
+            )
+            axioms = await run_java(entity_axioms, fragment.axioms, iri)
+            left_out = LeftOut.FAILED
     except TooManyAxiomsError as error:
         logger.warning("Not showing the axioms of %s: %s", logged_iri(iri), error)
         return ReadAxioms(None, too_many=True)
     except (SparqlError, RDFSyntaxError, FragmentError):
         logger.exception("Couldn't show the axioms of %s", logged_iri(iri))
         return ReadAxioms(None)
-    return ReadAxioms(axioms, annotations_left_out=fragment.annotations_left_out)
+    return ReadAxioms(axioms, annotations_left_out=left_out)
 
 
 def _read_equivalents(connection: sqlite3.Connection, iri: str) -> list[IRI]:

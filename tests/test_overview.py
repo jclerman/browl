@@ -29,7 +29,7 @@ from browl.links import EntityLink
 from browl.loading import dataset_name
 from browl.overview import ReadAnnotations, ReadAxioms
 from browl.rdf import IRI as RDFIRI
-from browl.rdf import OWL, RDF, RDFSyntaxError
+from browl.rdf import OWL, RDF, RDFS, RDFSyntaxError
 from tests.helpers import derived_stage, make_app, no_axioms, no_value_annotations
 
 pytestmark = pytest.mark.usefixtures("data_dir")
@@ -209,6 +209,31 @@ def test_fragment_error(
     assert "FragmentError: the OWLAPI couldn't parse the fragment" in caplog.text
     assert "Detailed logs:" in caplog.text  # the Java exception's, with its parsers' errors
     assert "Stack trace:" in caplog.text
+
+
+def test_annotations_unreadable(
+    jvm: None,
+    no_annotations: None,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Check that a fragment the OWLAPI can't read with its annotations is read again without them, with a note."""
+    axioms = f"<{IRI}> <{RDF}type> <{OWL}Class> .\n<{IRI}> <{RDFS}subClassOf> <{OWL}Thing> .\n"
+
+    async def fetched(*args: object) -> Fragment:
+        return Fragment(axioms.encode(), b"_:ax <http://exa\n")
+
+    monkeypatch.setattr(browl.overview, "fetch_fragment", fetched)
+    with caplog.at_level(logging.ERROR, logger="browl.overview"):
+        page = client.get("/_browl/hash", params=PANEL)
+    assert page.status_code == 200
+    assert MESSAGE not in page.text
+    assert "owl:Thing" in page.text
+    assert "These axioms' annotations can't be shown just now." in page.text
+    [record] = caplog.records
+    assert "without their annotations, which couldn't be read" in record.getMessage()
+    assert record.exc_info is not None
 
 
 def test_java_error(

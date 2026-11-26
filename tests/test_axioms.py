@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from pydantic import TypeAdapter
 
 import browl.overview
-from browl import axioms, frames, owl, owlapi
+from browl import axioms, frames, nesting, owl, owlapi
 from browl.derived import EntityType
 from browl.fuseki import UNION_FROM, FusekiClient
 from browl.jobs import Stage
@@ -604,12 +604,12 @@ def nested(depth: int, intersections: bool) -> list[owl.AnyAxiom]:
 @pytest.mark.parametrize("intersections", [False, True])
 def test_depth(intersections: bool) -> None:
     """Check that an axiom `MAX_DEPTH` deep converts and round-trips through JSON; one deeper is a `FragmentError`."""
-    deepest = asyncio.run(owlapi.run_java(nested, axioms.MAX_DEPTH, intersections))
+    deepest = asyncio.run(owlapi.run_java(nested, nesting.MAX_DEPTH, intersections))
     assert deepest[0].iris() == (f"{NS}A", f"{NS}B")
     adapter = TypeAdapter(list[owl.AnyAxiom])
     assert adapter.validate_json(adapter.dump_json(deepest)) == deepest
-    with pytest.raises(owlapi.FragmentError, match=f"^an axiom's nodes nest more than {axioms.MAX_DEPTH} deep$"):
-        asyncio.run(owlapi.run_java(nested, axioms.MAX_DEPTH + 1, intersections))
+    with pytest.raises(owlapi.FragmentError, match=f"^an axiom's nodes nest more than {nesting.MAX_DEPTH} deep$"):
+        asyncio.run(owlapi.run_java(nested, nesting.MAX_DEPTH + 1, intersections))
 
 
 def test_deep_fragment() -> None:

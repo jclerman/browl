@@ -13,10 +13,12 @@ super-properties; not its annotation assertions, nor its usage in other entities
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import functools
 import logging
-from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping
+from collections import Counter
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, cast
@@ -26,21 +28,14 @@ from pydantic import ValidationError
 
 from browl import owl
 from browl.fuseki import CONSTRUCT_MAX_BYTES, FusekiClient, ResultTooLargeError, SparqlError, filled_query
+from browl.nesting import MAX_ANNOTATION_DEPTH, MAX_DEPTH, annotation_sources
 from browl.owl import EntityKind
 from browl.owlapi import FragmentError, check_java_thread, ntriples_ontology
 from browl.precache.core import PREFIXES, logged_iri, sparql_file
-from browl.rdf import IRI, OWL, RDFSyntaxError, ntriples_iris
-from browl.tasks import task_group
+from browl.rdf import IRI, OWL, RDF, RDFSyntaxError, ntriples_iris
+from browl.tasks import caught, task_group
 
 logger = logging.getLogger(__name__)
-
-_AXIOMS = PREFIXES + sparql_file("entity-axioms.rq")
-_AXIOM_ANNOTATIONS = PREFIXES + sparql_file("entity-axiom-annotations.rq")
-_SYMMETRIC = PREFIXES + sparql_file("entity-symmetric.rq")
-_TYPES = PREFIXES + sparql_file("entity-types.rq")
-_ENTITY = "$entity"
-_NO_IRIS = "VALUES ?iri { }"
-_ANNOTATED_SOURCE = f"<{OWL}annotatedSource>".encode()
 
 MAX_FRAGMENT_IRIS = 5_000
 """The most IRIs an entity's fragment may mention before its types are fetched (`fetch_fragment`): more, and the page
@@ -49,14 +44,23 @@ says the entity has too many axioms to show, rather than fetch, parse, convert a
 MAX_AXIOMS = 1_000
 """The most axioms an entity may have for its page to show them (`entity_axioms`), as for `MAX_FRAGMENT_IRIS`."""
 
-MAX_DEPTH = 50
-"""The deepest an axiom's nodes may nest (the axiom is depth 1) for its entity's page to show its axioms: deeper, and
-the panel says they can't be shown (`FragmentError`). It keeps the recursion in converting, rendering and JSON (whose
-parser stops at about 200 levels, two per node in a list) well within bounds (DESIGN.md §2.8)."""
+MAX_FRAGMENT_ANNOTATIONS = 2_000
+"""The most axiom annotations, nested ones included, a fragment may hold (`pruned_annotations` counts them), as the
+OWLAPI's parse time grows with the square of one node's annotations: past it, they're left out, with a note
+(DESIGN.md §2.8, Axiom annotations)."""
 
-MAX_ANNOTATION_DEPTH = MAX_DEPTH - 1
-"""The deepest an axiom's or an annotation value's annotations nest, its own being depth 1: deeper ones are left out,
-so an annotation's nodes stay within `MAX_DEPTH` (DESIGN.md §2.8, Axiom annotations)."""
+_AXIOMS = PREFIXES + sparql_file("entity-axioms.rq")
+_AXIOM_ANNOTATIONS = PREFIXES + sparql_file("entity-axiom-annotations.rq")
+_SYMMETRIC = PREFIXES + sparql_file("entity-symmetric.rq")
+_TYPES = PREFIXES + sparql_file("entity-types.rq")
+_ENTITY = "$entity"
+_NO_IRIS = "VALUES ?iri { }"
+_ANNOTATED_SOURCE = f"<{OWL}annotatedSource>".encode()
+_NOT_ANNOTATIONS = frozenset(
+    f"<{iri}>".encode()
+    for iri in (f"{RDF}type", f"{OWL}annotatedSource", f"{OWL}annotatedProperty", f"{OWL}annotatedTarget")
+)
+"""The predicates of an annotation node's triples that aren't its annotations."""
 
 
 class TooManyAxiomsError(Exception):
@@ -72,15 +76,23 @@ class LeftOut(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Fragment:
-    """The triples from which the OWLAPI can parse an entity's axioms (`fetch_fragment`).
+    """The triples from which the OWLAPI can parse an entity's axioms (`fetch_fragment`), as N-Triples.
 
     Attributes:
-        ntriples: The triples, as N-Triples.
-        annotations_left_out: Why they hold none of the axioms' annotations, if they don't; else None.
+        axioms: The triples but the axioms' annotations.
+        annotations: The axioms' annotations, pruned (`pruned_annotations`); empty if they have none, or they're left
+            out.
+        annotations_left_out: Why the annotations are left out, if they are; else None.
     """
 
-    ntriples: bytes
+    axioms: bytes
+    annotations: bytes = b""
     annotations_left_out: LeftOut | None = None
+
+    @property
+    def ntriples(self) -> bytes:
+        """Return all the triples."""
+        return self.axioms + self.annotations
 
 
 async def fetch_fragment(sparql: FusekiClient, dataset: str, iri: str, dataset_clause: str = "") -> Fragment:
@@ -90,8 +102,9 @@ async def fetch_fragment(sparql: FusekiClient, dataset: str, iri: str, dataset_c
     it (`sparql/entity-axioms.rq`), the symmetric axioms stated on other entities (`sparql/entity-symmetric.rq`), the
     reified axioms and nested annotations that annotate them (`sparql/entity-axiom-annotations.rq`, pruned by
     `pruned_annotations`), and the types of every IRI those mention (`sparql/entity-types.rq`). If the annotations
-    would take the triples past `browl.fuseki.CONSTRUCT_MAX_BYTES` or `MAX_FRAGMENT_IRIS`, or their query fails (which
-    is logged), they're left out, so the axioms can still be shown.
+    would take the triples past `browl.fuseki.CONSTRUCT_MAX_BYTES`, `MAX_FRAGMENT_IRIS` or
+    `MAX_FRAGMENT_ANNOTATIONS`, or their query fails, they're left out, which is logged, so the axioms can still be
+    shown. The scans run in a thread, off the event loop.
 
     Args:
         sparql: The Fuseki client.
@@ -109,13 +122,12 @@ async def fetch_fragment(sparql: FusekiClient, dataset: str, iri: str, dataset_c
         own = group.create_task(sparql.construct(dataset, filled_query(_AXIOMS, dataset_clause, entity)))
         symmetric = group.create_task(sparql.construct(dataset, filled_query(_SYMMETRIC, dataset_clause, entity)))
         annotations = group.create_task(
-            _fetch_axiom_annotations(sparql, dataset, filled_query(_AXIOM_ANNOTATIONS, dataset_clause, entity))
+            caught(sparql.construct(dataset, filled_query(_AXIOM_ANNOTATIONS, dataset_clause, entity)), SparqlError)
         )
     triples = own.result() + symmetric.result()
-    mentioned = fragment_iris(triples)
+    mentioned = await asyncio.to_thread(fragment_iris, triples)
     annotation_triples, left_out = b"", None
     if isinstance(result := annotations.result(), ResultTooLargeError):
-        logger.warning("Showing the axioms of %s without their annotations, which are too large", logged_iri(iri))
         left_out = LeftOut.TOO_MANY
     elif isinstance(result, SparqlError):
         logger.error(
@@ -124,93 +136,64 @@ async def fetch_fragment(sparql: FusekiClient, dataset: str, iri: str, dataset_c
             exc_info=result,
         )
         left_out = LeftOut.FAILED
-    else:
-        annotation_triples = result
-    if annotation_triples:
-        with_annotations = mentioned | ntriples_iris(annotation_triples)
-        if len(triples) + len(annotation_triples) > CONSTRUCT_MAX_BYTES or len(with_annotations) > MAX_FRAGMENT_IRIS:
-            logger.warning("Showing the axioms of %s without their annotations, which are too large", logged_iri(iri))
+    elif result:
+        checked = await asyncio.to_thread(_checked_annotations, result, len(triples), mentioned)
+        if checked is None:
             left_out = LeftOut.TOO_MANY
         else:
-            triples += pruned_annotations(annotation_triples)
-            mentioned = with_annotations
-    if not mentioned:
-        return Fragment(triples, left_out)
-    values = f"VALUES ?iri {{ {' '.join(f'<{each}>' for each in sorted(mentioned))} }}"
-    types = await sparql.construct(dataset, filled_query(_TYPES, dataset_clause, {_NO_IRIS: values}))
-    return Fragment(triples + types, left_out)
+            annotation_triples, mentioned = checked
+    if left_out == LeftOut.TOO_MANY:
+        logger.warning("Showing the axioms of %s without their annotations, which are too many", logged_iri(iri))
+    if mentioned:
+        values = f"VALUES ?iri {{ {' '.join(f'<{each}>' for each in sorted(mentioned))} }}"
+        triples += await sparql.construct(dataset, filled_query(_TYPES, dataset_clause, {_NO_IRIS: values}))
+    return Fragment(triples, annotation_triples, left_out)
 
 
-async def _fetch_axiom_annotations(sparql: FusekiClient, dataset: str, query: str) -> bytes | SparqlError:
-    """Return the triples of an entity's axiom annotations (`fetch_fragment`), or the query's error.
+def _checked_annotations(ntriples: bytes, size: int, mentioned: set[str]) -> tuple[bytes, set[str]] | None:
+    """Return axiom annotations' triples, pruned, and the IRIs a fragment mentions with them; None if they're too many.
 
-    The error is returned, not raised, so it doesn't cancel the fragment's other queries, and is logged only if they
-    succeed.
+    They're too many if they'd take a fragment of `size` bytes that mentions `mentioned` past its caps
+    (`fetch_fragment`).
     """
-    try:
-        return await sparql.construct(dataset, query)
-    except SparqlError as error:
-        return error
+    if size + len(ntriples) > CONSTRUCT_MAX_BYTES:
+        return None
+    pruned, count = pruned_annotations(ntriples)
+    if count > MAX_FRAGMENT_ANNOTATIONS:
+        return None
+    with_annotations = mentioned | ntriples_iris(pruned)
+    if len(with_annotations) > MAX_FRAGMENT_IRIS:
+        return None
+    return pruned, with_annotations
 
 
-def annotation_sources[T: Hashable](sources: Mapping[T, Iterable[T]], key: Callable[[T], str] = str) -> dict[T, T]:
-    """Return the source each annotation node keeps, so they form trees no deeper than `MAX_ANNOTATION_DEPTH`.
-
-    An annotation node is a reified axiom or an `owl:Annotation`: whatever has an `owl:annotatedSource`. One whose
-    source isn't such a node (an entity, or a blank node's axiom) is at depth 1; one on a node at depth n, at n + 1. A
-    node keeps one source, on the shallowest path to it, the first by `key` among equals, so a node with several
-    sources (which OWL's RDF mapping doesn't make) is shown once. A node in a cycle that nothing outside it leads to,
-    or deeper than `MAX_ANNOTATION_DEPTH`, keeps none, and is left out (DESIGN.md §2.8, Axiom annotations).
-
-    Args:
-        sources: Each annotation node's `owl:annotatedSource`s.
-        key: How to order nodes, so the choice is the same each time.
-
-    Returns:
-        The source each node that isn't left out keeps.
-    """
-    kept: dict[T, T] = {}
-    on: dict[T, list[T]] = {}
-    frontier: list[T] = []
-    for node, each in sources.items():
-        outside = sorted((source for source in each if source not in sources), key=key)
-        if outside:
-            kept[node] = outside[0]
-            frontier.append(node)
-        for source in each:
-            if source in sources:
-                on.setdefault(source, []).append(node)
-    depth = 1
-    while frontier and depth < MAX_ANNOTATION_DEPTH:
-        deeper = []
-        for source in sorted(frontier, key=key):
-            for node in on.get(source, ()):
-                if node not in kept:
-                    kept[node] = source
-                    deeper.append(node)
-        frontier = deeper
-        depth += 1
-    return kept
-
-
-def pruned_annotations(ntriples: bytes) -> bytes:
+def pruned_annotations(ntriples: bytes) -> tuple[bytes, int]:
     """Return N-Triples without the annotation nodes `annotation_sources` leaves out, nor the sources they don't keep.
 
     The OWLAPI's parser overflows its stack on a cycle of `owl:Annotation`s, and nests as deep as they go, so a
     fragment is pruned before it's parsed. The N-Triples are Fuseki's: one triple a line, its terms separated by one
     space.
+
+    Returns:
+        The N-Triples, and how many annotations the nodes kept hold: their triples but their type and
+        `owl:annotated*` links (`MAX_FRAGMENT_ANNOTATIONS`).
     """
     if _ANNOTATED_SOURCE not in ntriples:
-        return ntriples
+        return ntriples, 0
     lines = ntriples.split(b"\n")
     sources: dict[bytes, list[bytes]] = {}
+    counts: Counter[bytes] = Counter()
     for line in lines:
         parts = line.split(b" ", 3)
-        if len(parts) == 4 and parts[1] == _ANNOTATED_SOURCE:
-            sources.setdefault(parts[0], []).append(parts[2])
+        if len(parts) == 4:
+            if parts[1] == _ANNOTATED_SOURCE:
+                sources.setdefault(parts[0], []).append(parts[2])
+            elif parts[1] not in _NOT_ANNOTATIONS:
+                counts[parts[0]] += 1
     kept = annotation_sources(sources, key=bytes.decode)
+    count = sum(counts[node] for node in kept)
     if len(kept) == len(sources) and all(len(each) == 1 for each in sources.values()):
-        return ntriples
+        return ntriples, count
     pruned = []
     for line in lines:
         parts = line.split(b" ", 3)
@@ -219,7 +202,7 @@ def pruned_annotations(ntriples: bytes) -> bytes:
         ):
             continue
         pruned.append(line)
-    return b"\n".join(pruned)
+    return b"\n".join(pruned), count
 
 
 def fragment_iris(*fragments: bytes, what: str = "the fragment") -> set[str]:
@@ -422,6 +405,7 @@ class _Java:
     AxiomType: Any
     Collection: Any
     Collections: Any
+    HashSet: Any
     IRI: Any
     List: Any
     excluded: Any  # Imports.EXCLUDED: a fragment's imports are never loaded
@@ -441,6 +425,7 @@ def _java() -> _Java:
         AxiomType=jpype.JClass(f"{model}.AxiomType"),
         Collection=jpype.JClass("java.util.Collection"),
         Collections=jpype.JClass("java.util.Collections"),
+        HashSet=jpype.JClass("java.util.HashSet"),
         IRI=jpype.JClass(f"{model}.IRI"),
         List=jpype.JClass("java.util.List"),
         excluded=jpype.JClass(f"{model}.parameters.Imports").EXCLUDED,
@@ -514,6 +499,21 @@ def axioms_about(ontology: Any, iri: str) -> list[Any]:
             own += (axiom for axiom in chains if axiom.getSuperProperty().equals(entity))
         found.update(dict.fromkeys(own))
     return list(found)
+
+
+def merged_annotations(axioms: Iterable[Any], extra: Mapping[Any, Iterable[Any]]) -> list[Any]:
+    """Return OWLAPI axioms, each with the annotations `extra` holds for it without its annotations, added."""
+    java = _java()
+    merged = []
+    for axiom in axioms:
+        bare = axiom.getAxiomWithoutAnnotations()
+        more = extra.get(bare)
+        if more:
+            annotations = java.HashSet(axiom.getAnnotations())
+            annotations.addAll(more)
+            axiom = bare.getAnnotatedAxiom(annotations)
+        merged.append(axiom)
+    return merged
 
 
 class _Converter:

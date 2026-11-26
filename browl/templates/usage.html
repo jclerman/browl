@@ -71,6 +71,11 @@
     {% endfor %}
     {% endfor %}
   </dl>
+  {% if usage.annotations_left_out == "too_many" %}
+  <p class="note">These usages' annotations are too many to show here.</p>
+  {% elif usage.annotations_left_out == "failed" %}
+  <p class="note">These usages' annotations can't be shown just now.</p>
+  {% endif %}
   {% endif %}
   {% endif %}
 </section>
