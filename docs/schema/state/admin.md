@@ -2,7 +2,7 @@
 
 ## Description
 
-Admins added in the UI (DESIGN.md 2.11): a signed-in user whose verified email is here, or in SEED_ADMINS, is an admin. P-22 creates the table; P-23's admins page manages it.
+Admins added in the UI (DESIGN.md 2.11): a signed-in user whose verified email is here, or in SEED_ADMINS, is an admin. It's managed on the admins page.
 
 <details>
 <summary><strong>Table Definition</strong></summary>

@@ -7,6 +7,7 @@ import asyncio
 import contextlib
 import itertools
 import re
+import sqlite3
 import threading
 import urllib.parse
 from collections.abc import Callable
@@ -694,7 +695,7 @@ def test_signed_in_bar(page: Page, server: LiveServer, size: dict[str, int]) -> 
     button, credit = box(sign_out), box(nav.get_by_role("link", name="hosted with browl"))
     assert credit["y"] >= button["y"] + button["height"]  # under it, both at the bar's end
     assert abs(credit["x"] + credit["width"] - button["x"] - button["width"]) < 2
-    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    assert_fits(page)
     sign_out.click()
     expect(nav.get_by_role("link", name="Admin sign-in")).to_be_visible()
     expect(page.locator("main h1")).to_have_text(TITLE)  # the ontology's home page, not "Not found"
@@ -712,7 +713,7 @@ def test_navigation_menu_narrow(page: Page, server: LiveServer) -> None:
     nav.get_by_text("Browse").click()
     for label in TREES:
         expect(nav.get_by_role("link", name=label)).to_be_visible()
-    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    assert_fits(page)
 
 
 def test_navigation_bar_sticky(page: Page, server: LiveServer) -> None:
@@ -792,6 +793,34 @@ def test_fonts_and_measure(page: Page, server: LiveServer) -> None:
     width = page.evaluate("document.querySelector('main p:last-child').getBoundingClientRect().width")
     char = page.evaluate("parseFloat(getComputedStyle(document.body).fontSize)")
     assert 35 * char < width < 60 * char  # 75ch is about 47em in the system font; uncapped, it would be about 78em
+
+
+LAYOUT_PROBLEMS = """() => {
+  const width = document.documentElement.clientWidth;
+  const problems = [];
+  if (document.documentElement.scrollWidth > width) {
+    problems.push(`the page is ${document.documentElement.scrollWidth}px wide, in a ${width}px window`);
+  }
+  for (const element of document.querySelectorAll("a[href], button, input, select, textarea, summary")) {
+    const rect = element.getBoundingClientRect();
+    if (rect.width <= 1 || rect.height <= 1 || element.closest(".visually-hidden")) {
+      continue;  // not shown, or only to screen readers
+    }
+    if (rect.left < -0.5 || rect.right > width + 0.5) {
+      const name = (element.getAttribute("aria-label") || element.textContent || element.value || "").trim();
+      const span = `${Math.round(rect.left)}-${Math.round(rect.right)}px`;
+      problems.push(`<${element.localName}> "${name.slice(0, 40)}" spans ${span}`);
+    }
+  }
+  return problems;
+}"""
+"""JS returning why a page doesn't fit its window: it scrolls sideways, or a control shown lies outside it."""
+
+
+def assert_fits(page: Page) -> None:
+    """Check that the page fits its window's width: no sideways scrolling, and every control within it."""
+    problems: list[str] = page.evaluate(LAYOUT_PROBLEMS)
+    assert problems == [], page.url
 
 
 def box(locator: Locator) -> FloatRect:
@@ -1236,7 +1265,7 @@ def test_annotations_grid_narrow(page: Page, annotated: LiveServer) -> None:
     term, value = box(page.locator(".annotations dt").first), box(page.locator(".annotations dd").first)
     assert value["y"] >= term["y"] + term["height"]
     assert abs(value["x"] - term["x"]) < 2
-    assert page.evaluate("document.documentElement.scrollWidth") <= NARROW["width"]
+    assert_fits(page)
 
 
 def test_annotations_layout(page: Page, annotated: LiveServer) -> None:
@@ -1764,7 +1793,7 @@ def test_usage_tab_narrow(page: Page, paged: LiveServer) -> None:
     page.set_viewport_size(NARROW)
     page.goto(f"{paged.url}{THING}?tab=usage&page=2")
     expect(page.locator(".usage-frame dt").first).to_be_visible()
-    assert page.evaluate("document.documentElement.scrollWidth") <= NARROW["width"]
+    assert_fits(page)
 
 
 def test_usage_label_fills_in_on_usage_tab(page: Page, server: LiveServer) -> None:
@@ -3525,11 +3554,11 @@ def test_search_page_filters_the_box(page: Page, searchable: LiveServer) -> None
     expect(page.locator(f"input[name=property][value='{SYNONYM}']")).to_be_checked()
 
 
-@pytest.mark.parametrize("accept", [True, False])
-def test_remove_admin_confirmed(page: Page, live_server: Callable[[FastAPI], LiveServer], accept: bool) -> None:
-    """Check that removing an admin asks first, and removes them only if confirmed, without breaking the CSP (A-7)."""
-    server = live_server(make_app())
-    server.app.state.admins.add("other@example.org", None, datetime.now(UTC))
+def open_admins(page: Page, server: LiveServer, accept: bool) -> list[str]:
+    """Open the admins page, answering each confirmation as `accept` says; return the questions asked.
+
+    The page also records, in `window.submits`, whether each form submission was cancelled.
+    """
     questions: list[str] = []
 
     def answer(dialog: Dialog) -> None:
@@ -3541,14 +3570,79 @@ def test_remove_admin_confirmed(page: Page, live_server: Callable[[FastAPI], Liv
 
     page.on("dialog", answer)
     watch_policy(page)
+    page.add_init_script(
+        "window.submits = [];"
+        " window.addEventListener('submit', (event) => window.submits.push(event.defaultPrevented));"
+    )
     page.goto(f"{server.url}/_browl/admin/admins")
-    page.get_by_role("button", name="Remove other@example.org").click()
-    removed = page.get_by_role("button", name="Remove other@example.org")
-    if accept:
-        expect(removed).to_have_count(0)
-    else:
-        page.wait_for_timeout(500)
-        expect(removed).to_have_count(1)
+    return questions
+
+
+def test_remove_admin_confirmed(page: Page, live_server: Callable[[FastAPI], LiveServer]) -> None:
+    """Check that removing an admin asks first, and removes them once confirmed, without breaking the CSP (A-7)."""
+    server = live_server(make_app())
+    server.app.state.admins.add("other@example.org", None, datetime.now(UTC))
+    questions = open_admins(page, server, accept=True)
+    with page.expect_navigation():
+        page.get_by_role("button", name="Remove other@example.org").click()
+    expect(page.get_by_role("button", name="Remove other@example.org")).to_have_count(0)
     assert questions == ["Remove other@example.org as an admin?"]
-    assert [admin.email for admin in server.app.state.admins.admins()] == ([] if accept else ["other@example.org"])
+    assert server.app.state.admins.admins() == []
     assert violations(page) == []
+
+
+def test_remove_admin_declined(page: Page, live_server: Callable[[FastAPI], LiveServer]) -> None:
+    """Check that declining the question cancels the removal: the form isn't sent (A-7)."""
+    server = live_server(make_app())
+    server.app.state.admins.add("other@example.org", None, datetime.now(UTC))
+    questions = open_admins(page, server, accept=False)
+    page.get_by_role("button", name="Remove other@example.org").click()
+    assert questions == ["Remove other@example.org as an admin?"]
+    assert page.evaluate("window.submits") == [True]  # cancelled, so no request was made
+    assert [admin.email for admin in server.app.state.admins.admins()] == ["other@example.org"]
+
+
+def test_remove_admin_fails(page: Page, live_server: Callable[[FastAPI], LiveServer]) -> None:
+    """Check that a removal the database refuses shows why, rather than nothing (review M2)."""
+    server = live_server(make_app())
+    server.app.state.admins.add("other@example.org", None, datetime.now(UTC))
+    with sqlite3.connect(server.app.state.admins.path) as connection:
+        connection.execute("CREATE TRIGGER no_delete BEFORE DELETE ON admin BEGIN SELECT RAISE(ABORT, 'no'); END")
+    open_admins(page, server, accept=True)
+    with page.expect_navigation():
+        page.get_by_role("button", name="Remove other@example.org").click()
+    expect(page.locator("#admins-error")).to_contain_text("Couldn't remove other@example.org")
+    expect(page.get_by_role("button", name="Remove other@example.org")).to_have_count(1)
+
+
+PHONE_WIDTHS = [320, 390]
+"""Phone screen widths to check pages at: a small phone's, and a common one's."""
+
+PHONE_PAGES = [
+    "/example.org/onto",
+    "/example.org/onto?tab=usage",
+    "/_browl/tree/classes",
+    "/_browl/search?q=Epsilon",
+    "/_browl/admin/upload",
+    "/_browl/admin/status",
+    "/_browl/admin/admins",
+]
+"""Pages of each kind, which `test_fits_phone_width` checks; add new pages here."""
+
+
+@pytest.mark.parametrize("width", PHONE_WIDTHS)
+@pytest.mark.parametrize("path", PHONE_PAGES)
+def test_fits_phone_width(page: Page, server: LiveServer, path: str, width: int) -> None:
+    """Check that each kind of page fits a phone's width, also with the menu open (review S4).
+
+    It's signed in as an admin, with long addresses listed: the admins table once pushed its Remove buttons off screen.
+    """
+    long = "a.very.long.local.part.for.an.address"
+    server.app.state.admins.add(f"{long}@a-long-subdomain.example.org", f"{long}@example.org", datetime.now(UTC))
+    cookie = session_cookie(server.app.state.settings.data_dir, AUTH_ON["SEED_ADMINS"][0])
+    page.context.add_cookies([{"name": SESSION_COOKIE, "value": cookie, "url": server.url}])
+    page.set_viewport_size({"width": width, "height": 700})
+    page.goto(f"{server.url}{path}")
+    assert_fits(page)
+    page.locator(".site-menu summary").click()
+    assert_fits(page)

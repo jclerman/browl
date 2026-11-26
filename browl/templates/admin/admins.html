@@ -1,6 +1,7 @@
 {% extends "base.html" %}
-{# The admins (A-7): seed admins, who can't be removed here, then those added here. Removing goes through htmx
-   (`hx-boost`) for its confirmation; without JS (U-17), the form posts at once. #}
+{# The admins (A-7): seed admins, who can't be removed here, then those added here. Removing asks first
+   (`static/confirm.js`); without JS (U-17), the form posts at once. #}
+{% block head %}<script src="{{ url_for('static', path='confirm.js').path }}" defer></script>{% endblock %}
 {% block title %}Admins{% endblock %}
 {% block content %}
 {% set current = "admins_page" %}{% include "admin/_nav.html" %}
@@ -29,7 +30,7 @@
         {% else %}
         {% set question = "Remove " ~ row.email ~ " as an admin?" %}
         {% endif %}
-        <form method="post" action="{{ url_for('remove_admin').path }}" hx-boost="true" hx-confirm="{{ question }}">
+        <form method="post" action="{{ url_for('remove_admin').path }}" data-confirm="{{ question }}">
           <input type="hidden" name="email" value="{{ row.email }}">
           <button type="submit" aria-label="Remove {{ row.email }}">Remove</button>
         </form>

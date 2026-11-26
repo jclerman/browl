@@ -251,6 +251,13 @@ def test_sign_in_table_admin(client: TestClient, google: FakeGoogle, data_dir: P
     assert client.get(UPLOAD).status_code == 403
 
 
+def test_sign_in_gmail_dots(client: TestClient, google: FakeGoogle, data_dir: Path) -> None:
+    """Check that a Gmail admin is let in when Google gives their address with other dots or case (P-23)."""
+    add_admin(data_dir, "jdoe@gmail.com")
+    assert sign_in(client, google, "J.Doe@Gmail.com").headers["Location"] == UPLOAD
+    assert client.get(UPLOAD).status_code == 200
+
+
 def test_not_admin(client: TestClient, google: FakeGoogle) -> None:
     """Check that a signed-in user who isn't an admin gets 403 on admin routes, and no admin link elsewhere.
 

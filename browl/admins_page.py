@@ -62,9 +62,17 @@ async def _admins_page(
     store: AdminStore = request.app.state.admins
     you = None if request.state.user is None else canonical_email(request.state.user)
     seeds = [AdminRow(email, True, canonical_email(email) == you) for email in settings.seed_admins]
+    try:
+        admins = await asyncio.to_thread(store.admins)
+    except sqlite3.Error:
+        # Still a page, e.g. for a write that failed too, with the seed admins, who don't need the database.
+        logger.exception("Couldn't read the admins from %s", store.path)
+        admins = []
+        error = " ".join(filter(None, [error, "The admins added here couldn't be read."]))
+        status_code = max(status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
     added = [
         AdminRow(admin.email, False, canonical_email(admin.email) == you, admin.added_at, admin.added_by)
-        for admin in await asyncio.to_thread(store.admins)
+        for admin in admins
         if not settings.is_seed_admin(admin.email)
     ]
     return templates.TemplateResponse(
@@ -94,10 +102,11 @@ async def admins_page(request: Request) -> HTMLResponse:
 @router.post("/admins", response_class=HTMLResponse, dependencies=[Depends(same_origin)])
 async def add_admin(request: Request, email: Annotated[str, Form()] = "") -> Response:
     """Add an admin by email address, then show the list; an invalid address, or an admin's, is refused (A-7)."""
+    text = email.strip()
     try:
-        address = parse_email(email)
+        address = parse_email(text)
     except ValueError:
-        message = f"“{email.strip()}” isn't an email address." if email.strip() else "Enter an email address."
+        message = f"“{text}” isn't an email address." if text else "Enter an email address."
         return await _admins_page(request, message, email, status.HTTP_422_UNPROCESSABLE_CONTENT)
     settings: Settings = request.app.state.settings
     if settings.is_seed_admin(address):

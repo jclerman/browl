@@ -17,18 +17,11 @@ from pathlib import Path
 
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
-GMAIL_DOMAIN = "gmail.com"
+_GMAIL_DOMAIN = "gmail.com"
 """The domain whose addresses ignore dots in the local part: `j.doe@gmail.com` is `jdoe@gmail.com`."""
 
-MAX_EMAIL_CHARS = 254
+_MAX_EMAIL_CHARS = 254
 """The longest email address accepted, the most an SMTP path allows (RFC 5321 with erratum 1690)."""
-
-CANONICAL_EMAIL_SQL = (
-    f"CASE WHEN email LIKE '%@{GMAIL_DOMAIN}'"
-    " THEN replace(substr(email, 1, instr(email, '@') - 1), '.', '') || substr(email, instr(email, '@'))"
-    " ELSE email END"
-)
-"""`canonical_email` in SQL, of an `email` column already lowercase, with one `@`; for migrating stored addresses."""
 
 _EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s.]+")
 """An email address, loosely: no spaces, one `@`, and a dot in the domain. Google checks the rest at sign-in."""
@@ -45,7 +38,7 @@ def canonical_email(address: str) -> str:
         ('jdoe@gmail.com', 'j.doe@example.org')
     """
     local, at, domain = address.lower().rpartition("@")
-    if at and domain == GMAIL_DOMAIN:
+    if at and domain == _GMAIL_DOMAIN:
         local = local.replace(".", "")
     return f"{local}{at}{domain}"
 
@@ -53,14 +46,15 @@ def canonical_email(address: str) -> str:
 def parse_email(text: str) -> str:
     """Return an email address typed in a form or the settings, trimmed and lowercased, to show.
 
-    Its canonical form must be an address too, so e.g. `...@gmail.com` isn't.
+    Its canonical form must be an address too, so e.g. `...@gmail.com` isn't. Control characters, which would reach
+    the logs, are refused.
 
     Raises:
         ValueError: The text isn't an email address.
     """
     address = text.strip().lower()
-    if len(address) > MAX_EMAIL_CHARS or not _EMAIL.fullmatch(canonical_email(address)):
-        raise ValueError(f"not an email address: {text.strip()!r}")
+    if len(address) > _MAX_EMAIL_CHARS or not address.isprintable() or not _EMAIL.fullmatch(canonical_email(address)):
+        raise ValueError(text)
     return address
 
 

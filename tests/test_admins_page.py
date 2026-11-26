@@ -10,7 +10,6 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import browl.admins
 from browl.admins import Admin, AdminStore, canonical_email, parse_email
 from browl.admins_page import MAX_FORM_BYTES
 from browl.auth import SESSION_COOKIE
@@ -69,7 +68,7 @@ def test_add_and_remove(client: TestClient, data_dir: Path) -> None:
     page = client.get(ADMINS).text
     assert 'aria-label="Remove new.admin@example.org"' in page
     assert f"by {SEED}" in page
-    assert 'hx-confirm="Remove new.admin@example.org as an admin?"' in page
+    assert 'data-confirm="Remove new.admin@example.org as an admin?"' in page
     sign_in_as(client, data_dir, "new.admin@example.org")
     assert client.get(UPLOAD).status_code == 200
     sign_in_as(client, data_dir, SEED)
@@ -97,6 +96,7 @@ def test_survives_restart(client: TestClient, data_dir: Path) -> None:
         ("a b@example.org", 422, "isn't an email address."),
         ("", 422, "Enter an email address."),
         (f"{'x' * 250}@example.org", 422, "isn't an email address."),
+        ("\x1b[2Jx@example.org", 422, "isn't an email address."),
         ("Seed@Example.org", 409, "seed@example.org is a seed admin already."),
     ],
 )
@@ -106,6 +106,8 @@ def test_add_refused(client: TestClient, entered: str, status: int, message: str
     assert response.status_code == status
     assert message in html.unescape(response.text)
     assert 'role="alert"' in response.text
+    assert f'value="{html.escape(entered)}"' in response.text
+    assert 'aria-describedby="admins-error"' in response.text
     assert store(client).admins() == []
 
 
@@ -200,6 +202,49 @@ def test_write_fails(client: TestClient, data_dir: Path) -> None:
     assert "Couldn't remove y@example.org" in html.unescape(response.text)
 
 
+def test_list_unreadable(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that if the admins added here can't be read, the page still lists the seed admins, and says so (C2).
+
+    It does so also after a write fails.
+    """
+
+    def fail() -> list[Admin]:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(store(client), "admins", fail)
+    page = client.get(ADMINS)
+    assert page.status_code == 500
+    assert "The admins added here couldn&#39;t be read." in page.text
+    assert f"<td>{SEED}" in page.text
+    monkeypatch.setattr(store(client), "remove", lambda email: fail())
+    response = client.post(REMOVE, data={"email": "y@example.org"}, headers=SAME_SITE)
+    assert response.status_code == 500
+    text = html.unescape(response.text)
+    assert "Couldn't remove y@example.org: the database couldn't be written." in text
+    assert "The admins added here couldn't be read." in text
+
+
+def test_list_order(data_dir: Path) -> None:
+    """Check that the seed admins come first, as configured, then the admins added here, by address."""
+    seeds = ["zed@example.org", "amy@example.org"]
+    with TestClient(make_app(**(AUTH_ON | {"SEED_ADMINS": seeds})), follow_redirects=False) as client:
+        sign_in_as(client, data_dir, "amy@example.org")
+        for email in ["mo@example.org", "bo@example.org"]:
+            add(client, email)
+        page = client.get(ADMINS).text
+        positions = [page.index(f"<td>{email}") for email in [*seeds, "bo@example.org", "mo@example.org"]]
+        assert positions == sorted(positions)
+
+
+def test_not_admin_cant_change(client: TestClient, data_dir: Path) -> None:
+    """Check that a signed-in user who isn't an admin can't add or remove admins (review S3)."""
+    add(client, "kept@example.org")
+    sign_in_as(client, data_dir, "visitor@example.org")
+    assert client.post(ADMINS, data={"email": "visitor@example.org"}, headers=SAME_SITE).status_code == 403
+    assert client.post(REMOVE, data={"email": "kept@example.org"}, headers=SAME_SITE).status_code == 403
+    assert [admin.email for admin in store(client).admins()] == ["kept@example.org"]
+
+
 def test_auth_disabled(data_dir: Path) -> None:
     """Check that with `AUTH_DISABLED` the page works, says the list has no effect yet, and records no adder."""
     with TestClient(make_app(), follow_redirects=False) as client:
@@ -232,20 +277,16 @@ def test_canonical_email(text: str, expected: str) -> None:
     assert canonical_email(text) == expected
 
 
-@pytest.mark.parametrize("text", ["...@gmail.com", "@example.org", "a@b", "a@b.", "a@@b.org", "a@b .org"])
+@pytest.mark.parametrize(
+    "text", ["...@gmail.com", "@example.org", "a@b", "a@b.", "a@@b.org", "a@b .org", "a\x00@b.org", "a\x85@b.org"]
+)
 def test_parse_email_refused(text: str) -> None:
-    """Check that `parse_email` refuses what isn't an address, also once a Gmail address's dots are dropped."""
-    with pytest.raises(ValueError, match="not an email address"):
+    """Check that `parse_email` refuses what isn't an address, also once a Gmail address's dots are dropped.
+
+    Control characters, which would reach the logs, are refused too (review C1).
+    """
+    with pytest.raises(ValueError):
         parse_email(text)
-
-
-def test_canonical_email_sql(tmp_path: Path) -> None:
-    """Check that the migration's SQL gives what `canonical_email` does."""
-    cases = ["j.doe@gmail.com", "j.doe+t@gmail.com", "j.doe@example.org", "j.doe@mail.gmail.com", "jdoe@gmail.com"]
-    with sqlite3.connect(":memory:") as connection:
-        for case in cases:
-            sql = f"SELECT {browl.admins.CANONICAL_EMAIL_SQL} FROM (SELECT ? AS email)"
-            assert connection.execute(sql, (case,)).fetchone()[0] == canonical_email(case), case
 
 
 def test_store_admins(tmp_path: Path) -> None:

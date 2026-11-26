@@ -1995,23 +1995,18 @@ How it works (P-22, `browl.auth`):
 
 The admins page (P-23, `browl.admins_page`, `admin/admins`) delivers A-7:
 
-- **It lists** the seed admins first, marked as such and with no Remove button, then the admins in the `admin` table,
-  each with when, and by whom, they were added (`added_by`, NULL with `AUTH_DISABLED`). An address that's in both, e.g.
-  one added in the UI and later seeded, is listed once, as a seed admin; its row stays, so dropping it from
-  `SEED_ADMINS` leaves it an admin who can be removed here. With `AUTH_DISABLED`, the page works and says the list takes
-  effect once sign-in is on.
-- **Adding** (POST `admin/admins`) takes an email address, trimmed, lowercased, and checked loosely: no
-  spaces, one `@`, a dot in the domain, at most 254 characters; Google checks the rest at sign-in. An invalid address
-  gets 422, a seed admin's or one already listed 409, each the page again with the reason and what was typed. Success
-  redirects (303) back to the list.
-- **Removing** (POST `admin/admins/remove`) refuses a seed admin with 409; removing one already gone is no error. The
-  Remove form is boosted by htmx so `hx-confirm` asks first; the question is stronger for your own row, as removing
-  yourself refuses you the admin pages from the next request. Without JS, it removes at once.
-- Both are POSTs refused from another site's page (`Sec-Fetch-Site`), like the upload. If the database can't be written,
-  the page says so, with 500, and the error is logged.
-- FastAPI parses a form's body before the routes' dependencies run, so before the admin and cross-site checks. So the
-  router caps it (FastAPI's `max_body_size` and `form_limits`): a body over 4 KB gets 413, a file part 400, whoever
-  sends it.
+- **It lists** the seed admins first, as configured, then the admins in the `admin` table, as added, with when and by
+  whom. An address in both, e.g. added here and later seeded, is listed once, as a seed admin; its row stays, so
+  dropping it from `SEED_ADMINS` leaves it an admin who can be removed here. With `AUTH_DISABLED`, the page works and
+  says the list takes effect once sign-in is on.
+- **Adding** checks an address only loosely (no spaces or control characters, one `@`, a dot in the domain); Google
+  checks the rest at sign-in. A seed admin's address, or one already listed, in any form, is refused.
+- **Removing** asks first (`static/confirm.js`), more starkly on your own row: removing yourself refuses you the admin
+  pages from your next request. Seed admins can't be removed. Without JS, Remove posts at once. The page is a plain
+  form post and a redirect, not htmx, so a refusal or error shows as a page like any other.
+- Both are POSTs refused from another site's page (`Sec-Fetch-Site`), like the upload. FastAPI parses a form's body
+  before the routes' dependencies run, so before the admin and cross-site checks; so the router caps it (FastAPI's
+  `max_body_size` and `form_limits`), whoever sends it.
 - The admin pages link to each other (Upload · Status · Admins) above their titles; the navigation bar's Admin link
   still goes to the upload page.
 

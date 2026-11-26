@@ -20,7 +20,6 @@ from typing import IO, Self
 
 import httpx2
 
-from browl.admins import CANONICAL_EMAIL_SQL
 from browl.jobtypes import ImportResult, Reasoner, StageError
 from browl.settings import Settings
 
@@ -111,9 +110,10 @@ MIGRATIONS: list[str] = [
     ALTER TABLE job ADD COLUMN detail_iri TEXT;
     """,
     # Version 9 (P-23): each admin's address as added, to show, and who added them; and both tables keyed by the
-    # canonical address (`browl.admins.canonical_email`), so a Gmail address with dots and one without match. Rows
-    # that then coincide are merged: the earliest addition, the latest sign-out.
-    f"""
+    # canonical address (`browl.admins.canonical_email`, here in SQL, for stored addresses: lowercase, one `@`), so a
+    # Gmail address with dots and one without match. Rows that then coincide are merged: the earliest addition, the
+    # latest sign-out. An `added_at` SQLite can't read as a time, e.g. one typed in by hand, becomes the migration's.
+    """
     CREATE TABLE admin_new (
         email TEXT PRIMARY KEY CHECK (email = lower(email)),
         display_email TEXT NOT NULL CHECK (display_email = lower(display_email)),
@@ -121,14 +121,28 @@ MIGRATIONS: list[str] = [
         added_by TEXT
     );
     INSERT INTO admin_new (email, display_email, added_at)
-        SELECT {CANONICAL_EMAIL_SQL}, min(email), min(added_at) FROM admin GROUP BY 1;
+        SELECT
+            CASE WHEN email LIKE '%@gmail.com'
+            THEN replace(substr(email, 1, instr(email, '@') - 1), '.', '') || substr(email, instr(email, '@'))
+            ELSE email END,
+            min(email),
+            coalesce(
+                min(strftime('%Y-%m-%dT%H:%M:%f+00:00', added_at)), strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now')
+            )
+        FROM admin GROUP BY 1;
     DROP TABLE admin;
     ALTER TABLE admin_new RENAME TO admin;
     CREATE TABLE sign_out_new (
         email TEXT PRIMARY KEY CHECK (email = lower(email)),
         signed_out_at TEXT NOT NULL
     );
-    INSERT INTO sign_out_new SELECT {CANONICAL_EMAIL_SQL}, max(signed_out_at) FROM sign_out GROUP BY 1;
+    INSERT INTO sign_out_new
+        SELECT
+            CASE WHEN email LIKE '%@gmail.com'
+            THEN replace(substr(email, 1, instr(email, '@') - 1), '.', '') || substr(email, instr(email, '@'))
+            ELSE email END,
+            max(signed_out_at)
+        FROM sign_out GROUP BY 1;
     DROP TABLE sign_out;
     ALTER TABLE sign_out_new RENAME TO sign_out;
     """,
