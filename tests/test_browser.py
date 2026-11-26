@@ -3112,6 +3112,24 @@ def test_column_rows_stick(page: Page, trees: LiveServer) -> None:
     assert abs(rows[1]["y"] - (rows[0]["y"] + rows[0]["height"])) < 2
 
 
+def test_column_rows_stick_below_wrapped_heading(page: Page, trees: LiveServer) -> None:
+    """Check that a heading too long for the column shows its link on a line of its own, with the rows stuck below."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}/Big")
+    column = hierarchy_column(page)
+    heading, label = column.get_by_role("heading"), column.get_by_role("heading").locator("span")
+    label.evaluate("(each) => { each.textContent = 'Local hierarchy: Named individual'; }")  # a punned IRI's
+    link = heading.get_by_role("link", name="Full tree")
+    expect(link).to_be_in_viewport()
+    assert box(link)["y"] >= box(label)["y"] + box(label)["height"]
+    assert box(link)["x"] + box(link)["width"] <= box(column)["x"] + box(column)["width"]
+    height = round(box(heading)["height"])
+    expect(column.locator(".tree")).to_have_css("--tree-stick", f"{height}px")
+    column.evaluate("(each) => { each.scrollTop = each.scrollHeight; }")
+    top = box(heading)["y"] + box(heading)["height"]
+    assert abs(box(column.locator(".tree-row", has=tree_item(page, "Top")))["y"] - top) < 2
+
+
 def test_column_row_leaves_under_parents(page: Page, trees: LiveServer) -> None:
     """Check that an opened sibling's stuck row, pushed out as its children end, slides under its parent's row."""
     page.set_viewport_size(WIDE)

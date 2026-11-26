@@ -177,9 +177,26 @@
     }).observe(bar);
   }
 
+  // The hierarchy column's open rows stick below their tree's heading, which may wrap to a second line.
+  const headings = new ResizeObserver((entries) => {
+    for (const { target } of entries) {
+      target.nextElementSibling?.style.setProperty("--tree-stick", `${target.offsetHeight}px`);
+    }
+  });
+  const observeHeadings = () => {
+    for (const heading of document.querySelectorAll(".hierarchy-column > h2")) {
+      headings.observe(heading);
+    }
+  };
+  observeHeadings();
+
   const main = document.querySelector("main");
   if (main) {
-    new MutationObserver(showCurrent).observe(main, { childList: true }); // a page the hash-IRI script moves in
+    // A page the hash-IRI script moves in.
+    new MutationObserver(() => {
+      showCurrent();
+      observeHeadings();
+    }).observe(main, { childList: true });
   }
   // A column that was folded had nothing to show.
   document.addEventListener("change", (event) => {

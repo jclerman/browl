@@ -1872,7 +1872,8 @@ CSS nesting gets the one-page view, without the toggle. _(P-16d)_
     "↳ organ (also above)", or "(also below)" where it's drawn further down. The entity is highlighted, with its
     direct children closed below it, paged as on the tree pages (`CHILD_PAGE`). So the column's size grows with the
     number of ancestors, not with the number of paths, which multiplies at every join. Each tree is headed "Local
-    hierarchy", as it shows the ancestors but not their siblings, then a "Full tree" link to its tree page.
+    hierarchy", as it shows the ancestors but not their siblings, then a "Full tree" link to its tree page, on a line
+    of its own if the heading doesn't fit the column, as a punned IRI's longer headings may not.
   - **Siblings:** after the entity's first parent's children shown (for a root, after the roots shown), "Show its
     siblings (12)" fetches that parent's children, or the roots, in their place: the page of them that holds the
     entity, which is shown open and marked, after a link to those before it (`siblings-of=` on the tree route's
@@ -1971,8 +1972,9 @@ too (P-38), and the JSON API's (P-33).
   eight; deeper ones share the last place, each covering its parent's. A shallower row is drawn over a deeper one, so
   an open node's row, pushed out as its children end (say an opened sibling's, above the page's entity), slides under
   its parents' rows. A stuck row is one line, cut short. On a tree page they stick below the navigation bar, whose
-  height `static/tree.js` measures; in the hierarchy column, below its heading. Plain CSS (`position: sticky` and
-  `z-index`, by a row's `data-depth`), so it works without JS, under a bar of about one line.
+  height `static/tree.js` measures; in the hierarchy column, below its heading, which it measures too, as the
+  heading may wrap. Plain CSS (`position: sticky` and `z-index`, by a row's `data-depth`), so it works without JS,
+  under a bar or heading of about one line.
 - **Keyboard** (U-17): the WAI-ARIA tree pattern, with roving `tabindex`; a node's link is the `treeitem`, its
   children's list its `group` (by `aria-owns`), and its counts its description. Departures from it: the toggles are
   the mouse's alone (`tabindex="-1"`, `aria-hidden`; a click on one leaves the focus on its item), and the "previous"

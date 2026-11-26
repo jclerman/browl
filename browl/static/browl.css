@@ -735,23 +735,29 @@ code {
   }
 }
 
+/* A heading too long for the column, such as a punned IRI's "Local hierarchy: Named individual", puts its "Full tree"
+   link on a line of its own, so the link always shows; `static/tree.js` then sticks its tree's rows below it. */
 .hierarchy-column h2 {
   position: sticky;
   top: 0;
   left: 0; /* also as the column scrolls sideways */
   z-index: 2;
-  height: 1.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 0.5em;
+  min-height: 1.75rem;
   margin: 0;
   font-size: 1rem;
   line-height: 1.75rem;
-  white-space: nowrap;
   background: var(--bg);
 }
 
 .hierarchy-full {
-  margin-left: 0.5em;
   font-size: 0.85em;
   font-weight: normal;
+  line-height: 1.25rem; /* within the heading's line, on its baseline, rather than taller */
+  white-space: nowrap;
 }
 
 .hierarchy-column .tree + h2 {
