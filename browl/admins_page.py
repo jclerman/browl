@@ -89,6 +89,11 @@ async def _admins_page(
     )
 
 
+def _as_listed(address: str, listed: str) -> str:
+    """Name an address typed, and the form it's listed in if that differs, e.g. a Gmail address with other dots."""
+    return address if address == listed else f"{address}, listed as {listed},"
+
+
 def _back(request: Request) -> RedirectResponse:
     return RedirectResponse(route_href(request, "admins_page"), status.HTTP_303_SEE_OTHER)
 
@@ -110,7 +115,9 @@ async def add_admin(request: Request, email: Annotated[str, Form()] = "") -> Res
         return await _admins_page(request, message, email, status.HTTP_422_UNPROCESSABLE_CONTENT)
     settings: Settings = request.app.state.settings
     if settings.is_seed_admin(address):
-        return await _admins_page(request, f"{address} is a seed admin already.", email, status.HTTP_409_CONFLICT)
+        seed = next(seed for seed in settings.seed_admins if canonical_email(seed) == canonical_email(address))
+        message = f"{_as_listed(address, seed)} is a seed admin already."
+        return await _admins_page(request, message, email, status.HTTP_409_CONFLICT)
     store: AdminStore = request.app.state.admins
     try:
         added = await asyncio.to_thread(store.add, address, request.state.user, datetime.now(UTC))
@@ -119,7 +126,14 @@ async def add_admin(request: Request, email: Annotated[str, Form()] = "") -> Res
         message = f"Couldn't add {address}: the database couldn't be written."
         return await _admins_page(request, message, email, status.HTTP_500_INTERNAL_SERVER_ERROR)
     if not added:
-        return await _admins_page(request, f"{address} is an admin already.", email, status.HTTP_409_CONFLICT)
+        try:
+            admins = await asyncio.to_thread(store.admins)
+        except sqlite3.Error:
+            admins = []  # the page reports it
+        key = canonical_email(address)
+        listed = next((admin.email for admin in admins if canonical_email(admin.email) == key), address)
+        message = f"{_as_listed(address, listed)} is an admin already."
+        return await _admins_page(request, message, email, status.HTTP_409_CONFLICT)
     logger.info("Admin added: %s, by %s", address, request.state.user)
     return _back(request)
 

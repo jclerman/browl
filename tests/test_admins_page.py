@@ -117,7 +117,10 @@ def test_add_duplicate(client: TestClient) -> None:
     for entered in ["j.doe@gmail.com", "JDoe@Gmail.com", "j.d.o.e@gmail.com"]:
         response = client.post(ADMINS, data={"email": entered}, headers=SAME_SITE)
         assert response.status_code == 409
-        assert f"{entered.lower()} is an admin already." in response.text
+        expected = (
+            "j.doe@gmail.com" if entered == "j.doe@gmail.com" else f"{entered.lower()}, listed as j.doe@gmail.com,"
+        )
+        assert f"{expected} is an admin already." in response.text
     assert [admin.email for admin in store(client).admins()] == ["j.doe@gmail.com"]
 
 
@@ -143,6 +146,7 @@ def test_gmail_seed_dots_ignored(data_dir: Path) -> None:
         assert 'j.doe@gmail.com <span class="note">(you)</span>' in page.text
         response = client.post(ADMINS, data={"email": "jdo.e@gmail.com"}, headers=SAME_SITE)
         assert (response.status_code, store(client).admins()) == (409, [])
+        assert "jdo.e@gmail.com, listed as j.doe@gmail.com, is a seed admin already." in response.text
         response = client.post(REMOVE, data={"email": "jdoe@gmail.com"}, headers=SAME_SITE)
         assert response.status_code == 409
 
@@ -222,6 +226,10 @@ def test_list_unreadable(client: TestClient, monkeypatch: pytest.MonkeyPatch) ->
     text = html.unescape(response.text)
     assert "Couldn't remove y@example.org: the database couldn't be written." in text
     assert "The admins added here couldn't be read." in text
+    monkeypatch.setattr(store(client), "add", lambda email, by, at: False)  # a duplicate, as far as it can tell
+    response = client.post(ADMINS, data={"email": "dup@example.org"}, headers=SAME_SITE)
+    assert response.status_code == 500
+    assert "dup@example.org is an admin already." in response.text
 
 
 def test_list_order(data_dir: Path) -> None:
