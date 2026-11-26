@@ -926,6 +926,11 @@ _(Q8)_
   read more of the index, and its text is at most 1,000 characters (`MAX_QUERY_CHARS`). `SearchQuery` checks them,
   and that the text is valid Unicode (a JSON string can carry a lone surrogate), so every caller gets them; a page's
   request handling still checks its own input (P-20).
+- **Counting** _(P-45)_: a query may count its results up to `count_to` (at most `MAX_COUNT`), reading that many IRIs
+  rather than stopping once it has its page; an exact total would read every match (770 K values for `a` on NCBITaxon).
+  The results page counts to its deepest page and one more (1,051), to tell whether there are more than it shows; the
+  autocomplete counts none. Measured on NCBITaxon's labels ([P-45 findings](../research/P-45/README.md)): about 2 ms a
+  query warm, 36 ms at most cold, many matches or none, and the last page costs what the first does, so N-2 holds.
 - **Measured** on NCBITaxon ([P-19 findings](../research/P-19/README.md)): every query measured took 0.1–0.9 ms
   median, 9 ms at most, whether it matches 252 K values, one, or none. A query that matches few seeks every lane at
   every length up to its longest, at most `KEY_CHARS`, about 5 µs a seek: 50 lanes of 150 lengths is about 40 ms, and
