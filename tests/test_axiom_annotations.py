@@ -593,6 +593,40 @@ def test_merged_equivalents() -> None:
     assert group.lines[0].axiom == two.without_annotations()
 
 
+def test_merged_line_rendered() -> None:
+    """Check that a merged frame line shows both its axioms' annotations, each once, in one box per property."""
+    a, b = (owl.Entity(kind=owl.EntityKind.CLASS, iri=f"{NS}{name}") for name in "AB")
+    one = owl.EquivalentClasses(members=(a, b), annotations=(note("one"), note("both")))
+    two = owl.EquivalentClasses(members=(b, a), annotations=(note("both"), note("two")))
+    axioms_panel = browl.overview.AxiomsPanel(groups=frames.frame_groups([one, two], a.iri, [], str))
+    shown = render('{% from "axioms.html" import axiom_frame %}{{ axiom_frame(p, {}, "x") }}', p=axioms_panel)
+    values = ", ".join(value(text) for text in ("both", "one", "two"))
+    box = boxed(f'<code dir="ltr">{NOTE}</code>: {values}')
+    assert re.findall(r"<dd\b.*?</dd>", shown, re.DOTALL) == [
+        f'<dd dir="ltr"><code dir="ltr">&lt;{NS}B&gt;</code>{box}</dd>'
+    ]
+
+
+def test_metacharacters() -> None:
+    """Check that an annotation's value with HTML's metacharacters is escaped, not markup."""
+    template = '{% from "annotations.html" import axiom_annotations %}{{ axiom_annotations(a, {}) }}'
+    shown = render(template, a=(note('<b>&"'),))
+    assert shown == boxed(f'<code dir="ltr">{NOTE}</code>: {value("&lt;b&gt;&amp;&#34;")}')
+
+
+@pytest.mark.parametrize(
+    ("language", "shown"), [("en-GB", "en-gb"), ("not a tag!", None)], ids=["mixed-case", "not-a-tag"]
+)
+def test_shown_tag(language: str, shown: str | None) -> None:
+    """Check an axiom annotation's language tag as shown: lowercased; or left out if the OWLAPI took one that isn't."""
+    tagged = owl.Annotation(
+        property=owl.Entity(kind=owl.EntityKind.ANNOTATION_PROPERTY, iri=NOTE),
+        value=owl.Literal(lexical="colour", datatype=IRI(f"{RDF}langString"), language=language),
+    )
+    [group] = browl.annotations.shown_annotations([tagged], str)
+    assert group.values == (LiteralValue(lexical="colour", datatype=IRI(f"{RDF}langString"), language=shown),)
+
+
 def test_json() -> None:
     """Check that values and frame lines keep their annotations through JSON, for the API (U-42)."""
     value = IRIValue(iri=BLADDER, annotations=(note("a", note("b")),))

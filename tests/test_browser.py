@@ -1309,6 +1309,35 @@ def test_annotations_layout(page: Page, annotated: LiveServer) -> None:
     assert between > within + 4
 
 
+BOX_TEXT = "a box of several words"
+
+
+def test_annotation_box_whole(page: Page, server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that an axiom annotation's box doesn't split across lines: after a value that wraps, at any phone width."""
+    comment = IRI(f"{RDFS}comment")
+    value = LiteralValue(lexical=LONG_VALUE, datatype=IRI(f"{XSD}string"))
+    note = owl.Annotation(
+        property=owl.Entity(kind=owl.EntityKind.ANNOTATION_PROPERTY, iri=f"{EX}/note"),
+        value=owl.Literal(lexical=BOX_TEXT, datatype=IRI(f"{XSD}string")),
+    )
+
+    async def fetched(*args: object) -> list[tuple[IRI, AnnotationValue]]:
+        return [(comment, value)]
+
+    async def annotations(*args: object) -> dict[tuple[IRI, AnnotationValue], tuple[owl.Annotation, ...]]:
+        return {(comment, value): (note,)}
+
+    monkeypatch.setattr(browl.overview, "fetch_annotations", fetched)
+    monkeypatch.setattr(browl.overview, "fetch_value_annotations", annotations)
+    monkeypatch.setattr(browl.overview, "_read_axioms", no_axioms)
+    page.goto(f"{server.url}/example.org/thing")
+    annotation = page.locator(".axiom-annotation")
+    expect(annotation).to_contain_text(BOX_TEXT)
+    for width in range(320, 640, 16):
+        page.set_viewport_size({"width": width, "height": 700})
+        assert annotation.evaluate("each => each.getClientRects().length") == 1, width
+
+
 # The window-filling frame (P-16d, DESIGN.md §2.9, U-30, U-44)
 
 MEDIUM = {"width": 800, "height": 800}
