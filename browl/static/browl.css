@@ -1248,7 +1248,7 @@ code {
       }
 
       /* The hierarchy column: on the left, beside the tabs and the panel, scrolling within itself, with its fold
-         control on its far left, and a handle on its right that drags its width (`static/one-page.js`), from 10rem
+         control on its far left, and a handle on its right that drags its width (`static/entity-page.js`), from 10rem
          to half the page. Folded, only the control is left. */
       & .entity-page:has(#hierarchy-shown) {
         grid-template-areas: "header header" "fold tabs" "fold panel";

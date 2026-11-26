@@ -1508,7 +1508,7 @@ def test_toggle_without_javascript(page: Page, varied: LiveServer) -> None:
 
 
 ONE_PAGE_KEY = "browl.onePage"
-"""Where `static/one-page.js` remembers the toggle."""
+"""Where `static/entity-page.js` remembers the toggle."""
 
 
 @pytest.mark.parametrize(
@@ -1551,7 +1551,7 @@ def test_toggle_restored_while_parsing(page: Page, varied: LiveServer) -> None:
     """Check that the toggle is restored before the page has been parsed, so a framed page isn't drawn first."""
     page.add_init_script(f"localStorage.setItem('{ONE_PAGE_KEY}', 'true')")
     held: list[Route] = []
-    page.route("**/one-page.js", lambda route: held.append(route))
+    page.route("**/entity-page.js", lambda route: held.append(route))
     page.set_viewport_size(WIDE)
     page.goto(f"{varied.url}/example.org/{MANY}", wait_until="commit")
     wait_until(page, lambda: bool(held), "the script's request")
@@ -2582,7 +2582,7 @@ CHAIN = 60
 """How many classes `deep` chains, each under the one before, so the last one's column is longer than the window."""
 
 HIERARCHY_KEY = "browl.hierarchyShown"
-"""Where `static/one-page.js` remembers the "Hierarchy" toggle."""
+"""Where `static/entity-page.js` remembers the "Hierarchy" toggle."""
 
 
 def hierarchy_toggle(page: Page) -> Locator:

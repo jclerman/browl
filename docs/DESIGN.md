@@ -1713,7 +1713,7 @@ CSS nesting gets the one-page view, without the toggle. _(P-16d)_
   it, as the frame applies only to `@media screen`.
 - **The toggle:** a "Scroll as one page" checkbox, at the tab bar's end, gives that view on screen too, e.g. to read a
   long entity in one go. It's shown only where the frame applies. It works without JS, through `:has(:checked)`, and
-  a small script (`static/one-page.js`) remembers it in `localStorage` for every page, also those the hash-IRI script
+  a small script (`static/entity-page.js`) remembers it in `localStorage` for every page, also those the hash-IRI script
   moves in; storage that fails is ignored. The script isn't deferred, so the page isn't first drawn in the frame, and
   it also restores the state on a page from the back-forward cache and on another tab's change. No cookie, so the
   server's pages don't vary with it, and no URL parameter.
@@ -1731,11 +1731,11 @@ CSS nesting gets the one-page view, without the toggle. _(P-16d)_
     scrolled, within itself, to show the entity (`static/tree.js`).
   - **Folding:** a control on the column's far left, a strip with "«", folds it; folded, the strip reads "» Hierarchy"
     down the page's left edge. In the one-page view it's a line above the column, "▾ Hierarchy". It's a checkbox in
-    its label, so it works without JS, through `:has`, and `static/one-page.js` remembers it in `localStorage`
+    its label, so it works without JS, through `:has`, and `static/entity-page.js` remembers it in `localStorage`
     (`browl.hierarchyShown`) for every page, as it does "Scroll as one page". A browser without `:has` always shows
     the column, without the control.
   - **Width:** `clamp(12rem, 22%, 20rem)` by default. With JS, the handle on the column's right (a `separator`) drags
-    it, or the left and right arrow keys change it, from `10rem` to half the page; `one-page.js` remembers it
+    it, or the left and right arrow keys change it, from `10rem` to half the page; `entity-page.js` remembers it
     (`browl.hierarchyWidth`), and a double click goes back to the default. Without JS, the handle is only a line.
   - **Shape:** the entity's ancestors as one merged tree, each drawn once. A node with several parents goes under its
     first parent, by display name. Under each other parent it's a one-line reference to it, which links to its page:
