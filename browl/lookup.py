@@ -202,7 +202,9 @@ def _pager(request: Request, at: _TabUrls, usage: UsageTab) -> Pager | None:
     if usage.pages is None:
         return None
     params = [(TAB_PARAM, USAGE)]
-    return make_pager(request, "Usage", usage.page, usage.pages, at.page, params, at.fragment, at.panel or at.page)
+    return make_pager(
+        request, "Usage", usage.page, usage.pages, at.page, params, fragment=at.fragment, htmx=True, panel=at.panel
+    )
 
 
 def _usage_label(request: Request, links: list[TabLink], iri: str, count: int | None) -> list[TabLink]:

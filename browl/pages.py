@@ -100,11 +100,12 @@ SECURITY_HEADERS = {"X-Content-Type-Options": "nosniff", "X-Frame-Options": "DEN
 PANEL_HEADERS = {"X-Robots-Tag": "noindex"}
 """The headers of a tab panel served alone, which isn't a page."""
 
+POSITIVE_INTEGER = re.compile(r"[1-9][0-9]{0,8}")
+"""A positive integer without a sign or leading zeros, as a paged URL's `offset=` or `page=` gives it, so each page has
+one URL."""
+
 _BIDI_CONTROLS = re.compile("[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 """The bidirectional-text controls `bidi_encoded` encodes."""
-
-_OFFSET = re.compile(r"[1-9][0-9]{0,8}")
-"""An `offset=` a paged URL may give (`read_offset`): a positive integer without a sign or leading zeros."""
 
 
 @dataclass(frozen=True)
@@ -227,7 +228,7 @@ def single_params(request: Request, names: Iterable[str]) -> dict[str, str | Non
 
 
 def read_offset(value: str | None) -> int | None:
-    """Return a paged URL's offset: 0 if it's absent; None if it isn't valid (`_OFFSET`), so each page has one URL.
+    """Return a paged URL's offset: 0 if it's absent; None if it isn't valid (`POSITIVE_INTEGER`).
 
     Examples:
         >>> read_offset(None), read_offset("50"), read_offset("050"), read_offset("+5")
@@ -235,7 +236,7 @@ def read_offset(value: str | None) -> int | None:
     """
     if value is None:
         return 0
-    return int(value) if _OFFSET.fullmatch(value) else None
+    return int(value) if POSITIVE_INTEGER.fullmatch(value) else None
 
 
 def not_found(request: Request) -> Response:

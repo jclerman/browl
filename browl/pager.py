@@ -1,25 +1,21 @@
 """The results pager (DESIGN.md §2.8, §2.9): Previous, Next, and a form to go to any page, shared by paged lists.
 
-A list paged by `page=…`, from 1 and absent for the first, has a `Pager` (`pager`), which `templates/pager.html`
-renders. A pager with a panel URL swaps pages into a tab panel with htmx (`static/tabs.js`), as the Usage tab does;
-without one, its links and form load whole pages, as the search results page does. Both work without JS.
+A list paged by `page=…`, from 1 and absent for the first, has a `Pager` (`make_pager`), which `templates/pager.html`
+renders. A pager with htmx swaps pages into a tab panel (`static/tabs.js`), as the Usage tab does; without, its links
+and form load whole pages, as the search results page does. Both work without JS.
 """
 
 import math
-import re
 import urllib.parse
 from dataclasses import dataclass
 
 from fastapi import Request
 
-from browl.pages import href
+from browl.pages import POSITIVE_INTEGER, href
 from browl.tabs import PANEL_PARAM, with_query
 
 PAGE_PARAM = "page"
 """The query parameter that names a page of a paged list, from 1; absent for the first."""
-
-_PAGE_NUMBER = re.compile(r"[1-9][0-9]{0,8}")
-"""A page number `page=…` may give: a positive integer, without a sign or leading zeros, so each page has one URL."""
 
 
 @dataclass(frozen=True)
@@ -84,11 +80,14 @@ def page_params(page: int) -> list[tuple[str, str]]:
 
 
 def read_page(request: Request) -> int | None:
-    """Return the page a request asks for, 1 if none; None if it repeats `page=` or isn't a page number."""
+    """Return the page a request asks for, 1 if none; None if it repeats `page=` or isn't a page number.
+
+    A page number is a positive integer without a sign or leading zeros (`POSITIVE_INTEGER`), so each page has one URL.
+    """
     values = request.query_params.getlist(PAGE_PARAM)
     if not values:
         return 1
-    if len(values) > 1 or not _PAGE_NUMBER.fullmatch(values[0]):
+    if len(values) > 1 or not POSITIVE_INTEGER.fullmatch(values[0]):
         return None
     return int(values[0])
 
@@ -110,7 +109,9 @@ def make_pager(
     pages: int,
     url: str,
     params: list[tuple[str, str]],
+    *,
     fragment: str | None = None,
+    htmx: bool = False,
     panel: str | None = None,
     more: bool = False,
     nofollow: bool = False,
@@ -125,19 +126,20 @@ def make_pager(
         url: The page's URL, from the app's root, without the list's parameters or a fragment; it may have a query.
         params: The list's parameters, which each page's URL adds, before `page=`.
         fragment: The page's fragment, in URI form, if it has one.
-        panel: The URL its pages' panels are fetched from, from the app's root, without the list's parameters or
-            `panel=`; None for a pager that loads whole pages. The page's URL, or a URL of its own, such as a hash
-            route's, which keeps its query when the form sends its fields.
+        htmx: Whether it swaps its pages' panels into the tab panel with htmx, rather than loading whole pages.
+        panel: With htmx, the URL its pages' panels are fetched from, from the app's root, if not the page's, such as
+            a hash route's; without the list's parameters or `panel=`.
         more: Whether there are more results past the last page that can be reached.
         nofollow: Whether search engines are asked not to follow its links.
     """
     if pages < 2:
         return None
+    panel_url = (panel or url) if htmx else None
 
     def panel_href(number: int) -> str | None:
-        if panel is None:
+        if panel_url is None:
             return None
-        return href(request, with_query(panel, [*params, *page_params(number), (PANEL_PARAM, "1")]))
+        return href(request, with_query(panel_url, [*params, *page_params(number), (PANEL_PARAM, "1")]))
 
     def link(number: int) -> PageLink | None:
         if not 1 <= number <= pages:
@@ -146,9 +148,9 @@ def make_pager(
 
     path, _, query = url.partition("?")
     action_panel = None
-    if panel is not None:
+    if htmx:
         # The page's own query is in the fields, a panel URL of its own's isn't.
-        action_panel = href(request, with_query(path if panel == url else panel, [(PANEL_PARAM, "1")]))
+        action_panel = href(request, with_query(path if panel is None else panel, [(PANEL_PARAM, "1")]))
     return Pager(
         name=name,
         page=page,
