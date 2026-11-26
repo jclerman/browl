@@ -968,10 +968,12 @@ class Annotation(Node):
 class Axiom(Node):
     """An axiom: what a page shows of it (DESIGN.md §2.8, Panel data apart from its HTML).
 
-    Its Manchester syntax leaves its annotations out: a page shows them, if at all, apart from the axiom's line.
+    Its Manchester syntax leaves its annotations out: a page shows them after it, on its line, as boxes (DESIGN.md §2.8,
+    Axiom annotations).
 
     Attributes:
-        annotations: The axiom's annotations, where a page shows them (a usage found only through them); else empty.
+        annotations: The axiom's annotations, but those left out (past `browl.nesting.MAX_ANNOTATION_DEPTH`, or with a
+            note on the page when too many or unreadable).
     """
 
     annotations: tuple[Annotation, ...] = ()

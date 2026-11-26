@@ -1440,20 +1440,19 @@ fallback). The page's data is typed models, as every entity page's is (below).
     panel and the Usage tab.
   - **Data:** each section (`AxiomGroup`) holds its label and lines; a line (`FrameLine`) its axiom, None for an
     implied equivalent, and the operands it shows, so the JSON API (U-42) returns the frame as the page shows it.
-- **Axiom annotations** _(P-49; U-35)_: an annotation value or a logical axiom shows its axiom's annotations after
-  it, on its line: a box per property, `property: value, value`, small and muted, tinted teal with a stronger teal
-  border (`--annotation-bg`, `--annotation-border`): `A hollow, muscular organ … ⟨database cross reference:
-  PMID:1234, ZFA:0000114⟩ ⟨has synonym type: plural form⟩`. Boxes, not brackets, set them apart from the value, as
-  brackets in the value's own color didn't. Properties and values are sorted as the annotations panel's are, with no
-  language ranking (`browl.annotations.shown_annotations`). A box doesn't split across lines: it moves to the next
-  if it doesn't fit, and one wider than its line wraps within it; its padding keeps the border off the text, and its
-  margin off the lines above and below. An annotation's own annotations are boxes within its value's box. Values and
-  links render as an annotation's do, and a blank value (an anonymous individual) is left out, as in the panel. The
-  boxes are the template's markup (`annotations.html`'s `axiom_annotations`), outside each value's `<bdi>`, so a
-  value's own text can't pass for an annotation; visually hidden brackets around each keep where it starts and ends
-  in what screen readers read and in copied text. `--muted` and `--accent` are AA on the tint in both themes, and the
-  border is 3:1 or more against the page; the page's entity, marked where it's in them, is `--fg` on `--mark-bg`,
-  where `--muted` isn't AA in the dark theme.
+- **Axiom annotations** _(P-49; U-35)_: an annotation value or a logical axiom shows its axiom's annotations after it,
+  on its line: a box per property, `property: value, value`, small and muted, tinted teal with a stronger teal border
+  (`--annotation-bg`, `--annotation-border`): `A hollow, muscular organ … ⟨database cross reference: PMID:1234,
+  ZFA:0000114⟩ ⟨has synonym type: plural form⟩`. Properties and values are sorted as the annotations panel's are, with
+  no language ranking (`browl.annotations.shown_annotations`). A box doesn't split across lines: it moves to the next if
+  it doesn't fit, and one wider than its line wraps within it; its padding keeps the border off the text, and its margin
+  off the lines above and below. An annotation's own annotations are boxes within its value's box. Values and links
+  render as an annotation's do, and a blank value (an anonymous individual) is left out, as in the panel. The boxes are
+  the template's markup (`annotations.html`'s `axiom_annotations`), outside each value's `<bdi>`, so a value's own text
+  can't pass for an annotation; visually hidden brackets around each keep where it starts and ends in what screen
+  readers read and in copied text. `--muted` and `--accent` are AA on the tint in both themes, and the border is 3:1 or
+  more against the page; the page's entity, marked where it's in them, is `--fg` on `--mark-bg`, where `--muted` isn't
+  AA in the dark theme.
   - **Annotations panel:** a second query (`entity-value-annotations.rq`), run alongside the panel's, reads the
     annotations of the reified `owl:Axiom`s whose source is the entity, whose property is an annotation property
     (`entity-annotations.rq`'s test) and whose target isn't blank, and of the `owl:Annotation`s nested on them, one
@@ -2341,7 +2340,7 @@ go into this document.
 | P-45 | Shared results pager: one pager model and macro for the Usage tab and the search results page, htmx optional; on the results page at the top, with "Page n of N", a form to go to any page, and the number of results counted up to `MAX_OFFSET + PAGE_SIZE + 1` IRIs, not by the autocomplete; measure the count's cost on NCBITaxon (2.6, 2.9) | U-10, U-17, U-26 | P-20, P-27, P-41 | To do | [#139](https://github.com/jclerman/browl/issues/139) |
 | P-47 | Individuals' pages: named individuals as entities, searchable, with their Overview sections, Usage tab and hierarchy column; anonymous individuals' assertions listed (2.5, 2.8, 2.9, Proposed) | U-10, U-18 | P-16, P-27, P-38, P-42 | To do | [#162](https://github.com/jclerman/browl/issues/162) |
 | P-48 | Individuals tab on class pages and the navigation bar's list of all individuals, by name with P-45's pager, from one `member` table filled at pre-caching (2.5, 2.8, 2.9, Proposed) | U-18, U-27, U-28 | P-47, P-45 | To do | [#164](https://github.com/jclerman/browl/issues/164) |
-| P-49 | Axiom annotations inline, muted and in brackets, after the annotation value or axiom they annotate: on the Overview's panels and every Usage tab line (2.8) | U-35 | P-16, P-27 | Done | [#163](https://github.com/jclerman/browl/issues/163) |
+| P-49 | Axiom annotations inline, in muted bordered boxes, after the annotation value or axiom they annotate: on the Overview's panels and every Usage tab line (2.8) | U-35 | P-16, P-27 | Done | [#163](https://github.com/jclerman/browl/issues/163) |
 
 ### Phase 5: Search, caching, auth
 

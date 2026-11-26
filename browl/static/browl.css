@@ -1034,11 +1034,8 @@ code {
   font-weight: 600;
 }
 
-/* An annotation value's or an axiom's own annotations (U-35), after it on its line: a teal box per property, with a
-   border, small and muted. --muted and --accent are AA on --annotation-bg in both themes, and the border is 3:1
-   against the page. A box doesn't split across lines, but one wider than its line wraps within it; its padding keeps
-   the border off the text, and its margin off the lines above and below. On the mark's background, where --muted
-   isn't AA in the dark theme, the entity is --fg. */
+/* Axiom annotations (U-35), a box per property (DESIGN.md §2.8, Axiom annotations). The mark's entity is --fg, as
+   --muted isn't AA on --mark-bg in the dark theme. */
 .axiom-annotation {
   position: relative; /* holds its visually hidden brackets */
   display: inline-block;
