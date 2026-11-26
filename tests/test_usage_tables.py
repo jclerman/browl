@@ -282,6 +282,7 @@ async def test_kinds(store: UsageStore) -> None:
     ]
     annotation, comment = UsageKind.AXIOM_ANNOTATION, f"{NS}comment"
     assert await rows("note") == [
+        ("Bladder", Source.ROOT, annotation, comment),
         ("Bladder", Source.ROOT, annotation, f"{OWL}disjointWith"),
         ("Cat", Source.ROOT, annotation, subclass),
         ("Kidney", Source.ROOT, annotation, comment),
@@ -291,6 +292,7 @@ async def test_kinds(store: UsageStore) -> None:
         general,
         general,
         (f"{NS}carol", Source.ROOT, annotation, f"{NS}knows"),  # individuals have no entity row until P-47
+        (f"{NS}carol", Source.ROOT, annotation, f"{NS}weight"),
     ]
     animal = await rows("Animal")
     assert ("Dog", Source.OBJECT, UsageKind.TYPE, f"{RDF}type") in animal

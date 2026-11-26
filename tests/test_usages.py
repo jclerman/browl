@@ -253,14 +253,17 @@ async def test_usages_kinds(store: UsageStore) -> None:
     assert await usages("hasPart") == [("root", general, ""), ("root", general, "")]  # two general class axioms
     assert await usages("hates") == [("root", general, "")]  # a negative property assertion
     # On Cat's and Liver's annotated axioms, an annotated general class axiom, the n-ary DisjointClasses, and the
-    # axiom annotations on Kidney's comments and a restriction, Bladder's disjointness and carol's assertion.
+    # axiom annotations on Kidney's comments and a restriction, Bladder's comment and disjointness, and carol's
+    # assertions.
     assert await usages("note") == [
+        ("root", axiom, "Bladder"),
         ("root", axiom, "Bladder"),
         ("root", axiom, "Cat"),
         ("root", axiom, "Kidney"),
         ("root", axiom, "Kidney"),
         ("root", axiom, "Kidney"),
         ("root", axiom, "Liver"),
+        ("root", axiom, "carol"),
         ("root", axiom, "carol"),
         ("root", general, ""),
         ("root", general, ""),

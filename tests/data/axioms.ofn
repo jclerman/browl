@@ -86,6 +86,9 @@ DisjointClasses(Annotation(:note "apart") :Bladder :Kidney)
 SubClassOf(Annotation(:note "restricted") :Kidney ObjectSomeValuesFrom(:partOf :Bladder))
 SubClassOf(:Kidney ObjectSomeValuesFrom(:partOf :Organ))
 ObjectPropertyAssertion(Annotation(:note "known") :knows :carol :dave)
+# Literal values of written usages, matched by their digest: a typed non-string one, and one with a mixed-case tag.
+DataPropertyAssertion(Annotation(:note "typed") :weight :carol "5"^^xsd:integer)
+AnnotationAssertion(Annotation(:note "British") :comment :Bladder "urinary bladder"@en-GB)
 
 # Class axioms.
 SubClassOf(:Dog :Animal)
