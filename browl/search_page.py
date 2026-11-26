@@ -13,16 +13,17 @@ from pydantic import ValidationError
 
 from browl.derived import TYPE_LABELS, EntityType, ready_generation
 from browl.links import EntityLink, read_entity_links
-from browl.lookup import PANEL_HEADERS, not_found
 from browl.names import name_properties, normalize
 from browl.pages import (
     MAX_IRI_CHARS,
+    PANEL_HEADERS,
     SEARCH_PATH,
     SUGGEST_PARAM,
     cut_name,
     cut_text,
     href,
     link_root,
+    not_found,
     read_derived,
     read_offset,
     single_params,

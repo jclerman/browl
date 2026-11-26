@@ -6,9 +6,12 @@
   const ITEM = '[role="treeitem"]';
   const TOGGLE = ".tree-toggle";
 
-  const groupOf = (item) => item.parentElement.querySelector(':scope > [role="group"]');
+  // A node's li holds its row (its toggle, item and counts) and its group; a paging link's, its item alone.
+  const liOf = (item) => item.closest("li");
+  const groupOf = (item) => liOf(item).querySelector(':scope > [role="group"]');
   const toggleOf = (item) => item.parentElement.querySelector(`:scope > ${TOGGLE}`);
-  const itemOf = (li) => li.querySelector(`:scope > ${ITEM}`);
+  const itemOfToggle = (toggle) => toggle.parentElement.querySelector(`:scope > ${ITEM}`);
+  const itemOf = (li) => li.querySelector(`:scope > ${ITEM}, :scope > .tree-row > ${ITEM}`);
   const isOpen = (item) => item.getAttribute("aria-expanded") === "true";
 
   // The items shown, walked through the tree's structure, so a key reads only the items near it.
@@ -27,7 +30,7 @@
     if (isOpen(item) && groupOf(item).firstElementChild) {
       return itemOf(groupOf(item).firstElementChild);
     }
-    for (let li = item.parentElement; li; li = parentLi(li)) {
+    for (let li = liOf(item); li; li = parentLi(li)) {
       if (li.nextElementSibling) {
         return itemOf(li.nextElementSibling);
       }
@@ -36,7 +39,7 @@
   }
 
   function previousShown(item) {
-    const li = item.parentElement;
+    const li = liOf(item);
     if (li.previousElementSibling) {
       return lastShownIn(li.previousElementSibling);
     }
@@ -46,14 +49,13 @@
 
   // The item a request's toggle opens, or whose "Show more" made it.
   const sourceOf = (event) => event.detail.requestConfig?.elt ?? event.detail.elt;
-  const toggleOfRequest = (event) => {
+  const requestFrom = (selector) => (event) => {
     const elt = sourceOf(event);
-    return elt?.matches?.(TOGGLE) ? elt : null;
+    return elt?.matches?.(selector) ? elt : null;
   };
-  const moreOfRequest = (event) => {
-    const elt = sourceOf(event);
-    return elt?.matches?.(`.tree-paging > ${ITEM}`) ? elt : null;
-  };
+  const toggleOfRequest = requestFrom(TOGGLE);
+  const moreOfRequest = requestFrom(`.tree-paging > ${ITEM}`); // "Show more", or in the column, "previous"
+  const siblingsOfRequest = requestFrom(`.tree-siblings > ${ITEM}`);
 
   // Only one item is in the Tab sequence, the roving one; the toggles are the mouse's, as the keys open and close
   // nodes. Applied to a tree once, and to what's added to it after, leaving the roving item as it is.
@@ -73,9 +75,34 @@
     }
     tree.dataset.roving = "true";
     tame(tree);
-    const first = firstItem(tree);
+    const first = startItem(tree);
     if (first) {
       first.tabIndex = 0;
+    }
+  }
+
+  // Where the keys start: in the hierarchy column, at the page's own entity.
+  const startItem = (tree) => tree.querySelector(`${ITEM}[aria-current="page"]`) ?? firstItem(tree);
+
+  // The hierarchy column scrolls within itself, not the page, to show the page's entity: a third of the way down, and
+  // its toggle at the left, if it's out of view.
+  function showCurrent() {
+    for (const column of document.querySelectorAll(".hierarchy-column")) {
+      const current = column.querySelector(`${ITEM}[aria-current="page"]`);
+      if (!current) {
+        continue;
+      }
+      const shown = column.getBoundingClientRect();
+      const at = current.parentElement.getBoundingClientRect(); // its line, from its toggle
+      if (at.bottom > shown.top + column.clientHeight) {
+        column.scrollTop += at.top - shown.top - column.clientHeight / 3;
+      }
+      // Sideways, only as far as its name needs, so the levels above keep as much of theirs as they can.
+      const name = current.getBoundingClientRect();
+      const over = name.right - (shown.left + column.clientWidth);
+      if (over > 0) {
+        column.scrollLeft += Math.min(over, at.left - shown.left);
+      }
     }
   }
 
@@ -98,8 +125,12 @@
   }
 
   // A toggle's link (for a modifier-click, or a failed fetch) follows its node's state: once open, it leaves the
-  // node's IRI out of `open=`, and once closed, adds it back after the others.
+  // node's IRI out of `open=`, and once closed, adds it back after the others. The hierarchy column's links are to
+  // the nodes' pages, whatever their state.
   function relink(toggle, open) {
+    if (toggle.closest(".hierarchy-column")) {
+      return;
+    }
     const iri = new URL(toggle.getAttribute("hx-get"), location.href).searchParams.get("node");
     const url = new URL(toggle.href);
     const params = [...url.searchParams].filter(([name, value]) => name !== "open" || value !== iri);
@@ -136,6 +167,26 @@
   for (const tree of document.querySelectorAll(TREE)) {
     setUp(tree);
   }
+  showCurrent();
+
+  // A tree page's open rows stick below the navigation bar, whose height varies as it wraps.
+  const bar = document.querySelector(".site-bar");
+  if (bar && document.querySelector(".tree-page")) {
+    new ResizeObserver(() => {
+      document.documentElement.style.setProperty("--site-bar-height", `${bar.offsetHeight}px`);
+    }).observe(bar);
+  }
+
+  const main = document.querySelector("main");
+  if (main) {
+    new MutationObserver(showCurrent).observe(main, { childList: true }); // a page the hash-IRI script moves in
+  }
+  // A column that was folded had nothing to show.
+  document.addEventListener("change", (event) => {
+    if (event.target.id === "hierarchy-shown" && event.target.checked) {
+      showCurrent();
+    }
+  });
 
   // The item focused, e.g. by a click, is the roving one. A toggle a click focuses passes the focus to its item, so
   // the keys work. A tree the page gained later, e.g. through the hash-IRI script, is set up once focus first enters
@@ -146,10 +197,10 @@
     if (!tree) {
       return;
     }
-    const item = target.matches(TOGGLE) ? itemOf(target.parentElement) : target.closest(ITEM);
+    const item = target.matches(TOGGLE) ? itemOfToggle(target) : target.closest(ITEM);
     if (!tree.dataset.roving) {
       setUp(tree);
-      const to = item ?? firstItem(tree);
+      const to = item ?? startItem(tree);
       if (to) {
         focusItem(to);
       }
@@ -192,7 +243,7 @@
         if (group && isOpen(item)) {
           close(item);
         } else {
-          const parent = parentLi(item.parentElement);
+          const parent = parentLi(liOf(item));
           to = parent && itemOf(parent);
         }
         break;
@@ -211,7 +262,7 @@
     if (!toggle) {
       return;
     }
-    const item = itemOf(toggle.parentElement);
+    const item = itemOfToggle(toggle);
     if (groupOf(item).hasAttribute("data-loaded")) {
       event.preventDefault();
       if (isOpen(item)) {
@@ -226,25 +277,41 @@
     document.addEventListener(name, (event) => {
       const toggle = toggleOfRequest(event);
       if (toggle) {
-        groupOf(itemOf(toggle.parentElement)).setAttribute("aria-busy", String(name === "htmx:beforeRequest"));
+        groupOf(itemOfToggle(toggle)).setAttribute("aria-busy", String(name === "htmx:beforeRequest"));
       }
     });
   }
 
-  // "Show more" replaces itself with the next page; where it had the focus, the page's first item takes it.
+  // "Show more" replaces itself with the next page; where it had the focus, the page's first item takes it. In the
+  // hierarchy column, the link to the previous page, always its list's first, replaces itself with that page, and its
+  // last item, just above where the link was, takes the focus.
   let shownMore = null; // where the page goes, while it's swapped in
+  let siblingsFocused = false; // whether "Show its siblings", which they replace, had the focus
   document.addEventListener("htmx:beforeSwap", (event) => {
+    const siblings = siblingsOfRequest(event);
+    if (siblings) {
+      siblingsFocused = document.activeElement === siblings;
+    }
     const more = moreOfRequest(event);
     if (more) {
       const li = more.parentElement;
-      shownMore = { list: li.parentElement, before: li.previousElementSibling, focused: document.activeElement === more };
+      shownMore = {
+        list: li.parentElement,
+        before: li.previousElementSibling,
+        after: li.nextElementSibling,
+        focused: document.activeElement === more,
+      };
     }
   });
 
   document.addEventListener("htmx:afterSwap", (event) => {
+    if (siblingsOfRequest(event)) {
+      shownSiblings(event.detail.target);
+      return;
+    }
     const toggle = toggleOfRequest(event);
     if (toggle) {
-      const item = itemOf(toggle.parentElement);
+      const item = itemOfToggle(toggle);
       const group = groupOf(item);
       group.setAttribute("data-loaded", "");
       if (item.closest(TREE)?.dataset.roving) {
@@ -256,13 +323,18 @@
     if (!moreOfRequest(event) || !shownMore) {
       return;
     }
-    const { list, before, focused } = shownMore;
+    const { list, before, after, focused } = shownMore;
     shownMore = null;
     if (list.closest(TREE)?.dataset.roving) {
       tame(list);
     }
-    const first = before ? before.nextElementSibling : list.firstElementChild;
-    const item = first && itemOf(first);
+    let edge; // the page's first node, or for a previous page, its last
+    if (before) {
+      edge = before.nextElementSibling;
+    } else {
+      edge = after ? after.previousElementSibling : list.lastElementChild;
+    }
+    const item = edge && itemOf(edge);
     const tree = list.closest(TREE);
     if (focused && item) {
       focusItem(item);
@@ -274,11 +346,29 @@
     }
   });
 
+  // The page's entity's siblings, in place of its first parent's children shown: the entity, among them, takes the
+  // focus if "Show its siblings" had it, or the roving tabindex if that was it, and stays in view.
+  function shownSiblings(list) {
+    const tree = list.closest(TREE);
+    const current = list.querySelector(`${ITEM}[aria-current="page"]`);
+    if (tree?.dataset.roving) {
+      tame(list);
+      if (current && (siblingsFocused || !tree.querySelector(`${ITEM}[tabindex="0"]`))) {
+        rove(current);
+      }
+    }
+    if (current && siblingsFocused) {
+      current.focus({ preventScroll: true });
+    }
+    siblingsFocused = false;
+    showCurrent();
+  }
+
   // Children that couldn't be fetched (e.g. the site is loading, or the network failed) are left to the page that
   // shows them.
   for (const name of ["htmx:responseError", "htmx:sendError"]) {
     document.addEventListener(name, (event) => {
-      const link = toggleOfRequest(event) ?? moreOfRequest(event);
+      const link = toggleOfRequest(event) ?? moreOfRequest(event) ?? siblingsOfRequest(event);
       if (link) {
         location.assign(link.href);
       }

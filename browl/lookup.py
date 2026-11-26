@@ -35,11 +35,24 @@ from browl.derived import (
     is_hash_prefix,
     read_meta,
 )
+from browl.hierarchy_column import read_column
 from browl.home import read_home
 from browl.jobs import JobState
 from browl.links import EntityLink, entity_name
 from browl.overview import read_overview
-from browl.pages import TREES, app_path, cut_name, href, is_under, link_root, read_derived, templates, tree_href
+from browl.pages import (
+    PANEL_HEADERS,
+    TREES,
+    app_path,
+    cut_name,
+    href,
+    is_under,
+    link_root,
+    not_found,
+    read_derived,
+    templates,
+    tree_href,
+)
 from browl.tabs import (
     PANEL_PARAM,
     TAB_PARAM,
@@ -84,9 +97,6 @@ ENTITY_TABS = (Tab(OVERVIEW, "Overview"), Tab(USAGE, USAGE_LABEL))
 
 _PAGE_NUMBER = re.compile(r"[1-9][0-9]{0,8}")
 """A page number `page=…` may give: a positive integer, without a sign or leading zeros, so each page has one URL."""
-
-PANEL_HEADERS = {"X-Robots-Tag": "noindex"}
-"""The headers of a tab panel served alone, which isn't a page."""
 
 POLL_ID = "usage-preparing"
 """The id of the Usage tab's "Preparing…", which polls (`usage.html`), and which htmx sends as `HX-Trigger`."""
@@ -278,11 +288,6 @@ def _usage_label(request: Request, links: list[TabLink], iri: str, count: int | 
     return [dataclasses.replace(link, **changes) if link.tab.slug == USAGE else link for link in links]
 
 
-def not_found(request: Request) -> Response:
-    """Return the "not found" page (U-14), with status 404."""
-    return templates.TemplateResponse(request, "not_found.html", {}, status_code=404)
-
-
 async def _page(
     request: Request,
     state: JobState,
@@ -368,6 +373,10 @@ async def _page(
     context["tabs"] = _usage_label(request, links, entity.iri, count)
     if query.panel:
         return templates.TemplateResponse(request, "entity_panel.html", context, headers=PANEL_HEADERS)
+    # Not in a panel alone, as the tabs keep the page's column.
+    context["column"] = await read_derived(
+        request, lambda connection: read_column(request, connection, entities), state
+    )
     return templates.TemplateResponse(request, "entity.html", context | common)
 
 

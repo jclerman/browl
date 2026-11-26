@@ -5,6 +5,7 @@ They drive headless Chromium through Playwright against the app on a live server
 
 import asyncio
 import contextlib
+import itertools
 import re
 import threading
 import urllib.parse
@@ -26,6 +27,8 @@ from browl import owl
 from browl.annotations import AnnotationValue, IRIValue, LiteralValue
 from browl.auth import SESSION_COOKIE
 from browl.derived import EntityType
+from browl.hierarchy import CHILD_PAGE
+from browl.hierarchy_column import MAX_COLUMN_DEPTH
 from browl.jobs import JobContext, Stage, StageFunction
 from browl.jobtypes import StageError
 from browl.links import EntityLink
@@ -38,7 +41,7 @@ from tests.conftest import DATA
 from tests.helpers import AUTH_ON, WAIT_S, LiveServer, derived_stage, iso, make_app, no_axioms, session_cookie
 from tests.test_pages import FakeTables
 from tests.test_search_page import SYNONYM, search_stage
-from tests.test_trees import tree_stage
+from tests.test_trees import KIDS, SUB_CLASS, kid, tree_stage
 
 pytestmark = pytest.mark.usefixtures("data_dir")
 
@@ -1507,10 +1510,10 @@ def test_toggle_without_javascript(page: Page, varied: LiveServer) -> None:
 
 
 ONE_PAGE_KEY = "browl.onePage"
-"""Where `static/one-page.js` remembers the toggle."""
+"""Where `static/entity-page.js` remembers the toggle."""
 
 
-@pytest.mark.parametrize(
+STORAGE_FAILS = pytest.mark.parametrize(
     ("storage", "script"),
     [
         ("blocked", "Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('blocked'); } });"),
@@ -1524,6 +1527,10 @@ ONE_PAGE_KEY = "browl.onePage"
     ],
     ids=["blocked", "full"],
 )
+"""`localStorage` blocked, or full with "Scroll as one page" remembered: a script run before each page's."""
+
+
+@STORAGE_FAILS
 def test_storage_fails(page: Page, varied: LiveServer, storage: str, script: str) -> None:
     """Check that the toggle works, without script errors, when `localStorage` is blocked, or full but remembers it."""
     errors: list[PlaywrightError] = []
@@ -1550,7 +1557,7 @@ def test_toggle_restored_while_parsing(page: Page, varied: LiveServer) -> None:
     """Check that the toggle is restored before the page has been parsed, so a framed page isn't drawn first."""
     page.add_init_script(f"localStorage.setItem('{ONE_PAGE_KEY}', 'true')")
     held: list[Route] = []
-    page.route("**/one-page.js", lambda route: held.append(route))
+    page.route("**/entity-page.js", lambda route: held.append(route))
     page.set_viewport_size(WIDE)
     page.goto(f"{varied.url}/example.org/{MANY}", wait_until="commit")
     wait_until(page, lambda: bool(held), "the script's request")
@@ -2296,7 +2303,7 @@ def tree_item(page: Page, name: str) -> Locator:
 
 def tree_toggle(page: Page, name: str) -> Locator:
     """Return the toggle of the tree item with this name."""
-    return page.locator("li", has=tree_item(page, name)).last.locator(":scope > .tree-toggle")
+    return page.locator("li", has=tree_item(page, name)).last.locator(":scope > .tree-row > .tree-toggle")
 
 
 def record_fragments(page: Page) -> list[str]:
@@ -2573,6 +2580,633 @@ def test_tree_modifier_click_left_to_browser(page: Page, trees: LiveServer) -> N
     opened.value.wait_for_load_state()
     assert query_of(opened.value.url) == {"open": [f"{EX}/Top"]}
     expect(tree_item(page, "Top")).to_have_attribute("aria-expanded", "false")
+
+
+# The hierarchy column (P-38, U-45, DESIGN.md §2.9 "Hierarchy column")
+
+TALL_ROOTS = 30
+"""How many roots `deep`'s `e` is also under, each drawing a reference to it, so its column outgrows the window."""
+
+DEEP = 30
+"""How many classes `deep` chains, so the last one's column leaves levels out (`MAX_COLUMN_DEPTH`)."""
+
+DEEP_KIDS = 60
+"""How many children the last of `deep`'s chain has, so its column scrolls."""
+
+HIERARCHY_KEY = "browl.hierarchyShown"
+"""Where `static/entity-page.js` remembers the "Hierarchy" toggle."""
+
+WIDTH_KEY = "browl.hierarchyWidth"
+"""Where `static/entity-page.js` remembers the column's width."""
+
+
+def hierarchy_toggle(page: Page) -> Locator:
+    """Return the entity page's "Hierarchy" toggle."""
+    return page.get_by_role("checkbox", name="Hierarchy")
+
+
+def fold_control(page: Page) -> Locator:
+    """Return the control, on the hierarchy column's left, that folds and unfolds it: the toggle's label."""
+    return page.locator(".hierarchy-fold")
+
+
+def hierarchy_column(page: Page) -> Locator:
+    """Return the entity page's hierarchy column."""
+    return page.get_by_role("navigation", name="Hierarchy")
+
+
+@pytest.mark.parametrize("size", [WIDE, MEDIUM], ids=["wide", "medium"])
+def test_column_beside_panels(page: Page, trees: LiveServer, size: dict[str, int]) -> None:
+    """Check that the column is on the left of the tabs and the panel, and that folding it gives them its room.
+
+    Its fold control is on its far left, and stays there once it's folded. The panels keep their layout, side by side
+    or stacked, and the page itself doesn't scroll.
+    """
+    watch_policy(page)
+    page.set_viewport_size(size)
+    page.goto(f"{trees.url}/Bottom")
+    column, tab_bar, tab_panel = hierarchy_column(page), page.locator(".tab-bar"), page.get_by_role("tabpanel")
+    expect(column).to_be_visible()
+    shown_column, shown_tabs, shown_panel = box(column), box(tab_bar), box(tab_panel)
+    fold = box(fold_control(page))
+    assert fold["x"] + fold["width"] <= shown_column["x"]
+    assert shown_column["x"] + shown_column["width"] <= shown_panel["x"]
+    assert abs(shown_column["y"] - shown_tabs["y"]) < 2  # it starts level with the tabs, below the header
+    assert shown_tabs["x"] == shown_panel["x"]
+    annotations, axioms = panels(page)
+    if size == WIDE:
+        assert annotations["y"] == axioms["y"] and annotations["x"] + annotations["width"] < axioms["x"]
+    else:
+        assert annotations["x"] == axioms["x"] and annotations["y"] + annotations["height"] < axioms["y"]
+    assert not page_scrolls(page)
+    fold_control(page).click()
+    expect(column).to_be_hidden()
+    expect(fold_control(page)).to_contain_text("Hierarchy")
+    assert box(fold_control(page))["x"] == fold["x"]
+    assert box(tab_panel)["x"] < shown_column["x"] + shown_column["width"]
+    assert box(tab_panel)["width"] > shown_panel["width"]
+    fold_control(page).click()
+    expect(column).to_be_visible()
+    assert violations(page) == []
+
+
+@pytest.mark.parametrize("size", [NARROW, WIDE], ids=["narrow", "toggled"])
+def test_column_above_in_one_page_view(page: Page, trees: LiveServer, size: dict[str, int]) -> None:
+    """Check that the one-page view puts the column above the tabs, and the "Hierarchy" toggle hides it.
+
+    The view is a narrow window's, or a wide one's with "Scroll as one page" checked.
+    """
+    page.set_viewport_size(size)
+    page.goto(f"{trees.url}/Bottom")
+    if size == WIDE:
+        one_page_toggle(page).check()
+    column = hierarchy_column(page)
+    shown_column, header = box(column), box(page.locator(".entity-header"))
+    assert header["y"] + header["height"] <= shown_column["y"]
+    assert shown_column["y"] + shown_column["height"] <= box(page.locator(".tab-bar"))["y"]
+    fold_control(page).click()
+    expect(column).to_be_hidden()
+
+
+@NO_JS
+def test_column_toggle_without_javascript(page: Page, trees: LiveServer) -> None:
+    """Check that, without JavaScript, the toggle still hides the column, though it isn't remembered."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}/Bottom")
+    fold_control(page).click()
+    expect(hierarchy_column(page)).to_be_hidden()
+    page.goto(f"{trees.url}/Top")
+    expect(hierarchy_column(page)).to_be_visible()
+
+
+def test_column_toggle_remembered(page: Page, trees: LiveServer) -> None:
+    """Check that hiding the column is remembered on other pages, apart from the "Scroll as one page" toggle."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}/Bottom")
+    fold_control(page).click()
+    assert page.evaluate(f"localStorage.getItem('{HIERARCHY_KEY}')") == "false"
+    page.goto(f"{trees.url}/Top")
+    expect(hierarchy_toggle(page)).not_to_be_checked()
+    expect(hierarchy_column(page)).to_be_hidden()
+    expect(one_page_toggle(page)).not_to_be_checked()
+    fold_control(page).click()
+    page.reload()
+    expect(hierarchy_column(page)).to_be_visible()
+
+
+def test_column_tree(page: Page, trees: LiveServer) -> None:
+    """Check that the column's tree opens and closes in place, fetches a child's children, and takes the keys.
+
+    The keys start at the page's entity.
+    """
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}/Left")
+    mark(page)
+    requests = record_fragments(page)
+    column = hierarchy_column(page)
+    left = column.get_by_role("treeitem", name="Left", exact=True)
+    expect(left).to_have_attribute("aria-current", "page")
+    column.get_by_role("link", name="Full tree").focus()
+    page.keyboard.press("Tab")  # into the tree
+    expect(left).to_be_focused()
+    page.keyboard.press("ArrowDown")  # the Alias group, then Bottom
+    page.keyboard.press("ArrowDown")
+    bottom = column.get_by_role("treeitem", name="Bottom", exact=True)
+    expect(bottom).to_be_focused()
+    page.keyboard.press("ArrowRight")  # fetches its children
+    expect(column.get_by_role("treeitem", name="Deep", exact=True)).to_be_visible()
+    assert query_of(requests[0])["at"] == ["hc-0-0-1"]
+    page.keyboard.press("ArrowLeft")  # closes it
+    page.keyboard.press("ArrowLeft")
+    expect(left).to_be_focused()
+    page.keyboard.press("ArrowLeft")  # closes it in place
+    expect(left).to_have_attribute("aria-expanded", "false")
+    expect(bottom).to_be_hidden()
+    assert len(requests) == 1
+    assert marked(page)
+
+
+def test_column_siblings_in_place(page: Page, trees: LiveServer) -> None:
+    """Check that "Show its sibling" shows the first parent's children in place, the entity open, marked and focused."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}/Bottom")
+    mark(page)
+    column = hierarchy_column(page)
+    siblings = column.get_by_role("treeitem", name="Show its sibling (1)")
+    siblings.focus()
+    page.keyboard.press("Enter")
+    group = column.get_by_role("treeitem", name="Alias ≡ Alias2 ≡ Alias3 ≡ … (+1)", exact=True)
+    expect(group).to_be_visible()
+    bottom = column.get_by_role("treeitem", name="Bottom", exact=True).first
+    expect(bottom).to_have_attribute("aria-current", "page")
+    expect(bottom).to_have_attribute("aria-expanded", "true")
+    expect(bottom).to_be_focused()
+    expect(column.get_by_role("treeitem", name="Deep", exact=True)).to_be_visible()
+    expect(siblings).to_have_count(0)
+    assert marked(page)
+
+
+def test_column_siblings_click_focus(page: Page, trees: LiveServer) -> None:
+    """Check that a click on "Show its sibling" leaves the focus, and the one roving item, on the entity."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}/Bottom")
+    column = hierarchy_column(page)
+    column.get_by_role("treeitem", name="Show its sibling (1)").click()
+    bottom = column.get_by_role("treeitem", name="Bottom", exact=True).first
+    expect(bottom).to_be_focused()
+    expect(column.locator('[role="tree"] [tabindex="0"]')).to_have_count(1)
+    expect(bottom).to_have_attribute("tabindex", "0")
+    page.keyboard.press("ArrowUp")
+    expect(column.get_by_role("treeitem", name="Alias ≡ Alias2 ≡ Alias3 ≡ … (+1)", exact=True)).to_be_focused()
+
+
+SIBLINGS = re.compile(r"[?&]siblings-of=")
+
+
+@pytest.mark.parametrize("failure", ["status", "network"])
+def test_column_siblings_failure_loads_page(page: Page, trees: LiveServer, failure: str) -> None:
+    """Check that siblings that can't be fetched load the link's page instead: the parent's, whose column shows them."""
+    if failure == "status":
+        page.route(SIBLINGS, lambda route: route.fulfill(status=503, content_type="text/html", body="<p>No</p>"))
+    else:
+        page.route(SIBLINGS, lambda route: route.abort())
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}/Bottom")
+    siblings = hierarchy_column(page).get_by_role("treeitem", name="Show its sibling (1)")
+    href = siblings.get_attribute("href")
+    siblings.click()
+    expect(page).to_have_url(f"{trees.url}{href}")
+    expect(hierarchy_column(page).locator('[aria-current="page"]')).to_have_text("Left")
+
+
+def column_kids(page: Page) -> list[tuple[str, str]]:
+    """Return the ids and names of `Big`'s children in the column, in order."""
+    found = hierarchy_column(page).evaluate(
+        """(column) => [...column.querySelectorAll("[role=treeitem]")]
+            .filter((item) => item.textContent.startsWith("Kid"))
+            .map((item) => [item.id, item.textContent])"""
+    )
+    return [(each, name) for each, name in found]
+
+
+def test_column_previous_siblings_in_place(page: Page, trees: LiveServer) -> None:
+    """Check that, among the entity's siblings, the link to the page before adds that page in place, before it.
+
+    The focus goes to its last item, just above where the link was; the ids carry on, and none is repeated.
+    """
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}/kid1249")
+    mark(page)
+    column = hierarchy_column(page)
+    column.get_by_role("treeitem", name="Show its siblings (1,249)").click()
+    previous = column.get_by_role("treeitem", name="Show the previous 500")
+    expect(previous).to_be_visible()
+    ids = [each for each, _ in column_kids(page)]
+    assert len(ids) == KIDS - 2 * CHILD_PAGE
+    stem = ids[0].rsplit("-", 1)[0]
+    with page.expect_request(re.compile(r"[?&]before=1000(&|$)")):
+        previous.click()
+    expect(column.get_by_role("treeitem", name="Show the first 500")).to_be_visible()
+    expect(tree_item(page, kid(999))).to_be_focused()
+    expect(tree_item(page, kid(999))).to_have_attribute("tabindex", "0")
+    expect(column.locator('[role="tree"] [tabindex="0"]')).to_have_count(1)
+    assert column_kids(page) == [(f"{stem}-{n}", kid(n)) for n in range(CHILD_PAGE, KIDS)]
+    expect(previous).to_have_count(0)
+    page.keyboard.press("ArrowDown")
+    expect(tree_item(page, kid(1000))).to_be_focused()
+    assert marked(page)
+
+
+def handle(page: Page) -> Locator:
+    """Return the handle that drags the hierarchy column's width."""
+    return page.get_by_role("separator", name="Hierarchy's width")
+
+
+def test_column_resized(page: Page, trees: LiveServer) -> None:
+    """Check that dragging the handle widens the column, and the keys; it's remembered, and a double click resets it."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}/Bottom")
+    column = hierarchy_column(page)
+    before = box(column)["width"]
+    at = box(handle(page))
+    page.mouse.move(at["x"] + at["width"] / 2, at["y"] + 50)
+    page.mouse.down()
+    page.mouse.move(at["x"] + at["width"] / 2 + 120, at["y"] + 50, steps=4)
+    page.mouse.up()
+    wider = box(column)["width"]
+    assert abs(wider - (before + 120)) < 3
+    page.reload()
+    assert abs(box(column)["width"] - wider) < 1
+    handle(page).focus()
+    page.keyboard.press("ArrowLeft")
+    assert abs(box(column)["width"] - (wider - 16)) < 1
+    expect(handle(page)).to_have_attribute("aria-valuenow", str(round(wider - 16)))
+    handle(page).dblclick()
+    assert abs(box(column)["width"] - before) < 1
+    page.mouse.move(at["x"] + at["width"] / 2, at["y"] + 50)
+    page.mouse.down()
+    page.mouse.move(at["x"] + 2000, at["y"] + 50, steps=4)  # at most half the page
+    page.mouse.up()
+    assert box(column)["width"] <= box(page.locator(".entity-page"))["width"] / 2 + 1
+
+
+def column_width(page: Page) -> float:
+    """Return the hierarchy column's width."""
+    return box(hierarchy_column(page))["width"]
+
+
+def test_column_width_kept_for_wider_window(page: Page, trees: LiveServer) -> None:
+    """Check that a remembered width, too wide for a narrow window, comes back once the window is wide enough (C2)."""
+    page.add_init_script(f"localStorage.setItem('{WIDTH_KEY}', '300')")
+    page.set_viewport_size(NARROW)
+    page.goto(f"{trees.url}/Bottom")
+    expect(page.locator(".hierarchy-resize")).to_have_attribute("tabindex", "0")  # set up, though hidden
+    page.set_viewport_size(WIDE)
+    assert abs(column_width(page) - 300) < 1
+
+
+@pytest.mark.parametrize("stored", ["abc", "-5", "0", "Infinity", "99999"])
+def test_column_width_bad_stored(page: Page, trees: LiveServer, stored: str) -> None:
+    """Check that a remembered width that isn't a positive number is ignored, and a huge one is cut to half the page."""
+    errors: list[PlaywrightError] = []
+    page.on("pageerror", lambda error: errors.append(error))
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}/Bottom")
+    default = column_width(page)
+    page.evaluate(f"localStorage.setItem('{WIDTH_KEY}', '{stored}')")
+    page.reload()
+    expect(hierarchy_column(page)).to_be_visible()
+    if stored == "99999":
+        assert abs(column_width(page) - box(page.locator(".entity-page"))["width"] / 2) < 20
+        expect(handle(page)).to_have_attribute("aria-valuenow", handle(page).get_attribute("aria-valuemax") or "")
+    else:
+        assert column_width(page) == default
+        expect(handle(page)).not_to_have_attribute("aria-valuenow", re.compile(""))
+    assert errors == []
+
+
+def test_column_shown_bad_stored(page: Page, trees: LiveServer) -> None:
+    """Check that a remembered "Hierarchy" state other than "false" leaves the column shown, the default."""
+    page.add_init_script(f"localStorage.setItem('{HIERARCHY_KEY}', 'garbage')")
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}/Bottom")
+    expect(hierarchy_toggle(page)).to_be_checked()
+    expect(hierarchy_column(page)).to_be_visible()
+
+
+def test_column_resize_keys_bounded(page: Page, trees: LiveServer) -> None:
+    """Check that the arrow keys change the width a step at a time, from 10rem to half the page, and no further."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}/Bottom")
+    before = column_width(page)
+    handle(page).focus()
+    page.keyboard.press("ArrowRight")
+    assert abs(column_width(page) - (before + 16)) < 1
+    expect(handle(page)).to_have_attribute("aria-valuenow", str(round(before + 16)))
+    expect(handle(page)).to_have_attribute("aria-valuemin", "160")
+    high = int(handle(page).get_attribute("aria-valuemax") or 0)
+    assert abs(high - box(page.locator(".entity-page"))["width"] / 2) < 20
+    for _ in range(round((high - before) / 16) + 3):
+        page.keyboard.press("ArrowRight")
+    expect(handle(page)).to_have_attribute("aria-valuenow", str(high))
+    assert column_width(page) <= high + 1
+    for _ in range(round((high - 160) / 16) + 3):
+        page.keyboard.press("ArrowLeft")
+    expect(handle(page)).to_have_attribute("aria-valuenow", "160")
+    assert abs(column_width(page) - 160) < 1
+    assert page.evaluate(f"localStorage.getItem('{WIDTH_KEY}')") == "160"
+
+
+@pytest.mark.browser_context_args(has_touch=True)
+def test_column_drag_cancelled(page: Page, trees: LiveServer) -> None:
+    """Check that a drag the browser cancels, here a touch's, ends (C3).
+
+    The width it reached is kept and remembered, and the handle no longer follows the pointer.
+    """
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}/Bottom")
+    before = column_width(page)
+    at = box(handle(page))
+    x, y = at["x"] + at["width"] / 2, at["y"] + 50
+    touch = page.context.new_cdp_session(page)
+    touch.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})
+    touch.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x + 60, "y": y}]})
+    dragged = column_width(page)
+    assert abs(dragged - (before + 60)) < 3
+    touch.send("Input.dispatchTouchEvent", {"type": "touchCancel", "touchPoints": []})
+    assert page.evaluate(f"localStorage.getItem('{WIDTH_KEY}')") == str(round(dragged))
+    page.mouse.move(x + 60, y)  # over the handle, which no longer follows
+    page.mouse.move(x + 160, y, steps=40)
+    assert abs(column_width(page) - dragged) < 1
+
+
+@STORAGE_FAILS
+def test_column_storage_fails(page: Page, trees: LiveServer, storage: str, script: str) -> None:
+    """Check that the column's fold and handle work, without script errors, when `localStorage` fails."""
+    errors: list[PlaywrightError] = []
+    page.on("pageerror", lambda error: errors.append(error))
+    page.add_init_script(script)
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}/Bottom")
+    one_page_toggle(page).uncheck()  # remembered as checked where storage is full
+    before = column_width(page)
+    handle(page).focus()
+    page.keyboard.press("ArrowRight")
+    assert abs(column_width(page) - (before + 16)) < 1
+    at = box(handle(page))
+    page.mouse.move(at["x"] + at["width"] / 2, at["y"] + 50)
+    page.mouse.down()
+    page.mouse.move(at["x"] + at["width"] / 2 + 40, at["y"] + 50, steps=4)
+    page.mouse.up()
+    assert abs(column_width(page) - (before + 56)) < 3
+    handle(page).dblclick()
+    assert abs(column_width(page) - before) < 1
+    fold_control(page).click()
+    expect(hierarchy_column(page)).to_be_hidden()
+    page.reload()  # not remembered
+    one_page_toggle(page).uncheck()
+    expect(hierarchy_column(page)).to_be_visible()
+    assert abs(column_width(page) - before) < 1
+    assert errors == []
+
+
+def test_column_toggle_follows_changes(page: Page, trees: LiveServer) -> None:
+    """Check that the "Hierarchy" toggle follows another tab's change, and is restored from the back-forward cache."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}/Bottom")
+    other = page.context.new_page()
+    other.goto(f"{trees.url}/Top")
+    fold_control(other).click()
+    expect(hierarchy_toggle(page)).not_to_be_checked()
+    expect(hierarchy_column(page)).to_be_hidden()
+    page.evaluate(f"localStorage.setItem('{HIERARCHY_KEY}', 'true')")  # a page gets no storage event of its own
+    page.evaluate("window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))")
+    expect(hierarchy_toggle(page)).to_be_checked()
+    expect(hierarchy_column(page)).to_be_visible()
+
+
+def test_column_rows_stick(page: Page, trees: LiveServer) -> None:
+    """Check that, as the entity's children scroll past in the column, the rows of the nodes above them stay in view."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}/Big")
+    column = hierarchy_column(page)
+    column.evaluate("(each) => { each.scrollTop = each.scrollHeight; }")
+    heading = box(column.get_by_role("heading"))
+    rows = [box(column.locator(".tree-row", has=tree_item(page, name))) for name in ("Top", "Big")]
+    top = heading["y"] + heading["height"]
+    assert abs(rows[0]["y"] - top) < 2
+    assert abs(rows[1]["y"] - (rows[0]["y"] + rows[0]["height"])) < 2
+
+
+def test_column_row_leaves_under_parents(page: Page, trees: LiveServer) -> None:
+    """Check that an opened sibling's stuck row, pushed out as its children end, slides under its parent's row."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}/Left")
+    column = hierarchy_column(page)
+    column.get_by_role("treeitem", name="Show its siblings (2)").click()
+    tree_toggle(page, "Big").click()
+    expect(tree_item(page, kid(0))).to_be_visible()
+    top = column.locator(".tree-row", has=tree_item(page, "Top"))
+    big = column.locator(".tree-row", has=tree_item(page, "Big"))
+    # Scroll until Big's row, pushed up by Left's, overlaps Top's; the column is short, so it scrolls that far.
+    column.evaluate(
+        """(each) => {
+            each.style.maxHeight = "8rem";
+            const top = each.querySelector("[role=treeitem][aria-current]").closest("li").getBoundingClientRect().y;
+            each.scrollTop += top - each.getBoundingClientRect().y - 50;
+        }"""
+    )
+    at = box(top)
+    assert box(big)["y"] < at["y"] + at["height"]
+    hit = page.evaluate(
+        "([x, y]) => document.elementFromPoint(x, y).closest('.tree-row').textContent",
+        [box(big)["x"] + 30, at["y"] + at["height"] / 2],
+    )
+    assert "Top" in hit and "Big" not in hit
+
+
+WRAPPED_BAR = {"width": 900, "height": 800}
+"""A window in which the navigation bar wraps, onto two lines."""
+
+
+@pytest.mark.parametrize("size", [WIDE, WRAPPED_BAR], ids=["wide", "wrapped"])
+def test_tree_page_rows_stick(page: Page, trees: LiveServer, size: dict[str, int]) -> None:
+    """Check that, on a tree page, open nodes' rows stick below the navigation bar as their children scroll past.
+
+    The bar's height is measured, so this holds where it wraps too.
+    """
+    page.set_viewport_size(size)
+    page.goto(f"{trees.url}/_browl/tree/classes?{TOP_AND_BIG}")
+    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    bar = box(page.locator(".site-bar"))
+    assert (bar["height"] > 60) == (size == WRAPPED_BAR)
+    top, big = (box(page.locator(".tree-row", has=tree_item(page, name))) for name in ("Top", "Big"))
+    assert abs(top["y"] - (bar["y"] + bar["height"])) < 2
+    assert abs(big["y"] - (top["y"] + top["height"])) < 2
+
+
+@pytest.fixture
+def deep(live_server: Callable[[FastAPI], LiveServer]) -> LiveServer:
+    """Return a live server with a tall hierarchy column, and one that leaves levels out, each class named by its IRI.
+
+    `e` is under `z` → `a1` … `a8`, `a8` its first parent by name, and under the roots `b00` to `b29` (`TALL_ROOTS`),
+    which sort before `z`, each drawing a reference to it: so `e`'s column is longer than the window, and `e` at its
+    bottom. The hash IRI `v#h` (named `h`) is under `e`. `d00` to `d29` (`DEEP`) are a chain, each under the one before,
+    and `d29` has `DEEP_KIDS` children, `k00` to `k59`.
+    """
+    chain = ["z", *(f"a{n}" for n in range(1, 9)), "e", "v#h"]
+    roots = [f"b{n:02}" for n in range(TALL_ROOTS)]
+    deep_chain = [f"d{n:02}" for n in range(DEEP)]
+    kids = [f"k{n:02}" for n in range(DEEP_KIDS)]
+    pairs = [
+        *itertools.pairwise(chain),
+        *((root, "e") for root in roots),
+        *itertools.pairwise(deep_chain),
+        *((deep_chain[-1], each) for each in kids),
+    ]
+    names = [*chain, *roots, *deep_chain, *kids]
+    entities = [(f"{EX}/{name}", EntityType.CLASS) for name in names]
+    edges = [(f"{EX}/{child}", SUB_CLASS, f"{EX}/{parent}") for parent, child in pairs]
+    labels: dict[str, tuple[str | None, str | None]] = {f"{EX}/{name}": (name.split("#")[-1], None) for name in names}
+    server = live_server(make_app())
+    server.app.state.jobs.register(Stage.PRE_CACHING, derived_stage(entities, names=labels, edges=edges))
+    server.call(server.app.state.jobs.start())
+    server.call(server.app.state.jobs.wait())
+    return server
+
+
+def expect_current_in_view(page: Page) -> None:
+    """Check that the column has scrolled within itself to show the page's entity, on one line."""
+    column = hierarchy_column(page)
+    wait_until(page, lambda: column.evaluate("(each) => each.scrollTop") > 0, "the column to scroll")
+    shown, item = box(column), box(column.locator('[aria-current="page"]'))
+    assert item["height"] < 30  # on one line
+    assert shown["y"] <= item["y"] and item["y"] + item["height"] <= shown["y"] + shown["height"]
+    assert shown["x"] <= item["x"] < shown["x"] + shown["width"]
+
+
+@pytest.mark.parametrize("size", [WIDE, NARROW], ids=["framed", "one-page"])
+def test_column_shows_entity(page: Page, deep: LiveServer, size: dict[str, int]) -> None:
+    """Check that a long column scrolls within itself to show the page's entity, and that the page doesn't scroll."""
+    page.set_viewport_size(size)
+    page.goto(f"{deep.url}/e")
+    column = hierarchy_column(page)
+    assert column.evaluate("(each) => each.scrollHeight") > size["height"]
+    expect_current_in_view(page)
+    assert page.evaluate("window.scrollY") == 0
+
+
+def test_column_unfolded_shows_entity(page: Page, deep: LiveServer) -> None:
+    """Check that a column loaded folded scrolls to show the page's entity once it's unfolded (C4)."""
+    page.add_init_script(f"localStorage.setItem('{HIERARCHY_KEY}', 'false')")
+    page.set_viewport_size(WIDE)
+    page.goto(f"{deep.url}/e")
+    expect(hierarchy_column(page)).to_be_hidden()
+    fold_control(page).click()
+    expect(hierarchy_column(page)).to_be_visible()
+    expect_current_in_view(page)
+
+
+@pytest.mark.parametrize("shown", [True, False], ids=["shown", "folded"])
+def test_hash_entity_column(page: Page, deep: LiveServer, shown: bool) -> None:
+    """Check a column on a hash entity's page, which the hash-IRI script moves in.
+
+    Its handle works, its remembered width and fold are restored, and it scrolls to show the entity, once unfolded if
+    it was folded.
+    """
+    page.add_init_script(
+        f"localStorage.setItem('{WIDTH_KEY}', '300'); localStorage.setItem('{HIERARCHY_KEY}', '{str(shown).lower()}')"
+    )
+    page.set_viewport_size(WIDE)
+    page.goto(f"{deep.url}/v#h")
+    column = hierarchy_column(page)
+    expect(hierarchy_toggle(page)).to_be_checked(checked=shown)
+    if not shown:
+        expect(column).to_be_hidden()
+        fold_control(page).click()
+    expect(column.locator('[aria-current="page"]')).to_have_text("h")
+    expect_current_in_view(page)
+    assert abs(box(column)["width"] - 300) < 1
+    handle(page).focus()
+    page.keyboard.press("ArrowRight")
+    assert abs(box(column)["width"] - 316) < 1
+    assert page.evaluate(f"localStorage.getItem('{WIDTH_KEY}')") == "316"
+
+
+ELIDED = f"… {DEEP - MAX_COLUMN_DEPTH + 1} levels hidden"
+"""The name of the row that stands for the levels `d29`'s column leaves out."""
+
+
+def test_column_elided(page: Page, deep: LiveServer) -> None:
+    """Check the row that stands for the levels a deep entity's column leaves out.
+
+    The top three levels and the bottom ones are shown, with the entity in view; the keys reach the row; it closes and
+    opens in place, with no request; and its link loads the tree page with the entity's path open.
+    """
+    page.set_viewport_size(WIDE)
+    page.goto(f"{deep.url}/d{DEEP - 1}")
+    requests = record_fragments(page)
+    column = hierarchy_column(page)
+    names = [f"d{n:02}" for n in range(DEEP)]
+    bottom = names[-(MAX_COLUMN_DEPTH - 4) :]
+    shown = [*names[:3], ELIDED, *bottom]
+    items = column.get_by_role("treeitem")
+    assert (
+        items.evaluate_all("(each) => each.map((item) => item.textContent.replace(/\\s+/g, ' ').trim())")[: len(shown)]
+        == shown
+    )
+    row = column.get_by_role("treeitem", name=ELIDED)
+    expect(row).to_have_attribute("aria-expanded", "true")
+    current = column.get_by_role("treeitem", name=names[-1], exact=True)
+    expect(current).to_have_attribute("aria-current", "page")
+    at, shown_column = box(current), box(column)
+    assert shown_column["y"] <= at["y"] and at["y"] + at["height"] <= shown_column["y"] + shown_column["height"]
+    assert at["x"] + at["width"] <= shown_column["x"] + shown_column["width"]
+    assert column.evaluate("(each) => each.scrollLeft") == 0  # its name fits, so the levels above aren't cut
+    tree_item(page, bottom[0]).focus()
+    for key, name in [("ArrowUp", ELIDED), ("ArrowUp", names[2]), ("ArrowDown", ELIDED), ("ArrowDown", bottom[0])]:
+        page.keyboard.press(key)
+        expect(column.get_by_role("treeitem", name=name, exact=True)).to_be_focused()
+    page.keyboard.press("ArrowUp")
+    page.keyboard.press("ArrowLeft")
+    expect(row).to_have_attribute("aria-expanded", "false")
+    expect(current).to_be_hidden()
+    page.keyboard.press("ArrowRight")
+    expect(current).to_be_visible()
+    toggle = tree_toggle(page, ELIDED)
+    toggle.click()
+    expect(row).to_have_attribute("aria-expanded", "false")
+    expect(tree_item(page, bottom[0])).to_be_hidden()
+    toggle.click()
+    expect(row).to_have_attribute("aria-expanded", "true")
+    expect(current).to_be_visible()
+    assert requests == []
+    row.click()
+    expect(page).to_have_url(re.compile(r"/_browl/tree/classes\?"))
+    assert query_of(page.url) == {"open": [f"{EX}/{name}" for name in names[:-1]]}
+    expect(tree_item(page, names[-1])).to_be_visible()
+
+
+def test_column_elided_rows_stick(page: Page, deep: LiveServer) -> None:
+    """Check that the open rows above the entity's children stack as they scroll past, the "…" row among them."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{deep.url}/d{DEEP - 1}")
+    column = hierarchy_column(page)
+    column.evaluate("(each) => { each.scrollTop = each.scrollHeight; }")
+    heading = box(column.get_by_role("heading"))
+    names = [f"d{n:02}" for n in range(DEEP)]
+    above = [*names[:3], ELIDED, *names[-(MAX_COLUMN_DEPTH - 4) :]]  # each row's level, down to the entity's
+    rows = [box(column.locator(".tree-row", has=tree_item(page, name)).last) for name in above]
+    top = heading["y"] + heading["height"]
+    height = rows[0]["height"]
+    for slot, row in enumerate(rows[:8]):
+        assert abs(row["y"] - (top + slot * height)) < 2
+    assert abs(rows[-1]["y"] - rows[7]["y"]) < 2  # deeper rows share the last place
+    hit = page.evaluate(
+        "([x, y]) => document.elementFromPoint(x, y).closest('.tree-row').textContent",
+        [rows[3]["x"] + 30, top + 3.5 * height],
+    )
+    assert ELIDED in " ".join(hit.split())
 
 
 # The search box (P-20, U-10, U-17, DESIGN.md §2.9 "Search")
