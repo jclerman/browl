@@ -322,9 +322,7 @@ def _drawn(
             shown_list.append(shown(child, child_at, child_id) if is_first else reference(child, child_at, child_id))
         page = ChildPage(nodes=[by_id[child] for child in under[node]], offset=0, total=len(shown_list))
         siblings = None
-        if (
-            with_siblings and first.get(entity) == node
-        ):  # the entity's siblings: the rest of its first parent's children
+        if with_siblings and first.get(entity) == node:  # the entity's siblings: its first parent's other children
             siblings = siblings_link(request, connection, tree, item, element_id, by_id[entity])
         return column_node(request, page_path, item, element_id, ShownList(page, shown_list, siblings=siblings))
 

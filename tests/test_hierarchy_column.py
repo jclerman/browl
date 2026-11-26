@@ -2,21 +2,41 @@
 
 import html.parser
 import itertools
+import logging
 import re
 import urllib.parse
 from collections.abc import Iterator
 from contextlib import closing
 
+import httpx2
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import browl.hierarchy
+import browl.hierarchy_column
+import browl.lookup
 from browl.derived import EntityType
+from browl.fuseki import FusekiClient, SparqlError
 from browl.hierarchy import CHILD_PAGE
-from browl.hierarchy_column import MAX_COLUMN_DEPTH
-from tests.helpers import connect, derived_stage, make_app, make_settings
-from tests.test_trees import EX, SUB_CLASS, SUB_PROPERTY, THING, TREE, Tree, ex, loaded, opened, query, tree_stage
+from browl.hierarchy_column import MAX_COLUMN_DEPTH, NO_NAMED_TYPE, IndividualTypes, fetch_types
+from browl.rdf import OWL, RDF
+from tests.helpers import connect, derived_stage, fuseki_dataset, make_app, make_settings
+from tests.test_trees import (
+    CLASS_EDGES,
+    CLASSES,
+    EX,
+    SUB_CLASS,
+    SUB_PROPERTY,
+    THING,
+    TREE,
+    Tree,
+    ex,
+    loaded,
+    opened,
+    query,
+    tree_stage,
+)
 
 pytestmark = pytest.mark.usefixtures("data_dir")
 
@@ -522,3 +542,144 @@ def test_siblings_of_root(client: TestClient) -> None:
 def test_siblings_not_found(client: TestClient, params: list[tuple[str, str]]) -> None:
     """Check that a column's fragment for a node not the parent's child, or with bad parameters, is a 404."""
     assert client.get("/_browl/tree/classes", params=params).status_code == 404
+
+
+def individual_stage(*punned: EntityType) -> object:
+    """Return `tree_stage` with an individual, `ind`, which may be punned with entities of other types too."""
+    entities = [(ex("ind"), EntityType.NAMED_INDIVIDUAL), *((ex("ind"), each) for each in punned)]
+    edges = [(ex("ind"), SUB_CLASS, ex("Right"))] if EntityType.CLASS in punned else []
+    names: dict[str, tuple[str | None, str | None]] = {ex("ind"): ("ind", None)}
+    names |= {ex(name): (name, None) for name in CLASSES}
+    return derived_stage(
+        [*entities, *((ex(name), EntityType.CLASS) for name in CLASSES)],
+        names=names,
+        edges=[*edges, *((ex(c), r, ex(p)) for c, r, p in CLASS_EDGES if p != "Thing")],
+    )
+
+
+def with_types(monkeypatch: pytest.MonkeyPatch, *names: str, count: int | None = None) -> None:
+    """Make the page's individual's types those named, without a query, `count` of them in all."""
+
+    async def fetched(*args: object) -> IndividualTypes:
+        iris = tuple(ex(name) for name in names)
+        return IndividualTypes(iris, len(iris) if count is None else count)
+
+    monkeypatch.setattr(browl.lookup, "fetch_types", fetched)
+
+
+def test_individual(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check an individual's tree: its types' ancestors merged, it beneath its types, with no children or siblings."""
+    with_types(monkeypatch, "Deep", "Right", "Nowhere")  # Nowhere is in no hierarchy
+    with loaded(app, individual_stage()) as client:
+        found = column(client, "/ind")
+    assert found.headings == [("Local hierarchy", "/_browl/tree/classes")]
+    assert shown(found) == [
+        (0, "Top"),
+        (1, "Left"),
+        (2, "Bottom"),
+        (3, "Deep"),
+        (4, "ind"),  # under Deep, though it has no subclasses
+        (1, "Right"),
+        (2, "Bottom (also above)"),
+        (2, "ind (also above)"),
+    ]
+    items = Tree(found.trees[0]).items
+    assert [item.id for item in items][:5] == ["hi-0", "hi-0-0", "hi-0-0-0", "hi-0-0-0-0", "hi-0-0-0-0-0"]
+    ind = items[4]
+    assert (ind.href, ind.toggle, ind.expanded) == ("/ind", None, None)  # no children
+    assert "Show its sibling" not in found.html  # nor siblings
+    assert '<p class="note">' not in found.html
+
+
+def test_individual_fragment(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a toggle in an individual's tree fetches a type's children with the individual tree's ids."""
+    with_types(monkeypatch, "Top")
+    with loaded(app, individual_stage()) as client:
+        top = Tree(column(client, "/ind").trees[0]).item("Top")
+        assert top.id == "hi-0"
+        fragment = client.get(top.load or "")
+    assert fragment.status_code == 200
+    items = Tree(fragment.text).items
+    assert [(item.id, item.text) for item in items] == [("hi-0-0", "Big"), ("hi-0-1", "Left"), ("hi-0-2", "Right")]
+    assert query(items[1].load or "") == [("node", ex("Left")), ("at", "hi-0-1")]
+
+
+@pytest.mark.parametrize("names", [(), ("Nowhere",)], ids=["none", "unknown"])
+def test_individual_no_named_type(app: FastAPI, monkeypatch: pytest.MonkeyPatch, names: tuple[str, ...]) -> None:
+    """Check that an individual with no type in the class hierarchy is alone in its tree, with a note saying so."""
+    with_types(monkeypatch, *names)
+    with loaded(app, individual_stage()) as client:
+        found = column(client, "/ind")
+    assert shown(found) == [(0, "ind")]
+    assert f'<p class="note">{NO_NAMED_TYPE}</p>' in found.html
+    assert "Show its sibling" not in found.html
+
+
+@pytest.mark.parametrize(
+    ("count", "note"), [(3, "1 more type isn't shown."), (1_002, "1,000 more types aren't shown.")]
+)
+def test_individual_types_left_out(app: FastAPI, monkeypatch: pytest.MonkeyPatch, count: int, note: str) -> None:
+    """Check that an individual's tree says how many of its types it leaves out (`MAX_ANCESTORS`)."""
+    with_types(monkeypatch, "Left", "Right", count=count)
+    with loaded(app, individual_stage()) as client:
+        found = column(client, "/ind")
+    assert f'<p class="note">{note.replace("'", "&#39;")}</p>' in found.html
+
+
+def test_individual_ancestors_capped(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that past `MAX_ANCESTORS`, an individual's tree keeps the ancestors nearest its types."""
+    monkeypatch.setattr(browl.hierarchy_column, "MAX_ANCESTORS", 3)
+    with_types(monkeypatch, "Deep")
+    with loaded(app, individual_stage()) as client:
+        assert shown(column(client, "/ind")) == [(0, "Left"), (1, "Bottom"), (2, "Deep"), (3, "ind")]
+
+
+def test_individual_punned(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that an IRI that's a class and an individual has both trees, side by side, each named."""
+    with_types(monkeypatch, "Left")
+    with loaded(app, individual_stage(EntityType.CLASS)) as client:
+        found = column(client, "/ind")
+    assert found.headings == [
+        ("Local hierarchy: Classes", "/_browl/tree/classes"),
+        ("Local hierarchy: Named individual", "/_browl/tree/classes"),
+    ]
+    assert [shown(found, index) for index in (0, 1)] == [
+        [(0, "Top"), (1, "Right"), (2, "ind"), (2, "Show its sibling (1)")],
+        [(0, "Top"), (1, "Left"), (2, "ind")],  # no siblings
+    ]
+    assert [Tree(tree).items[0].id for tree in found.trees] == ["hc-0", "hi-0"]
+
+
+def test_individual_types_fail(app: FastAPI, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """Check that if an individual's types can't be read, its page is served, with no tree for them, and it's logged."""
+
+    async def failed(*args: object) -> IndividualTypes:
+        raise SparqlError("Error 500")
+
+    monkeypatch.setattr(browl.lookup, "fetch_types", failed)
+    with loaded(app, individual_stage(EntityType.CLASS)) as client, caplog.at_level(logging.ERROR, "browl.lookup"):
+        found = column(client, "/ind")
+    assert found.headings == [("Local hierarchy", "/_browl/tree/classes")]  # the class's, alone
+    assert [record.getMessage() for record in caplog.records if record.name == "browl.lookup"] == [
+        f"Couldn't read the types of {ex('ind')} for its hierarchy column"
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(("limit", "expected"), [(300, ("A", "B", "C")), (2, ("A", "B"))])
+async def test_fetch_types(
+    fuseki_url: str, monkeypatch: pytest.MonkeyPatch, limit: int, expected: tuple[str, ...]
+) -> None:
+    """Check that an individual's named types are read by IRI, at most `MAX_ANCESTORS`, with how many there are.
+
+    OWL's types and class expressions aren't named types.
+    """
+    monkeypatch.setattr(browl.hierarchy_column, "MAX_ANCESTORS", limit)
+    rdf_type = f"<{RDF}type>"
+    triples = [f"<{ex('ind')}> {rdf_type} <{ex(name)}> ." for name in "CAB"]
+    triples += [f"<{ex('ind')}> {rdf_type} <{OWL}{name}> ." for name in ("NamedIndividual", "Thing")]
+    triples += [f"<{ex('ind')}> {rdf_type} _:b .", f"_:b {rdf_type} <{OWL}Restriction> ."]
+    with fuseki_dataset(fuseki_url, {None: "\n".join(triples).encode()}) as dataset:
+        async with httpx2.AsyncClient(base_url=fuseki_url) as http:
+            types = await fetch_types(FusekiClient(http), dataset, ex("ind"))
+    assert types == IndividualTypes(tuple(ex(name) for name in expected), 3)
