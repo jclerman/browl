@@ -50,6 +50,8 @@ def search_stage() -> object:
         (ex("pun"), EntityType.ANNOTATION_PROPERTY),
         (ex("other"), EntityType.CLASS),
         (ex("long"), EntityType.CLASS),
+        (ex("alice"), EntityType.NAMED_INDIVIDUAL),
+        (ex("Alicia"), EntityType.CLASS),
         (SYNONYM, EntityType.ANNOTATION_PROPERTY),
         (SUB_LABEL, EntityType.ANNOTATION_PROPERTY),
         (XREF, EntityType.ANNOTATION_PROPERTY),
@@ -67,6 +69,8 @@ def search_stage() -> object:
         (ex("pun"), LABEL, "punned", "en"),
         (ex("other"), SUB_LABEL, "other thing", "en"),
         (ex("long"), LABEL, LONG, "en"),
+        (ex("alice"), LABEL, "Alice", "en"),
+        (ex("Alicia"), LABEL, "Alicia", "en"),
         (SYNONYM, LABEL, "has exact synonym", "en"),
         (SUB_LABEL, LABEL, "sub-label", "en"),
         (XREF, LABEL, "database cross reference", "en"),
@@ -81,6 +85,8 @@ def search_stage() -> object:
         ex("pun"): ("punned", None),
         ex("other"): ("other thing", None),
         ex("long"): (LONG, None),
+        ex("alice"): ("Alice", None),
+        ex("Alicia"): ("Alicia", None),
         SYNONYM: ("has exact synonym", None),
         SUB_LABEL: ("sub-label", None),
         XREF: ("database cross reference", None),
@@ -343,6 +349,17 @@ def test_type_filter(client: TestClient) -> None:
     assert [hit.name for hit in only] == ["has part"]
 
 
+def test_individual_found(client: TestClient) -> None:
+    """Check that the suggestions and the results page find a named individual, which the type filter picks (P-47)."""
+    alice = Hit(None, "Alice", "Named individual", "/alice")
+    assert suggest(client, "ali").hits == [alice, Hit(None, "Alicia", "Class", "/Alicia")]
+    assert [hit.name for hit in results(client, [("q", "ali")]).hits] == ["Alice", "Alicia"]
+    only = results(client, [("q", "ali"), ("type", "named_individual")]).hits
+    assert [(hit.name, hit.types) for hit in only] == [("Alice", "Named individual")]
+    form = client.get(SEARCH).text
+    assert re.search(r'<input type="checkbox" name="type" value="named_individual"[^>]*>\s*Named individual', form)
+
+
 def test_property_filter(client: TestClient) -> None:
     """Check that the property filter searches only the name properties checked (U-10)."""
     assert [hit.name for hit in results(client, [("q", "myo"), ("property", LABEL)]).hits] == ["Myoblast"]
@@ -375,7 +392,7 @@ def test_property_choices(client: TestClient) -> None:
     }
     assert shown == {
         "Names, IDs, and synonyms": [
-            ("rdfs:label", f"{MANY + 10:,}, and 1 in sub-properties"),  # the punned IRI's label counts per type
+            ("rdfs:label", f"{MANY + 12:,}, and 1 in sub-properties"),  # the punned IRI's label counts per type
             ("has exact synonym", "2"),
             ("database cross reference", "1"),  # its values are on one entity each
             ("sub-label", "1"),
