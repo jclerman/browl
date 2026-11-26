@@ -4,6 +4,7 @@ import html.parser
 import re
 import urllib.parse
 from collections.abc import Iterator
+from dataclasses import replace
 from typing import NamedTuple
 
 import pytest
@@ -13,8 +14,8 @@ from fastapi.testclient import TestClient
 from browl import search, search_page
 from browl.derived import EntityType, NotCurrentError
 from browl.pages import MAX_NAME_CHARS
-from browl.search import MAX_QUERY_CHARS
-from browl.search_page import LAST_PAGE, PAGE_SIZE, Marked, _split, marked_length, value_offset
+from browl.search import MAX_QUERY_CHARS, SearchQuery, SearchResults
+from browl.search_page import COUNT_TO, LAST_PAGE, PAGE_SIZE, Marked, _split, marked_length, value_offset
 from tests.helpers import derived_stage, make_app
 from tests.test_trees import loaded
 
@@ -500,12 +501,19 @@ def test_filters_in_fixed_order(client: TestClient) -> None:
     ]
 
 
-def test_first_page_redirected(client: TestClient) -> None:
+@pytest.mark.parametrize(
+    ("params", "location"),
+    [
+        ([("type", "class"), ("page", "1"), ("q", "item")], f"{SEARCH}?q=item&type=class"),
+        ([("page", "1")], SEARCH),  # the blank page's URL is without `q=`
+        ([("q", ""), ("type", "class"), ("page", "1")], f"{SEARCH}?type=class"),
+    ],
+)
+def test_first_page_redirected(client: TestClient, params: list[tuple[str, str]], location: str) -> None:
     """Check that `page=1` is redirected to the first page's URL, without it, so each page has one URL."""
-    params = [("type", "class"), ("page", "1"), ("q", "item")]
     response = client.get(SEARCH, params=params, follow_redirects=False)
     assert response.status_code == 301
-    assert response.headers["Location"] == f"{SEARCH}?q=item&type=class"
+    assert response.headers["Location"] == location
 
 
 def test_pager(client: TestClient) -> None:
@@ -544,6 +552,53 @@ def test_paging_stops_at_last_page(client: TestClient, monkeypatch: pytest.Monke
 
 
 @pytest.mark.parametrize(
+    ("count_to", "count", "pages"),
+    [(MANY + 1, f"{MANY}", "2"), (MANY, f"more than {MANY - 1}", r"2\+")],
+    ids=["exact under the cap", "more than at the cap"],
+)
+def test_count_at_cap(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, count_to: int, count: str, pages: str
+) -> None:
+    """Check the count the results page shows either side of the cap: exact below `COUNT_TO`, else "more than"."""
+    monkeypatch.setattr(search_page, "LAST_PAGE", 2)
+    monkeypatch.setattr(search_page, "COUNT_TO", count_to)
+    text = client.get(SEARCH, params=[("q", "item")]).text
+    assert re.search(rf"Showing 1–{PAGE_SIZE} of\s+{count}<", text)
+    assert re.search(rf"of {pages}</label>", text)
+
+
+def test_count_past_cap_shown(app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check the text with the real constants once the count reaches `COUNT_TO`: "more than 1,050" and "of 21+"."""
+    real = app.state.search.search
+
+    async def capped(generation: int, query: SearchQuery) -> SearchResults:
+        return replace(await real(generation, query), count=COUNT_TO)
+
+    monkeypatch.setattr(app.state.search, "search", capped)
+    text = client.get(SEARCH, params=[("q", "item")]).text
+    assert re.search(rf"Showing 1–{PAGE_SIZE} of\s+more than 1,050<", text)
+    assert re.search(r"of 21\+</label>", text)
+
+
+@pytest.mark.parametrize(("suggest", "count_to"), [(True, 0), (False, COUNT_TO)], ids=["autocomplete", "results"])
+def test_only_results_page_counts(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch, suggest: bool, count_to: int
+) -> None:
+    """Check that the results page counts its results up to `COUNT_TO`, and the autocomplete counts none."""
+    real = app.state.search.search
+    queries: list[SearchQuery] = []
+
+    async def spy(generation: int, query: SearchQuery) -> SearchResults:
+        queries.append(query)
+        return await real(generation, query)
+
+    monkeypatch.setattr(app.state.search, "search", spy)
+    params = [("q", "item")] + ([("suggest", "1")] if suggest else [])
+    assert client.get(SEARCH, params=params).status_code == 200
+    assert [query.count_to for query in queries] == [count_to]
+
+
+@pytest.mark.parametrize(
     "params",
     [
         [("q", "a"), ("q", "b")],
@@ -564,6 +619,7 @@ def test_paging_stops_at_last_page(client: TestClient, monkeypatch: pytest.Monke
         [("q", "a"), ("page", "1" * 5_000)],  # past int()'s digit limit
         [("q", "a"), ("suggest", "yes")],
         [("q", "a"), ("suggest", "1"), ("page", "2")],
+        [("q", "a"), ("suggest", "1"), ("page", "1")],  # not redirected: the fragment isn't paged
         [("q", "a" * (MAX_QUERY_CHARS + 1))],
     ],
 )
@@ -597,6 +653,8 @@ def test_under_root_path(app: FastAPI) -> None:
         page = Hits(response.text)
         assert [hit.href for hit in page.hits] == ["/root/myoblast", "/root/heart"]
         assert page.links[-1][1].startswith(f"/root{SEARCH}?")
+        redirect = client.get(SEARCH, params=[("q", "myo"), ("page", "1")], follow_redirects=False)
+        assert (redirect.status_code, redirect.headers["Location"]) == (301, f"/root{SEARCH}?q=myo")
 
 
 @pytest.mark.parametrize(

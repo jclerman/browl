@@ -417,6 +417,8 @@ def test_pages(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     assert '<span class="pager-off" aria-disabled="true">Previous</span>' in first
     assert '<span class="pager-off" aria-disabled="true">Next</span>' in last
     assert "pager-off" not in second
+    assert re.search(r'id="usage-previous" rel="prev">Previous</a>', nav)
+    assert re.search(r'id="usage-next" rel="next">Next</a>', nav)
     assert '<form method="get" action="/axioms#Dog" hx-get=' in first
     assert '<input type="hidden" name="tab" value="usage">' in first
     assert 'name="page" min="1" max="5" value="1"' in first
