@@ -2115,7 +2115,6 @@ dependencies change.
 ```mermaid
 flowchart LR
     subgraph P4["Phase 4: Browsing"]
-        P38["P-38 Hierarchy column"]
         P39["P-39 Deprecated struck through"]
         P40["P-40 Shorter tree URLs"]
     end
@@ -2138,8 +2137,7 @@ flowchart LR
     end
     S5b["S-5b OLS4 comparison"]
 
-    P38 --> P33
-    P38 & P39 --> P25
+    P39 --> P25
     P31 --> P36
     P31 --> P32
 ```
@@ -2200,7 +2198,7 @@ go into this document.
 | P-16 | Entity page Overview tab: annotations panel and logical-axioms panel (parents, equivalents, property domains and ranges), compact layout; panel data built apart from its HTML (2.8); entity pages fill the window, the panels at fixed positions and scrolling within themselves, with a one-page view for printing, small screens and on demand (2.9) | U-3, U-9, U-30, U-31, U-32, U-44 | P-12, P-15b | Done | [#37](https://github.com/jclerman/browl/issues/37) (sub-issues [#29](https://github.com/jclerman/browl/issues/29), [#38](https://github.com/jclerman/browl/issues/38), [#39](https://github.com/jclerman/browl/issues/39), [#103](https://github.com/jclerman/browl/issues/103)) |
 | P-17 | Ontology home page, with the dropped-imports warning and the triple counts the job state keeps (P-8); link the ontology and version IRIs only if `http` or `https` (`browl.derived.Meta`) | U-1 | P-14 | Done | [#30](https://github.com/jclerman/browl/issues/30) |
 | P-18 | Hierarchy trees with lazy loading (htmx) and keyboard support | U-7, U-17 | P-12, P-14 | Done | [#31](https://github.com/jclerman/browl/issues/31) |
-| P-38 | Hierarchy column on entity pages: the entity's ancestors as one merged tree, each drawn once, and its direct children, from P-18's nodes (2.9) | U-45 | P-16, P-18 | To do | [#120](https://github.com/jclerman/browl/issues/120) |
+| P-38 | Hierarchy column on entity pages: the entity's ancestors as one merged tree, each drawn once, and its direct children, from P-18's nodes (2.9) | U-45 | P-16, P-18 | Done | [#120](https://github.com/jclerman/browl/issues/120) |
 | P-39 | Deprecated entities struck through, with a text equivalent, in the tree pages and the hierarchy column, from a flag stored at pre-caching (2.5); whether to mark them elsewhere too is open | U-46 | P-18 | To do | [#123](https://github.com/jclerman/browl/issues/123) |
 | P-40 | Tree URLs name open nodes by CURIE, else IRI, about 4× shorter; an index on `entity.curie` (2.9, 2.13) | U-17 | P-18 | To do | [#125](https://github.com/jclerman/browl/issues/125) |
 | P-27 | Usage tab on entity pages: the blank-node owner map, streaming up to 20 K usages per request, and the usage table built in the background after a load (2.5, 2.8) | U-26 | P-9, P-16, S-4, S-7 | Done | [#41](https://github.com/jclerman/browl/issues/41) (sub-issues [#108](https://github.com/jclerman/browl/issues/108), [#109](https://github.com/jclerman/browl/issues/109), [#110](https://github.com/jclerman/browl/issues/110)) |
