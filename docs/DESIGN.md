@@ -1339,7 +1339,7 @@ Object property assertions, Data property assertions and Negative property asser
 the axioms that name it, such as other individuals' assertions with it as value, and class expressions with it in
 `ObjectOneOf` or `ObjectHasValue`. The hierarchy column (U-45) shows its types' ancestors as one merged tree, each
 drawn once, with the individual beneath its types; it has no children or siblings. The navigation bar's Individuals
-link opens the list of all individuals ([2.9](#29-page-layout)), absent when the ontology has none. Anonymous
+link opens the list of all individuals ([2.9](#29-page-layout)). Anonymous
 individuals get no page: they're shown where they're used, as now; the blank-node owner map finds their assertions
 (the node-kind filter, [2.5](#25-derived-data-pre-caching)), so they're listed on the Usage tabs, not only counted.
 
@@ -1675,10 +1675,12 @@ Every page has the same frame (U-27, U-28, U-29):
 
 - Contents: the ontology name (a link to the home page), the autocomplete search box, and links to the four tree pages.
   An ontology with neither title nor IRI has no name in the bar.
-- _(Proposed, P-48; U-18)_ After the tree links, Individuals, if the ontology has any: `individuals` (2.13), a flat
+- _(Proposed, P-48; U-18)_ After the tree links, Individuals: `individuals` (2.13), a flat
   list of every named individual (they have no hierarchy), one line each, its name linked to its page and its direct
   types muted, sorted by casefolded display name then IRI, 50 to a page with P-45's pager, each page one range read of
-  `individual_rank` ([2.5](#25-derived-data-pre-caching)). A view grouped by direct type is Later (U-51).
+  `individual_rank` ([2.5](#25-derived-data-pre-caching)). A view grouped by direct type is Later (U-51). Like a tree
+  page, it's linked whether or not the ontology has any, and an ontology with none gets "None."; the JSON API, an
+  empty list.
 - The full search page with type and property filters (U-10) is reached from the search box, by "All results…" or
   Enter (below, Search).
 - An admin link appears only for signed-in admins: the base template shows it when `request.state.is_admin` is true,
@@ -2098,7 +2100,7 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | --- | --- |
 | `search` | The full results page, `q=`, `type=` and `property=` (repeated), `values=direct`, `offset=`; with `suggest=1` (no `offset=`), the autocomplete's fragment; both `noindex`. See [2.9](#29-page-layout), Search (P-20) |
 | `tree/{hierarchy}` | Tree page, `hierarchy` one of `classes`, `object-properties`, `data-properties` and `annotation-properties` (the navigation bar links them). `open=` (repeated), `children-of=`, `offset=`; a fragment: `node=`, `at=` (marked `noindex`), also for the hierarchy column, whose `at=` gets its links, `siblings-of=` its entity's siblings, and `before=` the page before a page of them. See [2.9](#29-page-layout), Tree pages (P-18) and Hierarchy column (P-38) |
-| `individuals` | _(Proposed, P-48)_ The list of named individuals (U-18), `page=` as on the Usage tab. See [2.9](#29-page-layout), Navigation bar |
+| `individuals` | _(Proposed, P-48)_ The list of named individuals (U-18), `page=` as on the Usage tab; "None." if the ontology has none, as a tree page has. See [2.9](#29-page-layout), Navigation bar |
 | `iri?iri=…` | Fallback entity URLs (Q1b) |
 | `hash?path=…&fragment=…` | The page for a hash URL's path and fragment, for the hash-IRI script ([2.3](#23-iri--url-mapping), Lookup); marked `noindex`, as its pages are at their hash URLs |
 | `usage-count?iri=…` | An entity's Usage tab label with its count, "Usage (128)", which its page fetches once it renders ([2.8](#28-entity-pages)); marked `noindex`; a 404 for an IRI with no entity (P-27b) |
