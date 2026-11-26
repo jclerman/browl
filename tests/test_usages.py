@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator, Iterator
 from contextlib import closing
 from typing import Any
@@ -12,11 +13,12 @@ import pytest
 
 from browl import axioms, owlapi
 from browl import usages as usages_module
-from browl.derived import NotCurrentError, UsageRootKind
+from browl.derived import NotCurrentError, UsageRootKind, entities_with_iri
 from browl.fuseki import UNION_FROM, FusekiClient, SelectResult, SparqlError
 from browl.precache.core import PREFIXES
 from browl.rdf import IRI, RDF, RDFS, BlankNode, Literal, Term, ntriples_iris
 from browl.settings import Settings
+from browl.usage_tab import sorted_usages
 from browl.usages import (
     CACHED_COUNT_S,
     TooManyUsagesError,
@@ -89,14 +91,32 @@ async def split_store(fuseki_url: str, ntriples: bytes, settings: Settings) -> A
 
 
 def normal(axiom: Any) -> str:
-    """Return an axiom's functional syntax without its annotations."""
-    return str(axiom.getAxiomWithoutAnnotations())
+    """Return an axiom's functional syntax without its annotations, nor its anonymous individuals' labels.
+
+    The OWLAPI gives those anew on every parse.
+    """
+    return re.sub(r"_:genid[0-9]+", "_:", str(axiom.getAxiomWithoutAnnotations()))
 
 
-def parsed(ntriples: bytes) -> set[str]:
-    """Return the axioms the OWLAPI parses from N-Triples, but unannotated declarations, without annotations."""
+def parsed(ntriples: bytes, closure: bool = False) -> set[str]:
+    """Return the axioms the OWLAPI parses from N-Triples, but unannotated declarations, without annotations.
+
+    With `closure`, the triples are a root's closure, which brings along the assertions of any anonymous individual in
+    it, which are roots of their own, so they're left out, as the Usage tab leaves them out (`browl.usage_tab`).
+    """
     with owlapi.ntriples_ontology(ntriples) as ontology:
-        return {normal(each) for each in ontology.getAxioms() if each.isAnnotated() or not axioms.is_declaration(each)}
+        return {
+            normal(each)
+            for each in ontology.getAxioms()
+            if (each.isAnnotated() or not axioms.is_declaration(each))
+            and not (closure and is_anonymous_assertion(each))
+        }
+
+
+def is_anonymous_assertion(axiom: Any) -> bool:
+    """Return whether an OWLAPI axiom is an assertion that names an anonymous individual."""
+    kinds = {"ClassAssertion", "ObjectPropertyAssertion", "DataPropertyAssertion", "AnnotationAssertion"}
+    return str(axiom.getAxiomType().getName()) in kinds and not axiom.getAnonymousIndividuals().isEmpty()
 
 
 def owlapi_usages(ntriples: bytes, described: dict[str, bytes], subjects: bytes) -> dict[str, set[str]]:
@@ -163,12 +183,14 @@ async def usage_triples(store: UsageStore, iri: str, usage: Usage) -> bytes:
         case UsageSource.PREDICATE:
             assert usage.subject is not None
             value = (await read_values(store, iri, [usage.subject]))[usage.subject][usage.index]
-            if isinstance(value, BlankNode):
+            if isinstance(value, BlankNode):  # an anonymous individual, which has no closure of its own
                 node = f"<_:{value}>"
                 triple = f"<{usage.subject}> <{iri}> ?b"
-                queries += [f"CONSTRUCT {{ {triple} }} WHERE {{ BIND ({node} AS ?b) {triple} }}", f"DESCRIBE {node}"]
+                queries.append(f"CONSTRUCT {{ {triple} }} WHERE {{ BIND ({node} AS ?b) {triple} }}")
             else:
                 triples = f"<{usage.subject}> <{iri}> {ntriples_term(value)} .\n".encode()
+        case UsageSource.ROOT if usage.root is not None and usage.root.kind == UsageRootKind.ASSERTION:
+            queries += assertion_queries(usage)
         case UsageSource.ROOT:
             assert usage.root is not None
             node = f"<_:{usage.root.label}>"
@@ -182,6 +204,25 @@ async def usage_triples(store: UsageStore, iri: str, usage: Usage) -> bytes:
     for query in queries:
         triples += await sparql.construct(dataset, PREFIXES + query)
     return await with_types(store, triples)
+
+
+def assertion_queries(usage: Usage) -> list[str]:
+    """Return the queries for an anonymous individual's assertion's triple, and its class expression's closure.
+
+    Its object is an IRI or a blank node, or a literal by its digest (`usage_root.object`).
+    """
+    assert usage.root is not None and usage.root.object is not None
+    node, predicate, term = f"<_:{usage.root.label}>", f"<{usage.predicate}>", usage.root.object
+    where = f"BIND ({node} AS ?s) ?s {predicate} ?o"
+    if term.startswith('"'):
+        digest = 'SHA256(CONCAT(STR(?o), " ", LCASE(LANG(?o)), " ", STR(DATATYPE(?o))))'
+        where += f" FILTER (isLiteral(?o) && SUBSTR({digest}, 1, {len(term) - 2}) = {term})"
+    else:
+        where = f"BIND ({term} AS ?o) {where}"
+    queries = [f"CONSTRUCT {{ ?s {predicate} ?o }} WHERE {{ {where} }}"]
+    if term.startswith("<_:") and usage.predicate == f"{RDF}type":
+        queries.append(f"DESCRIBE {term}")
+    return queries
 
 
 async def with_types(store: UsageStore, triples: bytes) -> bytes:
@@ -209,7 +250,8 @@ async def test_usages_match_owlapi(store: UsageStore, ntriples: bytes, settings:
         usages = await read_usages(store, iri)
         found = []
         for usage in usages:
-            axioms_found = await owlapi.run_java(parsed, await usage_triples(store, iri, usage))
+            closure = usage.root is not None and usage.root.kind != UsageRootKind.ASSERTION
+            axioms_found = await owlapi.run_java(parsed, await usage_triples(store, iri, usage), closure)
             assert len(axioms_found) == 1, (iri, usage, axioms_found)
             found.extend(axioms_found)
         assert sorted(found) == sorted(expected[iri]), iri
@@ -220,7 +262,8 @@ async def test_usages_kinds(store: UsageStore) -> None:
     """Check some entities' usages: their sources, roots and subjects ("" for none).
 
     A property's general class axioms and negative assertions are its usages, with no subject; a class's general class
-    axioms aren't, as its Overview lists them.
+    axioms aren't, as its Overview lists them. An anonymous individual's assertions are usages with no subject, one
+    each; an n-ary `DifferentIndividuals` is a named member's own axiom, as is a negative assertion its source's.
     """
 
     async def usages(name: str) -> list[tuple[str, str, str]]:
@@ -231,8 +274,10 @@ async def test_usages_kinds(store: UsageStore) -> None:
         )
 
     triple, axiom, general = UsageRootKind.TRIPLE, UsageRootKind.AXIOM, UsageRootKind.GENERAL
-    # Through a class expression, and as an annotation's value on a reified axiom; not in either general class axiom.
-    assert await usages("Fungus") == [("root", axiom, "Tricky"), ("root", triple, "Liver")]
+    assertion = UsageRootKind.ASSERTION
+    # Through a class expression, and as an annotation's value on a reified axiom, and an anonymous individual's; not
+    # in either general class axiom.
+    assert await usages("Fungus") == [("root", assertion, ""), ("root", axiom, "Tricky"), ("root", triple, "Liver")]
     # Cat DisjointWith Dog and an annotation by value; rex's class assertion; a SWRL rule; Pet's union. Its general
     # class axiom is its own.
     assert await usages("Dog") == [
@@ -251,11 +296,13 @@ async def test_usages_kinds(store: UsageStore) -> None:
     # Only in an annotation of an n-ary DisjointClasses, so not its own; its triple about itself isn't a usage.
     assert await usages("Mineral") == [("root", general, "")]
     assert await usages("hasPart") == [("root", general, ""), ("root", general, "")]  # two general class axioms
-    assert await usages("hates") == [("root", general, "")]  # a negative property assertion
+    # Two negative property assertions, one an anonymous individual's, and an anonymous individual's assertion.
+    assert await usages("hates") == [("root", assertion, ""), ("root", general, ""), ("root", general, "")]
     # On Cat's and Liver's annotated axioms, an annotated general class axiom, the n-ary DisjointClasses, and the
-    # axiom annotations on Kidney's comments and a restriction, Bladder's comment and disjointness, and carol's
-    # assertions.
+    # axiom annotations on Kidney's comments and a restriction, Bladder's comment and disjointness, and carol's and an
+    # anonymous individual's assertions.
     assert await usages("note") == [
+        ("root", assertion, ""),
         ("root", axiom, "Bladder"),
         ("root", axiom, "Bladder"),
         ("root", axiom, "Cat"),
@@ -270,12 +317,15 @@ async def test_usages_kinds(store: UsageStore) -> None:
     ]
     assert await usages("age") == [
         ("predicate", "", "alice"),
+        ("root", assertion, ""),  # an anonymous individual's two values
+        ("root", assertion, ""),
         ("root", general, ""),  # its negative assertion; not DisjointDataProperties(age, weight), its own
         ("root", triple, "Person"),
         ("root", triple, "Person"),
     ]
     assert await usages("remark") == [
         ("predicate", "", "Cat"),
+        ("root", assertion, ""),  # an anonymous individual's annotation
         ("root", axiom, "Kidney"),  # on the annotation of its comment's axiom
         ("root", axiom, "Kidney"),  # on its rdfs:seeAlso's axiom
         ("root", axiom, "Liver"),  # on the annotation of Liver's axiom
@@ -285,6 +335,12 @@ async def test_usages_kinds(store: UsageStore) -> None:
     [annotation] = [usage for usage in await read_usages(store, f"{NS}remark") if usage.source == "predicate"]
     assert annotation == Usage(UsageSource.PREDICATE, IRI(f"{NS}Cat"))
     assert await read_values(store, f"{NS}remark", [f"{NS}Cat"]) == {f"{NS}Cat": [IRI(f"{NS}Dog")]}
+    # The target of a negative assertion whose source is anonymous, and in a ObjectOneOf; not the n-ary
+    # DifferentIndividuals, its own; its anonymous members' assertions aren't in it.
+    assert await usages("tom") == [("root", general, ""), ("root", triple, "Pet")]
+    # alice's hasChild and DifferentFrom; not the assertions of the anonymous individual bob loves.
+    assert await usages("bob") == [("object", "", "alice"), ("object", "", "alice")]
+    assert (await usages("Pet")).count(("root", assertion, "")) == 1  # an anonymous individual's type
     [subclass] = [usage for usage in await read_usages(store, f"{NS}Parent") if usage.root]
     assert (subclass.predicate, subclass.root and subclass.root.kind) == (f"{RDFS}subClassOf", triple)
 
@@ -303,8 +359,8 @@ async def test_count_kept(store: UsageStore, monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr("browl.usages.CACHED_COUNT_S", 0.0)
     assert await count_usages(store, iri, cache) == count
     assert cache.get(generation, iri) == count
-    await count_usages(store, f"{NS}rex", cache)
-    assert cache.get(generation, f"{NS}rex") is None
+    await count_usages(store, f"{NS}nothing", cache)
+    assert cache.get(generation, f"{NS}nothing") is None
     cache.keep(generation, iri, -1)
     assert await count_usages(store, iri, cache) == -1  # read from the cache
     assert cache.get(generation - 1, iri) is None
@@ -367,29 +423,60 @@ async def test_imports(store: UsageStore, split_store: UsageStore, settings: Set
 
 
 async def test_anonymous_individuals(fuseki_url: str, settings: Settings) -> None:
-    """Check that an anonymous individual's axioms are counted but not listed: the owner map doesn't hold it (U-18)."""
+    """Check that anonymous individuals' assertions are listed and counted, each a usage with no subject (P-47).
+
+    An anonymous individual is found by its type, or as its property assertion's subject, or by `owl:sameAs`; one with
+    annotation assertions alone isn't, so they're counted, not listed. An anonymous individual's `owl:sameAs` a named
+    one is the named one's own axiom, which its Overview lists, not its usage.
+    """
     owl = "http://www.w3.org/2002/07/owl#"
-    pet, heart, likes = (f"<{NS}{name}>" for name in ("Pet", "Heart", "likes"))
-    triples = (
-        f"{pet} <{RDF}type> <{owl}Class> .\n{heart} <{RDF}type> <{owl}Class> .\n"
-        f"{likes} <{RDF}type> <{owl}ObjectProperty> .\n"
+    pet, heart, likes, age, note, rex = (f"<{NS}{name}>" for name in ("Pet", "Heart", "likes", "age", "note", "rex"))
+    declared = {pet: "Class", heart: "Class", likes: "ObjectProperty", age: "DatatypeProperty"}
+    declared |= {note: "AnnotationProperty", rex: "NamedIndividual"}
+    triples = "".join(f"{iri} <{RDF}type> <{owl}{kind}> .\n" for iri, kind in declared.items()) + (
         f"_:a <{RDF}type> {pet} .\n_:a {likes} {heart} .\n"  # ClassAssertion(Pet _:a), likes(_:a Heart)
+        f"_:b {likes} _:a .\n_:a {likes} _:b .\n"  # a cycle, _:b found by its property only
+        f'_:c <{owl}sameAs> {rex} .\n_:e {age} "5"^^<http://www.w3.org/2001/XMLSchema#integer> .\n'
+        f"_:d {note} {heart} .\n"  # annotations alone
     )
     async with loaded(fuseki_url, settings, {None: triples.encode()}, "") as anonymous:
-        for name in ("Pet", "Heart", "likes"):
-            assert await read_usages(anonymous, f"{NS}{name}") == [], name
-            assert await count_usages(anonymous, f"{NS}{name}") == 1, name
+        for name, listed, count in (("Pet", 1, 1), ("Heart", 1, 2), ("likes", 3, 3), ("age", 1, 1), ("note", 0, 1)):
+            usages = await read_usages(anonymous, f"{NS}{name}")
+            assert [(usage.subject, usage.root and usage.root.kind) for usage in usages] == [
+                (None, UsageRootKind.ASSERTION)
+            ] * listed, name
+            assert await count_usages(anonymous, f"{NS}{name}") == count, name
+        assert await read_usages(anonymous, f"{NS}rex") == []
+        assert await count_usages(anonymous, f"{NS}rex") == 0
 
 
-async def test_not_an_entity(store: UsageStore) -> None:
-    """Check that an IRI that isn't in `entity`, an individual, has only its triples' usages, and a count of them all.
+async def test_undeclared_individual(fuseki_url: str, settings: Settings) -> None:
+    """Check that an individual typed but not declared is no entity, so its axioms are under the subjects not in it.
 
-    Its count includes triples with a blank subject, such as a negative property assertion's, which the owner map
-    doesn't count for an IRI that's no entity.
+    They're after a declared one's, which are under it (DESIGN.md §2.8).
+
+    Its own usages are only its triples', with a count of them all, which includes those with a blank subject, as the
+    owner map counts them only for entities.
     """
-    usages = await read_usages(store, f"{NS}rex")
-    assert usages == [Usage(UsageSource.OBJECT, IRI(f"{NS}alice"), predicate=IRI(f"{NS}likes"))]
-    assert await count_usages(store, f"{NS}rex") > len(usages)  # also in ObjectOneOf(rex tom) and hates's assertion
+    owl = "http://www.w3.org/2002/07/owl#"
+    person, likes, alice, aaron = (f"<{NS}{name}>" for name in ("Person", "likes", "alice", "aaron"))
+    triples = (
+        f"{person} <{RDF}type> <{owl}Class> .\n{likes} <{RDF}type> <{owl}ObjectProperty> .\n"
+        f"{alice} <{RDF}type> <{owl}NamedIndividual> .\n{alice} <{RDF}type> {person} .\n"
+        f"{aaron} <{RDF}type> {person} .\n"
+        f"{alice} {likes} {aaron} .\n_:x {likes} {aaron} .\n"
+    )
+    async with loaded(fuseki_url, settings, {None: triples.encode()}, "") as found:
+        usages = await read_usages(found, f"{NS}Person")
+        ordered = await found.derived.read(found.generation, lambda c: sorted_usages(c, usages))
+        # aaron's name sorts first, but it's no entity's.
+        assert [str(usage.subject) for usage in ordered] == [f"{NS}alice", f"{NS}aaron"]
+        with closing(connect(settings, found.generation)) as connection:
+            assert [entity.type for entity in entities_with_iri(connection, f"{NS}alice")] == ["named_individual"]
+            assert entities_with_iri(connection, f"{NS}aaron") == []
+        undeclared = await read_usages(found, f"{NS}aaron")
+        assert undeclared == [Usage(UsageSource.OBJECT, IRI(f"{NS}alice"), predicate=IRI(f"{NS}likes"))]
+        assert await count_usages(found, f"{NS}aaron") == 2  # and _:x's assertion
 
 
 async def test_query_fails(store: UsageStore) -> None:

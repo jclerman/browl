@@ -401,15 +401,14 @@ async def fetch_usage_fragments(store: UsageStore, iri: str, usages: Sequence[Us
     values read first (`browl.usages.read_values`); one with a blank object, fetched (`sparql/usage-triples.rq`);
     and the blank nodes' closures, with the reified axioms and axiom annotations they lead to
     (`sparql/usage-closures.rq`), and the reified axioms' own triples (`sparql/usage-reified.rq`). The second holds the
-    closures of the roots with no subject, and of the class expressions the anonymous individuals' assertions name;
-    it's empty if there are none. The third holds the reified axioms, and their nested annotations, that may annotate
-    the first's triples (`sparql/usage-annotations.rq`), which `usage_axioms` matches to them; if they'd take the
-    fragments past their caps, or their query fails, they're left out, which is logged, so the axioms can still be
-    shown. The fourth holds the anonymous individuals' assertions, with the reified axioms on them
-    (`sparql/usage-assertions.rq`), apart, as the closures bring any anonymous individual's assertions along
-    (`usage_axioms`). Each has the declaration types of every IRI any mentions (`sparql/declaration-types.rq`), and is
-    pruned of cyclic or too deeply nested annotations (`browl.axioms.pruned_annotations`), in a thread, off the event
-    loop.
+    closures of the roots with no subject; it's empty if there are none. The third holds the reified axioms, and their
+    nested annotations, that may annotate the first's triples (`sparql/usage-annotations.rq`), which `usage_axioms`
+    matches to them; if they'd take the fragments past their caps, or their query fails, they're left out, which is
+    logged, so the axioms can still be shown. The fourth holds the anonymous individuals' assertions, with the reified
+    axioms on them (`sparql/usage-assertions.rq`) and the closures of the class expressions they name, apart, as the
+    second's closures bring any anonymous individual's assertions along (`usage_axioms`). Each has the declaration
+    types of every IRI any mentions (`sparql/declaration-types.rq`), and is pruned of cyclic or too deeply nested
+    annotations (`browl.axioms.pruned_annotations`), in a thread, off the event loop.
 
     Args:
         store: Where the usages were read.
@@ -433,6 +432,7 @@ async def fetch_usage_fragments(store: UsageStore, iri: str, usages: Sequence[Us
     reified: list[str] = []
     general: list[str] = []
     assertions: list[str] = []
+    expressions: list[str] = []  # the class expressions of anonymous individuals' class assertions
     annotated: dict[str, None] = {}
     try:
         property_values = await read_values(
@@ -471,7 +471,7 @@ async def fetch_usage_fragments(store: UsageStore, iri: str, usages: Sequence[Us
                 object_and_digest = f"UNDEF {term}" if term.startswith('"') else f"{term} UNDEF"  # a literal's digest
                 assertions.append(f"({label} <{usage.predicate}> {object_and_digest})")
                 if term.startswith("<_:") and usage.predicate == _RDF_TYPE:  # a class expression
-                    general.append(term)
+                    expressions.append(term)
             elif subject is None:
                 general.append(label)
             elif usage.root.kind == UsageRootKind.TRIPLE:
@@ -491,7 +491,10 @@ async def fetch_usage_fragments(store: UsageStore, iri: str, usages: Sequence[Us
             )
         ]
         general_task = group.create_task(_construct(store, _CLOSURES, _NO_ROOTS, general))
-        assertions_task = group.create_task(_construct(store, _ASSERTIONS, _NO_ANNOTATED, assertions))
+        assertions_tasks = [
+            group.create_task(_construct(store, _ASSERTIONS, _NO_ANNOTATED, assertions)),
+            group.create_task(_construct(store, _CLOSURES, _NO_ROOTS, expressions)),
+        ]
         annotations_task = group.create_task(
             caught(_construct(store, _ANNOTATIONS, _NO_ANNOTATED, sorted(annotated)), SparqlError)
         )
@@ -507,7 +510,11 @@ async def fetch_usage_fragments(store: UsageStore, iri: str, usages: Sequence[Us
     else:
         annotation_triples = result
     fragments, mentioned = await asyncio.to_thread(
-        _checked, subject_triples, general_triples, annotation_triples, assertions_task.result()
+        _checked,
+        subject_triples,
+        general_triples,
+        annotation_triples,
+        b"".join(task.result() for task in assertions_tasks),
     )
     left_out = left_out or fragments.annotations_left_out
     if left_out == LeftOut.TOO_MANY:

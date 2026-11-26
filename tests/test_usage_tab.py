@@ -26,6 +26,7 @@ import browl.usage_tables
 import browl.usages
 from browl import nesting, owl, owlapi
 from browl.axioms import axioms_about, convert_axioms, entity_axioms, fetch_fragment, is_declaration
+from browl.derived import UsageRootKind
 from browl.frames import frame_groups
 from browl.jobs import JobContext, Stage
 from browl.links import EntityLink
@@ -48,7 +49,7 @@ from browl.usage_tab import (
 from browl.usages import Usage, UsageSource, UsageStore, read_usages
 from tests.helpers import boxed, connect, fuseki_dataset, loaded, make_app, make_settings, ontology_ntriples
 from tests.test_axiom_annotations import AXIOM, CYCLE, depth, nested_chain, note
-from tests.test_usages import usage_triples
+from tests.test_usages import is_anonymous_assertion, usage_triples
 
 pytestmark = pytest.mark.anyio
 
@@ -90,13 +91,22 @@ def entity_iris(settings: Settings, store: UsageStore) -> list[str]:
         return sorted({iri for (iri,) in connection.execute("SELECT iri FROM entity")})
 
 
-def lone_axiom(ntriples: bytes) -> owl.AnyAxiom:
-    """Return the one axiom a usage's triples parse as, but unannotated declarations, without annotations."""
+def unlabelled(text: str) -> str:
+    """Return an axiom's text without its anonymous individuals' labels, which a page gives in order (`_:b1`, …)."""
+    return re.sub(r"_:b[0-9]+", "_:", text)
+
+
+def lone_axiom(ntriples: bytes, closure: bool = False) -> owl.AnyAxiom:
+    """Return the one axiom a usage's triples parse as, but unannotated declarations, without annotations.
+
+    With `closure`, the assertions of anonymous individuals the closure brings along are left out
+    (`tests.test_usages.parsed`).
+    """
     with ntriples_ontology(ntriples) as ontology:
         found = [
             axiom.getAxiomWithoutAnnotations()
             for axiom in ontology.getAxioms()
-            if axiom.isAnnotated() or not is_declaration(axiom)
+            if (axiom.isAnnotated() or not is_declaration(axiom)) and not (closure and is_anonymous_assertion(axiom))
         ]
     [node] = convert_axioms(found)
     return node
@@ -117,9 +127,10 @@ async def test_every_usage_once(
         ordered = await store.derived.read(store.generation, lambda c, found=usages: sorted_usages(c, found))
         expected: Counter[tuple[str | None, str]] = Counter()
         for usage in usages:
-            axiom = await owlapi.run_java(lone_axiom, await usage_triples(store, iri, usage))
+            closure = usage.root is not None and usage.root.kind != UsageRootKind.ASSERTION
+            axiom = await owlapi.run_java(lone_axiom, await usage_triples(store, iri, usage), closure)
             subject = usage.subject
-            expected[subject, (axiom if subject is None else axiom.with_first(subject)).manchester] += 1
+            expected[subject, unlabelled((axiom if subject is None else axiom.with_first(subject)).manchester)] += 1
         found: Counter[tuple[str | None, str]] = Counter()
         pages = max(1, math.ceil(len(usages) / size))
         for page in range(1, pages + 1):
@@ -130,7 +141,9 @@ async def test_every_usage_once(
             for group in groups:
                 on_page = sum(usage.subject == group.subject for usage in chunk)
                 assert len(group.axioms) == on_page, (iri, page, group)
-                found.update((group.subject, axiom.without_annotations().manchester) for axiom in group.axioms)
+                found.update(
+                    (group.subject, unlabelled(axiom.without_annotations().manchester)) for axiom in group.axioms
+                )
         assert found == expected, iri
 
 
@@ -287,25 +300,31 @@ def test_subjects(client: TestClient) -> None:
     columns.
     """
     dog = panel(client, "Dog").text
-    assert subjects_shown(dog) == [f"{NS}Cat", f"{NS}Pet", "No single subject", f"{NS}rex"]
+    # rex, a declared individual, is an entity, so among the named subjects (P-47).
+    assert subjects_shown(dog) == [f"{NS}Cat", f"{NS}Pet", f"{NS}rex", "No single subject"]
     assert lines_shown(dog) == [
         ":Cat :remark :Dog",  # an annotation assertion, by kind and text before Cat's other axiom
         ":Cat DisjointWith :Dog",
         ":Pet SubClassOf :Cat or :Dog",
+        ":rex Type :Dog",
         "DLSafeRule(Body(ClassAtom(<:Dog> Variable(<:x>))) Head(ClassAtom(<:Animal> Variable(<:x>))))",
-        "<:rex> Type :Dog",
     ]
     assert columns_shown(dog) == [
         (":remark", ":Dog"),
         ("DisjointWith", ":Dog"),
         ("SubClassOf", ":Cat or :Dog"),
-        "DLSafeRule(Body(ClassAtom(<:Dog> Variable(<:x>))) Head(ClassAtom(<:Animal> Variable(<:x>))))",
         ("Type", ":Dog"),
+        "DLSafeRule(Body(ClassAtom(<:Dog> Variable(<:x>))) Head(ClassAtom(<:Animal> Variable(<:x>))))",
     ]
     assert "5 usages" not in plain(dog) and "usage-count" not in dog  # the count is in the tab's label only
     age = panel(client, "age").text
-    assert subjects_shown(age) == [f"{NS}Person", "No single subject", f"{NS}alice"]
-    assert lines_shown(age)[2:] == ["not (<:bob> :age 7)", "<:alice> :age 42"]
+    assert subjects_shown(age) == [f"{NS}alice", f"{NS}Person", "No single subject"]
+    # An anonymous individual's two values, each a usage of its own, and a negative assertion.
+    assert lines_shown(age)[3:] == ["_:b1 :age 3", "_:b1 :age 4", "not (:bob :age 7)"]
+    # An undeclared IRI is no entity, so its axioms are after those with no single subject: an anonymous individual's.
+    aside = panel(client, "aside").text
+    assert subjects_shown(aside) == [f"{NS}Seed", "No single subject", f"{NS}ghost"]
+    assert lines_shown(aside) == [':Seed :aside "a seed\'s"', '_:b1 :aside "a dog\'s"', '<:ghost> :aside "a ghost\'s"']
     # By display name, case-folded: Heart's and Tricky's names start with "<b>" and "a <script>".
     assert subjects_shown(panel(client, "Animal").text)[:3] == [
         '<b>Heart</b> & "soul"',
@@ -327,19 +346,21 @@ def test_annotations(client: TestClient) -> None:
     plant = panel(client, "Plant").text
     assert annotations_shown(plant) == ["[:note: nested [:remark: :Plant]]"]
     assert lines_shown(plant)[1] == ":Liver SubClassOf :Organ"
-    # On Bladder's, Cat's, Kidney's and Liver's axioms, the n-ary DisjointClasses, the general class axiom, and carol's.
+    # On Bladder's, carol's, Cat's, Kidney's and Liver's axioms, the n-ary DisjointClasses, an anonymous individual's
+    # assertion, and the general class axiom.
     assert annotations_shown(panel(client, "note").text) == [
         "[:note: British]",
         "[:note: apart]",
+        "[:note: typed]",
+        "[:note: known]",
         "[:note: annotated]",
         "[:note: a source [:remark: :Bladder], second]",
         "[:note: en français]",
         "[:note: restricted]",
         "[:note: nested [:remark: :Plant]]",
         "[:note: n-ary] [:remark: :Mineral]",
+        "[:note: seen]",
         "[:note: general]",
-        "[:note: typed]",
-        "[:note: known]",
     ]
     # Written usages: literals matched by their digest, tagged ones too, nested annotations within.
     assert annotated_lines(panel(client, "comment").text)[:3] == [
@@ -347,9 +368,9 @@ def test_annotations(client: TestClient) -> None:
         (':Kidney :comment "filters blood"', "[:note: a source [:remark: :Bladder], second]"),
         (':Kidney :comment "rein"@fr', "[:note: en français]"),
     ]
-    assert annotated_lines(panel(client, "weight").text)[-1] == ("<:carol> :weight 5", "[:note: typed]")
+    assert annotated_lines(panel(client, "weight").text)[-1] == (":carol :weight 5", "[:note: typed]")
     # The entity as a written usage's predicate, with an IRI value; and as its object.
-    assert ("<:carol> :knows <:dave>", "[:note: known]") in annotated_lines(panel(client, "knows").text)
+    assert (":carol :knows :dave", "[:note: known]") in annotated_lines(panel(client, "knows").text)
     # Kidney's restriction of partOf to Organ isn't annotated, though the page fetches its other one's annotations.
     organ = annotated_lines(panel(client, "Organ").text)
     assert (":Kidney SubClassOf part of some :Organ", "") in organ
@@ -422,10 +443,10 @@ def test_pages(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     assert '<form method="get" action="/axioms#Dog" hx-get=' in first
     assert '<input type="hidden" name="tab" value="usage">' in first
     assert 'name="page" min="1" max="5" value="1"' in first
-    assert subjects_shown(last) == [f"{NS}rex"]
+    assert subjects_shown(last) == ["No single subject"]
     general = [panel(client, "hasPart", **({"page": page} if page else {})).text for page in ("", "2")]
     assert [subjects_shown(each) for each in general] == [["No single subject"], ["No single subject (continued)"]]
-    by_iri = client.get("/_browl/iri", params={"iri": f"{NS}rex", "tab": "usage"})  # not an entity
+    by_iri = client.get("/_browl/iri", params={"iri": f"{NS}ghost", "tab": "usage"})  # not an entity
     assert by_iri.status_code == 404
     params = {"iri": f"{NS}Pet", "tab": "usage", "page": "2"}
     fallback = client.get("/_browl/iri", params=params, follow_redirects=False)
@@ -605,7 +626,7 @@ def test_too_large(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: 
     monkeypatch.setattr(browl.usage_tab, "CONSTRUCT_MAX_BYTES", 40)
     assert TOO_LARGE in panel(client, "Animal").text  # its usages' triples, written in
     assert "bytes, more than 40" in caplog.text
-    assert TOO_LARGE in panel(client, "age").text  # `<:alice> :age 42`: its values, read first
+    assert TOO_LARGE in panel(client, "age").text  # `:alice :age 42`: its values, read first
     assert "the page's values are too large: the result is longer than 40 characters" in caplog.text
 
 
@@ -995,6 +1016,7 @@ def test_columns(client: TestClient) -> None:
     note = panel(client, "note").text
     assert [line for line in columns_shown(note) if isinstance(line, str)] == [
         "DisjointClasses: :Animal, :Fungus, :Plant",
+        "_:b1 :likes :rex",  # an anonymous individual's assertion
         ':hasPart some <b>Heart</b> & "soul" SubClassOf :Vertebrate',
     ]
     assert "No single subject" in subjects_shown(note)
