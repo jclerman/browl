@@ -1726,9 +1726,10 @@ CSS nesting gets the one-page view, without the toggle. _(P-16d)_
   keeps its own.
   - **Layout:** on medium and wide windows, on the left, beside the tabs and the panel, scrolling within itself, its
     heading staying in view. The one-page view puts it above the tabs, at most `40vh` high on screen, scrolling within
-    itself, so the page's content stays near. Its lines don't wrap and indent `0.75rem` a level, as a deep hierarchy
-    (NCBITaxon's is about 40 levels) would leave a narrow column no room; it scrolls sideways instead. It opens
-    scrolled, within itself, to show the entity (`static/tree.js`), and so does a column unfolded.
+    itself, so the page's content stays near. Its lines don't wrap and indent `0.75rem` a level, as even its 15 levels
+    (Depth, below) would leave a narrow column little room; it scrolls sideways instead. It opens scrolled, within
+    itself, to show the entity (`static/tree.js`), and so does a column unfolded: down, and sideways only as far as the
+    entity's name needs, so the levels above keep as much of theirs as they can.
   - **Folding:** a control on the column's far left, a strip with "«", folds it; folded, the strip reads "» Hierarchy"
     down the page's left edge. In the one-page view it's a line above the column, "▾ Hierarchy". It's a checkbox in
     its label, so it works without JS, through `:has`, and `static/entity-page.js` remembers it in `localStorage`

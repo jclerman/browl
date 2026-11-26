@@ -3161,6 +3161,8 @@ def test_column_elided(page: Page, deep: LiveServer) -> None:
     expect(current).to_have_attribute("aria-current", "page")
     at, shown_column = box(current), box(column)
     assert shown_column["y"] <= at["y"] and at["y"] + at["height"] <= shown_column["y"] + shown_column["height"]
+    assert at["x"] + at["width"] <= shown_column["x"] + shown_column["width"]
+    assert column.evaluate("(each) => each.scrollLeft") == 0  # its name fits, so the levels above aren't cut
     tree_item(page, bottom[0]).focus()
     for key, name in [("ArrowUp", ELIDED), ("ArrowUp", names[2]), ("ArrowDown", ELIDED), ("ArrowDown", bottom[0])]:
         page.keyboard.press(key)
@@ -3202,7 +3204,7 @@ def test_column_elided_rows_stick(page: Page, deep: LiveServer) -> None:
     assert abs(rows[-1]["y"] - rows[7]["y"]) < 2  # deeper rows share the last place
     hit = page.evaluate(
         "([x, y]) => document.elementFromPoint(x, y).closest('.tree-row').textContent",
-        [box(column)["x"] + 30, top + 3.5 * height],
+        [rows[3]["x"] + 30, top + 3.5 * height],
     )
     assert ELIDED in " ".join(hit.split())
 

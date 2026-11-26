@@ -97,8 +97,11 @@
       if (at.bottom > shown.top + column.clientHeight) {
         column.scrollTop += at.top - shown.top - column.clientHeight / 3;
       }
-      if (at.left + Math.min(at.width, column.clientWidth / 2) > shown.left + column.clientWidth) {
-        column.scrollLeft += at.left - shown.left;
+      // Sideways, only as far as its name needs, so the levels above keep as much of theirs as they can.
+      const name = current.getBoundingClientRect();
+      const over = name.right - (shown.left + column.clientWidth);
+      if (over > 0) {
+        column.scrollLeft += Math.min(over, at.left - shown.left);
       }
     }
   }
