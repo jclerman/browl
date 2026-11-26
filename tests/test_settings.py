@@ -128,7 +128,7 @@ def test_base_url_is_required(settings_env: pytest.MonkeyPatch) -> None:
         ),
         ("EXTRA_PREFIXES", '{"ex": "http://example.org/", "": "urn:x:"}', {"ex": "http://example.org/", "": "urn:x:"}),
         ("SEED_ADMINS", '["Admin@Example.org"]', ["admin@example.org"]),
-        ("SEED_ADMINS", '[" J.Doe@Gmail.com", "j.doe@example.org"]', ["jdoe@gmail.com", "j.doe@example.org"]),
+        ("SEED_ADMINS", '[" J.Doe@Gmail.com", "j.doe@example.org"]', ["j.doe@gmail.com", "j.doe@example.org"]),
         (
             "MATERIALIZE_PROPERTIES",
             '["http://purl.obolibrary.org/obo/BFO_0000050", "obo:BFO_0000051"]',

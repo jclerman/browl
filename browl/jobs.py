@@ -110,16 +110,18 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE job ADD COLUMN detail_iri TEXT;
     """,
-    # Version 9: who added each admin (P-23); and Gmail addresses without the dots in their local part, which Gmail
-    # ignores (`browl.admins.canonical_email`), so an address with and one without match. Rows that then coincide
-    # are merged: the earliest addition, the latest sign-out.
+    # Version 9 (P-23): each admin's address as added, to show, and who added them; and both tables keyed by the
+    # canonical address (`browl.admins.canonical_email`), so a Gmail address with dots and one without match. Rows
+    # that then coincide are merged: the earliest addition, the latest sign-out.
     f"""
     CREATE TABLE admin_new (
         email TEXT PRIMARY KEY CHECK (email = lower(email)),
+        display_email TEXT NOT NULL CHECK (display_email = lower(display_email)),
         added_at TEXT NOT NULL,
         added_by TEXT
     );
-    INSERT INTO admin_new (email, added_at) SELECT {CANONICAL_EMAIL_SQL}, min(added_at) FROM admin GROUP BY 1;
+    INSERT INTO admin_new (email, display_email, added_at)
+        SELECT {CANONICAL_EMAIL_SQL}, min(email), min(added_at) FROM admin GROUP BY 1;
     DROP TABLE admin;
     ALTER TABLE admin_new RENAME TO admin;
     CREATE TABLE sign_out_new (

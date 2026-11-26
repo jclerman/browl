@@ -167,9 +167,8 @@ def sign_in(client: TestClient, google: FakeGoogle, email: str = SEED, **params:
 
 
 def add_admin(data_dir: Path, email: str) -> None:
-    """Add an admin to the `admin` table, as P-23's page will."""
-    with sqlite3.connect(data_dir / STATE_DB) as connection:
-        connection.execute("INSERT INTO admin (email, added_at) VALUES (?, '2026-11-24T00:00:00+00:00')", (email,))
+    """Add an admin to the `admin` table, as the admins page does."""
+    AdminStore(data_dir / STATE_DB).add(email, None, datetime.now(UTC))
 
 
 @pytest.mark.parametrize(

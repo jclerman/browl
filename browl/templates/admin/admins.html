@@ -16,7 +16,7 @@
   <tbody>
     {% for row in rows %}
     <tr>
-      <td>{{ row.email }}{% if row.email == you %} <span class="note">(you)</span>{% endif %}</td>
+      <td>{{ row.email }}{% if row.you %} <span class="note">(you)</span>{% endif %}</td>
       {% if row.seed %}
       <td class="note">Seed admin, set in <code>SEED_ADMINS</code></td>
       <td></td>
@@ -24,7 +24,7 @@
       <td><time datetime="{{ row.added_at.isoformat() }}">{{ row.added_at.strftime("%Y-%m-%d") }}</time>
         {%- if row.added_by %} by {{ row.added_by }}{% endif %}</td>
       <td>
-        {% if row.email == you %}
+        {% if row.you %}
         {% set question = "Remove yourself as an admin? You'll lose access to the admin pages at once." %}
         {% else %}
         {% set question = "Remove " ~ row.email ~ " as an admin?" %}

@@ -8,7 +8,7 @@ import langcodes
 from pydantic import AliasGenerator, Field, HttpUrl, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from browl.admins import parse_email
+from browl.admins import canonical_email, parse_email
 from browl.rdf import PREFIX_NAME
 
 logger = logging.getLogger(__name__)
@@ -79,8 +79,8 @@ class Settings(BaseSettings):
             it, they run in the app's container.
         oidc_client_id: Google OAuth client ID (O-6).
         oidc_client_secret: Google OAuth client secret (O-6).
-        seed_admins: Admin email addresses, in their canonical form (`browl.admins.canonical_email`); they can't be
-            removed in the UI (O-6).
+        seed_admins: Admin email addresses, lowercased; they can't be removed in the UI (O-6). Compare them with
+            `is_seed_admin`.
         auth_disabled: Turns authentication off, for development only (O-7).
     """
 
@@ -179,7 +179,7 @@ class Settings(BaseSettings):
     @field_validator("seed_admins")
     @classmethod
     def check_seed_admins(cls, value: list[str]) -> list[str]:
-        """Check the seed admin email addresses, and put them in their canonical form (`canonical_email`)."""
+        """Check and lowercase the seed admin email addresses, refusing two with one canonical form."""
         addresses, invalid = [], []
         for text in value:
             try:
@@ -188,6 +188,7 @@ class Settings(BaseSettings):
                 invalid.append(text)
         if invalid:
             raise ValueError(f"not email addresses: {', '.join(invalid)}")
+        confirm_unique([canonical_email(address) for address in addresses])
         return addresses
 
     # After the validators above: pydantic runs a field's validators in the order they're defined, so this sees the
@@ -211,6 +212,11 @@ class Settings(BaseSettings):
             if missing:
                 raise ValueError(f"{', '.join(missing)} required unless AUTH_DISABLED is true")
         return value
+
+    def is_seed_admin(self, email: str) -> bool:
+        """Return whether an email address is a seed admin's, comparing canonical forms (`canonical_email`)."""
+        key = canonical_email(email)
+        return any(canonical_email(seed) == key for seed in self.seed_admins)
 
 
 def load_settings() -> Settings:

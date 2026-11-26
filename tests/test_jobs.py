@@ -344,9 +344,9 @@ def test_store_migrates_version_6(data_dir: Path) -> None:
 
 
 def test_store_migrates_version_8(data_dir: Path) -> None:
-    """Check that a version 8 database migrates: admins get no adder, and Gmail addresses lose their dots (P-23).
+    """Check that a version 8 database migrates: keyed by canonical addresses, shown as stored, with no adder (P-23).
 
-    Rows that then coincide merge into the earliest addition and the latest sign-out.
+    Gmail rows that then coincide merge into the earliest addition and the latest sign-out.
     """
     path = data_dir / STATE_DB
     with closing(sqlite3.connect(path)) as connection:
@@ -364,8 +364,8 @@ def test_store_migrates_version_8(data_dir: Path) -> None:
         admins = connection.execute("SELECT * FROM admin ORDER BY email").fetchall()
         sign_outs = connection.execute("SELECT * FROM sign_out ORDER BY email").fetchall()
     assert admins == [
-        ("a.b@example.org", "2026-01-03T00:00:00+00:00", None),
-        ("jdoe@gmail.com", "2026-01-01T00:00:00+00:00", None),
+        ("a.b@example.org", "a.b@example.org", "2026-01-03T00:00:00+00:00", None),
+        ("jdoe@gmail.com", "j.doe@gmail.com", "2026-01-01T00:00:00+00:00", None),
     ]
     assert sign_outs == [
         ("a.b@example.org", "2026-02-03T00:00:00+00:00"),

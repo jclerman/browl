@@ -1944,9 +1944,11 @@ applied to `async` handlers, because it would store unrun coroutine objects rath
   `/{RESERVED_PREFIX}/admin` require it. _(Q16)_
 - An admin is a signed-in user whose verified email is in the seed list (from configuration) or in the `admin` table in
   a persistent SQLite file. Seed admins can't be removed in the UI. Whole-domain rules are not supported. _(Q16a)_
-- Email addresses are compared in one canonical form (`browl.admins.canonical_email`): lowercased, and for `gmail.com`
-  without the dots in the local part, which Gmail ignores, so `J.Doe@gmail.com` and `jdoe@gmail.com` are one admin.
-  Gmail's other equivalences (`+` tags, `googlemail.com`) aren't applied. _(P-23)_
+- Email addresses are shown lowercased, as configured, added or signed in with, but compared in one canonical form
+  (`browl.admins.canonical_email`): lowercased, and for `gmail.com` without the dots in the local part, which Gmail
+  ignores, so `J.Doe@gmail.com` and `jdoe@gmail.com` are one admin. The `admin` and `sign_out` tables are keyed by
+  it; `admin` also keeps the address as added, to show. Gmail's other equivalences (`+` tags, `googlemail.com`)
+  aren't applied. _(P-23)_
 - `AUTH_DISABLED=true` turns authentication off for development. It logs a prominent warning at startup and is never the
   default. _(Q16)_
 
@@ -1957,10 +1959,10 @@ How it works (P-22, `browl.auth`):
   URL is `BASE_URL` joined to the route's path, not built from the request, since a proxy may change the request's
   scheme or host; it's the redirect URI each operator registers with their OAuth client
   ([`AUTHENTICATION.md`](AUTHENTICATION.md)). Authlib checks the state and the ID token's signature, issuer, audience
-  and nonce. The token's email must be verified; it's put in its canonical form (above), and the browser returns to
-  `next`, which must be a path of this app (no open redirect), else to the upload page. Authlib keeps only the latest
-  sign-in's state, so an admin already signed in who reaches the callback again (a second sign-in tab, or Back) goes
-  straight to `next` rather than to "Sign-in failed". The routes are in `browl.auth`, beside the admin routes' guard.
+  and nonce. The token's email must be verified; it's lowercased, and the browser returns to `next`, which must be a
+  path of this app (no open redirect), else to the upload page. Authlib keeps only the latest sign-in's state, so an
+  admin already signed in who reaches the callback again (a second sign-in tab, or Back) goes straight to `next` rather
+  than to "Sign-in failed". The routes are in `browl.auth`, beside the admin routes' guard.
 - **Token exchanges are capped**: anyone can send the browser's half of a sign-in, and each callback with a code makes
   browl call Google's token endpoint. So the callback makes at most `TOKEN_EXCHANGES_PER_MINUTE` (30) in any minute,
   across the app, counted in memory (one worker); past that it answers 429 with `Retry-After`, without calling Google.
@@ -1998,7 +2000,7 @@ The admins page (P-23, `browl.admins_page`, `admin/admins`) delivers A-7:
   one added in the UI and later seeded, is listed once, as a seed admin; its row stays, so dropping it from
   `SEED_ADMINS` leaves it an admin who can be removed here. With `AUTH_DISABLED`, the page works and says the list takes
   effect once sign-in is on.
-- **Adding** (POST `admin/admins`) takes an email address, trimmed, put in its canonical form, and checked loosely: no
+- **Adding** (POST `admin/admins`) takes an email address, trimmed, lowercased, and checked loosely: no
   spaces, one `@`, a dot in the domain, at most 254 characters; Google checks the rest at sign-in. An invalid address
   gets 422, a seed admin's or one already listed 409, each the page again with the reason and what was typed. Success
   redirects (303) back to the list.

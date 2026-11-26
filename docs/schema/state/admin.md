@@ -10,6 +10,7 @@ Admins added in the UI (DESIGN.md 2.11): a signed-in user whose verified email i
 ```sql
 CREATE TABLE "admin" (
         email TEXT PRIMARY KEY CHECK (email = lower(email)),
+        display_email TEXT NOT NULL CHECK (display_email = lower(display_email)),
         added_at TEXT NOT NULL,
         added_by TEXT
     )
@@ -19,19 +20,21 @@ CREATE TABLE "admin" (
 
 ## Columns
 
-| Name     | Type | Default | Nullable | Children | Parents | Comment                                                                                                                                       |
-| -------- | ---- | ------- | -------- | -------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| email    | TEXT |         | true     |          |         | The admin's email address in its canonical form (browl.admins.canonical_email): lowercased, and for Gmail without the dots in its local part. |
-| added_at | TEXT |         | false    |          |         | When the admin was added, ISO 8601 with a time zone.                                                                                          |
-| added_by | TEXT |         | true     |          |         | The email address of the admin who added them; NULL if added with AUTH_DISABLED, or before P-23.                                              |
+| Name          | Type | Default | Nullable | Children | Parents | Comment                                                                                                                                                                      |
+| ------------- | ---- | ------- | -------- | -------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| email         | TEXT |         | true     |          |         | The admin's email address in its canonical form, which sign-ins are matched by (browl.admins.canonical_email): lowercased, and for Gmail without the dots in its local part. |
+| display_email | TEXT |         | false    |          |         | The admin's email address as it was added, lowercased, to show.                                                                                                              |
+| added_at      | TEXT |         | false    |          |         | When the admin was added, ISO 8601 with a time zone.                                                                                                                         |
+| added_by      | TEXT |         | true     |          |         | The email address of the admin who added them, as they signed in; NULL if added with AUTH_DISABLED, or before P-23.                                                          |
 
 ## Constraints
 
-| Name                     | Type        | Definition                   |
-| ------------------------ | ----------- | ---------------------------- |
-| email                    | PRIMARY KEY | PRIMARY KEY (email)          |
-| sqlite_autoindex_admin_1 | PRIMARY KEY | PRIMARY KEY (email)          |
-| -                        | CHECK       | CHECK (email = lower(email)) |
+| Name                     | Type        | Definition                                   |
+| ------------------------ | ----------- | -------------------------------------------- |
+| email                    | PRIMARY KEY | PRIMARY KEY (email)                          |
+| sqlite_autoindex_admin_1 | PRIMARY KEY | PRIMARY KEY (email)                          |
+| -                        | CHECK       | CHECK (email = lower(email))                 |
+| -                        | CHECK       | CHECK (display_email = lower(display_email)) |
 
 ## Indexes
 
@@ -47,6 +50,7 @@ erDiagram
 
 "admin" {
   TEXT email PK
+  TEXT display_email
   TEXT added_at
   TEXT added_by
 }

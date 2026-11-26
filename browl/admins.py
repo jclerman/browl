@@ -3,8 +3,9 @@
 `browl.jobs.JobStore` creates and migrates the database at startup; this reads and writes its `admin` and `sign_out`
 tables. Each call opens its own connection, so calls can run on any thread.
 
-Email addresses are compared and stored in one form, `canonical_email`'s, so an address typed in any case, or a Gmail
-address with or without dots, matches the account Google signs in.
+Email addresses are shown as given, lowercased, but compared in their canonical form (`canonical_email`), so an address
+typed in any case, or a Gmail address with or without dots, matches the account Google signs in. The store's methods
+take addresses in either form.
 """
 
 import re
@@ -34,7 +35,7 @@ _EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s.]+")
 
 
 def canonical_email(address: str) -> str:
-    """Return the form of an email address that browl compares and stores.
+    """Return the form of an email address that browl compares, and keys the tables by.
 
     It's lowercased, and a Gmail address loses the dots in its local part, which Gmail ignores. Other Gmail
     equivalences, such as `+` tags and `googlemail.com`, aren't applied.
@@ -50,13 +51,15 @@ def canonical_email(address: str) -> str:
 
 
 def parse_email(text: str) -> str:
-    """Return an email address typed in a form or the settings, in its canonical form.
+    """Return an email address typed in a form or the settings, trimmed and lowercased, to show.
+
+    Its canonical form must be an address too, so e.g. `...@gmail.com` isn't.
 
     Raises:
         ValueError: The text isn't an email address.
     """
-    address = canonical_email(text.strip())
-    if len(address) > MAX_EMAIL_CHARS or not _EMAIL.fullmatch(address):
+    address = text.strip().lower()
+    if len(address) > MAX_EMAIL_CHARS or not _EMAIL.fullmatch(canonical_email(address)):
         raise ValueError(f"not an email address: {text.strip()!r}")
     return address
 
@@ -79,9 +82,10 @@ class Admin:
     """An admin added in the UI: a row of the `admin` table.
 
     Attributes:
-        email: Their email address, in its canonical form.
+        email: Their email address as it was added, lowercased.
         added_at: When they were added.
-        added_by: The address of the admin who added them; None if no one was signed in, with `AUTH_DISABLED`.
+        added_by: The address of the admin who added them, as they signed in; None if no one was signed in, with
+            `AUTH_DISABLED`.
     """
 
     email: str
@@ -115,7 +119,7 @@ class AdminStore:
             listed, signed_out_at = connection.execute(
                 "SELECT EXISTS (SELECT 1 FROM admin WHERE email = ?1),"
                 " (SELECT signed_out_at FROM sign_out WHERE email = ?1)",
-                (email,),
+                (canonical_email(email),),
             ).fetchone()
         return Account(bool(listed), None if signed_out_at is None else datetime.fromisoformat(signed_out_at))
 
@@ -129,7 +133,7 @@ class AdminStore:
             connection.execute(
                 "INSERT INTO sign_out (email, signed_out_at) VALUES (?, ?)"
                 " ON CONFLICT (email) DO UPDATE SET signed_out_at = excluded.signed_out_at",
-                (email, at.isoformat()),
+                (canonical_email(email), at.isoformat()),
             )
 
     def admins(self) -> list[Admin]:
@@ -139,19 +143,27 @@ class AdminStore:
             sqlite3.Error: The database couldn't be read.
         """
         with self._connect("ro") as connection:
-            rows = connection.execute("SELECT email, added_at, added_by FROM admin ORDER BY email").fetchall()
+            rows = connection.execute(
+                "SELECT display_email, added_at, added_by FROM admin ORDER BY display_email"
+            ).fetchall()
         return [Admin(*row) for row in rows]
 
     def add(self, email: str, by: str | None, at: datetime) -> bool:
         """Add an email address to the `admin` table, returning whether it was added: False if it was there already.
+
+        Args:
+            email: The address, lowercased; it's shown as given.
+            by: The address of the admin adding it; None if no one is signed in.
+            at: When it's added.
 
         Raises:
             sqlite3.Error: The database couldn't be written.
         """
         with self._connect("rw") as connection:
             cursor = connection.execute(
-                "INSERT INTO admin (email, added_at, added_by) VALUES (?, ?, ?) ON CONFLICT (email) DO NOTHING",
-                (email, at.isoformat(), by),
+                "INSERT INTO admin (email, display_email, added_at, added_by) VALUES (?, ?, ?, ?)"
+                " ON CONFLICT (email) DO NOTHING",
+                (canonical_email(email), email, at.isoformat(), by),
             )
         return cursor.rowcount == 1
 
@@ -162,5 +174,5 @@ class AdminStore:
             sqlite3.Error: The database couldn't be written.
         """
         with self._connect("rw") as connection:
-            cursor = connection.execute("DELETE FROM admin WHERE email = ?", (email,))
+            cursor = connection.execute("DELETE FROM admin WHERE email = ?", (canonical_email(email),))
         return cursor.rowcount == 1

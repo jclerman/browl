@@ -40,15 +40,17 @@ class AdminRow:
     """An admin, as the admins page lists them.
 
     Attributes:
-        email: Their email address, in its canonical form.
+        email: Their email address, as configured or added, lowercased.
         seed: Whether they're a seed admin, who can't be removed here; one also in the `admin` table is listed once,
             as a seed admin.
+        you: Whether they're the admin viewing the page.
         added_at: When they were added here; None for a seed admin.
         added_by: Who added them; None for a seed admin, or one added with `AUTH_DISABLED`.
     """
 
     email: str
     seed: bool
+    you: bool
     added_at: datetime | None = None
     added_by: str | None = None
 
@@ -58,18 +60,18 @@ async def _admins_page(
 ) -> HTMLResponse:
     settings: Settings = request.app.state.settings
     store: AdminStore = request.app.state.admins
-    seeds = settings.seed_admins
+    you = None if request.state.user is None else canonical_email(request.state.user)
+    seeds = [AdminRow(email, True, canonical_email(email) == you) for email in settings.seed_admins]
     added = [
-        AdminRow(admin.email, False, admin.added_at, admin.added_by)
+        AdminRow(admin.email, False, canonical_email(admin.email) == you, admin.added_at, admin.added_by)
         for admin in await asyncio.to_thread(store.admins)
-        if admin.email not in seeds
+        if not settings.is_seed_admin(admin.email)
     ]
     return templates.TemplateResponse(
         request,
         "admin/admins.html",
         {
-            "rows": [AdminRow(email, True) for email in seeds] + added,
-            "you": request.state.user,
+            "rows": seeds + added,
             "auth_disabled": settings.auth_disabled,
             "error": error,
             "entered": entered,
@@ -98,7 +100,7 @@ async def add_admin(request: Request, email: Annotated[str, Form()] = "") -> Res
         message = f"“{email.strip()}” isn't an email address." if email.strip() else "Enter an email address."
         return await _admins_page(request, message, email, status.HTTP_422_UNPROCESSABLE_CONTENT)
     settings: Settings = request.app.state.settings
-    if address in settings.seed_admins:
+    if settings.is_seed_admin(address):
         return await _admins_page(request, f"{address} is a seed admin already.", email, status.HTTP_409_CONFLICT)
     store: AdminStore = request.app.state.admins
     try:
@@ -120,9 +122,9 @@ async def remove_admin(request: Request, email: Annotated[str, Form()] = "") -> 
     One already removed, e.g. by another admin meanwhile, is no error. An admin who removes themselves is refused
     the admin pages from their next request.
     """
-    address = canonical_email(email.strip())
+    address = email.strip().lower()
     settings: Settings = request.app.state.settings
-    if address in settings.seed_admins:
+    if settings.is_seed_admin(address):
         message = f"{address} is a seed admin, set in SEED_ADMINS, so can't be removed here."
         return await _admins_page(request, message, status_code=status.HTTP_409_CONFLICT)
     store: AdminStore = request.app.state.admins

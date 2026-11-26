@@ -111,21 +111,38 @@ def test_add_refused(client: TestClient, entered: str, status: int, message: str
 
 def test_add_duplicate(client: TestClient) -> None:
     """Check that an admin already added is refused, also as a Gmail address with other dots or case (A-7)."""
-    add(client, "jdoe@gmail.com")
-    for entered in ["jdoe@gmail.com", "J.Doe@Gmail.com"]:
+    add(client, "j.doe@gmail.com")
+    for entered in ["j.doe@gmail.com", "JDoe@Gmail.com", "j.d.o.e@gmail.com"]:
         response = client.post(ADMINS, data={"email": entered}, headers=SAME_SITE)
         assert response.status_code == 409
-        assert "jdoe@gmail.com is an admin already." in response.text
-    assert [admin.email for admin in store(client).admins()] == ["jdoe@gmail.com"]
+        assert f"{entered.lower()} is an admin already." in response.text
+    assert [admin.email for admin in store(client).admins()] == ["j.doe@gmail.com"]
 
 
-def test_gmail_dots_ignored(client: TestClient, data_dir: Path) -> None:
-    """Check that a Gmail admin added with dots is one when signed in without them, and the other way round."""
-    add(client, "j.doe@gmail.com")
-    sign_in_as(client, data_dir, "jdoe@gmail.com")
-    assert client.get(UPLOAD).status_code == 200
-    sign_in_as(client, data_dir, "j.d.o.e@gmail.com")  # e.g. a session from before the dots were dropped
-    assert client.get(UPLOAD).status_code == 200
+def test_gmail_dots_shown_but_ignored(client: TestClient, data_dir: Path) -> None:
+    """Check that a Gmail admin is shown with the dots they were added with, and is one however they sign in."""
+    add(client, "J.Doe@Gmail.com")
+    page = client.get(ADMINS).text
+    assert 'aria-label="Remove j.doe@gmail.com"' in page
+    for signed_in in ["jdoe@gmail.com", "j.doe@gmail.com", "j.d.o.e@gmail.com"]:
+        sign_in_as(client, data_dir, signed_in)
+        assert client.get(UPLOAD).status_code == 200, signed_in
+        assert 'j.doe@gmail.com <span class="note">(you)</span>' in client.get(ADMINS).text
+    response = client.post(REMOVE, data={"email": "jdoe@gmail.com"}, headers=SAME_SITE)
+    assert (response.status_code, store(client).admins()) == (303, [])
+
+
+def test_gmail_seed_dots_ignored(data_dir: Path) -> None:
+    """Check that a seed admin's Gmail address is shown as configured, and matches however they sign in."""
+    with TestClient(make_app(**(AUTH_ON | {"SEED_ADMINS": ["J.Doe@gmail.com"]})), follow_redirects=False) as client:
+        sign_in_as(client, data_dir, "jdoe@gmail.com")
+        page = client.get(ADMINS)
+        assert page.status_code == 200
+        assert 'j.doe@gmail.com <span class="note">(you)</span>' in page.text
+        response = client.post(ADMINS, data={"email": "jdo.e@gmail.com"}, headers=SAME_SITE)
+        assert (response.status_code, store(client).admins()) == (409, [])
+        response = client.post(REMOVE, data={"email": "jdoe@gmail.com"}, headers=SAME_SITE)
+        assert response.status_code == 409
 
 
 def test_remove_seed_refused(client: TestClient) -> None:

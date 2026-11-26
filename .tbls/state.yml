@@ -65,10 +65,13 @@ comments:
       admin. P-22 creates the table; P-23's admins page manages it.
     columnComments:
       email: >-
-        The admin's email address in its canonical form (browl.admins.canonical_email): lowercased, and for Gmail
-        without the dots in its local part.
+        The admin's email address in its canonical form, which sign-ins are matched by (browl.admins.canonical_email):
+        lowercased, and for Gmail without the dots in its local part.
+      display_email: The admin's email address as it was added, lowercased, to show.
       added_at: When the admin was added, ISO 8601 with a time zone.
-      added_by: The email address of the admin who added them; NULL if added with AUTH_DISABLED, or before P-23.
+      added_by: >-
+        The email address of the admin who added them, as they signed in; NULL if added with AUTH_DISABLED, or before
+        P-23.
   - table: sign_out
     tableComment: >-
       When each account last signed out (DESIGN.md 2.11), admin or not: a session for that email that started at or
