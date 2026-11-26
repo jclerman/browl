@@ -236,7 +236,7 @@ class AdminMark:
             request.session.clear()
             return
         request.state.user = email
-        request.state.is_admin = email in settings.seed_admins or account.listed
+        request.state.is_admin = settings.is_seed_admin(email) or account.listed
 
 
 async def require_admin(request: Request) -> None:

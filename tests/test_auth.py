@@ -167,9 +167,8 @@ def sign_in(client: TestClient, google: FakeGoogle, email: str = SEED, **params:
 
 
 def add_admin(data_dir: Path, email: str) -> None:
-    """Add an admin to the `admin` table, as P-23's page will."""
-    with sqlite3.connect(data_dir / STATE_DB) as connection:
-        connection.execute("INSERT INTO admin (email, added_at) VALUES (?, '2026-11-24T00:00:00+00:00')", (email,))
+    """Add an admin to the `admin` table, as the admins page does."""
+    AdminStore(data_dir / STATE_DB).add(email, None, datetime.now(UTC))
 
 
 @pytest.mark.parametrize(
@@ -250,6 +249,13 @@ def test_sign_in_table_admin(client: TestClient, google: FakeGoogle, data_dir: P
     with sqlite3.connect(data_dir / STATE_DB) as connection:
         connection.execute("DELETE FROM admin")
     assert client.get(UPLOAD).status_code == 403
+
+
+def test_sign_in_gmail_dots(client: TestClient, google: FakeGoogle, data_dir: Path) -> None:
+    """Check that a Gmail admin is let in when Google gives their address with other dots or case (P-23)."""
+    add_admin(data_dir, "jdoe@gmail.com")
+    assert sign_in(client, google, "J.Doe@Gmail.com").headers["Location"] == UPLOAD
+    assert client.get(UPLOAD).status_code == 200
 
 
 def test_not_admin(client: TestClient, google: FakeGoogle) -> None:

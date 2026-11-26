@@ -1,0 +1,8 @@
+{# The admin pages' own links, above each one's title. `current` names the page's route. #}
+<nav class="admin-nav" aria-label="Admin">
+  <ul>
+    {% for route, label in [("upload_page", "Upload"), ("job_status", "Status"), ("admins_page", "Admins")] %}
+    <li><a href="{{ url_for(route).path }}"{% if route == current %} aria-current="page"{% endif %}>{{ label }}</a></li>
+    {% endfor %}
+  </ul>
+</nav>

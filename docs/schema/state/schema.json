@@ -157,19 +157,31 @@
     {
       "name": "admin",
       "type": "table",
-      "comment": "Admins added in the UI (DESIGN.md 2.11): a signed-in user whose verified email is here, or in SEED_ADMINS, is an admin. P-22 creates the table; P-23 adds the page that manages it.",
+      "comment": "Admins added in the UI (DESIGN.md 2.11): a signed-in user whose verified email is here, or in SEED_ADMINS, is an admin. It's managed on the admins page.",
       "columns": [
         {
           "name": "email",
           "type": "TEXT",
           "nullable": true,
-          "comment": "The admin's email address, lowercased, as Google gives it verified."
+          "comment": "The admin's email address in its canonical form, which sign-ins are matched by (browl.admins.canonical_email): lowercased, and for Gmail without the dots in its local part."
+        },
+        {
+          "name": "display_email",
+          "type": "TEXT",
+          "nullable": false,
+          "comment": "The admin's email address as it was added, lowercased, to show."
         },
         {
           "name": "added_at",
           "type": "TEXT",
           "nullable": false,
-          "comment": "When the admin was added."
+          "comment": "When the admin was added, ISO 8601 with a time zone."
+        },
+        {
+          "name": "added_by",
+          "type": "TEXT",
+          "nullable": true,
+          "comment": "The email address of the admin who added them, as they signed in; NULL if added with AUTH_DISABLED, or before P-23."
         }
       ],
       "indexes": [
@@ -209,9 +221,19 @@
           "columns": [
             "email"
           ]
+        },
+        {
+          "name": "-",
+          "type": "CHECK",
+          "def": "CHECK (display_email = lower(display_email))",
+          "table": "admin",
+          "columns": [
+            "email",
+            "display_email"
+          ]
         }
       ],
-      "def": "CREATE TABLE admin (\n        email TEXT PRIMARY KEY CHECK (email = lower(email)),\n        added_at TEXT NOT NULL\n    )"
+      "def": "CREATE TABLE \"admin\" (\n        email TEXT PRIMARY KEY CHECK (email = lower(email)),\n        display_email TEXT NOT NULL CHECK (display_email = lower(display_email)),\n        added_at TEXT NOT NULL,\n        added_by TEXT\n    )"
     },
     {
       "name": "sign_out",
@@ -222,7 +244,7 @@
           "name": "email",
           "type": "TEXT",
           "nullable": true,
-          "comment": "The account's email address, lowercased, as Google gives it verified."
+          "comment": "The account's email address in its canonical form (browl.admins.canonical_email)."
         },
         {
           "name": "signed_out_at",
@@ -270,7 +292,7 @@
           ]
         }
       ],
-      "def": "CREATE TABLE sign_out (\n        email TEXT PRIMARY KEY CHECK (email = lower(email)),\n        signed_out_at TEXT NOT NULL\n    )"
+      "def": "CREATE TABLE \"sign_out\" (\n        email TEXT PRIMARY KEY CHECK (email = lower(email)),\n        signed_out_at TEXT NOT NULL\n    )"
     }
   ],
   "driver": {

@@ -128,6 +128,7 @@ def test_base_url_is_required(settings_env: pytest.MonkeyPatch) -> None:
         ),
         ("EXTRA_PREFIXES", '{"ex": "http://example.org/", "": "urn:x:"}', {"ex": "http://example.org/", "": "urn:x:"}),
         ("SEED_ADMINS", '["Admin@Example.org"]', ["admin@example.org"]),
+        ("SEED_ADMINS", '[" J.Doe@Gmail.com", "j.doe@example.org"]', ["j.doe@gmail.com", "j.doe@example.org"]),
         (
             "MATERIALIZE_PROPERTIES",
             '["http://purl.obolibrary.org/obo/BFO_0000050", "obo:BFO_0000051"]',
@@ -242,6 +243,8 @@ def test_only_uppercase_env_names_are_read(
         ("SEED_ADMINS", '["admin"]', f"{NOT_EMAIL}: admin$"),
         ("SEED_ADMINS", '["a@b@c"]', f"{NOT_EMAIL}: a@b@c$"),
         ("SEED_ADMINS", '["a@b.org", "A@b.org"]', f"{DUPLICATES}: a@b.org$"),
+        ("SEED_ADMINS", '["jdoe@gmail.com", "j.doe@gmail.com"]', f"{DUPLICATES}: jdoe@gmail.com$"),
+        ("SEED_ADMINS", '["a@localhost"]', f"{NOT_EMAIL}: a@localhost$"),
     ],
 )
 def test_invalid_setting_is_rejected(settings_env: pytest.MonkeyPatch, name: str, value: str, message: str) -> None:

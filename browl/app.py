@@ -14,7 +14,21 @@ from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
 
 import browl
-from browl import admin, auth, derived, imports, loading, lookup, owlapi, precache, robot, search, search_page, trees
+from browl import (
+    admin,
+    admins_page,
+    auth,
+    derived,
+    imports,
+    loading,
+    lookup,
+    owlapi,
+    precache,
+    robot,
+    search,
+    search_page,
+    trees,
+)
 from browl.admins import AdminStore
 from browl.derived import DerivedReader, NotCurrentError
 from browl.fuseki import FusekiClient, dataset_clause, ping
@@ -175,6 +189,7 @@ def create_app(
     app.include_router(router, prefix=reserved)
     app.include_router(auth.router, prefix=reserved)
     app.include_router(admin.router, prefix=reserved)
+    app.include_router(admins_page.router, prefix=reserved)
     app.include_router(lookup.reserved_router, prefix=reserved)
     app.include_router(trees.router, prefix=reserved)
     app.include_router(search_page.router, prefix=reserved)

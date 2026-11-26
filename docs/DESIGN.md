@@ -1944,6 +1944,11 @@ applied to `async` handlers, because it would store unrun coroutine objects rath
   `/{RESERVED_PREFIX}/admin` require it. _(Q16)_
 - An admin is a signed-in user whose verified email is in the seed list (from configuration) or in the `admin` table in
   a persistent SQLite file. Seed admins can't be removed in the UI. Whole-domain rules are not supported. _(Q16a)_
+- Email addresses are shown lowercased, as configured, added or signed in with, but compared in one canonical form
+  (`browl.admins.canonical_email`): lowercased, and for `gmail.com` without the dots in the local part, which Gmail
+  ignores, so `J.Doe@gmail.com` and `jdoe@gmail.com` are one admin. The `admin` and `sign_out` tables are keyed by
+  it; `admin` also keeps the address as added, to show. Gmail's other equivalences (`+` tags, `googlemail.com`)
+  aren't applied. _(P-23)_
 - `AUTH_DISABLED=true` turns authentication off for development. It logs a prominent warning at startup and is never the
   default. _(Q16)_
 
@@ -1987,6 +1992,23 @@ How it works (P-22, `browl.auth`):
   clears any session for that account that started at or before it: signing out ends the account's sessions on every
   device, and a copied cookie stops working. If the time can't be stored, the error is logged, and only this browser
   is signed out. The table holds a row for each account that has ever signed out.
+
+The admins page (P-23, `browl.admins_page`, `admin/admins`) delivers A-7:
+
+- **It lists** the seed admins first, as configured, then the admins in the `admin` table, as added, with when and by
+  whom. An address in both, e.g. added here and later seeded, is listed once, as a seed admin; its row stays, so
+  dropping it from `SEED_ADMINS` leaves it an admin who can be removed here. With `AUTH_DISABLED`, the page works and
+  says the list takes effect once sign-in is on.
+- **Adding** checks an address only loosely (no spaces or control characters, one `@`, a dot in the domain); Google
+  checks the rest at sign-in. A seed admin's address, or one already listed, in any form, is refused.
+- **Removing** asks first (`static/confirm.js`), more starkly on your own row: removing yourself refuses you the admin
+  pages from your next request. Seed admins can't be removed. Without JS, Remove posts at once. The page is a plain
+  form post and a redirect, not htmx, so a refusal or error shows as a page like any other.
+- Both are POSTs refused from another site's page (`Sec-Fetch-Site`), like the upload. FastAPI parses a form's body
+  before the routes' dependencies run, so before the admin and cross-site checks; so the router caps it (FastAPI's
+  `max_body_size` and `form_limits`), whoever sends it.
+- The admin pages link to each other (Upload · Status · Admins) above their titles; the navigation bar's Admin link
+  still goes to the upload page.
 
 ### 2.12 Configuration
 
@@ -2128,22 +2150,18 @@ flowchart LR
         P45["P-45 Shared results pager"]
         P46["P-46 Prose search"]
         P21["P-21 Page cache"]
-        P23["P-23 Admin list"]
         P33["P-33 JSON API"]
     end
     subgraph P6["Phase 6: Hardening"]
         P24["P-24 Performance check"]
         P25["P-25 Accessibility pass"]
         P29["P-29 Compressed load files"]
-        P31["P-31 Load progress"]
         P32["P-32 Reasoner progress"]
         P36["P-36 Cancel a load"]
     end
     S5b["S-5b OLS4 comparison"]
 
     P39 --> P25
-    P31 --> P36
-    P31 --> P32
 ```
 
 ### Phase 0: Spikes
@@ -2222,7 +2240,7 @@ go into this document.
 | P-33 | JSON API over the pages' data: routes under `api/` returning the models the pages render (2.8, 2.13) | U-42 | P-16, P-17, P-18, P-19, P-27, P-38 | To do | [#76](https://github.com/jclerman/browl/issues/76) |
 | P-21 | Page cache keyed by generation | O-10, N-3 | P-16 | To do | [#40](https://github.com/jclerman/browl/issues/40) |
 | P-22 | Google sign-in, admin-route protection, dev no-auth mode (cancelling a job: P-36) | A-1, O-6, O-7 | P-6 | Done | [#17](https://github.com/jclerman/browl/issues/17) |
-| P-23 | Admin list management page and persistence | A-7 | P-22 | To do | [#19](https://github.com/jclerman/browl/issues/19) |
+| P-23 | Admin list management page and persistence | A-7 | P-22 | Done | [#19](https://github.com/jclerman/browl/issues/19) |
 
 ### Phase 6: Hardening
 
@@ -2231,7 +2249,7 @@ go into this document.
 | P-24 | Performance check against N-1–N-3 targets at scale; whether streaming extraction alongside the TDB2 load is worth it | N-1–N-3 | all above | To do | [#42](https://github.com/jclerman/browl/issues/42) |
 | P-25 | Accessibility pass (trees, combobox, no-JS pages) | U-17 | P-18, P-20, P-38, P-39 | To do | [#35](https://github.com/jclerman/browl/issues/35) |
 | P-29 | Store the upload, fetched imports and ROBOT's output compressed at rest (gzip shrank Uberon 13–16×, P-8), and accept compressed uploads; measure the cost first | A-2 | P-8 | To do | [#71](https://github.com/jclerman/browl/issues/71) |
-| P-31 | Show load progress: each stage's elapsed time, ROBOT's current step, triples loaded of the total, the import being handled; for pre-caching, each hook's name, elapsed time and phase, with the rows received while a query streams and the database changes made; and background builds after a load (P-27c's usage table), with their progress | A-5 | P-8 | To do | [#73](https://github.com/jclerman/browl/issues/73) |
+| P-31 | Show load progress: each stage's elapsed time, ROBOT's current step, triples loaded of the total, the import being handled; for pre-caching, each hook's name, elapsed time and phase, with the rows received while a query streams and the database changes made; and background builds after a load (P-27c's usage table), with their progress | A-5 | P-8 | Done | [#73](https://github.com/jclerman/browl/issues/73) |
 | P-32 | Show the reasoner's own progress (per task, as Protégé does), running ROBOT's reasoning through its Java API with a progress monitor | A-5 | P-31, P-30 | To do | [#74](https://github.com/jclerman/browl/issues/74) |
 | P-36 | Cancel from the admin status page: a running load or rebuild (the job stops, its new store and derived files are removed, and the served ontology is unchanged) or a background build after a load; and a time limit on pre-caching | A-10 | P-22, P-31 | To do | [#111](https://github.com/jclerman/browl/issues/111) |
 | P-37 | Axioms broken across lines by their structure, with leading operators indented by depth, where they have more than one set of parentheses; axiom keywords bold and class-expression constructors in an accent color; on the Overview's Logical axioms panel and the Usage tab (2.8, 2.9); amends U-32 | U-32 | P-15, P-16, P-27 | To do | [#114](https://github.com/jclerman/browl/issues/114) |

@@ -206,7 +206,7 @@ def same_origin(request: Request) -> None:
     """Refuse a request a browser sent from another site's page, e.g. one submitting the upload form (CSRF).
 
     Browsers say where a request came from in `Sec-Fetch-Site`; a request without it, e.g. from curl, passes. It's
-    checked before the body is read, so it suits the streaming upload.
+    checked before the body is read, so it suits the streaming upload; but FastAPI parses a `Form()` body first.
 
     Raises:
         HTTPException: 403, the request came from another site.

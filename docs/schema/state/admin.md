@@ -2,15 +2,17 @@
 
 ## Description
 
-Admins added in the UI (DESIGN.md 2.11): a signed-in user whose verified email is here, or in SEED_ADMINS, is an admin. P-22 creates the table; P-23 adds the page that manages it.
+Admins added in the UI (DESIGN.md 2.11): a signed-in user whose verified email is here, or in SEED_ADMINS, is an admin. It's managed on the admins page.
 
 <details>
 <summary><strong>Table Definition</strong></summary>
 
 ```sql
-CREATE TABLE admin (
+CREATE TABLE "admin" (
         email TEXT PRIMARY KEY CHECK (email = lower(email)),
-        added_at TEXT NOT NULL
+        display_email TEXT NOT NULL CHECK (display_email = lower(display_email)),
+        added_at TEXT NOT NULL,
+        added_by TEXT
     )
 ```
 
@@ -18,18 +20,21 @@ CREATE TABLE admin (
 
 ## Columns
 
-| Name     | Type | Default | Nullable | Children | Parents | Comment                                                             |
-| -------- | ---- | ------- | -------- | -------- | ------- | ------------------------------------------------------------------- |
-| email    | TEXT |         | true     |          |         | The admin's email address, lowercased, as Google gives it verified. |
-| added_at | TEXT |         | false    |          |         | When the admin was added.                                           |
+| Name          | Type | Default | Nullable | Children | Parents | Comment                                                                                                                                                                      |
+| ------------- | ---- | ------- | -------- | -------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| email         | TEXT |         | true     |          |         | The admin's email address in its canonical form, which sign-ins are matched by (browl.admins.canonical_email): lowercased, and for Gmail without the dots in its local part. |
+| display_email | TEXT |         | false    |          |         | The admin's email address as it was added, lowercased, to show.                                                                                                              |
+| added_at      | TEXT |         | false    |          |         | When the admin was added, ISO 8601 with a time zone.                                                                                                                         |
+| added_by      | TEXT |         | true     |          |         | The email address of the admin who added them, as they signed in; NULL if added with AUTH_DISABLED, or before P-23.                                                          |
 
 ## Constraints
 
-| Name                     | Type        | Definition                   |
-| ------------------------ | ----------- | ---------------------------- |
-| email                    | PRIMARY KEY | PRIMARY KEY (email)          |
-| sqlite_autoindex_admin_1 | PRIMARY KEY | PRIMARY KEY (email)          |
-| -                        | CHECK       | CHECK (email = lower(email)) |
+| Name                     | Type        | Definition                                   |
+| ------------------------ | ----------- | -------------------------------------------- |
+| email                    | PRIMARY KEY | PRIMARY KEY (email)                          |
+| sqlite_autoindex_admin_1 | PRIMARY KEY | PRIMARY KEY (email)                          |
+| -                        | CHECK       | CHECK (email = lower(email))                 |
+| -                        | CHECK       | CHECK (display_email = lower(display_email)) |
 
 ## Indexes
 
@@ -45,7 +50,9 @@ erDiagram
 
 "admin" {
   TEXT email PK
+  TEXT display_email
   TEXT added_at
+  TEXT added_by
 }
 ```
 

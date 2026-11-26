@@ -580,6 +580,26 @@ code {
   }
 }
 
+/* The admin pages' links (`admin/_nav.html`), the page shown in bold. */
+.admin-nav ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space);
+  list-style: none;
+  margin: 0 0 var(--space);
+  padding: 0;
+}
+
+.admin-nav a[aria-current="page"] {
+  color: inherit;
+  font-weight: bold;
+  text-decoration: none;
+}
+
+.add-admin input[type="email"] {
+  width: min(30ch, 100%);
+}
+
 .upload {
   max-width: var(--measure);
 }
@@ -1651,12 +1671,15 @@ code {
   font-style: italic;
 }
 
-/* A table, one line per hit; on a narrow screen, each hit's cells wrap as one block. */
-.hits {
+/* A table, one line per hit; on a narrow screen, each hit's cells wrap as one block. The admins page's table shares
+   its look. */
+.hits,
+.admins {
   border-collapse: collapse;
 }
 
-.hits th {
+.hits th,
+.admins th {
   color: var(--muted);
   font-size: 0.85em;
   font-weight: normal;
@@ -1664,7 +1687,9 @@ code {
 }
 
 .hits th,
-.hits td {
+.hits td,
+.admins th,
+.admins td {
   padding: calc(var(--space) / 4) calc(var(--space) / 2);
   vertical-align: baseline;
 }
@@ -1716,6 +1741,51 @@ code {
     min-width: 0;
   }
 }
+
+/* The admins page (A-7): a table like the hits', with a line under each admin. A long address wraps rather than
+   widening the page. */
+.admins th,
+.admins td {
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+
+.admins form {
+  margin: 0;
+}
+
+/* On a narrow screen, each admin is a block: the address, then when they were added and the Remove button. */
+@media (width <= 40rem) {
+  .admins,
+  .admins tbody,
+  .admins tr {
+    display: block;
+  }
+
+  .admins thead {
+    display: none;
+  }
+
+  .admins tr {
+    border-bottom: 1px solid var(--border);
+    padding: calc(var(--space) / 4) 0;
+  }
+
+  .admins td {
+    border: 0;
+    display: inline-block;
+    padding: 0 calc(var(--space) / 2) 0 0;
+  }
+
+  .admins td:first-child {
+    display: block;
+  }
+
+  .admins td:empty {
+    display: none;
+  }
+}
+
 
 .search-paging {
   display: flex;

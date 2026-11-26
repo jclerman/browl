@@ -16,6 +16,7 @@ import httpx2
 import pytest
 
 import browl.jobs
+from browl.admins import AdminStore
 from browl.job_view import job_elapsed
 from browl.jobs import (
     CANCELLED,
@@ -68,7 +69,7 @@ def schema_version(path: Path) -> int:
 def test_store_migrates_new_database(data_dir: Path) -> None:
     """Check that a new database is created at the latest schema version, with no job."""
     store = JobStore(data_dir / "sub" / STATE_DB)
-    assert schema_version(store.path) == len(browl.jobs.MIGRATIONS) == 8
+    assert schema_version(store.path) == len(browl.jobs.MIGRATIONS) == 9
     assert store.read() == JobState()
 
 
@@ -343,6 +344,44 @@ def test_store_migrates_version_6(data_dir: Path) -> None:
     assert schema_version(path) == len(browl.jobs.MIGRATIONS)
 
 
+def test_store_migrates_version_8(data_dir: Path) -> None:
+    """Check that a version 8 database migrates: keyed by canonical addresses, shown as stored, with no adder (P-23).
+
+    Gmail rows that then coincide merge into the earliest addition and the latest sign-out. Each `added_at` becomes
+    ISO 8601 in UTC; one SQLite can't read as a time becomes the migration's (review C4).
+    """
+    path = data_dir / STATE_DB
+    with closing(sqlite3.connect(path)) as connection:
+        connection.executescript(
+            f"BEGIN;\n{';'.join(browl.jobs.MIGRATIONS[:8])}\nPRAGMA user_version = 8;\n"
+            "INSERT INTO admin VALUES ('j.doe@gmail.com', '2026-01-02T00:00:00+00:00'),"
+            " ('jdoe@gmail.com', '2026-01-01T00:00:00+00:00'), ('a.b@example.org', '2026-01-03T00:00:00+00:00'),"
+            " ('by-hand@example.org', '2026-01-05 10:00:00'), ('zone@example.org', '2026-01-04T01:00:00+01:00'),"
+            " ('junk@example.org', 'yesterday');\n"
+            "INSERT INTO sign_out VALUES ('j.doe@gmail.com', '2026-02-02T00:00:00+00:00'),"
+            " ('jdoe@gmail.com', '2026-02-01T00:00:00+00:00'), ('a.b@example.org', '2026-02-03T00:00:00+00:00');\n"
+            "COMMIT;"
+        )
+    before = datetime.now(UTC)
+    JobStore(path)
+    assert schema_version(path) == len(browl.jobs.MIGRATIONS)
+    with closing(sqlite3.connect(path)) as connection:
+        admins = connection.execute("SELECT * FROM admin WHERE email != 'junk@example.org' ORDER BY email").fetchall()
+        sign_outs = connection.execute("SELECT * FROM sign_out ORDER BY email").fetchall()
+    assert admins == [
+        ("a.b@example.org", "a.b@example.org", "2026-01-03T00:00:00.000+00:00", None),
+        ("by-hand@example.org", "by-hand@example.org", "2026-01-05T10:00:00.000+00:00", None),
+        ("jdoe@gmail.com", "j.doe@gmail.com", "2026-01-01T00:00:00.000+00:00", None),
+        ("zone@example.org", "zone@example.org", "2026-01-04T00:00:00.000+00:00", None),
+    ]
+    assert sign_outs == [
+        ("a.b@example.org", "2026-02-03T00:00:00+00:00"),
+        ("jdoe@gmail.com", "2026-02-02T00:00:00+00:00"),
+    ]
+    [junk] = [admin for admin in AdminStore(path).admins() if admin.email == "junk@example.org"]
+    assert before - timedelta(seconds=1) <= junk.added_at <= datetime.now(UTC)
+
+
 async def test_stage_results_recorded(data_dir: Path) -> None:
     """Check that the imports, triple counts and prefixes the stages set are stored, also when a stage fails."""
     imports = [ImportResult("http://a/", None, None, 3), ImportResult("file:/x", "http://a/", "not allowed")]
@@ -406,9 +445,10 @@ async def test_upload_failure(data_dir: Path) -> None:
     assert (await run_job(runner)).site == Site.AVAILABLE
 
 
-async def upload_slowly(runner: JobRunner) -> None:
-    """Take a second over an upload."""
+async def upload_slowly(runner: JobRunner, started: asyncio.Event) -> None:
+    """Take a second over an upload, setting `started` once it has started."""
     async with runner.upload():
+        started.set()
         await asyncio.sleep(1)
 
 
@@ -417,21 +457,37 @@ async def test_upload_cancelled(data_dir: Path, scope: str) -> None:
     """Check that an upload cancelled from outside is recorded as cancelled, and frees the runner.
 
     It's cancelled by a cancel scope, a time limit, or cancelling the request's task, as a server may when a client
-    disconnects. An anyio cancel scope also cancels the failure record, which must still stop the site serving.
+    disconnects. An anyio cancel scope also cancels the failure record, which must still stop the site serving. Each
+    cancels once the upload has started, not after a fixed time, which a slow machine may spend still claiming the job
+    (`test_claim_cancelled` covers that).
     """
     runner = await open_runner(data_dir)
+    started = asyncio.Event()
     if scope == "anyio":
-        with anyio.move_on_after(0.05):
-            await upload_slowly(runner)
+
+        async def cancel_once_started(cancel_scope: anyio.CancelScope) -> None:
+            await started.wait()
+            cancel_scope.cancel()
+
+        with anyio.CancelScope() as cancel_scope:
+            async with anyio.create_task_group() as group:
+                group.start_soon(cancel_once_started, cancel_scope)
+                await upload_slowly(runner, started)
     elif scope == "asyncio":
+
+        async def expire_once_started(timeout: asyncio.Timeout) -> None:
+            await started.wait()
+            timeout.reschedule(asyncio.get_running_loop().time())
+
         with pytest.raises(TimeoutError):
-            async with asyncio.timeout(0.05):
-                await upload_slowly(runner)
+            async with asyncio.timeout(None) as timeout:
+                expiry = asyncio.create_task(expire_once_started(timeout))
+                await upload_slowly(runner, started)
+        await expiry
     else:
-        task = asyncio.create_task(upload_slowly(runner))
+        task = asyncio.create_task(upload_slowly(runner, started))
         async with asyncio.timeout(5):
-            while not runner.state.running:
-                await asyncio.sleep(0.001)
+            await started.wait()
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
