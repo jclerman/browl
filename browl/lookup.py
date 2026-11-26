@@ -12,6 +12,7 @@ own page is the home page (`browl.home`), without tabs.
 
 import dataclasses
 import html
+import logging
 import sqlite3
 import urllib.parse
 from dataclasses import dataclass
@@ -34,10 +35,12 @@ from browl.derived import (
     is_hash_prefix,
     read_meta,
 )
-from browl.hierarchy_column import read_column
+from browl.fuseki import SparqlError
+from browl.hierarchy_column import IndividualTypes, fetch_types, read_column
 from browl.home import read_home
 from browl.jobs import JobState
 from browl.links import EntityLink, entity_name
+from browl.loading import dataset_name
 from browl.overview import read_overview
 from browl.pager import PAGE_PARAM, Pager, make_pager, page_params, read_page
 from browl.pages import (
@@ -53,6 +56,8 @@ from browl.pages import (
     templates,
     tree_href,
 )
+from browl.precache.core import logged_iri
+from browl.rdf import RDFSyntaxError
 from browl.tabs import (
     PANEL_PARAM,
     TAB_PARAM,
@@ -76,6 +81,9 @@ from browl.usage_tab import (
     remaining_text,
     usage_label,
 )
+from browl.usages import ready_store
+
+logger = logging.getLogger(__name__)
 
 HASH_PATH = "hash"
 """The hash-IRI script's lookup route's path under the reserved prefix."""
@@ -304,10 +312,30 @@ async def _page(
     if query.panel:
         return templates.TemplateResponse(request, "entity_panel.html", context, headers=PANEL_HEADERS)
     # Not in a panel alone, as the tabs keep the page's column.
+    individual_types = await _individual_types(request, state, entities)
     context["column"] = await read_derived(
-        request, lambda connection: read_column(request, connection, entities), state
+        request, lambda connection: read_column(request, connection, entities, individual_types), state
     )
     return templates.TemplateResponse(request, "entity.html", context | common)
+
+
+async def _individual_types(
+    request: Request, state: JobState, entities: list[Entity]
+) -> dict[str, IndividualTypes] | None:
+    """Return the named types of the individual among an IRI's entities, for its column, by IRI; None if there's none.
+
+    If they can't be read, which is logged, there are none, and the column has no tree for them.
+    """
+    individual = next((each for each in entities if each.type == EntityType.NAMED_INDIVIDUAL), None)
+    if individual is None:
+        return None
+    generation, clause = ready_store(state)
+    try:
+        types = await fetch_types(request.app.state.sparql, dataset_name(generation), individual.iri, clause)
+    except (SparqlError, RDFSyntaxError):
+        logger.exception("Couldn't read the types of %s for its hierarchy column", logged_iri(individual.iri))
+        return {}
+    return {individual.iri: types}
 
 
 def _hash_script(request: Request, prefix: str, path: str, prefix_only: bool) -> dict[str, str]:
