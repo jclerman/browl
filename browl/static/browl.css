@@ -1066,6 +1066,7 @@ code {
   line-height: 1.35;
   text-indent: 0;
   vertical-align: baseline;
+  baseline-source: first; /* its first line on the value's, when it wraps beside a short one */
 }
 
 .axiom-annotation .axiom-annotation {
