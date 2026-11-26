@@ -732,7 +732,7 @@ def test_annotations_query_fails(
 
 
 def test_unlisted(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Check that usages counted but not listed, such as anonymous individuals', make no pages past those listed.
+    """Check that usages counted but not listed, such as some in anonymous individuals, make no pages past those listed.
 
     An entity with none listed says so.
     """
@@ -751,7 +751,7 @@ def test_unlisted(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(browl.usage_tab, "read_usages", none)
     page = panel(client, "Dog").text
-    assert "None of these usages can be listed yet" in page
+    assert "None of these usages can be listed here." in page
     assert "<dl" not in page and '<nav class="pager"' not in page
     whole = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "Dog", "tab": "usage"}).text
     assert 'hx-sync="#tab-panel:replace">Usage (5)</a>' in whole  # the count, unlisted usages included
