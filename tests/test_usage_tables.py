@@ -272,17 +272,27 @@ async def test_kinds(store: UsageStore) -> None:
         ("Heart", Source.ROOT, UsageKind.SUB_CLASS_OF, subclass),
         ("Fruit", Source.ROOT, UsageKind.SUB_CLASS_OF, subclass),
         ("hasPart", Source.OBJECT, UsageKind.INVERSE_OF, f"{OWL}inverseOf"),
+        ("Kidney", Source.ROOT, UsageKind.SUB_CLASS_OF, subclass),
+        ("Kidney", Source.ROOT, UsageKind.SUB_CLASS_OF, subclass),
         ("Liver", Source.ROOT, UsageKind.SUB_CLASS_OF, subclass),
         ("Mineral", Source.ROOT, UsageKind.DISJOINT_CLASS, f"{OWL}disjointWith"),
         general,
         general,
         general,
     ]
+    annotation, comment = UsageKind.AXIOM_ANNOTATION, f"{NS}comment"
     assert await rows("note") == [
-        ("Cat", Source.ROOT, UsageKind.AXIOM_ANNOTATION, subclass),
-        ("Liver", Source.ROOT, UsageKind.AXIOM_ANNOTATION, subclass),
+        ("Bladder", Source.ROOT, annotation, comment),
+        ("Bladder", Source.ROOT, annotation, f"{OWL}disjointWith"),
+        ("Cat", Source.ROOT, annotation, subclass),
+        ("Kidney", Source.ROOT, annotation, comment),
+        ("Kidney", Source.ROOT, annotation, comment),
+        ("Kidney", Source.ROOT, annotation, subclass),
+        ("Liver", Source.ROOT, annotation, subclass),
         general,
         general,
+        (f"{NS}carol", Source.ROOT, annotation, f"{NS}knows"),  # individuals have no entity row until P-47
+        (f"{NS}carol", Source.ROOT, annotation, f"{NS}weight"),
     ]
     animal = await rows("Animal")
     assert ("Dog", Source.OBJECT, UsageKind.TYPE, f"{RDF}type") in animal

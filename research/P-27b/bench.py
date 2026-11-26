@@ -61,7 +61,7 @@ async def first_page(store: UsageStore, counts: UsageCounts, iri: str) -> dict:
     times["stream"] = time.perf_counter()
     ordered = await store.derived.read(GENERATION, lambda c: sorted_usages(c, usages))
     times["sort"] = time.perf_counter()
-    groups = await read_usage_page(store, iri, ordered, 1)
+    groups = (await read_usage_page(store, iri, ordered, 1)).groups
     times["page"] = time.perf_counter()
     mentioned = [g.subject for g in groups if g.subject] + [i for g in groups for a in g.axioms for i in a.iris()]
     links = await store.derived.read(GENERATION, lambda c: read_entity_links(c, mentioned, "_browl", ""))

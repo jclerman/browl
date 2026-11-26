@@ -364,3 +364,18 @@ def test_contrast(theme: int, text: str, background: str) -> None:
     """Check that each text color meets WCAG AA (4.5:1) on each background, in both themes (U-29)."""
     palette = palettes()[theme]
     assert contrast(palette[text], palette[background]) >= 4.5
+
+
+@pytest.mark.parametrize("theme", [0, 1], ids=["light", "dark"])
+@pytest.mark.parametrize("text", ["fg", "muted", "accent"])
+def test_annotation_contrast(theme: int, text: str) -> None:
+    """Check that each text color in an axiom annotation's box meets WCAG AA (4.5:1) on its tint, in both themes."""
+    palette = palettes()[theme]
+    assert contrast(palette[text], palette["annotation-bg"]) >= 4.5
+
+
+@pytest.mark.parametrize("theme", [0, 1], ids=["light", "dark"])
+def test_annotation_border(theme: int) -> None:
+    """Check that an axiom annotation's border is 3:1 or more against the page (WCAG 1.4.11), in both themes."""
+    palette = palettes()[theme]
+    assert contrast(palette["annotation-border"], palette["bg"]) >= 3

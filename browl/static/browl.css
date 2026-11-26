@@ -11,6 +11,8 @@
   --accent: #3d6b8c;
   --danger: #a33a32;
   --mark-bg: #f7eab8; /* the page's entity, in an axiom: --fg 11.7:1, --accent 4.7:1 on it */
+  --annotation-bg: #dfeeec; /* an axiom annotation's box: --muted 4.8:1, --accent 4.8:1 on it */
+  --annotation-border: #4f8f88; /* 3.6:1 on --bg */
   /* A load stage's state (`_load_progress.html`): done, running, failed; not started uses --bar-bg and --muted. */
   --done-bg: #e1f0e1;
   --done-fg: #25622f; /* 6.2:1 on --done-bg */
@@ -38,6 +40,8 @@
     --accent: #7fa8c6;
     --danger: #e08a80;
     --mark-bg: #3d3822; /* --fg 8.5:1, --accent 4.7:1 */
+    --annotation-bg: #1f3331; /* --muted 4.7:1, --accent 5.3:1 */
+    --annotation-border: #4f8a83; /* 4.2:1 on --bg */
     --done-bg: #1f3524;
     --done-fg: #93d19d; /* 7.4:1 */
     --active-bg: #3b3214;
@@ -1030,6 +1034,33 @@ code {
   font-weight: 600;
 }
 
+/* Axiom annotations (U-35), a box per property (DESIGN.md §2.8, Axiom annotations). The mark's entity is --fg, as
+   --muted isn't AA on --mark-bg in the dark theme. */
+.axiom-annotation {
+  position: relative; /* holds its visually hidden brackets */
+  display: inline-block;
+  max-width: 100%;
+  margin: 0.15em 0;
+  padding: 0.1em 0.45em;
+  border: 1px solid var(--annotation-border);
+  border-radius: 4px;
+  background: var(--annotation-bg);
+  color: var(--muted);
+  font-size: 0.82em;
+  line-height: 1.35;
+  text-indent: 0;
+  vertical-align: baseline;
+}
+
+.axiom-annotation .axiom-annotation {
+  margin: 0 0 0 0.2em;
+  font-size: 1em; /* not smaller again */
+}
+
+.axiom-annotation mark {
+  color: var(--fg);
+}
+
 /* Text for screen readers alone. */
 .visually-hidden {
   position: absolute;
@@ -1040,13 +1071,11 @@ code {
   white-space: nowrap;
 }
 
-/* The Usage tab (U-26): the paging at the top; then a frame of subjects and their axioms; an axiom's annotations, when
-   shown, beneath it in small text, nested ones indented further. */
+/* The Usage tab (U-26): the paging at the top; then a frame of subjects and their axioms. */
 
 /* Three columns: the subject, the keyword (`SubClassOf`, an annotation assertion's property, …) and the rest of the
    axiom, each line a subgrid of the last two, so the keywords line up down the tab. A line that doesn't start with its
-   subject and a keyword spans both, as do the annotations beneath a line, indented. Without subgrid, a line is the
-   keyword and the rest, as text. */
+   subject and a keyword spans both. Without subgrid, a line is the keyword and the rest, as text. */
 .frame.usage-frame {
   grid-template-columns: fit-content(20rem) fit-content(16rem) minmax(0, 1fr);
 }
@@ -1077,8 +1106,7 @@ code {
     text-indent: calc(var(--space) * -1.5);
   }
 
-  .usage-whole .usage-axiom,
-  .usage-line .axiom-annotations {
+  .usage-whole .usage-axiom {
     grid-column: 1 / -1;
   }
 }
@@ -1092,14 +1120,6 @@ code {
   .frame.usage-frame dd {
     grid-column: 1 / -1;
   }
-}
-
-.axiom-annotations {
-  margin: 0;
-  padding-left: calc(var(--space) * 1.5);
-  list-style: none;
-  text-indent: 0;
-  font-size: 0.85em;
 }
 
 .pager {

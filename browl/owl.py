@@ -3,7 +3,7 @@
 Node types follow the OWL 2 structural specification's names (`SubClassOf`, `ObjectSomeValuesFrom`, …), and an
 axiom's fields name its roles (`SubClassOf.sub`, `ClassAssertion.individual`). Each node is a frozen Pydantic model with
 a `type` field that discriminates the unions of nodes (`ClassExpression`, `AnyAxiom`, …), so nodes round-trip through
-JSON (U-42), those `browl.axioms` makes at least, which nest at most `browl.axioms.MAX_DEPTH` deep. A field holding
+JSON (U-42), those `browl.axioms` makes at least, which nest at most `browl.nesting.MAX_DEPTH` deep. A field holding
 axioms is typed `AnyAxiom`: Pydantic serializes by the declared type, so `Axiom` would drop the subclass's fields.
 
 A node renders in Manchester syntax as a stream of typed tokens (`Node.manchester_tokens`): keywords, IRIs, literals
@@ -968,10 +968,12 @@ class Annotation(Node):
 class Axiom(Node):
     """An axiom: what a page shows of it (DESIGN.md §2.8, Panel data apart from its HTML).
 
-    Its Manchester syntax leaves its annotations out: a page shows them, if at all, apart from the axiom's line.
+    Its Manchester syntax leaves its annotations out: a page shows them after it, on its line, as boxes (DESIGN.md §2.8,
+    Axiom annotations).
 
     Attributes:
-        annotations: The axiom's annotations, where a page shows them (a usage found only through them); else empty.
+        annotations: The axiom's annotations, but those left out (past `browl.nesting.MAX_ANNOTATION_DEPTH`, or with a
+            note on the page when too many or unreadable).
     """
 
     annotations: tuple[Annotation, ...] = ()

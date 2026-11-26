@@ -1,29 +1,20 @@
+{% from "annotations.html" import axiom_annotations %}
 {% from "axioms.html" import manchester %}
 {% from "links.html" import named_iri, named_text %}
-{# An axiom's annotations (`browl.owl.Annotation`), each `property value` on a line of its own beneath the axiom, an
-   annotation's own annotations nested beneath it; the entity, `mark`, highlighted. #}
-{% macro axiom_annotations(annotations, links, mark) -%}
-<ul class="axiom-annotations">
-  {%- for annotation in annotations %}
-  <li>{{ manchester(annotation.manchester_tokens(), links, mark) }}
-    {%- if annotation.annotations %}{{ axiom_annotations(annotation.annotations, links, mark) }}{% endif %}</li>
-  {%- endfor %}
-</ul>
-{%- endmacro %}
-
-{# A line of the Usage tab: an axiom of `subject`'s, the entity, `mark`, highlighted. One that starts with its subject
-   then a keyword (`browl.owl.Axiom.subject_split`) is in two columns, the keyword and the rest, its subject in text
-   only screen readers read, so the line still reads as the whole axiom; any other spans both. #}
+{# A line of the Usage tab: an axiom of `subject`'s, with its annotations after it (`axiom_annotations`), the entity,
+   `mark`, highlighted. One that starts with its subject then a keyword (`browl.owl.Axiom.subject_split`) is in two
+   columns, the keyword and the rest, its subject in text only screen readers read, so the line still reads as the
+   whole axiom; any other spans both. #}
 {% macro usage_line(axiom, subject, links, mark) -%}
 {%- set split = none if subject is none else axiom.subject_split(subject) -%}
 {%- if split is none -%}
-<dd dir="ltr" class="usage-line usage-whole"><span class="usage-axiom">{{ manchester(axiom.manchester_tokens(), links, mark) }}</span>
+<dd dir="ltr" class="usage-line usage-whole"><span class="usage-axiom">{{ manchester(axiom.manchester_tokens(), links, mark) }}
+  {{- axiom_annotations(axiom.annotations, links, mark) }}</span></dd>
 {%- else -%}
 <dd dir="ltr" class="usage-line"><span class="visually-hidden">{{ named_text(subject, links, split.subject.text) }} </span>
   <span class="usage-keyword">{{ manchester(split.keyword, links, mark) }}</span>
-  <span class="usage-axiom">{{ manchester(split.rest, links, mark) }}</span>
+  <span class="usage-axiom">{{ manchester(split.rest, links, mark) }}{{ axiom_annotations(axiom.annotations, links, mark) }}</span></dd>
 {%- endif %}
-  {%- if axiom.annotations %}{{ axiom_annotations(axiom.annotations, links, mark) }}{% endif %}</dd>
 {%- endmacro %}
 
 {# The Usage tab (`browl.usage_tab.UsageTab`, DESIGN.md §2.8) of the entity `iri`: the paging at the top, if there's
@@ -80,6 +71,11 @@
     {% endfor %}
     {% endfor %}
   </dl>
+  {% if usage.annotations_left_out == "too_many" %}
+  <p class="note">These usages' annotations are too many to show here.</p>
+  {% elif usage.annotations_left_out == "failed" %}
+  <p class="note">These usages' annotations can't be shown just now.</p>
+  {% endif %}
   {% endif %}
   {% endif %}
 </section>

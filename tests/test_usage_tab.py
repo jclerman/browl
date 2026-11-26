@@ -6,7 +6,7 @@ import math
 import re
 import sqlite3
 from collections import Counter
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from contextlib import closing, contextmanager
 from typing import Any
 
@@ -24,7 +24,7 @@ import browl.precache.stage
 import browl.usage_tab
 import browl.usage_tables
 import browl.usages
-from browl import owl, owlapi
+from browl import nesting, owl, owlapi
 from browl.axioms import axioms_about, convert_axioms, entity_axioms, fetch_fragment, is_declaration
 from browl.frames import frame_groups
 from browl.jobs import JobContext, Stage
@@ -36,6 +36,7 @@ from browl.precache.stage import pre_cache
 from browl.rdf import IRI
 from browl.settings import Settings
 from browl.usage_tab import (
+    UsageFragments,
     UsageGroup,
     UsageTab,
     fetch_usage_fragments,
@@ -44,7 +45,8 @@ from browl.usage_tab import (
     usage_label,
 )
 from browl.usages import Usage, UsageSource, UsageStore, read_usages
-from tests.helpers import connect, fuseki_dataset, loaded, make_app, make_settings, ontology_ntriples
+from tests.helpers import boxed, connect, fuseki_dataset, loaded, make_app, make_settings, ontology_ntriples
+from tests.test_axiom_annotations import AXIOM, CYCLE, depth, nested_chain, note
 from tests.test_usages import usage_triples
 
 pytestmark = pytest.mark.anyio
@@ -122,7 +124,7 @@ async def test_every_usage_once(
         for page in range(1, pages + 1):
             chunk = ordered[(page - 1) * size : page * size]
             continued = page > 1 and bool(chunk) and ordered[(page - 1) * size - 1].subject == chunk[0].subject
-            groups = await read_usage_page(store, iri, chunk, continued)
+            groups = (await read_usage_page(store, iri, chunk, continued)).groups
             assert [group.subject for group in groups] == list(dict.fromkeys(usage.subject for usage in chunk))
             for group in groups:
                 on_page = sum(usage.subject == group.subject for usage in chunk)
@@ -218,10 +220,26 @@ def subjects_shown(page: str) -> list[str]:
     return [html.unescape(re.sub(r"<[^>]+>", "", heading)).strip() for heading in found]
 
 
-LINE = re.compile(
-    r'<dd dir="ltr" class="usage-line( usage-whole)?">(.*?)(?:<ul class="axiom-annotations">|</dd>)', re.DOTALL
-)
-"""A Usage tab line: whether it spans the keyword's and the rest's columns, and its markup, without annotations."""
+LINE = re.compile(r'<dd dir="ltr" class="usage-line( usage-whole)?">(.*?)</dd>', re.DOTALL)
+"""A Usage tab line: whether it spans the keyword's and the rest's columns, and its markup."""
+ANNOTATIONS = ' <span class="axiom-annotations">'
+"""Where a line's annotations start (`templates/annotations.html`'s `axiom_annotations`)."""
+
+
+def split_annotations(line: str) -> tuple[str, str]:
+    """Return a line's markup without its axiom annotations, and theirs: the outermost span, nested ones within it."""
+    start = line.find(ANNOTATIONS)
+    if start < 0:
+        return line, ""
+    depth, end = 0, start
+    for tag in re.finditer(r"<span\b|</span>", line[start:]):
+        depth += 1 if tag[0] == "<span" else -1
+        if depth == 0:
+            end = start + tag.end()
+            break
+    return line[:start] + line[end:], line[start:end]
+
+
 SPLIT = re.compile(
     r'<span class="visually-hidden">(.*?)</span>\s*<span class="usage-keyword">(.*?)</span>\s*'
     r'<span class="usage-axiom">(.*)</span>\s*$',
@@ -237,32 +255,28 @@ def plain(markup: str) -> str:
 
 def lines_shown(page: str) -> list[str]:
     """Return the text of a Usage tab panel's axiom lines, in order, without their annotations or markup."""
-    return [plain(line) for _, line in LINE.findall(page)]
+    return [plain(split_annotations(line)[0]) for _, line in LINE.findall(page)]
 
 
 def columns_shown(page: str) -> list[tuple[str, str] | str]:
     """Return a Usage tab panel's lines: each in columns as its keyword and the rest, or whole, as text."""
     found: list[tuple[str, str] | str] = []
-    for whole, line in LINE.findall(page):
+    for whole, marked in LINE.findall(page):
+        line = split_annotations(marked)[0]
         split = SPLIT.match(line)
         assert (split is None) == bool(whole), line
         found.append(plain(line) if split is None else (plain(split[2]), plain(split[3])))
     return found
 
 
+def annotated_lines(page: str) -> list[tuple[str, str]]:
+    """Return a panel's lines, each as its text without annotations, and its annotations' text, if any."""
+    return [tuple(map(plain, split_annotations(line))) for _, line in LINE.findall(page)]  # type: ignore[misc]
+
+
 def annotations_shown(page: str) -> list[str]:
-    """Return a panel's annotation lists' items, nested ones by depth (`>`), without markup, in order."""
-    found = []
-    depth = 0
-    for token in re.findall(r'<ul class="axiom-annotations">|</ul>|<li>.*?(?=<ul|</li>)', page, re.DOTALL):
-        if token.startswith("<ul"):
-            depth += 1
-        elif token == "</ul>":
-            depth -= 1
-        else:
-            text = html.unescape(re.sub(r"<[^>]+>", "", token)).replace(NS, ":").strip()
-            found.append(">" * (depth - 1) + text)
-    return found
+    """Return the text of each of a panel's lines' axiom annotations that has some, in order, without markup."""
+    return [plain(annotations) for _, line in LINE.findall(page) if (annotations := split_annotations(line)[1])]
 
 
 def test_subjects(client: TestClient) -> None:
@@ -303,23 +317,72 @@ def test_subjects(client: TestClient) -> None:
 
 
 def test_annotations(client: TestClient) -> None:
-    """Check that an axiom shows its annotations only when the usage is found through them alone, nested by depth."""
-    assert annotations_shown(panel(client, "Fungus").text) == [":remark :Fungus"]  # on Tricky SubClassOf Animal
+    """Check that every line shows its axiom's annotations after it, nested ones in boxes within their value's.
+
+    Those of a written usage (Cat SubClassOf Animal) are fetched for the page, as are those of a usage found only
+    through them (Tricky SubClassOf Animal, annotated with Fungus).
+    """
+    assert annotations_shown(panel(client, "Fungus").text) == ["[:remark: :Fungus]"]
     plant = panel(client, "Plant").text
-    assert annotations_shown(plant) == [':note "nested"', ">:remark :Plant"]
+    assert annotations_shown(plant) == ["[:note: nested [:remark: :Plant]]"]
     assert lines_shown(plant)[1] == ":Liver SubClassOf :Organ"
-    # On Cat's and Liver's axioms, the general class axiom, and the n-ary DisjointClasses.
+    # On Bladder's, Cat's, Kidney's and Liver's axioms, the n-ary DisjointClasses, the general class axiom, and carol's.
     assert annotations_shown(panel(client, "note").text) == [
-        ':note "annotated"',
-        ':note "nested"',
-        ">:remark :Plant",
-        ':note "n-ary"',
-        ":remark :Mineral",
-        ':note "general"',
+        "[:note: British]",
+        "[:note: apart]",
+        "[:note: annotated]",
+        "[:note: a source [:remark: :Bladder], second]",
+        "[:note: en français]",
+        "[:note: restricted]",
+        "[:note: nested [:remark: :Plant]]",
+        "[:note: n-ary] [:remark: :Mineral]",
+        "[:note: general]",
+        "[:note: typed]",
+        "[:note: known]",
     ]
-    animal = panel(client, "Animal").text  # Cat SubClassOf Animal is annotated, but it's a usage by its own terms
+    # Written usages: literals matched by their digest, tagged ones too, nested annotations within.
+    assert annotated_lines(panel(client, "comment").text)[:3] == [
+        (':Bladder :comment "urinary bladder"@en-gb', "[:note: British]"),
+        (':Kidney :comment "filters blood"', "[:note: a source [:remark: :Bladder], second]"),
+        (':Kidney :comment "rein"@fr', "[:note: en français]"),
+    ]
+    assert annotated_lines(panel(client, "weight").text)[-1] == ("<:carol> :weight 5", "[:note: typed]")
+    # The entity as a written usage's predicate, with an IRI value; and as its object.
+    assert ("<:carol> :knows <:dave>", "[:note: known]") in annotated_lines(panel(client, "knows").text)
+    # Kidney's restriction of partOf to Organ isn't annotated, though the page fetches its other one's annotations.
+    organ = annotated_lines(panel(client, "Organ").text)
+    assert (":Kidney SubClassOf part of some :Organ", "") in organ
+    assert (":Kidney rdfs:seeAlso :Bladder", "[:remark: :Organ]") in organ
+    assert "restricted" not in str(organ)
+    animal = panel(client, "Animal").text
+    assert annotations_shown(animal) == ["[:remark: :Fungus]", "[:note: annotated]"]
     assert ":Cat SubClassOf :Animal" in lines_shown(animal)
-    assert "axiom-annotations" not in animal
+    # An annotated declaration, and axioms annotated with an entity they name too.
+    assert annotations_shown(panel(client, "Seed").text) == ["[rdfs:seeAlso: :Seed]"] * 3
+
+
+def annotation_pairs(axiom: owl.AnyAxiom) -> list[tuple[str, str]]:
+    """Return an axiom's annotations' properties and values: an IRI, or a literal's lexical form."""
+    pairs = []
+    for each in axiom.annotations:
+        value = each.value
+        shown = value.iri if isinstance(value, owl.IRIReference) else getattr(value, "lexical", "")
+        pairs.append((each.property.iri, shown))
+    return pairs
+
+
+async def usage_lines(store: UsageStore, iri: str) -> list[tuple[str, list[tuple[str, str]]]]:
+    """Return an entity's usages' axioms, on one page: each in Manchester syntax, with its annotations."""
+    groups = (await read_usage_page(store, iri, await read_usages(store, iri), False)).groups
+    return [(axiom.manchester, annotation_pairs(axiom)) for group in groups for axiom in group.axioms]
+
+
+async def test_object_annotations(store: UsageStore) -> None:
+    """Check an individual's usage as an assertion's object, with its axiom's annotations; its page waits for P-47."""
+    assert await usage_lines(store, f"{NS}dave") == [
+        (f"<{NS}carol> <{NS}knows> <{NS}dave>", [(f"{NS}note", "known")]),
+        (f"<{NS}carol> SameAs <{NS}dave>", []),
+    ]
 
 
 def test_label(client: TestClient) -> None:
@@ -543,6 +606,107 @@ def test_too_large(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: 
     assert "the page's values are too large: the result is longer than 40 characters" in caplog.text
 
 
+ANNOTATIONS_TOO_MANY = "These usages' annotations are too many to show here."
+ANNOTATIONS_FAILED = "These usages' annotations can't be shown just now."
+
+
+def answer_annotations(monkeypatch: pytest.MonkeyPatch, answer: Callable[[], bytes]) -> None:
+    """Make the Usage tab's annotations query answer with what `answer` returns, or raises; the others as they are."""
+    construct = browl.usage_tab._construct
+
+    async def patched(store: UsageStore, query: str, empty: str, rows: Sequence[str]) -> bytes:
+        if query == browl.usage_tab._ANNOTATIONS:
+            return answer()
+        return await construct(store, query, empty, rows)
+
+    monkeypatch.setattr(browl.usage_tab, "_construct", patched)
+
+
+CAT_REIFIED = (
+    f"_:big <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Axiom> .\n"
+    f"_:big <http://www.w3.org/2002/07/owl#annotatedSource> <{NS}Cat> .\n"
+    "_:big <http://www.w3.org/2002/07/owl#annotatedProperty> <http://www.w3.org/2000/01/rdf-schema#subClassOf> .\n"
+    f"_:big <http://www.w3.org/2002/07/owl#annotatedTarget> <{NS}Animal> .\n"
+)
+"""The reification of `Cat SubClassOf Animal`, on Animal's Usage tab, for annotations to be added to."""
+
+
+def test_too_many_annotations(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Check that 3,000 annotations on one usage's reified axiom are left out, with a note, and the page shown.
+
+    The OWLAPI's parse of them grows with the square of their number (`browl.axioms.MAX_FRAGMENT_ANNOTATIONS`).
+    """
+    assert browl.usage_tab.MAX_FRAGMENT_ANNOTATIONS < 3_000
+    notes = "".join(f'_:big <{NS}note> "{i}" .\n' for i in range(3_000))
+    answer_annotations(monkeypatch, lambda: (CAT_REIFIED + notes).encode())
+    page = panel(client, "Animal").text
+    assert ":Cat SubClassOf :Animal" in lines_shown(page)
+    assert "[:note: annotated]" not in annotations_shown(page)
+    assert ANNOTATIONS_TOO_MANY in page
+    assert "without their annotations, which are too many" in caplog.text
+
+
+@pytest.mark.parametrize("cap", ["bytes", "iris"])
+def test_annotations_past_caps(client: TestClient, monkeypatch: pytest.MonkeyPatch, cap: str) -> None:
+    """Check that annotations that alone take a page's fragments past their byte or IRI cap are left out, with a note.
+
+    The page, within the cap without them, is shown.
+    """
+    if cap == "bytes":
+        monkeypatch.setattr(browl.usage_tab, "CONSTRUCT_MAX_BYTES", 20_000)
+        notes = f'_:big <{NS}note> "{"x" * 20_000}" .\n'
+    else:
+        monkeypatch.setattr(browl.usage_tab, "MAX_FRAGMENT_IRIS", 100)
+        notes = "".join(f"_:big <{NS}note> <{NS}n{i}> .\n" for i in range(100))
+    within = panel(client, "Animal").text
+    assert "[:note: annotated]" in annotations_shown(within)
+    assert ANNOTATIONS_TOO_MANY not in within
+    answer_annotations(monkeypatch, lambda: (CAT_REIFIED + notes).encode())
+    page = panel(client, "Animal").text
+    assert ":Cat SubClassOf :Animal" in lines_shown(page)
+    assert not annotations_shown(page)
+    assert ANNOTATIONS_TOO_MANY in page
+
+
+def test_too_many_own_annotations(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a page whose usages' own fragment holds too many annotations says it's too large."""
+    monkeypatch.setattr(browl.usage_tab, "MAX_FRAGMENT_ANNOTATIONS", 0)
+    assert TOO_LARGE in panel(client, "Fungus").text  # a usage found through its annotations alone
+
+
+@pytest.mark.parametrize(
+    ("error", "note", "level"),
+    [
+        (browl.fuseki.SparqlError("no luck"), ANNOTATIONS_FAILED, "ERROR"),
+        (browl.fuseki.ResultTooLargeError("too long"), ANNOTATIONS_TOO_MANY, "WARNING"),
+    ],
+    ids=["failed", "too-large"],
+)
+def test_annotations_query_fails(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    error: Exception,
+    note: str,
+    level: str,
+) -> None:
+    """Check that a failed or too large annotations query leaves only the annotations out, with a note, logged."""
+
+    def fail() -> bytes:
+        raise error
+
+    answer_annotations(monkeypatch, fail)
+    page = panel(client, "Animal")
+    assert page.status_code == 200
+    assert ":Cat SubClassOf :Animal" in lines_shown(page.text)
+    assert "[:note: annotated]" not in annotations_shown(page.text)
+    assert note in page.text
+    [record] = [record for record in caplog.records if record.name == "browl.usage_tab"]
+    assert record.levelname == level
+
+
 def test_unlisted(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that usages counted but not listed, such as anonymous individuals', make no pages past those listed.
 
@@ -629,8 +793,8 @@ def test_unclaimed_on_page(monkeypatch: pytest.MonkeyPatch) -> None:
     claimed = owl.SubClassOf(sub=subject, super=entity)
     stray = owl.SubClassOf(sub=owl.Entity(kind=owl.EntityKind.CLASS, iri=f"{NS}C"), super=entity)
 
-    async def fragments(*args: object) -> tuple[bytes, bytes]:
-        return b"", b""
+    async def fragments(*args: object) -> UsageFragments:
+        return UsageFragments(b"", b"")
 
     async def parsed(*args: object) -> tuple[dict[str, list[owl.AnyAxiom]], list[owl.AnyAxiom]]:
         return {subject.iri: [claimed]}, [stray]
@@ -638,7 +802,7 @@ def test_unclaimed_on_page(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(browl.usage_tab, "fetch_usage_fragments", fragments)
     monkeypatch.setattr(browl.usage_tab, "run_java", parsed)
     usage = Usage(UsageSource.OBJECT, subject.iri, predicate=IRI(f"{NS}p"))
-    groups = asyncio.run(read_usage_page(None, entity.iri, [usage], False))  # type: ignore[arg-type]
+    groups = asyncio.run(read_usage_page(None, entity.iri, [usage], False)).groups  # type: ignore[arg-type]
     assert groups == [UsageGroup(subject=subject.iri, axioms=[claimed]), UsageGroup(subject=None, axioms=[stray])]
 
 
@@ -660,8 +824,7 @@ async def test_fragment_types(store: UsageStore) -> None:
     Another entity's class assertions or characteristics would add axioms to the page.
     """
     usages = await read_usages(store, f"{NS}Animal")
-    subject_triples, _ = await fetch_usage_fragments(store, f"{NS}Animal", usages)
-    lines = subject_triples.decode().splitlines()
+    lines = (await fetch_usage_fragments(store, f"{NS}Animal", usages)).subject.decode().splitlines()
     part_of = f"<{NS}partOf> {RDF_TYPE}"
     assert f"{part_of} <{OWL_NS}ObjectProperty> ." in lines  # in Heart's and Liver's superclasses
     assert f"{part_of} <{OWL_NS}TransitiveProperty> ." not in lines
@@ -701,7 +864,7 @@ async def test_blank_object(jvm: None, fuseki_url: str, settings: Settings) -> N
     triples = f"{CLASSES}{remark} {RDF_TYPE} <{OWL_NS}AnnotationProperty> .\n<{NS}A> {remark} _:x .\n"
     async with loaded(fuseki_url, settings, {None: triples.encode()}, "") as blank:
         [usage] = await read_usages(blank, f"{NS}remark")
-        [group] = await read_usage_page(blank, f"{NS}remark", [usage], False)
+        [group] = (await read_usage_page(blank, f"{NS}remark", [usage], False)).groups
     assert group.subject == f"{NS}A"
     assert [axiom.manchester for axiom in group.axioms] == [f"<{NS}A> <{NS}remark> _:b1"]
 
@@ -724,7 +887,7 @@ async def test_imports(fuseki_url: str, ntriples: bytes, settings: Settings, sto
             for each in (store, split):
                 usages = await read_usages(each, iri)
                 ordered = await each.derived.read(each.generation, lambda c, found=usages: sorted_usages(c, found))
-                pages.append(await read_usage_page(each, iri, ordered[: browl.usage_tab.PAGE_USAGES], False))
+                pages.append((await read_usage_page(each, iri, ordered[: browl.usage_tab.PAGE_USAGES], False)).groups)
             assert pages[0] == pages[1], name
             assert pages[0]
 
@@ -826,11 +989,12 @@ def test_columns(client: TestClient) -> None:
         ("SubClassOf", ":hasParent min 1 :Person"),
     ]
     assert lines_shown(has_parent)[1:3] == [":hasChild InverseOf :hasParent", ":hasMother SubPropertyOf: :hasParent"]
-    assert columns_shown(panel(client, "note").text)[2:] == [
+    note = panel(client, "note").text
+    assert [line for line in columns_shown(note) if isinstance(line, str)] == [
         "DisjointClasses: :Animal, :Fungus, :Plant",
         ':hasPart some <b>Heart</b> & "soul" SubClassOf :Vertebrate',
     ]
-    assert subjects_shown(panel(client, "note").text)[2:] == ["No single subject"]
+    assert "No single subject" in subjects_shown(note)
 
 
 OBJECT_PROPERTY = "ObjectProperty"
@@ -869,14 +1033,70 @@ async def test_symmetric_on_both_tabs(jvm: None, fuseki_url: str, settings: Sett
     triples = symmetric_triples("disjointWith", "Class")
     async with loaded(fuseki_url, settings, {None: triples}, "") as small:
         [usage] = await read_usages(small, f"{NS}A")
-        [group] = await read_usage_page(small, f"{NS}A", [usage], False)
+        [group] = (await read_usage_page(small, f"{NS}A", [usage], False)).groups
         fragment = await fetch_fragment(small.sparql, small.dataset, f"{NS}A", small.dataset_clause)
     assert group.subject == f"{NS}Z"
     assert [axiom.manchester for axiom in group.axioms] == [f"<{NS}Z> DisjointWith <{NS}A>"]
-    axioms = await owlapi.run_java(entity_axioms, fragment, f"{NS}A")
+    axioms = await owlapi.run_java(entity_axioms, fragment.ntriples, f"{NS}A")
     [section] = frame_groups(axioms, f"{NS}A", [], str)
     assert section.label == "Disjoint With"
     assert [owl.manchester_text(line.manchester_tokens()) for line in section.lines] == [f"<{NS}Z>"]
+
+
+COPIED = (
+    CLASSES
+    + "".join(
+        f"<{NS}{name}> {RDF_TYPE} <{OWL_NS}{kind}> .\n"
+        for name, kind in [("p", "ObjectProperty"), ("note", "AnnotationProperty"), ("comment", "AnnotationProperty")]
+    )
+    + f"<{NS}A> {SUBCLASS} _:r1 .\n"
+    + f"_:r1 {RDF_TYPE} <{OWL_NS}Restriction> .\n_:r1 <{OWL_NS}onProperty> <{NS}p> .\n"
+    + f"_:r1 <{OWL_NS}someValuesFrom> <{NS}B> .\n"
+    + f"_:ax {RDF_TYPE} <{OWL_NS}Axiom> .\n_:ax <{OWL_NS}annotatedSource> <{NS}A> .\n"
+    + f"_:ax <{OWL_NS}annotatedProperty> {SUBCLASS} .\n_:ax <{OWL_NS}annotatedTarget> _:r2 .\n"
+    + f"_:r2 {RDF_TYPE} <{OWL_NS}Restriction> .\n_:r2 <{OWL_NS}onProperty> <{NS}p> .\n"
+    + f"_:r2 <{OWL_NS}someValuesFrom> <{NS}B> .\n"
+    + f'_:ax <{NS}note> "copied" .\n'
+    + f'<{NS}A> <{NS}comment> "colour"@en-GB .\n'
+    + f"_:tag {RDF_TYPE} <{OWL_NS}Axiom> .\n_:tag <{OWL_NS}annotatedSource> <{NS}A> .\n"
+    + f'_:tag <{OWL_NS}annotatedProperty> <{NS}comment> .\n_:tag <{OWL_NS}annotatedTarget> "colour"@en-GB .\n'
+    + f'_:tag <{NS}note> "mixed case" .\n'
+)
+"""Hand-written, unlike the OWLAPI's: a reified axiom whose blank target is a copy of its axiom's restriction, not the
+same node; and an annotated literal whose language tag isn't lowercase."""
+
+
+async def test_copied_target(jvm: None, fuseki_url: str, settings: Settings) -> None:
+    """Check that an axiom whose reification's blank target is a copy shows its annotations on both tabs, once.
+
+    And that a literal with a mixed-case tag is matched by its digest.
+    """
+    note = [(f"{NS}note", "copied")]
+    async with loaded(fuseki_url, settings, {None: COPIED.encode()}, "") as small:
+        assert await usage_lines(small, f"{NS}B") == [(f"<{NS}A> SubClassOf <{NS}p> some <{NS}B>", note)]
+        [(_, tagged)] = await usage_lines(small, f"{NS}comment")
+        fragment = await fetch_fragment(small.sparql, small.dataset, f"{NS}A", small.dataset_clause)
+    assert tagged == [(f"{NS}note", "mixed case")]
+    axioms = await owlapi.run_java(entity_axioms, fragment.ntriples, f"{NS}A")
+    [section] = frame_groups(axioms, f"{NS}A", [], str)
+    assert [(owl.manchester_text(line.manchester_tokens()), list(line.annotations)) for line in section.lines] == [
+        (f"<{NS}p> some <{NS}B>", [annotation for axiom in axioms for annotation in axiom.annotations])
+    ]
+    assert [annotation_pairs(axiom) for axiom in axioms] == [note]
+
+
+@pytest.mark.parametrize("nested", ["cycle", "too-deep"])
+async def test_nested_annotations(jvm: None, fuseki_url: str, settings: Settings, nested: str) -> None:
+    """Check a line whose annotations nest in a cycle, or past `MAX_ANNOTATION_DEPTH`: pruned, and the axiom shown."""
+    triples = CYCLE if nested == "cycle" else AXIOM + nested_chain(nesting.MAX_DEPTH + 10)
+    async with loaded(fuseki_url, settings, {None: triples.encode()}, "") as small:
+        [group] = (await read_usage_page(small, f"{NS}B", await read_usages(small, f"{NS}B"), False)).groups
+    [axiom] = group.axioms
+    assert axiom.without_annotations().manchester == f"<{NS}A> SubClassOf <{NS}B>"
+    if nested == "cycle":
+        assert axiom.annotations == (note("0", note("1", note("2"))),)
+    else:
+        assert depth(axiom.annotations) == nesting.MAX_ANNOTATION_DEPTH
 
 
 def render_usage(tab: UsageTab, iri: str) -> str:
@@ -921,7 +1141,7 @@ def test_highlight_and_columns_rendered() -> None:
     assert page.count(mark) == 3  # on Z's disjointness, its annotation, and the general class axiom
     assert "<mark>" not in "".join(re.findall(r"<dt>.*?</dt>", page, re.DOTALL))
     assert '<span class="visually-hidden"><bdi>a</bdi> </span>' in page
-    assert mark in page.split('<ul class="axiom-annotations">')[1]
+    assert boxed(f'<code dir="ltr">{NS}note</code>: {mark}') in page
 
 
 def test_highlight(client: TestClient) -> None:
@@ -934,7 +1154,10 @@ def test_highlight(client: TestClient) -> None:
     assert dog.count(mark) == 4  # once in each line but the SWRL rule's, in functional syntax, as text
     assert "<mark>" not in "".join(re.findall(r"<dt>.*?</dt>", dog, re.DOTALL))
     mineral = panel(client, "Mineral").text  # in an n-ary axiom's annotations
-    assert mark.replace("Dog", "Mineral") in mineral.split('<ul class="axiom-annotations">')[1]
+    assert mark.replace("Dog", "Mineral") in mineral.split(ANNOTATIONS)[1]
+    note = panel(client, "note").text  # as an annotation's property, in each box it names
+    marked = f'<span class="visually-hidden">[</span><mark><a href="/axioms#note"><bdi>{NS}note</bdi></a></mark>:'
+    assert note.count(marked) == len(annotations_shown(note))
 
 
 def test_table_failure(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
@@ -952,6 +1175,6 @@ def test_table_failure(client: TestClient, monkeypatch: pytest.MonkeyPatch, capl
 async def test_missing_value(store: UsageStore, caplog: pytest.LogCaptureFixture) -> None:
     """Check that a property's usage past its subject's values, which can't happen, is logged and left out."""
     usage = Usage(UsageSource.PREDICATE, IRI(f"{NS}Cat"), index=5)
-    [group] = await read_usage_page(store, f"{NS}remark", [usage], False)
+    [group] = (await read_usage_page(store, f"{NS}remark", [usage], False)).groups
     assert group.axioms == []
     assert f"No value 5 of {NS}remark for {NS}Cat" in caplog.text

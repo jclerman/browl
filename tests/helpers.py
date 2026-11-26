@@ -34,6 +34,7 @@ from browl.jobs import JobContext, StageFunction
 from browl.jobtypes import ImportResult, Reasoner
 from browl.loading import dataset_name
 from browl.names import curie_prefixes, name_property_iris
+from browl.overview import ReadAxioms
 from browl.precache import hierarchies, values
 from browl.precache.core import Hook
 from browl.precache.entities import Reserved, fill_hash_prefix, fill_type_count, insert_entities
@@ -455,9 +456,14 @@ def fuseki_dataset(fuseki_url: str, graphs: dict[str | None, bytes]) -> Iterator
             client.delete(f"/$/datasets/{name}")
 
 
-async def no_axioms(*args: object) -> tuple[list[object], bool]:
+async def no_axioms(*args: object) -> ReadAxioms:
     """Stand in for `browl.overview._read_axioms`, finding no axioms without a query."""
-    return [], False
+    return ReadAxioms([])
+
+
+async def no_value_annotations(*args: object) -> dict[object, object]:
+    """Stand in for `browl.overview.fetch_value_annotations`, finding no axiom annotations without a query."""
+    return {}
 
 
 def ontology_ntriples() -> bytes:
@@ -495,3 +501,10 @@ async def loaded(
                 reader.close()
         finally:
             await http.delete(f"/$/datasets/{name}")
+
+
+def boxed(*texts: str) -> str:
+    """Return axiom annotations' markup around each property's HTML: a box each, with visually hidden brackets."""
+    hidden = '<span class="visually-hidden">{}</span>'.format
+    shown = " ".join(f'<span class="axiom-annotation">{hidden("[")}{text}{hidden("]")}</span>' for text in texts)
+    return f' <span class="axiom-annotations">{shown}</span>'

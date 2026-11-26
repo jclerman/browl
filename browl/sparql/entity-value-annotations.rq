@@ -1,0 +1,38 @@
+# The axiom annotations on an entity's annotations (DESIGN.md §2.8, Axiom annotations): the annotations of the reified
+# axioms (owl:Axiom) whose owl:annotatedSource is the entity, whose property is an annotation property (by
+# entity-annotations.rq's test) and whose target isn't blank, and of the owl:Annotations nested on them, at any depth.
+# One row per annotation: the node it's on; that node's source, property and target, which say what it annotates; and
+# the annotation's property and value. browl.annotations matches the reified axioms to the entity's annotations, and
+# drops repeats (no DISTINCT, which can slow Fuseki), blank values, cycles and nesting past
+# browl.nesting.MAX_ANNOTATION_DEPTH. `$entity` stands for the entity's IRI, and browl.annotations adds the dataset
+# clause before WHERE and a LIMIT.
+SELECT ?node ?source ?about ?target ?annotationProperty ?value
+WHERE {
+  ?axiom owl:annotatedSource $entity ;
+    owl:annotatedProperty ?property ;
+    owl:annotatedTarget ?annotated .
+  FILTER (!isBlank(?annotated))
+  FILTER (
+    # Begin the annotation-property test, the same in each copy, as tests/test_sparql.py checks.
+    ?property IN (rdfs:label, rdfs:comment, rdfs:seeAlso, rdfs:isDefinedBy, owl:deprecated, owl:versionInfo,
+                  owl:priorVersion, owl:backwardCompatibleWith, owl:incompatibleWith)
+    || (!STRSTARTS(STR(?property), "http://www.w3.org/1999/02/22-rdf-syntax-ns#")
+        && !STRSTARTS(STR(?property), "http://www.w3.org/2000/01/rdf-schema#")
+        && !STRSTARTS(STR(?property), "http://www.w3.org/2002/07/owl#")
+        && !STRSTARTS(STR(?property), "http://www.w3.org/2001/XMLSchema#")
+        && (EXISTS { ?property rdf:type owl:AnnotationProperty }
+            || NOT EXISTS {
+              ?property rdf:type ?logical
+              FILTER (?logical IN (owl:ObjectProperty, owl:DatatypeProperty, owl:FunctionalProperty,
+                                   owl:InverseFunctionalProperty, owl:TransitiveProperty, owl:SymmetricProperty,
+                                   owl:AsymmetricProperty, owl:ReflexiveProperty, owl:IrreflexiveProperty))
+            }))
+    # End the annotation-property test.
+  )
+  ?node owl:annotatedSource* ?axiom ;
+    owl:annotatedSource ?source ;
+    owl:annotatedProperty ?about ;
+    owl:annotatedTarget ?target ;
+    ?annotationProperty ?value .
+  FILTER (?annotationProperty NOT IN (rdf:type, owl:annotatedSource, owl:annotatedProperty, owl:annotatedTarget))
+}

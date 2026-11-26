@@ -1,3 +1,4 @@
+{% from "annotations.html" import axiom_annotations %}
 {% from "links.html" import named_iri %}
 {# An axiom's Manchester tokens (`browl.owl.Node.manchester_tokens`), from `links` (IRI → `browl.links.EntityLink`),
    as HTML (DESIGN.md §2.8): an IRI with a page as a link to it; any other as text, a standard vocabulary's by its
@@ -17,8 +18,8 @@
 {%- endmacro %}
 
 {# An entity's logical axioms (`browl.overview.AxiomsPanel`), from `links`, as a frame in a two-column grid (U-32):
-   each section's label once, then one line per axiom; an equivalent only its equivalence group implies is marked.
-   The entity, `iri`, is highlighted where a line shows it. #}
+   each section's label once, then one line per axiom, with its annotations; an equivalent only its equivalence group
+   implies is marked. The entity, `iri`, is highlighted where a line shows it. #}
 {% macro axiom_frame(panel, links, iri) -%}
 <section class="axioms panel" tabindex="0" aria-labelledby="axioms-heading">
   <h2 id="axioms-heading">Logical axioms</h2>
@@ -34,10 +35,16 @@
     <dt>{{ group.label }}</dt>
     {% for line in group.lines %}
     <dd dir="ltr">{{ manchester(line.manchester_tokens(), links, iri) }}
-      {%- if line.axiom is none %} <small class="implied">(implied)</small>{% endif %}</dd>
+      {%- if line.axiom is none %} <small class="implied">(implied)</small>{% endif -%}
+      {{ axiom_annotations(line.annotations, links, iri) }}</dd>
     {% endfor %}
     {% endfor %}
   </dl>
+  {% if panel.annotations_left_out == "too_many" %}
+  <p class="note">These axioms' annotations are too many to show here.</p>
+  {% elif panel.annotations_left_out == "failed" %}
+  <p class="note">These axioms' annotations can't be shown just now.</p>
+  {% endif %}
   {% if panel.more_equivalents %}
   <p class="note">This class has more equivalents than can be shown here.</p>
   {% endif %}

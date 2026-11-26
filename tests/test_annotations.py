@@ -30,7 +30,7 @@ from browl.jobs import Stage
 from browl.links import EntityLink
 from browl.pages import MAX_IRI_CHARS, MAX_LANGUAGE_CHARS, MAX_LITERAL_CHARS, templates
 from browl.rdf import IRI, OWL, RDF, RDFS, XSD
-from tests.helpers import derived_stage, fuseki_dataset, make_app, no_axioms
+from tests.helpers import derived_stage, fuseki_dataset, make_app, no_axioms, no_value_annotations
 
 NS = "http://example.org/ann#"
 SKOS = "http://www.w3.org/2004/02/skos/core#"
@@ -297,6 +297,7 @@ def test_too_many_page(data_dir: Path, monkeypatch: pytest.MonkeyPatch, caplog: 
         raise TooManyAnnotationsError("the entity has more than 1000 annotation values")
 
     monkeypatch.setattr(browl.overview, "fetch_annotations", too_many)
+    monkeypatch.setattr(browl.overview, "fetch_value_annotations", no_value_annotations)
     monkeypatch.setattr(browl.overview, "_read_axioms", no_axioms)
     app = make_app()
     with TestClient(app) as client:

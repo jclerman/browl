@@ -5,39 +5,37 @@ A page fetches the triples its entity's axioms need (`fetch_fragment`), the OWLA
 Templates make the HTML (`templates/axioms.html`).
 
 An entity's axioms are those the OWLAPI lists for it (`getAxioms(entity)`), and for a class its `HasKey` axioms and
-the general class axioms that mention it, for an object property the property chains that imply it, without their
-annotations. That's every logical axiom about the entity, plus an annotation property's domain, range and
+the general class axioms that mention it, for an object property the property chains that imply it, with their
+annotations (U-35). That's every logical axiom about the entity, plus an annotation property's domain, range and
 super-properties; not its annotation assertions, nor its usage in other entities' axioms, which the Usage tab shows
-(`browl.usage_tab`, which also converts annotation assertions, and axioms with their annotations).
+(`browl.usage_tab`, which also converts annotation assertions).
 """
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import functools
 import logging
-from collections.abc import Callable, Iterable, Iterator
+from collections import Counter
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, cast
 
 import jpype
 from pydantic import ValidationError
 
 from browl import owl
-from browl.fuseki import FusekiClient, filled_query
+from browl.fuseki import CONSTRUCT_MAX_BYTES, FusekiClient, ResultTooLargeError, SparqlError, filled_query
+from browl.nesting import MAX_ANNOTATION_DEPTH, MAX_DEPTH, annotation_sources
 from browl.owl import EntityKind
 from browl.owlapi import FragmentError, check_java_thread, ntriples_ontology
-from browl.precache.core import PREFIXES, sparql_file
-from browl.rdf import IRI, RDFSyntaxError, ntriples_iris
-from browl.tasks import task_group
+from browl.precache.core import PREFIXES, logged_iri, sparql_file
+from browl.rdf import IRI, OWL, RDF, RDFSyntaxError, ntriples_iris
+from browl.tasks import caught, task_group
 
 logger = logging.getLogger(__name__)
-
-_AXIOMS = PREFIXES + sparql_file("entity-axioms.rq")
-_SYMMETRIC = PREFIXES + sparql_file("entity-symmetric.rq")
-_TYPES = PREFIXES + sparql_file("entity-types.rq")
-_ENTITY = "$entity"
-_NO_IRIS = "VALUES ?iri { }"
 
 MAX_FRAGMENT_IRIS = 5_000
 """The most IRIs an entity's fragment may mention before its types are fetched (`fetch_fragment`): more, and the page
@@ -46,22 +44,67 @@ says the entity has too many axioms to show, rather than fetch, parse, convert a
 MAX_AXIOMS = 1_000
 """The most axioms an entity may have for its page to show them (`entity_axioms`), as for `MAX_FRAGMENT_IRIS`."""
 
-MAX_DEPTH = 50
-"""The deepest an axiom's nodes may nest (the axiom is depth 1) for its entity's page to show its axioms: deeper, and
-the panel says they can't be shown (`FragmentError`). It keeps the recursion in converting, rendering and JSON (whose
-parser stops at about 200 levels, two per node in a list) well within bounds (DESIGN.md §2.8)."""
+MAX_FRAGMENT_ANNOTATIONS = 2_000
+"""The most axiom annotations, nested ones included, a fragment may hold (`pruned_annotations` counts them), as the
+OWLAPI's parse time grows with the square of one node's annotations: past it, they're left out, with a note
+(DESIGN.md §2.8, Axiom annotations)."""
+
+_AXIOMS = PREFIXES + sparql_file("entity-axioms.rq")
+_AXIOM_ANNOTATIONS = PREFIXES + sparql_file("entity-axiom-annotations.rq")
+_SYMMETRIC = PREFIXES + sparql_file("entity-symmetric.rq")
+_TYPES = PREFIXES + sparql_file("entity-types.rq")
+_ENTITY = "$entity"
+_NO_IRIS = "VALUES ?iri { }"
+_ANNOTATED_SOURCE = f"<{OWL}annotatedSource>".encode()
+_NOT_ANNOTATIONS = frozenset(
+    f"<{iri}>".encode()
+    for iri in (f"{RDF}type", f"{OWL}annotatedSource", f"{OWL}annotatedProperty", f"{OWL}annotatedTarget")
+)
+"""The predicates of an annotation node's triples that aren't its annotations."""
 
 
 class TooManyAxiomsError(Exception):
     """An entity's axioms are too many, or mention too many IRIs, to show on its page (DESIGN.md §2.8)."""
 
 
-async def fetch_fragment(sparql: FusekiClient, dataset: str, iri: str, dataset_clause: str = "") -> bytes:
-    """Return, as N-Triples, the triples from which the OWLAPI can parse an entity's axioms (DESIGN.md §2.8).
+class LeftOut(StrEnum):
+    """Why a panel's axiom annotations are left out, which the page says: too many, or they couldn't be read."""
+
+    TOO_MANY = "too_many"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class Fragment:
+    """The triples from which the OWLAPI can parse an entity's axioms (`fetch_fragment`), as N-Triples.
+
+    Attributes:
+        axioms: The triples but the axioms' annotations.
+        annotations: The axioms' annotations, pruned (`pruned_annotations`); empty if they have none, or they're left
+            out.
+        annotations_left_out: Why the annotations are left out, if they are; else None.
+    """
+
+    axioms: bytes
+    annotations: bytes = b""
+    annotations_left_out: LeftOut | None = None
+
+    @property
+    def ntriples(self) -> bytes:
+        """Return all the triples."""
+        return self.axioms + self.annotations
+
+
+async def fetch_fragment(sparql: FusekiClient, dataset: str, iri: str, dataset_clause: str = "") -> Fragment:
+    """Return the triples from which the OWLAPI can parse an entity's axioms, with their annotations (DESIGN.md §2.8).
 
     They are the entity's triples with their blank-node closure, the axioms rooted at blank nodes that list or mention
-    it (`sparql/entity-axioms.rq`), the symmetric axioms stated on other entities (`sparql/entity-symmetric.rq`), and
-    the types of every IRI those mention (`sparql/entity-types.rq`).
+    it (`sparql/entity-axioms.rq`), the symmetric axioms stated on other entities (`sparql/entity-symmetric.rq`), the
+    reified axioms and nested annotations that annotate them (`sparql/entity-axiom-annotations.rq`, pruned by
+    `pruned_annotations`), and the types of every IRI those mention (`sparql/entity-types.rq`). If the annotations
+    would take the triples past `browl.fuseki.CONSTRUCT_MAX_BYTES`, `MAX_FRAGMENT_IRIS` or
+    `MAX_FRAGMENT_ANNOTATIONS`, or their query fails, they're left out, which is logged, so the axioms can still be
+    shown. The scans run in a thread, off the event loop.
 
     Args:
         sparql: The Fuseki client.
@@ -72,18 +115,94 @@ async def fetch_fragment(sparql: FusekiClient, dataset: str, iri: str, dataset_c
     Raises:
         SparqlError: A query failed.
         RDFSyntaxError: The IRI isn't valid.
-        TooManyAxiomsError: The triples mention more than `MAX_FRAGMENT_IRIS` IRIs.
+        TooManyAxiomsError: The triples, without the annotations, mention more than `MAX_FRAGMENT_IRIS` IRIs.
     """
     entity = {_ENTITY: f"<{IRI(iri)}>"}
     async with task_group() as group:
         own = group.create_task(sparql.construct(dataset, filled_query(_AXIOMS, dataset_clause, entity)))
         symmetric = group.create_task(sparql.construct(dataset, filled_query(_SYMMETRIC, dataset_clause, entity)))
+        annotations = group.create_task(
+            caught(sparql.construct(dataset, filled_query(_AXIOM_ANNOTATIONS, dataset_clause, entity)), SparqlError)
+        )
     triples = own.result() + symmetric.result()
-    mentioned = fragment_iris(triples)
-    if not mentioned:
-        return triples
-    values = f"VALUES ?iri {{ {' '.join(f'<{each}>' for each in sorted(mentioned))} }}"
-    return triples + await sparql.construct(dataset, filled_query(_TYPES, dataset_clause, {_NO_IRIS: values}))
+    mentioned = await asyncio.to_thread(fragment_iris, triples)
+    annotation_triples, left_out = b"", None
+    if isinstance(result := annotations.result(), ResultTooLargeError):
+        left_out = LeftOut.TOO_MANY
+    elif isinstance(result, SparqlError):
+        logger.error(
+            "Showing the axioms of %s without their annotations, which couldn't be read",
+            logged_iri(iri),
+            exc_info=result,
+        )
+        left_out = LeftOut.FAILED
+    elif result:
+        checked = await asyncio.to_thread(_checked_annotations, result, len(triples), mentioned)
+        if checked is None:
+            left_out = LeftOut.TOO_MANY
+        else:
+            annotation_triples, mentioned = checked
+    if left_out == LeftOut.TOO_MANY:
+        logger.warning("Showing the axioms of %s without their annotations, which are too many", logged_iri(iri))
+    if mentioned:
+        values = f"VALUES ?iri {{ {' '.join(f'<{each}>' for each in sorted(mentioned))} }}"
+        triples += await sparql.construct(dataset, filled_query(_TYPES, dataset_clause, {_NO_IRIS: values}))
+    return Fragment(triples, annotation_triples, left_out)
+
+
+def _checked_annotations(ntriples: bytes, size: int, mentioned: set[str]) -> tuple[bytes, set[str]] | None:
+    """Return axiom annotations' triples, pruned, and the IRIs a fragment mentions with them; None if they're too many.
+
+    They're too many if they'd take a fragment of `size` bytes that mentions `mentioned` past its caps
+    (`fetch_fragment`).
+    """
+    if size + len(ntriples) > CONSTRUCT_MAX_BYTES:
+        return None
+    pruned, count = pruned_annotations(ntriples)
+    if count > MAX_FRAGMENT_ANNOTATIONS:
+        return None
+    with_annotations = mentioned | ntriples_iris(pruned)
+    if len(with_annotations) > MAX_FRAGMENT_IRIS:
+        return None
+    return pruned, with_annotations
+
+
+def pruned_annotations(ntriples: bytes) -> tuple[bytes, int]:
+    """Return N-Triples without the annotation nodes `annotation_sources` leaves out, nor the sources they don't keep.
+
+    The OWLAPI's parser overflows its stack on a cycle of `owl:Annotation`s, and nests as deep as they go, so a
+    fragment is pruned before it's parsed. The N-Triples are Fuseki's: one triple a line, its terms separated by one
+    space.
+
+    Returns:
+        The N-Triples, and how many annotations the nodes kept hold: their triples but their type and
+        `owl:annotated*` links (`MAX_FRAGMENT_ANNOTATIONS`).
+    """
+    if _ANNOTATED_SOURCE not in ntriples:
+        return ntriples, 0
+    lines = ntriples.split(b"\n")
+    sources: dict[bytes, list[bytes]] = {}
+    counts: Counter[bytes] = Counter()
+    for line in lines:
+        parts = line.split(b" ", 3)
+        if len(parts) == 4:
+            if parts[1] == _ANNOTATED_SOURCE:
+                sources.setdefault(parts[0], []).append(parts[2])
+            elif parts[1] not in _NOT_ANNOTATIONS:
+                counts[parts[0]] += 1
+    kept = annotation_sources(sources, key=bytes.decode)
+    count = sum(counts[node] for node in kept)
+    if len(kept) == len(sources) and all(len(each) == 1 for each in sources.values()):
+        return ntriples, count
+    pruned = []
+    for line in lines:
+        parts = line.split(b" ", 3)
+        if parts[0] in sources and (
+            parts[0] not in kept or (len(parts) == 4 and parts[1] == _ANNOTATED_SOURCE and parts[2] != kept[parts[0]])
+        ):
+            continue
+        pruned.append(line)
+    return b"\n".join(pruned), count
 
 
 def fragment_iris(*fragments: bytes, what: str = "the fragment") -> set[str]:
@@ -128,6 +247,16 @@ def _literal(converter: _Converter, literal: Any) -> owl.Node:
 def _facet(converter: _Converter, restriction: Any) -> owl.Node:
     return owl.FacetRestriction(
         facet=IRI(str(restriction.getFacet().getIRI())), value=cast(owl.Literal, converter(restriction.getFacetValue()))
+    )
+
+
+def _annotation(converter: _Converter, annotation: Any) -> owl.Node:
+    """Make an annotation, with its own annotations unless it's `MAX_ANNOTATION_DEPTH` deep, when they're left out."""
+    nested = converter.value(annotation.getAnnotations()) if converter.depth < MAX_ANNOTATION_DEPTH else ()
+    return owl.Annotation(
+        property=cast(owl.Entity, converter(annotation.getProperty())),
+        value=cast(owl.IRIReference | owl.AnonymousIndividual | owl.Literal, converter(annotation.getValue())),
+        annotations=nested,
     )
 
 
@@ -183,7 +312,7 @@ _BUILDS: tuple[tuple[str, _Build], ...] = (
     ("OWLLiteral", _literal),
     ("OWLFacetRestriction", _facet),
     ("IRI", _iri),  # an annotation's subject or value
-    ("OWLAnnotation", _fields(owl.Annotation, property="getProperty", value="getValue", annotations="getAnnotations")),
+    ("OWLAnnotation", _annotation),
     ("OWLObjectInverseOf", _fields(owl.ObjectInverseOf, property="getInverse")),
     # Class expressions.
     ("OWLObjectIntersectionOf", _fields(owl.ObjectIntersectionOf, operands="getOperands")),
@@ -276,6 +405,7 @@ class _Java:
     AxiomType: Any
     Collection: Any
     Collections: Any
+    HashSet: Any
     IRI: Any
     List: Any
     excluded: Any  # Imports.EXCLUDED: a fragment's imports are never loaded
@@ -295,6 +425,7 @@ def _java() -> _Java:
         AxiomType=jpype.JClass(f"{model}.AxiomType"),
         Collection=jpype.JClass("java.util.Collection"),
         Collections=jpype.JClass("java.util.Collections"),
+        HashSet=jpype.JClass("java.util.HashSet"),
         IRI=jpype.JClass(f"{model}.IRI"),
         List=jpype.JClass("java.util.List"),
         excluded=jpype.JClass(f"{model}.parameters.Imports").EXCLUDED,
@@ -303,10 +434,11 @@ def _java() -> _Java:
 
 
 def entity_closure(ontology: Any, iri: str) -> list[Any]:
-    """Return an entity's axioms in an ontology (the module's docstring says which), without their annotations.
+    """Return an entity's axioms in an ontology (the module's docstring says which), with their annotations.
 
     The same for a fragment fetched for the entity as for the whole ontology: a test checks that. An IRI with several
-    types (punning) has the axioms of each.
+    types (punning) has the axioms of each. An axiom stated with different annotations is listed once for each: the
+    OWLAPI's axioms differ by their annotations, and the frame merges them (`browl.frames`).
 
     Args:
         ontology: The `OWLOntology`.
@@ -329,7 +461,7 @@ def entity_closure(ontology: Any, iri: str) -> list[Any]:
             own += (axiom for axiom in chains if axiom.getSuperProperty().equals(entity))
         for axiom in own:
             if str(axiom.getAxiomType().getName()) not in _LEFT_OUT:
-                found.setdefault(axiom.getAxiomWithoutAnnotations(), None)
+                found.setdefault(axiom, None)
     return list(found)
 
 
@@ -369,6 +501,21 @@ def axioms_about(ontology: Any, iri: str) -> list[Any]:
     return list(found)
 
 
+def merged_annotations(axioms: Iterable[Any], extra: Mapping[Any, Iterable[Any]]) -> list[Any]:
+    """Return OWLAPI axioms, each with the annotations `extra` holds for it without its annotations, added."""
+    java = _java()
+    merged = []
+    for axiom in axioms:
+        bare = axiom.getAxiomWithoutAnnotations()
+        more = extra.get(bare)
+        if more:
+            annotations = java.HashSet(axiom.getAnnotations())
+            annotations.addAll(more)
+            axiom = bare.getAnnotatedAxiom(annotations)
+        merged.append(axiom)
+    return merged
+
+
 class _Converter:
     """Converts OWLAPI objects into nodes (`browl.owl`), choosing each build (`_BUILDS`) by the object's Java class.
 
@@ -384,6 +531,11 @@ class _Converter:
         self._builds: dict[type, _Build] = {}
         self._depth = 0
         self.labels: dict[str, str] | None = None
+
+    @property
+    def depth(self) -> int:
+        """Return the depth of the node being made, the outermost being 1; 0 between calls."""
+        return self._depth
 
     def __call__(self, owl_object: Any) -> owl.Node:
         """Return an OWLAPI object as a node.
@@ -503,13 +655,13 @@ def entity_axioms(ntriples: bytes, iri: str) -> list[owl.AnyAxiom]:
     Raises:
         FragmentError: The OWLAPI couldn't parse the fragment, or failed on it with any other Java exception, or an
             axiom holds an object of a kind no node type covers, or nests too deep.
-        TooManyAxiomsError: The entity has more than `MAX_AXIOMS` axioms.
+        TooManyAxiomsError: The entity has more than `MAX_AXIOMS` axioms, not counting their annotations.
     """
     try:
         with ntriples_ontology(ntriples) as ontology:
             closure = entity_closure(ontology, iri)
-            if len(closure) > MAX_AXIOMS:
-                raise TooManyAxiomsError(f"the entity has {len(closure)} axioms, more than {MAX_AXIOMS}")
+            if (count := len({axiom.getAxiomWithoutAnnotations() for axiom in closure})) > MAX_AXIOMS:
+                raise TooManyAxiomsError(f"the entity has {count} axioms, more than {MAX_AXIOMS}")
             return convert_axioms(closure)
     except jpype.JException as error:
         raise FragmentError(f"the OWLAPI failed on the fragment: {error}") from error

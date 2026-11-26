@@ -252,10 +252,19 @@ async def test_usages_kinds(store: UsageStore) -> None:
     assert await usages("Mineral") == [("root", general, "")]
     assert await usages("hasPart") == [("root", general, ""), ("root", general, "")]  # two general class axioms
     assert await usages("hates") == [("root", general, "")]  # a negative property assertion
-    # On Cat's and Liver's annotated axioms, an annotated general class axiom, and the n-ary DisjointClasses.
+    # On Cat's and Liver's annotated axioms, an annotated general class axiom, the n-ary DisjointClasses, and the
+    # axiom annotations on Kidney's comments and a restriction, Bladder's comment and disjointness, and carol's
+    # assertions.
     assert await usages("note") == [
+        ("root", axiom, "Bladder"),
+        ("root", axiom, "Bladder"),
         ("root", axiom, "Cat"),
+        ("root", axiom, "Kidney"),
+        ("root", axiom, "Kidney"),
+        ("root", axiom, "Kidney"),
         ("root", axiom, "Liver"),
+        ("root", axiom, "carol"),
+        ("root", axiom, "carol"),
         ("root", general, ""),
         ("root", general, ""),
     ]
@@ -267,6 +276,8 @@ async def test_usages_kinds(store: UsageStore) -> None:
     ]
     assert await usages("remark") == [
         ("predicate", "", "Cat"),
+        ("root", axiom, "Kidney"),  # on the annotation of its comment's axiom
+        ("root", axiom, "Kidney"),  # on its rdfs:seeAlso's axiom
         ("root", axiom, "Liver"),  # on the annotation of Liver's axiom
         ("root", axiom, "Tricky"),
         ("root", general, ""),  # on the n-ary DisjointClasses

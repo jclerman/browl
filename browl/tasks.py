@@ -1,7 +1,7 @@
 """Running reads concurrently."""
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
 
 
@@ -16,3 +16,14 @@ async def task_group() -> AsyncIterator[asyncio.TaskGroup]:
             yield group
     except ExceptionGroup as errors:
         raise errors.exceptions[0]  # noqa: B904 -- the task's own error, with the group as its context
+
+
+async def caught[T, E: Exception](awaitable: Awaitable[T], *errors: type[E]) -> T | E:
+    """Return what an awaitable returns, or the error of these types it raises.
+
+    In a task group, the error then doesn't cancel the other tasks, and the caller can log it only if they succeed.
+    """
+    try:
+        return await awaitable
+    except errors as error:
+        return error

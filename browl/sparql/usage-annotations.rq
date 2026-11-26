@@ -1,0 +1,23 @@
+# The reified axioms (owl:Axiom) that annotate a Usage tab page's usages, with the owl:Annotations nested on them
+# (browl.usage_tab; DESIGN.md §2.8, Axiom annotations): by each usage's subject and predicate, and its object: an IRI;
+# a literal, by a digest of its lexical form, language tag and datatype, so a long value isn't written into the query
+# (browl.usage_tab._literal_digest); or any blank node, as a reified axiom's blank target can be a copy of the usage's.
+# The axioms they reify are matched to the page's (browl.usage_tab.usage_axioms), so any other is dropped. DESCRIBE
+# adds each node's closure, so a blank owl:annotatedTarget comes with its class expression. browl.usage_tab fills in
+# the rows, an UNDEF object for a literal or a blank node, and an UNDEF digest but for a literal, and adds the dataset
+# clause before WHERE.
+DESCRIBE ?node
+WHERE {
+  VALUES (?subject ?predicate ?object ?digest) { }
+  ?axiom owl:annotatedSource ?subject ;
+    owl:annotatedProperty ?predicate ;
+    owl:annotatedTarget ?target .
+  FILTER (
+    IF(BOUND(?object), sameTerm(?target, ?object),
+       IF(BOUND(?digest),
+          isLiteral(?target)
+          && SHA256(CONCAT(STR(?target), " ", LCASE(LANG(?target)), " ", STR(DATATYPE(?target)))) = ?digest,
+          isBlank(?target)))
+  )
+  ?node owl:annotatedSource* ?axiom
+}

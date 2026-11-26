@@ -1,0 +1,217 @@
+{
+  "entities": 320,
+  "ms (with annotations), random sample": {
+    "p50": 6.9,
+    "p95": 9.5,
+    "max": 28.9
+  },
+  "ms (without), random sample": {
+    "p50": 5.5,
+    "p95": 7.1,
+    "max": 20.5
+  },
+  "ms (with), most annotated": {
+    "p50": 14.1,
+    "p95": 40.5,
+    "max": 40.5
+  },
+  "ms (without), most annotated": {
+    "p50": 7.6,
+    "p95": 20.8,
+    "max": 20.8
+  },
+  "caps": {
+    "MAX_AXIOM_ANNOTATIONS": 2000,
+    "MAX_ANNOTATIONS_CHARS": 4194304,
+    "CONSTRUCT_MAX_BYTES": 67108864,
+    "MAX_FRAGMENT_IRIS": 5000
+  },
+  "largest value_annotation_rows": {
+    "iri": "http://purl.obolibrary.org/obo/GO_1904746",
+    "ms": 25.045457994565368,
+    "values": 151,
+    "value_annotation_rows": 147,
+    "value_annotation_chars": 73524,
+    "fragment_bytes": 138928,
+    "fragment_iris": 40,
+    "axioms": 8,
+    "annotated_axioms": 0,
+    "left_out": "None",
+    "without": {
+      "ms": 8.63362499512732,
+      "values": 151,
+      "value_annotation_rows": 0,
+      "value_annotation_chars": 0,
+      "fragment_bytes": 37332,
+      "fragment_iris": 35,
+      "axioms": 8,
+      "annotated_axioms": 0,
+      "left_out": "None"
+    }
+  },
+  "largest value_annotation_chars": {
+    "iri": "http://purl.obolibrary.org/obo/GO_1904746",
+    "ms": 25.045457994565368,
+    "values": 151,
+    "value_annotation_rows": 147,
+    "value_annotation_chars": 73524,
+    "fragment_bytes": 138928,
+    "fragment_iris": 40,
+    "axioms": 8,
+    "annotated_axioms": 0,
+    "left_out": "None",
+    "without": {
+      "ms": 8.63362499512732,
+      "values": 151,
+      "value_annotation_rows": 0,
+      "value_annotation_chars": 0,
+      "fragment_bytes": 37332,
+      "fragment_iris": 35,
+      "axioms": 8,
+      "annotated_axioms": 0,
+      "left_out": "None"
+    }
+  },
+  "largest fragment_bytes": {
+    "iri": "http://purl.obolibrary.org/obo/GO_1904746",
+    "ms": 25.045457994565368,
+    "values": 151,
+    "value_annotation_rows": 147,
+    "value_annotation_chars": 73524,
+    "fragment_bytes": 138928,
+    "fragment_iris": 40,
+    "axioms": 8,
+    "annotated_axioms": 0,
+    "left_out": "None",
+    "without": {
+      "ms": 8.63362499512732,
+      "values": 151,
+      "value_annotation_rows": 0,
+      "value_annotation_chars": 0,
+      "fragment_bytes": 37332,
+      "fragment_iris": 35,
+      "axioms": 8,
+      "annotated_axioms": 0,
+      "left_out": "None"
+    }
+  },
+  "largest fragment_iris": {
+    "iri": "http://purl.obolibrary.org/obo/UBERON_0001132",
+    "ms": 15.424584038555622,
+    "values": 35,
+    "value_annotation_rows": 20,
+    "value_annotation_chars": 15345,
+    "fragment_bytes": 71031,
+    "fragment_iris": 63,
+    "axioms": 16,
+    "annotated_axioms": 13,
+    "left_out": "None",
+    "without": {
+      "ms": 10.362791130319238,
+      "values": 35,
+      "value_annotation_rows": 0,
+      "value_annotation_chars": 0,
+      "fragment_bytes": 34196,
+      "fragment_iris": 54,
+      "axioms": 16,
+      "annotated_axioms": 0,
+      "left_out": "None"
+    }
+  },
+  "fragment growth (bytes with / without), most annotated": {
+    "p50": 3.5,
+    "p95": 3.9,
+    "max": 3.9
+  },
+  "left out": [],
+  "most annotated": {
+    "GO_1904746": {
+      "ms": 25.0,
+      "values": 151,
+      "value_annotation_rows": 147,
+      "value_annotation_chars": 73524,
+      "fragment_bytes": 138928,
+      "fragment_iris": 40,
+      "axioms": 8,
+      "annotated_axioms": 0,
+      "left_out": "None"
+    },
+    "GO_1904747": {
+      "ms": 40.5,
+      "values": 151,
+      "value_annotation_rows": 147,
+      "value_annotation_chars": 73338,
+      "fragment_bytes": 138719,
+      "fragment_iris": 41,
+      "axioms": 8,
+      "annotated_axioms": 0,
+      "left_out": "None"
+    },
+    "UBERON_0004251": {
+      "ms": 17.6,
+      "values": 83,
+      "value_annotation_rows": 76,
+      "value_annotation_chars": 34244,
+      "fragment_bytes": 66278,
+      "fragment_iris": 32,
+      "axioms": 3,
+      "annotated_axioms": 0,
+      "left_out": "None"
+    },
+    "CHEBI_17579": {
+      "ms": 15.3,
+      "values": 77,
+      "value_annotation_rows": 72,
+      "value_annotation_chars": 29676,
+      "fragment_bytes": 62076,
+      "fragment_iris": 39,
+      "axioms": 13,
+      "annotated_axioms": 0,
+      "left_out": "None"
+    },
+    "UBERON_0002713": {
+      "ms": 15.8,
+      "values": 79,
+      "value_annotation_rows": 69,
+      "value_annotation_chars": 30938,
+      "fragment_bytes": 60376,
+      "fragment_iris": 35,
+      "axioms": 3,
+      "annotated_axioms": 0,
+      "left_out": "None"
+    },
+    "CHEBI_16134": {
+      "ms": 16.7,
+      "values": 75,
+      "value_annotation_rows": 67,
+      "value_annotation_chars": 27299,
+      "fragment_bytes": 57569,
+      "fragment_iris": 42,
+      "axioms": 13,
+      "annotated_axioms": 0,
+      "left_out": "None"
+    },
+    "CHEBI_16189": {
+      "ms": 14.0,
+      "values": 66,
+      "value_annotation_rows": 68,
+      "value_annotation_chars": 27694,
+      "fragment_bytes": 51877,
+      "fragment_iris": 36,
+      "axioms": 8,
+      "annotated_axioms": 0,
+      "left_out": "None"
+    },
+    "CHEBI_30772": {
+      "ms": 14.1,
+      "values": 66,
+      "value_annotation_rows": 60,
+      "value_annotation_chars": 24764,
+      "fragment_bytes": 49946,
+      "fragment_iris": 34,
+      "axioms": 6,
+      "annotated_axioms": 0,
+      "left_out": "None"
+    }
+  }
+}

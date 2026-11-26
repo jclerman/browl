@@ -4,23 +4,37 @@ A page counts the entity's usages first. With at most `MAX_STREAMED_USAGES`, it 
 and takes its slice; with more, the tab shows the count and says it's preparing them, which the usage table (P-27c)
 will serve. The page's usages are then fetched as two fragments (`fetch_usage_fragments`) and parsed by the OWLAPI
 (`usage_axioms`): one of the usages with a subject, whose axioms are matched to their subjects, and one of those with
-none. Each line is an axiom in Manchester syntax; one found only through its annotations shows them too. The tab's
-label carries the count, which the page fetches after it renders (`read_count`), so the Overview never waits for it.
+none; a third holds the reified axioms that annotate them. Each line is an axiom in Manchester syntax, with its
+annotations (U-35). The tab's label carries the count, which the page fetches after it renders (`read_count`), so the
+Overview never waits for it.
 """
 
+import asyncio
+import hashlib
 import logging
 import math
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
 from itertools import batched
-from typing import Any
+from typing import Any, NamedTuple
 
 import jpype
 from fastapi import Request
 from pydantic import BaseModel, ConfigDict
 
 from browl import owl
-from browl.axioms import TooManyAxiomsError, axioms_about, convert_axioms, fragment_iris, is_declaration
+from browl.axioms import (
+    MAX_FRAGMENT_ANNOTATIONS,
+    MAX_FRAGMENT_IRIS,
+    LeftOut,
+    TooManyAxiomsError,
+    axioms_about,
+    convert_axioms,
+    fragment_iris,
+    is_declaration,
+    merged_annotations,
+    pruned_annotations,
+)
 from browl.derived import UsageRootKind
 from browl.fuseki import CONSTRUCT_MAX_BYTES, ResultTooLargeError, SparqlError, filled_query
 from browl.jobs import JobState
@@ -29,8 +43,8 @@ from browl.owlapi import FragmentError, check_java_thread, ntriples_ontology, ru
 from browl.pages import link_root, read_derived
 from browl.precache.core import PREFIXES, logged_iri, sparql_file
 from browl.precache.usage_table import SubjectGroup, sort_name
-from browl.rdf import IRI, BlankNode, RDFSyntaxError, ntriples_term
-from browl.tasks import task_group
+from browl.rdf import IRI, BlankNode, Literal, RDFSyntaxError, ntriples_iris, ntriples_term
+from browl.tasks import caught, task_group
 from browl.usage_tables import TableNotReadyError
 from browl.usages import (
     MAX_STREAMED_USAGES,
@@ -60,10 +74,12 @@ POLL_S = 5
 _TRIPLES = PREFIXES + sparql_file("usage-triples.rq")
 _CLOSURES = PREFIXES + sparql_file("usage-closures.rq")
 _REIFIED = PREFIXES + sparql_file("usage-reified.rq")
+_ANNOTATIONS = PREFIXES + sparql_file("usage-annotations.rq")
 _TYPES = PREFIXES + sparql_file("declaration-types.rq")
 _NO_TRIPLES = "VALUES (?subject ?predicate ?object) { }"
 _NO_ROOTS = "VALUES ?root { }"
 _NO_AXIOMS = "VALUES ?axiom { }"
+_NO_ANNOTATED = "VALUES (?subject ?predicate ?object ?digest) { }"
 _NO_IRIS = "VALUES ?iri { }"
 
 
@@ -79,8 +95,8 @@ class UsageGroup(BaseModel):
             axioms that mention a property.
         continued: Whether the subject's usages started on an earlier page.
         axioms: The usages' axioms, sorted by kind and text (`browl.axioms.convert_axioms`), a symmetric one between
-            two written with the subject first (`browl.owl.Axiom.with_first`); with their annotations only where the
-            usage is found through them alone (`browl.owl.Axiom.annotations`).
+            two written with the subject first (`browl.owl.Axiom.with_first`); with their annotations
+            (`browl.owl.Axiom.annotations`).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -107,6 +123,8 @@ class UsageTab(BaseModel):
         remaining_s: While preparing, about how long the usage table's build has left, in seconds
             (`browl.usage_tables.UsageTables.remaining_s`); None if that isn't known.
         too_many: Whether the page's axioms are too large to show (`fetch_usage_fragments`).
+        annotations_left_out: Why the page's axioms are shown without their annotations, if they are
+            (`UsageFragments`); else None.
         links: Each IRI the page mentions, by IRI (`browl.links.read_entity_links`).
     """
 
@@ -119,6 +137,7 @@ class UsageTab(BaseModel):
     preparing: bool = False
     remaining_s: float | None = None
     too_many: bool = False
+    annotations_left_out: LeftOut | None = None
     links: dict[str, EntityLink] = {}
 
 
@@ -237,7 +256,7 @@ async def read_usage_tab(request: Request, state: JobState, iri: str, page: int)
         chunk = ordered[start : start + PAGE_USAGES]
         continued = bool(chunk) and start > 0 and ordered[start - 1].subject == chunk[0].subject
     try:
-        shown = await read_usage_page(store, iri, chunk, continued)
+        shown, left_out = await read_usage_page(store, iri, chunk, continued)
     except TooManyAxiomsError as error:
         logger.warning("Not showing page %d of the usages of %s: %s", page, logged_iri(iri), error)
         return unshown(too_many=True)
@@ -251,7 +270,7 @@ async def read_usage_tab(request: Request, state: JobState, iri: str, page: int)
     links = await read_derived(
         request, lambda connection: read_entity_links(connection, mentioned, prefix, root), state
     )
-    return UsageTab(count=count, page=page, pages=pages, groups=shown, links=links)
+    return UsageTab(count=count, page=page, pages=pages, groups=shown, annotations_left_out=left_out, links=links)
 
 
 def _pages(usages: int) -> int:
@@ -259,7 +278,19 @@ def _pages(usages: int) -> int:
     return max(1, math.ceil(usages / PAGE_USAGES))
 
 
-async def read_usage_page(store: UsageStore, iri: str, chunk: Sequence[Usage], continued: bool) -> list[UsageGroup]:
+class UsagePage(NamedTuple):
+    """A page of an entity's usages (`read_usage_page`).
+
+    Attributes:
+        groups: The usages, by subject, with their axioms.
+        annotations_left_out: Why the axioms are shown without their annotations, if they are; else None.
+    """
+
+    groups: list[UsageGroup]
+    annotations_left_out: LeftOut | None = None
+
+
+async def read_usage_page(store: UsageStore, iri: str, chunk: Sequence[Usage], continued: bool) -> UsagePage:
     """Return a page of an entity's usages, by subject, with their axioms.
 
     Args:
@@ -275,9 +306,11 @@ async def read_usage_page(store: UsageStore, iri: str, chunk: Sequence[Usage], c
         FragmentError: The OWLAPI couldn't parse a fragment, or convert an axiom (`usage_axioms`).
     """
     groups = _grouped(chunk)
-    subject_triples, general_triples = await fetch_usage_fragments(store, iri, chunk)
+    fragments = await fetch_usage_fragments(store, iri, chunk)
     subjects: dict[str, int] = {subject: len(each) for subject, each in groups if subject is not None}
-    by_subject, general = await run_java(usage_axioms, subject_triples, general_triples, iri, subjects)
+    by_subject, general = await run_java(
+        usage_axioms, fragments.subject, fragments.general, iri, subjects, fragments.annotations
+    )
     shown = [
         UsageGroup(
             subject=subject,
@@ -288,7 +321,7 @@ async def read_usage_page(store: UsageStore, iri: str, chunk: Sequence[Usage], c
     ]
     if general and all(subject is not None for subject, _ in groups):  # unclaimed axioms (`usage_axioms`)
         shown.append(UsageGroup(subject=None, axioms=general))
-    return shown
+    return UsagePage(shown, fragments.annotations_left_out)
 
 
 def sorted_usages(connection: sqlite3.Connection, usages: Iterable[Usage]) -> list[Usage]:
@@ -339,15 +372,41 @@ def _grouped(usages: Sequence[Usage]) -> list[tuple[IRI | None, list[Usage]]]:
     return groups
 
 
-async def fetch_usage_fragments(store: UsageStore, iri: str, usages: Sequence[Usage]) -> tuple[bytes, bytes]:
-    """Return, as N-Triples, the triples from which the OWLAPI can parse a page's usages' axioms (DESIGN.md §2.8).
+class UsageFragments(NamedTuple):
+    """The triples from which the OWLAPI can parse a page's usages' axioms, as N-Triples (`fetch_usage_fragments`).
+
+    Attributes:
+        subject: The usages with a subject.
+        general: The usages with none; empty if there are none.
+        annotations: The reified axioms that annotate the usages with a subject; empty if there are none, or they're
+            left out.
+        annotations_left_out: Why they're left out, if they are; else None.
+    """
+
+    subject: bytes
+    general: bytes
+    annotations: bytes = b""
+    annotations_left_out: LeftOut | None = None
+
+
+def _literal_digest(literal: Literal) -> str:
+    """Return the digest `sparql/usage-annotations.rq` matches a literal by: its lexical form, tag and datatype's."""
+    return hashlib.sha256(f"{literal.value} {literal.language or ''} {literal.datatype}".encode()).hexdigest()
+
+
+async def fetch_usage_fragments(store: UsageStore, iri: str, usages: Sequence[Usage]) -> UsageFragments:
+    """Return the triples from which the OWLAPI can parse a page's usages' axioms (DESIGN.md §2.8).
 
     The first fragment holds the usages with a subject: a triple whose terms are known, written here, a property's
     values read first (`browl.usages.read_values`); one with a blank object, fetched (`sparql/usage-triples.rq`);
     and the blank nodes' closures, with the reified axioms and
     axiom annotations they lead to (`sparql/usage-closures.rq`), and the reified axioms' own triples
     (`sparql/usage-reified.rq`). The second holds the closures of the roots with no subject; it's empty if there are
-    none. Each has the declaration types of every IRI either mentions (`sparql/declaration-types.rq`).
+    none. The third holds the reified axioms, and their nested annotations, that may annotate the first's triples
+    (`sparql/usage-annotations.rq`), which `usage_axioms` matches to them; if they'd take the fragments past their
+    caps, or their query fails, they're left out, which is logged, so the axioms can still be shown. Each has the
+    declaration types of every IRI any mentions (`sparql/declaration-types.rq`), and is pruned of cyclic or too deeply
+    nested annotations (`browl.axioms.pruned_annotations`), in a thread, off the event loop.
 
     Args:
         store: Where the usages were read.
@@ -357,16 +416,20 @@ async def fetch_usage_fragments(store: UsageStore, iri: str, usages: Sequence[Us
     Raises:
         SparqlError: A query failed.
         RDFSyntaxError: An IRI isn't valid.
-        TooManyAxiomsError: The fragments, or a property's values, come to more than `browl.fuseki.CONSTRUCT_MAX_BYTES`,
-            so the OWLAPI's heap can't hold them, or mention more than `browl.axioms.MAX_FRAGMENT_IRIS` IRIs.
+        TooManyAxiomsError: The first two fragments, or a property's values, come to more than
+            `browl.fuseki.CONSTRUCT_MAX_BYTES`, so the OWLAPI's heap can't hold them, or mention more than
+            `browl.axioms.MAX_FRAGMENT_IRIS` IRIs, or hold more than `browl.axioms.MAX_FRAGMENT_ANNOTATIONS`
+            annotations.
     """
     entity = IRI(iri)
     lines: list[str] = []
-    # The queries' VALUES rows: triples with a blank object, and blank nodes, as `<_:label>`.
+    # The queries' VALUES rows: triples with a blank object, and blank nodes, as `<_:label>`; and the triples whose
+    # reified axioms are fetched, by their subject, predicate, object and a literal's digest.
     owned: list[str] = []
     closures: list[str] = []
     reified: list[str] = []
     general: list[str] = []
+    annotated: dict[str, None] = {}
     try:
         property_values = await read_values(
             store,
@@ -380,6 +443,7 @@ async def fetch_usage_fragments(store: UsageStore, iri: str, usages: Sequence[Us
         subject = usage.subject
         if usage.source == UsageSource.OBJECT:
             lines.append(f"<{subject}> <{usage.predicate}> <{entity}> .\n")
+            annotated[f"(<{subject}> <{usage.predicate}> <{entity}> UNDEF)"] = None
         elif usage.source == UsageSource.PREDICATE:
             found = property_values.get(subject or "", [])
             if usage.index >= len(found):  # none should be: the values are those the usages were counted from
@@ -389,8 +453,13 @@ async def fetch_usage_fragments(store: UsageStore, iri: str, usages: Sequence[Us
             if isinstance(value, BlankNode):
                 owned.append(f"(<{subject}> <{entity}> <_:{value}>)")
                 closures.append(f"<_:{value}>")
+                annotated[f"(<{subject}> <{entity}> UNDEF UNDEF)"] = None
             else:
                 lines.append(f"<{subject}> <{entity}> {ntriples_term(value)} .\n")
+                if isinstance(value, Literal):
+                    annotated[f'(<{subject}> <{entity}> UNDEF "{_literal_digest(value)}")'] = None
+                else:
+                    annotated[f"(<{subject}> <{entity}> <{value}> UNDEF)"] = None
         elif usage.root is not None:
             label = f"<_:{usage.root.label}>"
             if subject is None:
@@ -398,33 +467,83 @@ async def fetch_usage_fragments(store: UsageStore, iri: str, usages: Sequence[Us
             elif usage.root.kind == UsageRootKind.TRIPLE:
                 owned.append(f"(<{subject}> <{usage.predicate}> {label})")
                 closures.append(label)
+                annotated[f"(<{subject}> <{usage.predicate}> UNDEF UNDEF)"] = None
             else:  # a reified axiom
                 closures.append(label)
                 reified.append(label)
-    queries = [
-        (_TRIPLES, _NO_TRIPLES, owned, True),
-        (_CLOSURES, _NO_ROOTS, closures, True),
-        (_REIFIED, _NO_AXIOMS, reified, True),
-        (_CLOSURES, _NO_ROOTS, general, False),
-    ]
     async with task_group() as group:
-        tasks = [
-            (group.create_task(store.sparql.construct(store.dataset, _filled(store, query, empty, values))), own)
-            for query, empty, values, own in queries
-            if values
+        parts = [
+            group.create_task(_construct(store, query, empty, rows))
+            for query, empty, rows in (
+                (_TRIPLES, _NO_TRIPLES, owned),
+                (_CLOSURES, _NO_ROOTS, closures),
+                (_REIFIED, _NO_AXIOMS, reified),
+            )
         ]
-    subject_triples = "".join(lines).encode() + b"".join(task.result() for task, own in tasks if own)
-    general_triples = b"".join(task.result() for task, own in tasks if not own)
-    # Each query's result is capped, but not the literals written here, nor the results together.
-    if (size := len(subject_triples) + len(general_triples)) > CONSTRUCT_MAX_BYTES:
-        raise TooManyAxiomsError(f"the page's fragments come to {size:,} bytes, more than {CONSTRUCT_MAX_BYTES:,}")
-    mentioned = fragment_iris(subject_triples, general_triples, what="the page")
+        general_task = group.create_task(_construct(store, _CLOSURES, _NO_ROOTS, general))
+        annotations_task = group.create_task(
+            caught(_construct(store, _ANNOTATIONS, _NO_ANNOTATED, sorted(annotated)), SparqlError)
+        )
+    subject_triples = "".join(lines).encode() + b"".join(part.result() for part in parts)
+    general_triples, annotation_triples, left_out = general_task.result(), b"", None
+    if isinstance(result := annotations_task.result(), ResultTooLargeError):
+        left_out = LeftOut.TOO_MANY
+    elif isinstance(result, SparqlError):
+        logger.error(
+            "Showing usages of %s without their annotations, which couldn't be read", logged_iri(iri), exc_info=result
+        )
+        left_out = LeftOut.FAILED
+    else:
+        annotation_triples = result
+    fragments, mentioned = await asyncio.to_thread(_checked, subject_triples, general_triples, annotation_triples)
+    left_out = left_out or fragments.annotations_left_out
+    if left_out == LeftOut.TOO_MANY:
+        logger.warning("Showing usages of %s without their annotations, which are too many", logged_iri(iri))
     if mentioned:
         values = [f"<{each}>" for each in sorted(mentioned)]
         types = await store.sparql.construct(store.dataset, _filled(store, _TYPES, _NO_IRIS, values))
-        subject_triples += types
-        general_triples += types if general_triples else b""
-    return subject_triples, general_triples
+        fragments = UsageFragments(
+            fragments.subject + types,
+            fragments.general + types if fragments.general else b"",
+            fragments.annotations + types if fragments.annotations else b"",
+        )
+    return fragments._replace(annotations_left_out=left_out)
+
+
+def _checked(subject: bytes, general: bytes, annotations: bytes) -> tuple[UsageFragments, set[str]]:
+    """Return a page's fragments pruned (`browl.axioms.pruned_annotations`), and the IRIs they mention.
+
+    The annotations are left out, too many, if they'd take the fragments past their caps (`fetch_usage_fragments`).
+
+    Raises:
+        TooManyAxiomsError: The fragments are too large without the annotations.
+    """
+    # Each query's result is capped, but not the literals written here, nor the results together.
+    if (size := len(subject) + len(general)) > CONSTRUCT_MAX_BYTES:
+        raise TooManyAxiomsError(f"the page's fragments come to {size:,} bytes, more than {CONSTRUCT_MAX_BYTES:,}")
+    (subject, in_subject), (general, in_general) = pruned_annotations(subject), pruned_annotations(general)
+    if (count := in_subject + in_general) > MAX_FRAGMENT_ANNOTATIONS:
+        raise TooManyAxiomsError(
+            f"the page's axioms have {count:,} annotations, more than {MAX_FRAGMENT_ANNOTATIONS:,}"
+        )
+    mentioned = fragment_iris(subject, general, what="the page")
+    too_many = UsageFragments(subject, general, annotations_left_out=LeftOut.TOO_MANY), mentioned
+    if not annotations:
+        return UsageFragments(subject, general), mentioned
+    if size + len(annotations) > CONSTRUCT_MAX_BYTES:
+        return too_many
+    annotations, more = pruned_annotations(annotations)
+    with_annotations = mentioned | ntriples_iris(annotations)
+    if count + more > MAX_FRAGMENT_ANNOTATIONS or len(with_annotations) > MAX_FRAGMENT_IRIS:
+        return too_many
+    return UsageFragments(subject, general, annotations), with_annotations
+
+
+async def _construct(store: UsageStore, query: str, empty: str, rows: Sequence[str]) -> bytes:
+    """Return a CONSTRUCT or DESCRIBE query's result, with `rows` in its empty `VALUES` block; none without rows."""
+    if not rows:
+        return b""
+    return await store.sparql.construct(store.dataset, _filled(store, query, empty, rows))
 
 
 def _filled(store: UsageStore, query: str, empty: str, rows: Iterable[str]) -> str:
@@ -433,14 +552,20 @@ def _filled(store: UsageStore, query: str, empty: str, rows: Iterable[str]) -> s
 
 
 def usage_axioms(
-    subject_triples: bytes, general_triples: bytes, iri: str, subjects: Mapping[str, int]
+    subject_triples: bytes,
+    general_triples: bytes,
+    iri: str,
+    subjects: Mapping[str, int],
+    annotation_triples: bytes = b"",
 ) -> tuple[dict[str, list[owl.AnyAxiom]], list[owl.AnyAxiom]]:
     """Parse a page's fragments (`fetch_usage_fragments`) and return its axioms, by subject, and those with none.
 
     An axiom of the first fragment goes to the subject it's about (`browl.axioms.axioms_about`); one about two of the
     page's subjects, such as `DisjointClasses(A, B)`, to the first that has fewer axioms than usages. Axioms about none
-    of them (none should be) are logged, and go with those of no subject. An axiom keeps its annotations only if the
-    entity is in them and not in the rest of the axiom: the usage is found through them alone.
+    of them (none should be) are logged, and go with those of no subject. Each keeps its annotations, and gains those
+    of the third fragment's axioms that are the same without their annotations. Those are parsed apart, as the OWLAPI
+    makes an axiom of a reified one even without its triple, and the query fetches some that aren't the page's: the
+    subject's others with a blank object and the same predicate.
 
     Call this on the Java thread (`browl.owlapi.run_java`).
 
@@ -449,6 +574,7 @@ def usage_axioms(
         general_triples: The usages with none; empty if there are none.
         iri: The entity's IRI.
         subjects: The page's subjects, in order, with how many usages each has on the page.
+        annotation_triples: The reified axioms that may annotate the first's; empty if there are none.
 
     Raises:
         FragmentError: The OWLAPI couldn't parse a fragment, or failed on it with any other Java exception, or an axiom
@@ -458,10 +584,16 @@ def usage_axioms(
     found: dict[str, list[Any]] = {subject: [] for subject in subjects}
     unclaimed: list[Any] = []
     general: list[Any] = []
+    extra: dict[Any, list[Any]] = {}
     try:
         if subjects:
             with ntriples_ontology(subject_triples) as ontology:
                 unclaimed = _assign(ontology, subjects, found)
+            if annotation_triples:
+                with ntriples_ontology(annotation_triples) as ontology:
+                    for axiom in ontology.getAxioms():
+                        if axiom.isAnnotated():
+                            extra.setdefault(axiom.getAxiomWithoutAnnotations(), []).extend(axiom.getAnnotations())
         if general_triples:
             with ntriples_ontology(general_triples) as ontology:
                 general = [axiom for axiom in ontology.getAxioms() if _is_usage(axiom)]
@@ -471,8 +603,10 @@ def usage_axioms(
                 len(unclaimed),
                 logged_iri(iri),
             )
-        by_subject = {subject: _usage_nodes(axioms, iri, subject) for subject, axioms in found.items()}
-        return by_subject, _usage_nodes([*general, *unclaimed], iri)
+        by_subject = {
+            subject: _usage_nodes(merged_annotations(axioms, extra), subject) for subject, axioms in found.items()
+        }
+        return by_subject, _usage_nodes([*general, *merged_annotations(unclaimed, extra)])
     except jpype.JException as error:
         raise FragmentError(f"the OWLAPI failed on a Usage tab's fragment: {error}") from error
 
@@ -509,17 +643,13 @@ def _assign(ontology: Any, subjects: Mapping[str, int], found: dict[str, list[An
     return unclaimed
 
 
-def _usage_nodes(axioms: Iterable[Any], iri: str, subject: str | None = None) -> list[owl.AnyAxiom]:
-    """Return axioms as nodes, each with its annotations only if the entity is in them and not in the rest.
+def _usage_nodes(axioms: Iterable[Any], subject: str | None = None) -> list[owl.AnyAxiom]:
+    """Return axioms as nodes, with their annotations.
 
     With a subject, a symmetric axiom between two is written with the subject first (`browl.owl.Axiom.with_first`), and
     the axioms sorted again by kind and text, as `convert_axioms` sorts them.
     """
-    nodes = []
-    for node in convert_axioms(axioms):
-        if node.annotations and iri in (bare := node.without_annotations()).iris():
-            node = bare
-        nodes.append(node)
+    nodes = convert_axioms(axioms)
     if subject is None:
         return nodes
     return sorted((node.with_first(subject) for node in nodes), key=lambda node: (node.kind, node.manchester))
