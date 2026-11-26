@@ -1580,6 +1580,7 @@ code {
 
     .results-head {
       display: flex;
+      flex-wrap: wrap;
       gap: var(--space);
       align-items: baseline;
       align-self: baseline;
@@ -1589,7 +1590,8 @@ code {
       margin-block: 0;
     }
 
-    .results-head .note {
+    .results-head .note,
+    .results-head .pager {
       margin: 0;
     }
 
@@ -1805,10 +1807,4 @@ code {
   .admins td:empty {
     display: none;
   }
-}
-
-
-.search-paging {
-  display: flex;
-  gap: var(--space);
 }

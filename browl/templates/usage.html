@@ -1,6 +1,7 @@
 {% from "annotations.html" import axiom_annotations %}
 {% from "axioms.html" import manchester %}
 {% from "links.html" import named_iri, named_text %}
+{% from "pager.html" import pager_nav %}
 {# A line of the Usage tab: an axiom of `subject`'s, with its annotations after it (`axiom_annotations`), the entity,
    `mark`, highlighted. One that starts with its subject then a keyword (`browl.owl.Axiom.subject_split`) is in two
    columns, the keyword and the rest, its subject in text only screen readers read, so the line still reads as the
@@ -17,9 +18,8 @@
 {%- endif %}
 {%- endmacro %}
 
-{# The Usage tab (`browl.usage_tab.UsageTab`, DESIGN.md §2.8) of the entity `iri`: the paging at the top, if there's
-   more than one page (`browl.lookup._Pager`), Previous and Next always there, grayed out at the ends, so
-   nothing moves from page to page, held there as the tab panel scrolls; then a frame of the page's usages
+{# The Usage tab (`browl.usage_tab.UsageTab`, DESIGN.md §2.8) of the entity `iri`: the pager at the top, if there's
+   more than one page (`pager_nav`), held there as the tab panel scrolls; then a frame of the page's usages
    in three columns, each subject once, then one line per axiom (`usage_line`), in Manchester syntax. The count is in
    the tab's label only. Above the streaming limit, before the usage table is ready, the count and "Preparing…", with
    an estimate if there's one, in an element of its own, which polls the tab's panel (`poll`, a `browl.lookup._Poll`)
@@ -37,22 +37,7 @@
   <p class="note">None.</p>
   {% else %}
   {% if pager is not none %}
-  {# htmx swaps the panel of another page in, and `tabs.js` adds it to the history; the `id`s keep the focus. #}
-  <nav class="pager" aria-label="Usage pages" data-panel="{{ pager.panel }}" hx-target="#tab-panel"
-       hx-sync="#tab-panel:replace">
-    {% if pager.previous is not none %}<a href="{{ pager.previous.href }}" hx-get="{{ pager.previous.panel }}"
-      id="usage-previous" rel="prev">Previous</a>
-    {%- else %}<span class="pager-off" aria-disabled="true">Previous</span>{% endif %}
-    <form method="get" action="{{ pager.action }}" hx-get="{{ pager.action_panel }}">
-      {% for name, value in pager.fields %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
-      <label>Page <input type="number" name="page" min="1" max="{{ usage.pages }}" value="{{ usage.page }}"
-        id="usage-page" required> of {{ "{:,}".format(usage.pages) }}</label>
-      <button type="submit" id="usage-go">Go</button>
-    </form>
-    {% if pager.next is not none %}<a href="{{ pager.next.href }}" hx-get="{{ pager.next.panel }}" id="usage-next"
-      rel="next">Next</a>
-    {%- else %}<span class="pager-off" aria-disabled="true">Next</span>{% endif %}
-  </nav>
+  {{ pager_nav(pager) }}
   {% endif %}
   {% if usage.too_many %}
   <p class="note">This page's usages are too large to show here.</p>

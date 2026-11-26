@@ -1208,8 +1208,9 @@ Tabs (U-28; see [2.9](#29-page-layout)):
       has one URL: a `page` that isn't a positive integer without leading zeros, is repeated, or is past the last is
       a 404, and `page=1` redirects to the URL without it. A page with the hash-IRI script shows its own entity's
       first page rather than 404 a page it lacks, as its fragment's entity may have it; the script's lookup 404s a
-      page that entity lacks. The paging, at the top of the tab, is Previous and Next, always shown, grayed out and
-      not links at the ends, so nothing moves from page to page, and a small GET form, "Page N of M". Without JS
+      page that entity lacks. The paging, at the top of the tab, is the results pager the search results page
+      shares (P-45, `templates/pager.html`): Previous and Next, always shown, grayed out and not links at the ends,
+      so nothing moves from page to page, and a small GET form, "Page N of M". Without JS
       they load the page; with htmx they swap in its tab panel alone (`panel=1`, from the hash route on a hash
       entity's page), scrolled to its top, the focus kept on the control used, else on the panel, and push the
       page's URL, so Back and Forward step through pages ([2.9](#29-page-layout)); Go reads `02` as 2, and replaces
@@ -1965,10 +1966,14 @@ too (P-38), and the JSON API's (P-33).
   all values or direct ones only. A property is labelled by display name, else as `NAME_PROPERTIES` names it, else by
   CURIE, else by IRI; a `property=` naming one the page doesn't offer gets "not found". Above the hits, the first page
   lists the common values that match (§2.6), each with its property and its count and share of each type, "too many to
-  list"; the autocomplete doesn't. It shows 50 hits a page, with Previous and Next links, as deep as search's
-  `MAX_OFFSET` allows. P-45 will page it as the Usage tab is paged, through one pager element both share: at the top,
-  with "Page n of N" and a form to go to any page, and the number of results, counted up to the deepest page (1,051
-  IRIs), as an exact total would read every match. One box (P-42): the page has no box of its own. Its filters belong to
+  list"; the autocomplete doesn't. It shows 50 hits a page (`page=`, as the Usage tab is paged), as deep as search's
+  `MAX_OFFSET` allows: 21 pages. Its pager is the Usage tab's (P-45, `templates/pager.html`): Previous and Next, and
+  "Page n of N" with Go, in the Results heading's row, so it stays in view as the hits scroll; without htmx, as the
+  page is a whole page, and its links `rel="nofollow"`. The heading's note gives the number of results, "Showing
+  51–100 of 734", counted up to the deepest page and one more (`COUNT_TO`, 1,051 IRIs), as an exact total would read
+  every match: past that, "of more than 1,050" and "Page n of 21+". The autocomplete counts none. A page past the
+  last, within the 21, says "No more results." without a pager; past the 21, "not found"; `page=1` redirects to the
+  URL without it. One box (P-42): the page has no box of its own. Its filters belong to
   the navigation bar's form (`form=`), so the bar's box searches with them, submitted with or without JS and in its
   suggestions (`hx-include`), and on the page it holds the page's query; a Search button by the filters submits the form
   too. So the visitor gets the autocomplete with the filters, and never two boxes. On a large enough window, the
@@ -2150,7 +2155,7 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 
 | Path | Purpose |
 | --- | --- |
-| `search` | The full results page, `q=`, `type=` and `property=` (repeated), `values=direct`, `offset=`; with `suggest=1` (no `offset=`), the autocomplete's fragment; both `noindex`. See [2.9](#29-page-layout), Search (P-20) |
+| `search` | The full results page, `q=`, `type=` and `property=` (repeated), `values=direct`, `page=`; with `suggest=1` (no `page=`), the autocomplete's fragment; both `noindex`. See [2.9](#29-page-layout), Search (P-20) |
 | `tree/{hierarchy}` | Tree page, `hierarchy` one of `classes`, `object-properties`, `data-properties` and `annotation-properties` (the navigation bar links them). `open=` (repeated), `children-of=`, `offset=`; a fragment: `node=`, `at=` (marked `noindex`), also for the hierarchy column, whose `at=` gets its links, `siblings-of=` its entity's siblings, and `before=` the page before a page of them. See [2.9](#29-page-layout), Tree pages (P-18) and Hierarchy column (P-38) |
 | `individuals` | _(Proposed, P-48)_ The list of named individuals (U-18), `page=` and `panel=1` as on the Usage tab; "None." if the ontology has none, as a tree page has. See [2.9](#29-page-layout), Navigation bar |
 | `iri?iri=…` | Fallback entity URLs (Q1b) |
@@ -2245,7 +2250,6 @@ flowchart LR
     subgraph P4["Phase 4: Browsing"]
         P39["P-39 Deprecated struck through"]
         P40["P-40 Shorter tree URLs"]
-        P45["P-45 Shared results pager"]
         P47["P-47 Individuals' pages"]
         P48["P-48 Individuals tab and list"]
     end
@@ -2268,7 +2272,6 @@ flowchart LR
 
     P39 --> P25
     P47 --> P48
-    P45 --> P48
     P47 --> P33
     P48 --> P33
     P48 --> P25
@@ -2334,7 +2337,7 @@ go into this document.
 | P-39 | Deprecated entities struck through, with a text equivalent, in the tree pages and the hierarchy column, from a flag stored at pre-caching (2.5); whether to mark them elsewhere too is open | U-46 | P-18 | To do | [#123](https://github.com/jclerman/browl/issues/123) |
 | P-40 | Tree URLs name open nodes by CURIE, else IRI, about 4× shorter; an index on `entity.curie` (2.9, 2.13) | U-17 | P-18 | To do | [#125](https://github.com/jclerman/browl/issues/125) |
 | P-27 | Usage tab on entity pages: the blank-node owner map, streaming up to 20 K usages per request, and the usage table built in the background after a load (2.5, 2.8) | U-26 | P-9, P-16, S-4, S-7 | Done | [#41](https://github.com/jclerman/browl/issues/41) (sub-issues [#108](https://github.com/jclerman/browl/issues/108), [#109](https://github.com/jclerman/browl/issues/109), [#110](https://github.com/jclerman/browl/issues/110)) |
-| P-45 | Shared results pager: one pager model and macro for the Usage tab and the search results page, htmx optional; on the results page at the top, with "Page n of N", a form to go to any page, and the number of results counted up to `MAX_OFFSET + PAGE_SIZE + 1` IRIs, not by the autocomplete; measure the count's cost on NCBITaxon (2.6, 2.9) | U-10, U-17, U-26 | P-20, P-27, P-41 | To do | [#139](https://github.com/jclerman/browl/issues/139) |
+| P-45 | Shared results pager: one pager model and macro for the Usage tab and the search results page, htmx optional; on the results page at the top, with "Page n of N", a form to go to any page, and the number of results counted up to `MAX_OFFSET + PAGE_SIZE + 1` IRIs, not by the autocomplete; measure the count's cost on NCBITaxon (2.6, 2.9) | U-10, U-17, U-26 | P-20, P-27, P-41 | Done | [#139](https://github.com/jclerman/browl/issues/139) |
 | P-47 | Individuals' pages: named individuals as entities, searchable, with their Overview sections, Usage tab and hierarchy column; anonymous individuals' assertions listed (2.5, 2.8, 2.9, Proposed) | U-10, U-18 | P-16, P-27, P-38, P-42 | To do | [#162](https://github.com/jclerman/browl/issues/162) |
 | P-48 | Individuals tab on class pages and the navigation bar's list of all individuals, by name with P-45's pager, from one `member` table filled at pre-caching (2.5, 2.8, 2.9, Proposed) | U-18, U-27, U-28 | P-47, P-45 | To do | [#164](https://github.com/jclerman/browl/issues/164) |
 | P-49 | Axiom annotations inline, in muted bordered boxes, after the annotation value or axiom they annotate: on the Overview's panels and every Usage tab line (2.8) | U-35 | P-16, P-27 | Done | [#163](https://github.com/jclerman/browl/issues/163) |

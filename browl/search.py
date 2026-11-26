@@ -30,6 +30,9 @@ MAX_LIMIT = 100
 MAX_OFFSET = 1000
 """The most results a query may skip: paging deeper reads more of the index for each page."""
 
+MAX_COUNT = MAX_OFFSET + MAX_LIMIT + 1
+"""The most results a query may count (`SearchQuery.count_to`): those of its deepest page, and one more."""
+
 MAX_QUERY_CHARS = 1000
 """The longest query text."""
 
@@ -78,6 +81,8 @@ class SearchQuery:
             sub-properties' values, transitively, rank after its own (rule 5).
         limit: How many results to return.
         offset: How many of the best results to skip, for paging.
+        count_to: How many results to count, at most, for `SearchResults.count`; 0 to count none, so a query reads
+            only as many as it returns. Counting reads every result up to it.
     """
 
     text: Annotated[str, Field(max_length=MAX_QUERY_CHARS), AfterValidator(_encodable)]
@@ -87,6 +92,7 @@ class SearchQuery:
     entailed: bool = True
     limit: Annotated[int, Field(ge=1, le=MAX_LIMIT)] = SEARCH_LIMIT
     offset: Annotated[int, Field(ge=0, le=MAX_OFFSET)] = 0
+    count_to: Annotated[int, Field(ge=0, le=MAX_COUNT)] = 0
 
 
 @dataclass(frozen=True)
@@ -169,12 +175,15 @@ class SearchResults:
     Attributes:
         hits: The results.
         more: Whether there are more after them.
+        count: How many results there are, up to the query's `SearchQuery.count_to`, which it is if there are as
+            many or more; None if the query counts none.
         common: The common values that match, best first, which no hit lists: given with the first page only.
     """
 
     hits: tuple[SearchHit, ...]
     more: bool
     common: tuple[CommonValue, ...] = ()
+    count: int | None = None
 
 
 class SearchBackend(ABC):
@@ -450,15 +459,16 @@ def search(connection: sqlite3.Connection, query: SearchQuery, fixed: "_Fixed | 
         fixed: What every query reads alike in the database, if it's been read (`_Fixed`); else it's read.
     """
     text = normalize(query.text)
+    none = 0 if query.count_to else None
     if not text:
-        return SearchResults((), more=False)
+        return SearchResults((), more=False, count=none)
     if fixed is None:
         fixed = _Fixed.read(connection)
     lanes, places, iris = _lanes(fixed, query)
     common = _common(fixed, query, text, places, iris) if query.offset == 0 else ()
     if not lanes:
-        return SearchResults((), more=False, common=common)
-    wanted = query.offset + query.limit + 1  # one more, to tell whether there are more
+        return SearchResults((), more=False, common=common, count=none)
+    wanted = max(query.offset + query.limit + 1, query.count_to)  # one more, to tell whether there are more
     best: dict[str, tuple[_Match, bool]] = {}
 
     def take(matches: Generator[_Match], exact: bool) -> bool:
@@ -505,7 +515,9 @@ def search(connection: sqlite3.Connection, query: SearchQuery, fixed: "_Fixed | 
         SearchHit(match.iri, types[match.iri], match.value, match.lane.iri, match.language, exact, match.word_start)
         for match, exact in found
     )
-    return SearchResults(hits, more=len(best) >= wanted, common=common)
+    more = len(best) > query.offset + query.limit
+    count = min(len(best), query.count_to) if query.count_to else None
+    return SearchResults(hits, more=more, common=common, count=count)
 
 
 def _with_value(connection: sqlite3.Connection, match: _Match) -> _Match:

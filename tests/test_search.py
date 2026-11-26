@@ -552,6 +552,19 @@ async def test_paging(data_dir: Path) -> None:
     assert find(settings, "m", offset=5) == SearchResults((), more=False)
 
 
+async def test_count(data_dir: Path) -> None:
+    """Check that `count_to` counts the results up to it, past the page, and that a query without it counts none."""
+    settings = make_settings()
+    await build(settings, [(f"e{n}", LABEL, LABEL, f'"m{n}"@en') for n in range(5)])
+    assert find(settings, "m", limit=1).count is None
+    assert [find(settings, "m", limit=1, count_to=to).count for to in (3, 5, 6)] == [3, 5, 5]
+    assert find(settings, "m", limit=2, offset=4, count_to=6).count == 5
+    counted = find(settings, "m", limit=1, count_to=3)
+    assert ([hit.value for hit in counted.hits], counted.more) == (["m0"], True)  # the page is the same
+    assert find(settings, "q", count_to=3).count == 0
+    assert find(settings, " ", count_to=3) == SearchResults((), more=False, count=0)
+
+
 async def test_paging_across_exact_matches(data_dir: Path) -> None:
     """Check paging from the exact matches into the prefix matches.
 

@@ -12,7 +12,6 @@ own page is the home page (`browl.home`), without tabs.
 
 import dataclasses
 import html
-import re
 import sqlite3
 import urllib.parse
 from dataclasses import dataclass
@@ -40,6 +39,7 @@ from browl.home import read_home
 from browl.jobs import JobState
 from browl.links import EntityLink, entity_name
 from browl.overview import read_overview
+from browl.pager import PAGE_PARAM, Pager, make_pager, page_params, read_page
 from browl.pages import (
     PANEL_HEADERS,
     TREES,
@@ -89,14 +89,8 @@ OVERVIEW = "overview"
 USAGE = "usage"
 """The Usage tab's slug."""
 
-PAGE_PARAM = "page"
-"""The query parameter that names a page of the Usage tab, from 1; absent for the first."""
-
 ENTITY_TABS = (Tab(OVERVIEW, "Overview"), Tab(USAGE, USAGE_LABEL))
 """An entity page's tabs (U-28); the first is shown by default."""
-
-_PAGE_NUMBER = re.compile(r"[1-9][0-9]{0,8}")
-"""A page number `page=…` may give: a positive integer, without a sign or leading zeros, so each page has one URL."""
 
 POLL_ID = "usage-preparing"
 """The id of the Usage tab's "Preparing…", which polls (`usage.html`), and which htmx sends as `HX-Trigger`."""
@@ -203,78 +197,12 @@ class _Poll:
     remaining: str | None
 
 
-@dataclass(frozen=True)
-class _PageLink:
-    """A link of the Usage tab's to another page.
-
-    Attributes:
-        href: The page's URL, root-relative.
-        panel: The URL its panel is fetched from, root-relative.
-    """
-
-    href: str
-    panel: str
-
-
-@dataclass(frozen=True)
-class _Pager:
-    """The Usage tab's links to other pages, and its form to go to a page.
-
-    Attributes:
-        panel: This page's panel URL, root-relative, which `tabs.js` keeps in the history.
-        previous: The link to the previous page; None on the first.
-        next: The link to the next page; None on the last.
-        action: The form's URL, root-relative, without its query, which the form's fields replace.
-        action_panel: The URL htmx sends the form's fields to for a page's panel, root-relative.
-        fields: The form's hidden fields: the page URL's own query, and the tab.
-    """
-
-    panel: str
-    previous: _PageLink | None
-    next: _PageLink | None
-    action: str
-    action_panel: str
-    fields: list[tuple[str, str]]
-
-
-def _pager(request: Request, at: _TabUrls, usage: UsageTab) -> _Pager | None:
-    """Return the Usage tab's paging, if it has more than one page."""
-    pages = usage.pages
-    if pages is None or pages < 2:
+def _pager(request: Request, at: _TabUrls, usage: UsageTab) -> Pager | None:
+    """Return the Usage tab's pager, if it has more than one page."""
+    if usage.pages is None:
         return None
-
-    def params(page: int) -> list[tuple[str, str]]:
-        return [(TAB_PARAM, USAGE), *([(PAGE_PARAM, str(page))] if page > 1 else [])]
-
-    def panel_href(page: int) -> str:
-        return href(request, with_query(at.panel or at.page, [*params(page), (PANEL_PARAM, "1")]))
-
-    def link(page: int) -> _PageLink | None:
-        if not 1 <= page <= pages:
-            return None
-        return _PageLink(href(request, with_query(at.page, params(page)), at.fragment), panel_href(page))
-
-    path, _, query = at.page.partition("?")
-    fields = [*urllib.parse.parse_qsl(query, keep_blank_values=True), (TAB_PARAM, USAGE)]
-    return _Pager(
-        panel=panel_href(usage.page),
-        previous=link(usage.page - 1),
-        next=link(usage.page + 1),
-        action=href(request, path, at.fragment),
-        # The page's own query is in the fields, a hash route's isn't.
-        action_panel=href(request, with_query(at.panel or path, [(PANEL_PARAM, "1")])),
-        fields=fields,
-    )
-
-
-def _page_number(request: Request) -> int | None:
-    """Return the Usage tab's page a request asks for, 1 if none; None if it repeats `page` or isn't a page number."""
-    values = request.query_params.getlist(PAGE_PARAM)
-    if not values:
-        return 1
-    if len(values) > 1 or not _PAGE_NUMBER.fullmatch(values[0]):
-        return None
-    return int(values[0])
+    params = [(TAB_PARAM, USAGE)]
+    return make_pager(request, "Usage", usage.page, usage.pages, at.page, params, at.fragment, at.panel or at.page)
 
 
 def _usage_label(request: Request, links: list[TabLink], iri: str, count: int | None) -> list[TabLink]:
@@ -348,7 +276,7 @@ async def _page(
     if tab.slug == OVERVIEW:
         context["overview"] = await read_overview(request, state, entity.iri)
     elif tab.slug == USAGE:
-        page = _page_number(request)
+        page = read_page(request)
         if page == 1 and PAGE_PARAM in request.query_params and not query.panel and at.panel is None:
             # The first page's URL is without `page`, so each page has one URL; a fragment is kept by the browser.
             location = href(request, with_query(at.page, [(TAB_PARAM, USAGE)]), at.fragment)
@@ -366,7 +294,7 @@ async def _page(
         context["pager"] = _pager(request, at, usage)
         context["poll"] = None
         if usage.preparing:
-            params = [(TAB_PARAM, USAGE), *([(PAGE_PARAM, str(usage.page))] if usage.page > 1 else [])]
+            params = [(TAB_PARAM, USAGE), *page_params(usage.page)]
             url = href(request, with_query(at.panel or at.page, [*params, (PANEL_PARAM, "1")]))
             context["poll"] = _Poll(url, POLL_S, remaining_text(usage.remaining_s))
         count = usage.count

@@ -31,6 +31,7 @@ from browl.jobs import JobContext, Stage
 from browl.links import EntityLink
 from browl.loading import dataset_name
 from browl.owlapi import ntriples_ontology
+from browl.pager import PageLink
 from browl.pages import templates
 from browl.precache.stage import pre_cache
 from browl.rdf import IRI
@@ -406,7 +407,7 @@ def test_pages(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     assert subjects_shown(first) == [f"{NS}Cat"]
     assert subjects_shown(second) == [f"{NS}Cat (continued)"]
     assert '<small class="continued">(continued)</small>' in second
-    assert 'value="2"\n        id="usage-page" required> of 5</label>' in second
+    assert re.search(r'value="2"\s+id="usage-page" required> of 5</label>', second)
     assert second.index('<nav class="pager"') < second.index('<dl class="frame usage-frame">')
     # Previous, the form and Next fetch panels from the hash route; its URLs are `test_pager_hash_route`'s.
     nav = second[second.index('<nav class="pager"') : second.index("</nav>")]
@@ -761,9 +762,9 @@ def test_pager_fallback_url() -> None:
     assert pager is not None
     page = "/root/_browl/iri?iri=urn%3Aexample%3Ax&tab=usage"
     assert (pager.previous, pager.panel, pager.next) == (
-        browl.lookup._PageLink(page, f"{page}&panel=1"),
+        PageLink(page, f"{page}&panel=1"),
         f"{page}&page=2&panel=1",
-        browl.lookup._PageLink(f"{page}&page=3", f"{page}&page=3&panel=1"),
+        PageLink(f"{page}&page=3", f"{page}&page=3&panel=1"),
     )
     assert (pager.action, pager.fields) == ("/root/_browl/iri", [("iri", "urn:example:x"), ("tab", "usage")])
     assert pager.action_panel == "/root/_browl/iri?panel=1"  # the fields give the IRI
@@ -779,9 +780,9 @@ def test_pager_hash_route() -> None:
     assert pager is not None
     panel = "/_browl/hash?path=/onto&fragment=Foo&tab=usage"
     assert (pager.previous, pager.panel, pager.next) == (
-        browl.lookup._PageLink("/onto?tab=usage#Foo", f"{panel}&panel=1"),
+        PageLink("/onto?tab=usage#Foo", f"{panel}&panel=1"),
         f"{panel}&page=2&panel=1",
-        browl.lookup._PageLink("/onto?tab=usage&page=3#Foo", f"{panel}&page=3&panel=1"),
+        PageLink("/onto?tab=usage&page=3#Foo", f"{panel}&page=3&panel=1"),
     )
     assert (pager.action, pager.fields) == ("/onto#Foo", [("tab", "usage")])
     assert pager.action_panel == "/_browl/hash?path=/onto&fragment=Foo&panel=1"
