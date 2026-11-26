@@ -2248,7 +2248,6 @@ flowchart LR
         P45["P-45 Shared results pager"]
         P47["P-47 Individuals' pages"]
         P48["P-48 Individuals tab and list"]
-        P49["P-49 Axiom annotations"]
     end
     subgraph P5["Phase 5: Search, caching, auth"]
         P43["P-43 Sticky search filters"]
@@ -2272,9 +2271,7 @@ flowchart LR
     P45 --> P48
     P47 --> P33
     P48 --> P33
-    P49 --> P33
     P48 --> P25
-    P49 --> P25
 ```
 
 ### Phase 0: Spikes
