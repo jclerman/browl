@@ -2707,7 +2707,7 @@ def test_column_beside_panels(page: Page, trees: LiveServer, size: dict[str, int
 
 @pytest.mark.parametrize("size", [WIDE, NARROW], ids=["beside", "above"])
 def test_iri_box_over_column(page: Page, trees: LiveServer, size: dict[str, int]) -> None:
-    """Check that the opened IRI box is drawn over the hierarchy column: its sticky heading, its rows and its link."""
+    """Check that the opened IRI box is drawn over the hierarchy column, whose sticky heading it overlaps."""
     page.set_viewport_size(size)
     page.goto(f"{trees.url}/Bottom")
     page.locator(".entity-iri summary").click()
