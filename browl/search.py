@@ -459,15 +459,15 @@ def search(connection: sqlite3.Connection, query: SearchQuery, fixed: "_Fixed | 
         fixed: What every query reads alike in the database, if it's been read (`_Fixed`); else it's read.
     """
     text = normalize(query.text)
-    none = 0 if query.count_to else None
+    empty_count = 0 if query.count_to else None
     if not text:
-        return SearchResults((), more=False, count=none)
+        return SearchResults((), more=False, count=empty_count)
     if fixed is None:
         fixed = _Fixed.read(connection)
     lanes, places, iris = _lanes(fixed, query)
     common = _common(fixed, query, text, places, iris) if query.offset == 0 else ()
     if not lanes:
-        return SearchResults((), more=False, common=common, count=none)
+        return SearchResults((), more=False, common=common, count=empty_count)
     wanted = max(query.offset + query.limit + 1, query.count_to)  # one more, to tell whether there are more
     best: dict[str, tuple[_Match, bool]] = {}
 

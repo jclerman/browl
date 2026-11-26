@@ -1973,8 +1973,8 @@ too (P-38), and the JSON API's (P-33).
   lists the common values that match (§2.6), each with its property and its count and share of each type, "too many to
   list"; the autocomplete doesn't. It shows 50 hits a page (`page=`, as the Usage tab is paged), as deep as search's
   `MAX_OFFSET` allows: 21 pages. Its pager is the Usage tab's (P-45, `templates/pager.html`): Previous and Next, and
-  "Page n of N" with Go, in the Results heading's row, so it stays in view as the hits scroll; without htmx, as the
-  page is a whole page, and its links `rel="nofollow"`. The heading's note gives the number of results, "Showing
+  "Page n of N" with Go, in the Results heading's row, so it stays in view as the hits scroll. It loads whole pages
+  (no htmx), and its links are `rel="nofollow"`. The heading's note gives the number of results, "Showing
   51–100 of 734", counted up to the deepest page and one more (`COUNT_TO`, 1,051 IRIs), as an exact total would read
   every match: past that, "of more than 1,050" and "Page n of 21+". The autocomplete counts none. A page past the
   last, within the 21, says "No more results." without a pager; past the 21, "not found"; `page=1` redirects to the

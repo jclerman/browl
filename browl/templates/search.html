@@ -48,7 +48,7 @@
       <h2 id="results-heading">Results</h2>
       {% if hits %}
       <p class="note">Showing {{ "{:,}".format(offset + 1) }}–{{ "{:,}".format(offset + hits | length) }} of
-        {% if more %}more than {{ "{:,}".format(count - 1) }}{% else %}{{ "{:,}".format(count) }}{% endif %}</p>
+        {% if more %}more than {{ "{:,}".format(shown_cap) }}{% else %}{{ "{:,}".format(count) }}{% endif %}</p>
       {% endif %}
       {# In the heading's row, outside the panel, so it stays in view as the hits scroll. #}
       {% if pager is not none %}{{ pager_nav(pager) }}{% endif %}

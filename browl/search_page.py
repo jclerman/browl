@@ -383,8 +383,8 @@ def shown_common(common: Sequence[CommonValue], labels: Mapping[str, str]) -> li
 
 
 def _params(asked: SearchRequest) -> list[tuple[str, str]]:
-    """Return a search URL's parameters for the same query and filters, without the page."""
-    params = [(QUERY_PARAM, asked.text)]
+    """Return a search URL's parameters for the same query and filters, without the page; without `q=` if it's empty."""
+    params = [(QUERY_PARAM, asked.text)] if asked.text else []
     params += [(TYPE_PARAM, kind.value) for kind in asked.types]
     params += [(PROPERTY_PARAM, iri) for iri in asked.properties]
     if asked.direct:
@@ -481,6 +481,7 @@ async def search_page(request: Request) -> Response:
         "offset": asked.offset,
         "count": results.count,
         "more": more,
+        "shown_cap": COUNT_TO - 1,  # with `more`, there are more results than this
         "pager": pager,
         "action": href(request, page_path),
         "types": [(kind.value, TYPE_LABELS[kind], kind in asked.types) for kind in EntityType],
