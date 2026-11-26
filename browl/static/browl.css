@@ -1205,6 +1205,15 @@ code {
   margin-left: 0.5em;
 }
 
+/* A named individual beneath its types in its hierarchy column (P-47): a leading diamond marks it as no class. An
+   inline block, so its link's underline skips it. */
+.tree-icon-individual {
+  display: inline-block;
+  margin-right: 0.3em;
+  color: var(--accent);
+  font-size: 0.8em;
+}
+
 .tree-paging {
   padding-left: 1.25rem; /* where a node's name starts, past its toggle */
 }

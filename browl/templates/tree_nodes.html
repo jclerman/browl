@@ -7,9 +7,12 @@
 {%- endmacro %}
 
 {# A node's name, and an equivalence group's other members' (U-9). The link is to the representative's page, which
-   links to the others. #}
+   links to the others. A named individual's leads with a diamond, so it can't be taken for a class; circles are kept
+   for a class icon, if one is added. #}
 {% macro node_label(node) -%}
+{%- if node.individual %}<span class="tree-icon-individual" aria-hidden="true">◆</span>{% endif -%}
 <bdi>{{ node.link.name }}</bdi>
+{%- if node.individual %}<span class="visually-hidden"> (named individual)</span>{% endif -%}
 {%- for other in node.equivalents %} ≡ <bdi>{{ other.name }}</bdi>{% endfor %}
 {%- if node.more_equivalents %} ≡ … <small>(+{{ "{:,}".format(node.more_equivalents) }})</small>{% endif %}
 {%- endmacro %}

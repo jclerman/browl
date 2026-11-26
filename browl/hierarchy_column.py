@@ -225,7 +225,7 @@ def _individual_tree(
     root = link_root(request.scope)
     nodes = read_nodes(connection, EntityType.CLASS, parents, prefix, root)
     link = read_entity_links(connection, [individual.iri], prefix, root)[individual.iri]
-    node = TreeNode(id=individual.id, link=link, children=0, descendants=0)  # no class's id
+    node = TreeNode(id=individual.id, link=link, children=0, descendants=0, individual=True)  # no class's id
     parents[node.id] = [seed for seed in seeds if seed in parents]
     drawn = _drawn(request, connection, _CLASSES, node.id, parents, [*nodes, node], INDIVIDUAL_COLUMN_ID, False)
     note = None

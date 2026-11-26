@@ -49,6 +49,8 @@ class TreeNode(BaseModel):
         more_equivalents: How many other members its label doesn't name.
         children: How many immediate children it has (U-7).
         descendants: How many distinct descendants it has (U-8).
+        individual: Whether it's a named individual beneath its types, in its hierarchy column (P-47), not a class;
+            its label leads with a diamond.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -59,6 +61,7 @@ class TreeNode(BaseModel):
     more_equivalents: int = 0
     children: int
     descendants: int
+    individual: bool = False
 
 
 class ChildPage(BaseModel):

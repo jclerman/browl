@@ -544,6 +544,10 @@ def test_siblings_not_found(client: TestClient, params: list[tuple[str, str]]) -
     assert client.get("/_browl/tree/classes", params=params).status_code == 404
 
 
+IND = "◆ind (named individual)"
+"""An individual's node's text in its tree: a diamond, its name, and words for screen readers, as no class's."""
+
+
 def individual_stage(*punned: EntityType) -> object:
     """Return `tree_stage` with an individual, `ind`, which may be punned with entities of other types too."""
     entities = [(ex("ind"), EntityType.NAMED_INDIVIDUAL), *((ex("ind"), each) for each in punned)]
@@ -578,10 +582,10 @@ def test_individual(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
         (1, "Left"),
         (2, "Bottom"),
         (3, "Deep"),
-        (4, "ind"),  # under Deep, though it has no subclasses
+        (4, IND),  # under Deep, though it has no subclasses; marked as no class
         (1, "Right"),
         (2, "Bottom (also above)"),
-        (2, "ind (also above)"),
+        (2, f"{IND} (also above)"),
     ]
     items = Tree(found.trees[0]).items
     assert [item.id for item in items][:5] == ["hi-0", "hi-0-0", "hi-0-0-0", "hi-0-0-0-0", "hi-0-0-0-0-0"]
@@ -610,7 +614,7 @@ def test_individual_no_named_type(app: FastAPI, monkeypatch: pytest.MonkeyPatch,
     with_types(monkeypatch, *names)
     with loaded(app, individual_stage()) as client:
         found = column(client, "/ind")
-    assert shown(found) == [(0, "ind")]
+    assert shown(found) == [(0, IND)]
     assert f'<p class="note">{NO_NAMED_TYPE}</p>' in found.html
     assert "Show its sibling" not in found.html
 
@@ -631,7 +635,7 @@ def test_individual_ancestors_capped(app: FastAPI, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(browl.hierarchy_column, "MAX_ANCESTORS", 3)
     with_types(monkeypatch, "Deep")
     with loaded(app, individual_stage()) as client:
-        assert shown(column(client, "/ind")) == [(0, "Left"), (1, "Bottom"), (2, "Deep"), (3, "ind")]
+        assert shown(column(client, "/ind")) == [(0, "Left"), (1, "Bottom"), (2, "Deep"), (3, IND)]
 
 
 def test_individual_punned(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -645,7 +649,7 @@ def test_individual_punned(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> Non
     ]
     assert [shown(found, index) for index in (0, 1)] == [
         [(0, "Top"), (1, "Right"), (2, "ind"), (2, "Show its sibling (1)")],
-        [(0, "Top"), (1, "Left"), (2, "ind")],  # no siblings
+        [(0, "Top"), (1, "Left"), (2, IND)],  # no siblings; the class tree's ind is unmarked
     ]
     assert [Tree(tree).items[0].id for tree in found.trees] == ["hc-0", "hi-0"]
 
