@@ -619,6 +619,38 @@ code {
   margin: 0;
 }
 
+/* On a narrow screen, each admin is a block: the address, then when they were added and the Remove button. */
+@media (max-width: 40rem) {
+  .admins,
+  .admins tbody,
+  .admins tr {
+    display: block;
+  }
+
+  .admins thead {
+    display: none;
+  }
+
+  .admins tr {
+    border-bottom: 1px solid var(--border);
+    padding: calc(var(--space) / 4) 0;
+  }
+
+  .admins td {
+    border: 0;
+    display: inline-block;
+    padding: 0 calc(var(--space) / 2) 0 0;
+  }
+
+  .admins td:first-child {
+    display: block;
+  }
+
+  .admins td:empty {
+    display: none;
+  }
+}
+
 .add-admin input[type="email"] {
   width: min(30ch, 100%);
 }
