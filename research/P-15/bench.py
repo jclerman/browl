@@ -70,8 +70,8 @@ async def page(sparql: FusekiClient, dataset: str, iri: str, clause: str) -> tup
     start = time.perf_counter()
     fragment = await axioms.fetch_fragment(sparql, dataset, iri, clause)
     fetched = time.perf_counter()
-    rendered = await owlapi.run_java(axioms.entity_axioms, fragment, iri)
-    return (fetched - start) * 1000, (time.perf_counter() - fetched) * 1000, rendered, len(fragment)
+    rendered = await owlapi.run_java(axioms.entity_axioms, fragment.ntriples, iri)
+    return (fetched - start) * 1000, (time.perf_counter() - fetched) * 1000, rendered, len(fragment.ntriples)
 
 
 async def main() -> None:
