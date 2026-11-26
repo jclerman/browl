@@ -75,6 +75,7 @@ Requirements have stable IDs so plan items and tests can refer to them. The pref
 | **U-35** · Axiom annotations (e.g. cross-references on a synonym or definition) are shown after the annotation value or axiom they annotate, on its line, muted and in brackets, wrapping as the line does: on the Overview's panels and on every line of the Usage tab. _(was Later; P-49)_ | v1 |
 | **U-49** · A visitor can choose the order in which properties rank search results, in place of the name properties' order. _(P-42 makes it possible)_ | Later |
 | **U-51** · A view of the individuals organized by their direct types, beside U-18's flat list. | Later |
+| **U-52** · Declared datatypes have pages, with their annotations and definitions (`DatatypeDefinition`), and are listed from the navigation bar, so no declared entity lacks a page. _(Q17 skipped them for v1)_ | Later |
 | **U-20** · Autocomplete tolerates typos. _(Q8)_ | Later |
 | **U-21** · Autocomplete can optionally match IRIs and CURIEs. Never on by default. _(Q12)_ | Later |
 | **U-22** · Imported entities can link out to their real IRI where it is hosted. _(Q3)_ | Later |
@@ -2203,6 +2204,7 @@ flowchart LR
         P29["P-29 Compressed load files"]
         P32["P-32 Reasoner progress"]
         P36["P-36 Cancel a load"]
+        P37["P-37 Axiom line breaks"]
     end
     S5b["S-5b OLS4 comparison"]
 
@@ -2307,8 +2309,8 @@ go into this document.
 
 ### Later
 
-Requirements marked **Later** (U-20–U-25, U-33, U-34, U-36–U-41, U-43, U-49, U-51, A-8, A-9, O-12) are not yet broken
-into work items.
+Requirements marked **Later** (U-20–U-25, U-33, U-34, U-36–U-41, U-43, U-49, U-51, U-52, A-8, A-9, O-12) are not yet
+broken into work items.
 
 **Novel features** _(post-log)_. EBI's [OLS4](https://github.com/EBISPOT/ols4) already offers much of v1 for many
 ontologies at once. It shows hierarchies along configured properties, but it does no reasoning, and its "Related from"
