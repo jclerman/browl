@@ -2,7 +2,8 @@
 
 A frame shows each axiom by the operands that aren't the entity, under a section named for its kind: on Heart's page,
 `Heart SubClassOf Organ` is `Organ` under SubClass Of. An axiom whose entity isn't where its section expects it, such
-as a general class axiom, is shown whole.
+as a general class axiom, is shown whole. An individual's property assertions are under their property's name within
+their section, as annotations are under theirs (P-47).
 """
 
 import functools
@@ -19,7 +20,7 @@ from browl.rdf import IRI
 
 
 class Section(StrEnum):
-    """A section of the frame (DESIGN.md §2.8): a class's, a property's, or one for any other axiom."""
+    """A section of the frame (DESIGN.md §2.8): a class's, a property's, an individual's, or one for any other axiom."""
 
     SUB_CLASS_OF = "sub_class_of"
     EQUIVALENT_TO = "equivalent_to"
@@ -33,6 +34,12 @@ class Section(StrEnum):
     SUB_PROPERTY_OF = "sub_property_of"
     INVERSE_OF = "inverse_of"
     CHAINS = "chains"
+    TYPES = "types"
+    SAME_AS = "same_as"
+    DIFFERENT_FROM = "different_from"
+    OBJECT_ASSERTIONS = "object_assertions"
+    DATA_ASSERTIONS = "data_assertions"
+    NEGATIVE_ASSERTIONS = "negative_assertions"
     OTHER = "other"
 
 
@@ -49,6 +56,12 @@ SECTION_LABELS = {
     Section.SUB_PROPERTY_OF: "SubProperty Of",
     Section.INVERSE_OF: "Inverse Of",
     Section.CHAINS: "SuperProperty Of (Chain)",
+    Section.TYPES: "Types",
+    Section.SAME_AS: "Same As",
+    Section.DIFFERENT_FROM: "Different From",
+    Section.OBJECT_ASSERTIONS: "Object property assertions",
+    Section.DATA_ASSERTIONS: "Data property assertions",
+    Section.NEGATIVE_ASSERTIONS: "Negative property assertions",
     Section.OTHER: "Other axioms",
 }
 """Each section's label, as the page shows it."""
@@ -71,12 +84,20 @@ _PROPERTY_ORDER = (
     Section.DISJOINT_WITH,
     Section.CHAINS,
 )
+_INDIVIDUAL_ORDER = (
+    Section.TYPES,
+    Section.SAME_AS,
+    Section.DIFFERENT_FROM,
+    Section.OBJECT_ASSERTIONS,
+    Section.DATA_ASSERTIONS,
+    Section.NEGATIVE_ASSERTIONS,
+)
+_ORDERS = {EntityKind.CLASS: _CLASS_ORDER, EntityKind.NAMED_INDIVIDUAL: _INDIVIDUAL_ORDER}
 _SECTION_INDEX = {
-    kind: {
-        section: index for index, section in enumerate(_CLASS_ORDER if kind is EntityKind.CLASS else _PROPERTY_ORDER)
-    }
-    for kind in EntityKind
+    kind: {section: index for index, section in enumerate(_ORDERS.get(kind, _PROPERTY_ORDER))} for kind in EntityKind
 }
+_BY_PROPERTY = frozenset({Section.OBJECT_ASSERTIONS, Section.DATA_ASSERTIONS})
+"""The sections whose lines are under their property's name, each property a group of its own."""
 _KIND_INDEX = {kind: index for index, kind in enumerate(EntityKind)}
 _KIND_WORDS = {
     EntityKind.CLASS: "class",
@@ -88,10 +109,16 @@ _KIND_WORDS = {
 }
 
 Operand = Annotated[
-    owl.ClassExpression | owl.DataRange | owl.ObjectPropertyExpression | owl.IRIReference, Field(discriminator="type")
+    owl.ClassExpression
+    | owl.DataRange
+    | owl.ObjectPropertyExpression
+    | owl.IRIReference
+    | owl.AnonymousIndividual
+    | owl.Literal,
+    Field(discriminator="type"),
 ]
-"""An operand a frame's line shows: a class or property expression, a data range, or an annotation property's domain
-or range."""
+"""An operand a frame's line shows: a class or property expression, a data range, an annotation property's domain or
+range, or an individual or literal an assertion names."""
 
 _DOMAINS = (owl.ObjectPropertyDomain, owl.DataPropertyDomain, owl.AnnotationPropertyDomain)
 _RANGES = (owl.ObjectPropertyRange, owl.DataPropertyRange, owl.AnnotationPropertyRange)
@@ -109,6 +136,7 @@ _CHARACTERISTICS = (
 _EQUIVALENTS = (owl.EquivalentClasses, owl.EquivalentObjectProperties, owl.EquivalentDataProperties)
 _DISJOINTS = (owl.DisjointClasses, owl.DisjointObjectProperties, owl.DisjointDataProperties)
 _CLASS_AXIOMS = (owl.SubClassOf, owl.EquivalentClasses, owl.DisjointClasses, owl.DisjointUnion, owl.HasKey)
+_NEGATIVE_ASSERTIONS = (owl.NegativeObjectPropertyAssertion, owl.NegativeDataPropertyAssertion)
 
 
 class FrameLine(BaseModel):
@@ -157,6 +185,8 @@ class AxiomGroup(BaseModel):
         label: The section's label, as the page shows it: its `SECTION_LABELS` label, with the kind added if another
             of the entity's sections has that label too ("Equivalent To (object property)").
         lines: Its lines, in the order shown (`frame_groups`).
+        property: For an individual's object or data property assertions, the property whose values its lines show,
+            as a section has a group for each, by the property's name; else None.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -165,6 +195,7 @@ class AxiomGroup(BaseModel):
     kind: EntityKind | None
     label: str
     lines: tuple[FrameLine, ...]
+    property: Entity | None = None
 
 
 def frame_groups(
@@ -182,17 +213,18 @@ def frame_groups(
             the entity itself.
         shown_name: The name the page shows for an IRI.
     """
-    # Each section's lines, by what makes them one: the line without annotations, or under Equivalent To its
-    # equivalent, which several axioms, or the equivalence group, may state; with their annotations.
-    sections: dict[tuple[EntityKind | None, Section], dict[object, tuple[FrameLine, dict[owl.Annotation, None]]]] = {}
+    # Each section's lines, by what makes them one: the line without annotations, or under Equivalent To and Same As
+    # its equivalent, which several axioms, or the equivalence group, may state; with their annotations. A section by
+    # property has a group for each.
+    sections: dict[_Key, dict[object, tuple[FrameLine, dict[owl.Annotation, None]]]] = {}
     for axiom in axioms:
-        for kind, section, line in _place(axiom.without_annotations(), iri):
-            same = line.operands[0] if section is Section.EQUIVALENT_TO else line
-            _, annotations = sections.setdefault((kind, section), {}).setdefault(same, (line, {}))
+        for kind, section, line, by in _place(axiom.without_annotations(), iri):
+            same = line.operands[0] if section in (Section.EQUIVALENT_TO, Section.SAME_AS) else line
+            _, annotations = sections.setdefault((kind, section, by), {}).setdefault(same, (line, {}))
             annotations.update(dict.fromkeys(axiom.annotations))
     for each in equivalents:
         entity = Entity(kind=EntityKind.CLASS, iri=each)
-        sections.setdefault((EntityKind.CLASS, Section.EQUIVALENT_TO), {}).setdefault(
+        sections.setdefault((EntityKind.CLASS, Section.EQUIVALENT_TO, None), {}).setdefault(
             entity, (FrameLine(axiom=None, operands=(entity,)), {})
         )
 
@@ -201,9 +233,9 @@ def frame_groups(
         named = len(line.operands) == 1 and isinstance(line.operands[0], Entity)
         return not named, _shown_text(tokens, shown_name).casefold(), owl.manchester_text(tokens)
 
-    keys = sorted(sections, key=_section_key)
-    labels = [SECTION_LABELS[section] for _, section in keys]
-    counts = Counter(labels)
+    keys = sorted(sections, key=lambda key: _section_key(key, shown_name))
+    labels = [SECTION_LABELS[section] for _, section, _ in keys]
+    counts = Counter(SECTION_LABELS[section] for _, section in dict.fromkeys(key[:2] for key in keys))
     return [
         AxiomGroup(
             section=section,
@@ -213,17 +245,33 @@ def frame_groups(
                 sorted(
                     (
                         line.model_copy(update={"annotations": tuple(annotations)}) if annotations else line
-                        for line, annotations in sections[kind, section].values()
+                        for line, annotations in sections[kind, section, by].values()
                     ),
                     key=line_key,
                 )
             ),
+            property=by,
         )
-        for (kind, section), label in zip(keys, labels, strict=True)
+        for (kind, section, by), label in zip(keys, labels, strict=True)
     ]
 
 
-def _place(axiom: AnyAxiom, iri: str) -> Iterator[tuple[EntityKind | None, Section, FrameLine]]:
+type _Key = tuple[EntityKind | None, Section, Entity | None]
+"""A group of a frame's lines: its section's kind, the section, and for a section by property, the property."""
+
+
+def _place(axiom: AnyAxiom, iri: str) -> Iterator[tuple[EntityKind | None, Section, FrameLine, Entity | None]]:
+    """Yield the group (`_Key`) of each line that shows an axiom on the entity's page, and the line."""
+    for kind, section, line in _sections(axiom, iri):
+        by: Entity | None = None
+        if section in _BY_PROPERTY:
+            assert isinstance(line.axiom, owl.ObjectPropertyAssertion | owl.DataPropertyAssertion)
+            assert isinstance(line.axiom.property, Entity)  # an assertion of an inverse property is shown whole
+            by = line.axiom.property
+        yield kind, section, line, by
+
+
+def _sections(axiom: AnyAxiom, iri: str) -> Iterator[tuple[EntityKind | None, Section, FrameLine]]:
     """Yield the section, and its kind, of each line that shows an axiom on the entity's page."""
     if isinstance(axiom, owl.SubClassOf) and _is(axiom.sub, iri):
         yield EntityKind.CLASS, Section.SUB_CLASS_OF, FrameLine(axiom=axiom, operands=(axiom.super,))
@@ -259,7 +307,27 @@ def _place(axiom: AnyAxiom, iri: str) -> Iterator[tuple[EntityKind | None, Secti
         # The other side; or the entity itself, if it's its own inverse (`p owl:inverseOf p`).
         other = axiom.second if entity is axiom.first else axiom.first
         yield entity.kind, Section.INVERSE_OF, FrameLine(axiom=axiom, operands=(other,))
-    else:  # such as an individual's `SameAs`, written with the entity first
+    elif isinstance(axiom, owl.ClassAssertion) and _is(axiom.individual, iri):
+        yield EntityKind.NAMED_INDIVIDUAL, Section.TYPES, FrameLine(axiom=axiom, operands=(axiom.class_,))
+    elif isinstance(axiom, owl.SameIndividual) and (entity := _member(axiom.members, iri)):
+        # One member, from `i owl:sameAs i`: the individual is the same as itself.
+        for same in [each for each in axiom.members if each is not entity] or [entity]:
+            yield EntityKind.NAMED_INDIVIDUAL, Section.SAME_AS, FrameLine(axiom=axiom, operands=(same,))
+    elif isinstance(axiom, owl.DifferentIndividuals) and (entity := _member(axiom.members, iri)):
+        different = tuple(each for each in axiom.members if each is not entity) or (entity,)
+        yield EntityKind.NAMED_INDIVIDUAL, Section.DIFFERENT_FROM, FrameLine(axiom=axiom, operands=different)
+    elif (
+        isinstance(axiom, owl.ObjectPropertyAssertion | owl.DataPropertyAssertion)
+        and _is(axiom.subject, iri)
+        and isinstance(axiom.property, Entity)
+    ):
+        is_object = isinstance(axiom, owl.ObjectPropertyAssertion)
+        section = Section.OBJECT_ASSERTIONS if is_object else Section.DATA_ASSERTIONS
+        yield EntityKind.NAMED_INDIVIDUAL, section, FrameLine(axiom=axiom, operands=(axiom.object,))
+    elif isinstance(axiom, _NEGATIVE_ASSERTIONS) and _is(axiom.subject, iri):
+        line = FrameLine(axiom=axiom, operands=(axiom.property, axiom.object))
+        yield EntityKind.NAMED_INDIVIDUAL, Section.NEGATIVE_ASSERTIONS, line
+    else:  # such as an inverse property's assertion, written with the entity first
         yield None, Section.OTHER, FrameLine(axiom=axiom.with_first(iri))
 
 
@@ -273,12 +341,16 @@ def _member(members: Sequence[owl.Node], iri: str) -> Entity | None:
     return next((member for member in members if _is(member, iri)), None)
 
 
-def _section_key(key: tuple[EntityKind | None, Section]) -> tuple[int, int]:
-    """Order sections by kind, a class's first, then by the kind's order of sections; other axioms last."""
-    kind, section = key
+def _section_key(key: _Key, shown_name: Callable[[str], str]) -> tuple[int, int, str, str]:
+    """Order groups by kind, a class's first, then by the kind's order of sections, then by property name and IRI.
+
+    Other axioms come last.
+    """
+    kind, section, by = key
     if kind is None:
-        return len(EntityKind), 0
-    return _KIND_INDEX[kind], _SECTION_INDEX[kind][section]
+        return len(EntityKind), 0, "", ""
+    name, by_iri = ("", "") if by is None else (shown_name(by.iri).casefold(), by.iri)
+    return _KIND_INDEX[kind], _SECTION_INDEX[kind][section], name, by_iri
 
 
 def _shown_text(tokens: Iterable[Token], shown_name: Callable[[str], str]) -> str:

@@ -19,7 +19,9 @@
 
 {# An entity's logical axioms (`browl.overview.AxiomsPanel`), from `links`, as a frame in a two-column grid (U-32):
    each section's label once, then one line per axiom, with its annotations; an equivalent only its equivalence group
-   implies is marked. The entity, `iri`, is highlighted where a line shows it. #}
+   implies is marked. An individual's property assertions are under their section's label, across both columns, then
+   each property's name, as an annotation's is (`browl.frames.AxiomGroup.property`). The entity, `iri`, is highlighted
+   where a line shows it. #}
 {% macro axiom_frame(panel, links, iri) -%}
 <section class="axioms panel" tabindex="0" aria-labelledby="axioms-heading">
   <h2 id="axioms-heading">Logical axioms</h2>
@@ -32,7 +34,15 @@
   {% else %}
   <dl class="frame">
     {% for group in panel.groups %}
+    {% if group.property is none %}
     <dt>{{ group.label }}</dt>
+    {% else %}
+    {% set previous = loop.previtem if not loop.first else none %}
+    {% if previous is none or previous.section != group.section or previous.kind != group.kind %}
+    <dt class="frame-heading">{{ group.label }}</dt>
+    {% endif %}
+    <dt class="frame-property">{{ named_iri(group.property.iri, links) }}</dt>
+    {% endif %}
     {% for line in group.lines %}
     <dd dir="ltr">{{ manchester(line.manchester_tokens(), links, iri) }}
       {%- if line.axiom is none %} <small class="implied">(implied)</small>{% endif -%}
