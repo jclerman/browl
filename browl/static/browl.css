@@ -1026,6 +1026,11 @@ code {
   .frame dt:not(:first-child) + dd {
     margin-top: 0;
   }
+
+  /* A property's values, indented under it, as its name is under its section's label. */
+  .frame dd.frame-value {
+    margin-left: calc(var(--space) * 2);
+  }
 }
 
 .lang,

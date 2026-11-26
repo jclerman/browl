@@ -44,7 +44,8 @@
     <dt class="frame-property">{{ named_iri(group.property.iri, links) }}</dt>
     {% endif %}
     {% for line in group.lines %}
-    <dd dir="ltr">{{ manchester(line.manchester_tokens(), links, iri) }}
+    <dd{% if group.property is not none %} class="frame-value"{% endif %} dir="ltr">
+      {{- manchester(line.manchester_tokens(), links, iri) }}
       {%- if line.axiom is none %} <small class="implied">(implied)</small>{% endif -%}
       {{ axiom_annotations(line.annotations, links, iri) }}</dd>
     {% endfor %}

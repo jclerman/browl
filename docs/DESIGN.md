@@ -1437,13 +1437,13 @@ is (below). Uberon's 67 individuals' pages take 14 ms at p50 and 58 ms at p95, t
   - **Properties** (U-31): Equivalent To, SubProperty Of, Domains, Ranges, Characteristics (functional, transitive,
     …), Inverse Of, Disjoint With, and SuperProperty Of (Chain), the chains that imply the property. An annotation
     property has only SubProperty Of, Domains and Ranges.
-  - **Individuals** _(P-47)_: Types, Same As, Different From, Object property assertions, Data property
-    assertions, and Negative property assertions. Each property under Object and Data property assertions is a group
-    of its own (`AxiomGroup.property`): the section's label spans both columns, then the property's name, indented,
-    with its values, as an annotation's are. Same As has a line per other member, Different From one per axiom, its
-    others separated by commas, and a negative assertion is `property value`. A punned individual's assertions go
-    under these sections, after its other kinds', not Other axioms; an assertion of an inverse property is shown whole
-    there.
+  - **Individuals** _(P-47)_: Types, Same As, Different From, Object property assertions, Data property assertions, and
+    Negative property assertions. Each property under Object and Data property assertions is a group of its own
+    (`AxiomGroup.property`): the section's label spans both columns, then the property's name, indented, with its
+    values, as an annotation's are; in a narrow window, where the values go under the labels, they're indented under
+    their property. Same As has a line per other member, Different From one per axiom, its others separated by commas,
+    and a negative assertion is `property value`. A punned individual's assertions go under these sections, after its
+    other kinds', not Other axioms; an assertion of an inverse property is shown whole there.
   - **Frame-style lines** (`browl.frames`): a line shows an axiom by its operands that aren't the entity, from its
     named roles: on Heart's page, `Heart SubClassOf Organ` is `Organ` under SubClass Of.
     - An n-ary disjointness is one line, its other members separated by commas, as are a disjoint union's members and

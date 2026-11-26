@@ -900,25 +900,26 @@ def test_individual_page(data_dir: Path, fuseki_url: str, dataset: str, monkeypa
 
     code = '<code dir="ltr">&lt;http://example.org/axioms#{}&gt;</code>'.format
     heading, by = '<dt class="frame-heading">{}</dt>'.format, '<dt class="frame-property">{}</dt>'.format
+    value = '<dd class="frame-value" dir="ltr">'  # a property's, which a narrow window indents under it
     assert frame("alice") == "".join(
         [
             '<dl class="frame">',
             f'<dt>Types</dt><dd dir="ltr">{link("likes")} {keyword("some")} {code("Pet")}</dd>',
             f'<dt>Different From</dt><dd dir="ltr">{link("bob")}</dd><dd dir="ltr">{link("carol")}, {link("tom")}</dd>',
             heading("Object property assertions"),
-            f'{by(link("hasChild"))}<dd dir="ltr">{link("bob")}</dd>',
-            f'{by(link("likes"))}<dd dir="ltr">{link("rex")}</dd>',
+            f"{by(link('hasChild'))}{value}{link('bob')}</dd>",
+            f"{by(link('likes'))}{value}{link('rex')}</dd>",
             heading("Data property assertions"),
-            f'{by(link("age"))}<dd dir="ltr"><bdi>42</bdi></dd>',
+            f"{by(link('age'))}{value}<bdi>42</bdi></dd>",
             f'<dt>Negative property assertions</dt><dd dir="ltr">{link("hates")} {link("rex")}</dd>',
         ]
     )
     bob = frame("bob")
-    assert f'{by(f'<code dir="ltr">{NS}loves</code>')}<dd dir="ltr">_:b1</dd>' in bob  # an anonymous object
+    assert f"{by(f'<code dir="ltr">{NS}loves</code>')}{value}_:b1</dd>" in bob  # an anonymous object
     assert f'<dt>Negative property assertions</dt><dd dir="ltr">{link("age")} <bdi>7</bdi></dd>' in bob
     carol = frame("carol")
     assert f'<dt>Same As</dt><dd dir="ltr">{link("dave")}</dd>' in carol
-    assert f'{by(link("knows"))}<dd dir="ltr">{link("dave")} <span class="axiom-annotations">' in carol
+    assert f'{by(link("knows"))}{value}{link("dave")} <span class="axiom-annotations">' in carol
     # Dog is a class and an individual: its class assertion is in its own section, after the class's.
     dog = frame("Dog")
     assert dog.index("<dt>SubClass Of</dt>") < dog.index("<dt>General class axioms</dt>") < dog.index("<dt>Types</dt>")
