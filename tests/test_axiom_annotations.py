@@ -5,6 +5,7 @@ nested annotations; the caps that leave them out with a note. The Usage tab's ar
 """
 
 import asyncio
+import functools
 import logging
 import re
 from collections.abc import Callable, Iterator
@@ -376,6 +377,19 @@ async def test_fragment_too_many_annotations(caplog: pytest.LogCaptureFixture) -
 
 
 @pytest.mark.anyio
+async def test_fragment_result_too_large(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """Check that annotations whose query's result is larger than `FusekiClient.construct` holds are too many."""
+    small = functools.partialmethod(FusekiClient.construct, max_bytes=len(OWN))
+    monkeypatch.setattr(FusekiClient, "construct", small)
+    sparql = fuseki_stub(
+        {ANNOTATIONS_QUERY: ntriples(ANNOTATION), TYPES_QUERY: ntriples(""), "DESCRIBE": ntriples(OWN)}
+    )
+    fragment = await fetch_fragment(sparql, "ds", f"{NS}A")
+    assert fragment == axioms.Fragment(OWN.encode(), annotations_left_out=LeftOut.TOO_MANY)
+    assert "without their annotations, which are too many" in caplog.text
+
+
+@pytest.mark.anyio
 async def test_fragment_scans_off_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that a fragment's scans, of its IRIs and its annotations, run off the event loop."""
     on_loop = []
@@ -435,23 +449,42 @@ def link(name: str) -> str:
     return f'<a href="/axioms#{name.capitalize()}"><bdi>{name}</bdi></a>'
 
 
-def test_page(data_dir: Path, dataset: str, fuseki_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Check the Overview's axiom annotations: after their value or axiom, in boxes, nested ones within.
-
-    A symmetric axiom stated on Bladder shows its annotations on Kidney's page too.
-    """
+def overviews(dataset: str, fuseki_url: str, monkeypatch: pytest.MonkeyPatch, *fragments: str) -> list[str]:
+    """Return the Overview of each test class, by its IRI's fragment, from the store, checking each is served."""
     monkeypatch.setattr(browl.overview, "dataset_name", lambda generation: dataset)
     app = make_app(FUSEKI_URL=fuseki_url)
     with TestClient(app) as client:
         app.state.jobs.register(Stage.PRE_CACHING, derived_stage(ENTITIES, names=NAMES))
         client.portal.call(app.state.jobs.start)
         client.portal.call(app.state.jobs.wait)
-        kidney = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "Kidney", "panel": "1"}).text
-        bladder = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "Bladder", "panel": "1"}).text
-    note_link = '<a href="/axioms#note"><bdi>note</bdi></a>'
+        pages = [
+            client.get("/_browl/hash", params={"path": "/axioms", "fragment": fragment, "panel": "1"})
+            for fragment in fragments
+        ]
+    assert [page.status_code for page in pages] == [200] * len(fragments)
+    return [page.text for page in pages]
+
+
+def panel(page: str, name: str) -> str:
+    """Return an Overview panel's HTML, by its class: `annotations` or `axioms`."""
+    found = re.search(rf'<section class="{name} panel".*?</section>', page, re.DOTALL)
+    assert found is not None
+    return found.group()
+
+
+note_link = '<a href="/axioms#note"><bdi>note</bdi></a>'
+value = '<bdi class="value">{}</bdi>'.format
+LEFT_OUT_NOTES = {"too_many": "are too many to show here", "failed": "can't be shown just now"}
+
+
+def test_page(data_dir: Path, dataset: str, fuseki_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check the Overview's axiom annotations: after their value or axiom, in boxes, nested ones within.
+
+    A symmetric axiom stated on Bladder shows its annotations on Kidney's page too.
+    """
+    kidney, bladder = overviews(dataset, fuseki_url, monkeypatch, "Kidney", "Bladder")
     remark_link = '<a href="/axioms#remark"><bdi>remark</bdi></a>'
     nested = boxed(f"{remark_link}: {link('bladder')}")
-    value = '<bdi class="value">{}</bdi>'.format
     filters = boxed(f"{note_link}: {value('a source')}{nested}, {value('second')}")
     assert f"<dd>{value('filters blood')}{filters}</dd>" in kidney
     assert '<dd><bdi class="value" lang="fr">rein</bdi> <small class="lang">fr</small>' in kidney
@@ -461,6 +494,52 @@ def test_page(data_dir: Path, dataset: str, fuseki_url: str, monkeypatch: pytest
     assert re.search(rf'<dt>Disjoint With</dt>\s*<dd dir="ltr">{re.escape(link("kidney") + apart)}</dd>', bladder)
     assert boxed(f"{note_link}: {value('restricted')}") in kidney
     assert "too many to show" not in kidney and "can't be shown" not in kidney
+
+
+@pytest.mark.usefixtures("data_dir")
+@pytest.mark.parametrize("left_out", ["too_many", "failed"])
+def test_values_left_out(
+    dataset: str, fuseki_url: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, left_out: str
+) -> None:
+    """Check that the annotations panel's values are shown without their axiom annotations, with a note, if need be.
+
+    That's when they're too many or their query fails. The axioms panel keeps its own.
+    """
+    if left_out == "too_many":
+        monkeypatch.setattr(browl.annotations, "MAX_AXIOM_ANNOTATIONS", 0)
+    else:
+        monkeypatch.setattr(browl.annotations, "_VALUE_ANNOTATIONS", browl.annotations._VALUE_ANNOTATIONS + " nonsense")
+    [kidney] = overviews(dataset, fuseki_url, monkeypatch, "Kidney")
+    annotations = panel(kidney, "annotations")
+    assert f"<dd>{value('filters blood')}</dd>" in annotations
+    assert "axiom-annotation" not in annotations
+    assert f"These annotations' own annotations {LEFT_OUT_NOTES[left_out]}." in annotations
+    axioms_panel = panel(kidney, "axioms")
+    assert boxed(f"{note_link}: {value('restricted')}") in axioms_panel
+    assert "These axioms' annotations" not in axioms_panel
+    logged = {"too_many": "without their axiom annotations", "failed": "Couldn't show the axiom annotations"}
+    assert logged[left_out] in caplog.text
+
+
+@pytest.mark.usefixtures("data_dir")
+@pytest.mark.parametrize("left_out", ["too_many", "failed"])
+def test_axioms_left_out(dataset: str, fuseki_url: str, monkeypatch: pytest.MonkeyPatch, left_out: str) -> None:
+    """Check that the axioms panel's axioms are shown without their annotations, with a note, if need be.
+
+    That's when they're too many or their query fails. The annotations panel keeps its values' own.
+    """
+    if left_out == "too_many":
+        monkeypatch.setattr(axioms, "MAX_FRAGMENT_ANNOTATIONS", 0)
+    else:
+        monkeypatch.setattr(axioms, "_AXIOM_ANNOTATIONS", axioms._AXIOM_ANNOTATIONS + " nonsense")
+    [kidney] = overviews(dataset, fuseki_url, monkeypatch, "Kidney")
+    axioms_panel = panel(kidney, "axioms")
+    assert link("bladder") in axioms_panel and "Disjoint With" in axioms_panel
+    assert "axiom-annotation" not in axioms_panel
+    assert f"These axioms' annotations {LEFT_OUT_NOTES[left_out]}." in axioms_panel
+    annotations = panel(kidney, "annotations")
+    assert boxed(f"{note_link}: {value('en français')}") in annotations
+    assert "own annotations" not in annotations
 
 
 def render(source: str, **context: object) -> str:
