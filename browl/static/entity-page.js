@@ -4,7 +4,8 @@
 // handle beside the column drags its width, or the arrow keys change it; a double click goes back to the default.
 (() => {
   "use strict";
-  // Each toggle's checkbox id: its storage key, and its state when none is remembered.
+  // Each toggle's checkbox id: its storage key, and its state when none is remembered. Only the other state's value
+  // ("true" or "false") changes it, so a stored value that's neither, e.g. from an older version, leaves the default.
   const TOGGLES = {
     "one-page": { key: "browl.onePage", checked: false },
     "hierarchy-shown": { key: "browl.hierarchyShown", checked: true },
@@ -13,29 +14,50 @@
   const WIDTH_KEY = "browl.hierarchyWidth";
   const STEP = 16; // px, for an arrow key
 
+  function remember(key, value) {
+    try {
+      if (value === null) {
+        localStorage.removeItem(key);
+      } else {
+        localStorage.setItem(key, value);
+      }
+    } catch {
+      // not remembered
+    }
+  }
+
+  // A key's value: null if none is stored, undefined if storage fails.
+  function remembered(key) {
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return undefined;
+    }
+  }
+
   // The width the stylesheet allows: from 10rem to half the page.
   function bounds(page) {
     const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
-    return [10 * rem, page.clientWidth / 2];
+    const low = 10 * rem;
+    return [low, Math.max(low, page.clientWidth / 2)];
   }
 
-  function setWidth(handle, width, save) {
+  // Set the column's width, kept within bounds, unless `free`: a remembered width is applied as it is, as the
+  // stylesheet bounds it to the window, so a narrow window doesn't cut it for a wider one later.
+  function setWidth(handle, width, { save = false, free = false } = {}) {
     const page = handle.closest(".entity-page");
     const [low, high] = bounds(page);
-    const bounded = Math.round(Math.min(Math.max(width, low), Math.max(low, high)));
-    page.style.setProperty("--hierarchy-width", `${bounded}px`);
+    const bounded = Math.round(Math.min(Math.max(width, low), high));
+    page.style.setProperty("--hierarchy-width", `${free ? width : bounded}px`);
     handle.setAttribute("aria-valuenow", String(bounded));
     handle.setAttribute("aria-valuemin", String(Math.round(low)));
     handle.setAttribute("aria-valuemax", String(Math.round(high)));
     if (save) {
-      try {
-        localStorage.setItem(WIDTH_KEY, String(bounded));
-      } catch {
-        // not remembered
-      }
+      remember(WIDTH_KEY, String(bounded));
     }
   }
 
+  // Once for each page's handle: the one served, or one the hash-IRI script moves in.
   function setUpHandle() {
     const handle = document.querySelector(".hierarchy-resize");
     if (!handle || handle.dataset.ready) {
@@ -45,14 +67,9 @@
     handle.tabIndex = 0;
     const column = document.getElementById("hierarchy-column");
     const width = () => column.getBoundingClientRect().width;
-    let stored = null;
-    try {
-      stored = localStorage.getItem(WIDTH_KEY);
-    } catch {
-      // not remembered
-    }
-    if (stored !== null && Number(stored) > 0) {
-      setWidth(handle, Number(stored), false);
+    const stored = Number(remembered(WIDTH_KEY) ?? NaN); // NaN if none
+    if (Number.isFinite(stored) && stored > 0) {
+      setWidth(handle, stored, { free: true });
     }
     handle.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) {
@@ -61,13 +78,14 @@
       event.preventDefault();
       handle.setPointerCapture(event.pointerId);
       const start = event.clientX - width();
-      const move = (moved) => setWidth(handle, moved.clientX - start, false);
+      const move = (moved) => setWidth(handle, moved.clientX - start);
       handle.addEventListener("pointermove", move);
+      // The drag ends when the capture does: on pointerup, or a pointercancel, e.g. a touch the browser takes over.
       handle.addEventListener(
-        "pointerup",
+        "lostpointercapture",
         () => {
           handle.removeEventListener("pointermove", move);
-          setWidth(handle, width(), true);
+          setWidth(handle, width(), { save: true });
         },
         { once: true },
       );
@@ -76,32 +94,22 @@
       const step = { ArrowLeft: -STEP, ArrowRight: STEP }[event.key];
       if (step) {
         event.preventDefault();
-        setWidth(handle, width() + step, true);
+        setWidth(handle, width() + step, { save: true });
       }
     });
     handle.addEventListener("dblclick", () => {
       handle.closest(".entity-page").style.removeProperty("--hierarchy-width");
       handle.removeAttribute("aria-valuenow");
-      try {
-        localStorage.removeItem(WIDTH_KEY);
-      } catch {
-        // not remembered
-      }
+      remember(WIDTH_KEY, null);
     });
   }
 
   function restore() {
-    setUpHandle();
     for (const [id, { key, checked }] of Object.entries(TOGGLES)) {
       const toggle = document.getElementById(id);
-      if (!toggle) {
-        continue;
-      }
-      try {
-        const stored = localStorage.getItem(key);
-        toggle.checked = stored === null ? checked : stored === "true";
-      } catch {
-        // not remembered
+      const stored = remembered(key);
+      if (toggle && stored !== undefined) {
+        toggle.checked = stored === String(!checked) ? !checked : checked;
       }
     }
   }
@@ -109,11 +117,7 @@
   document.addEventListener("change", (event) => {
     const toggle = TOGGLES[event.target.id];
     if (toggle) {
-      try {
-        localStorage.setItem(toggle.key, String(event.target.checked));
-      } catch {
-        // not remembered
-      }
+      remember(toggle.key, String(event.target.checked));
     }
   });
 
@@ -130,8 +134,12 @@
   });
 
   restore();
+  setUpHandle();
   const main = document.querySelector("main");
   if (main) {
-    new MutationObserver(restore).observe(main, { childList: true });
+    new MutationObserver(() => {
+      restore();
+      setUpHandle();
+    }).observe(main, { childList: true });
   }
 })();

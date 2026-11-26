@@ -1728,15 +1728,17 @@ CSS nesting gets the one-page view, without the toggle. _(P-16d)_
     heading staying in view. The one-page view puts it above the tabs, at most `40vh` high on screen, scrolling within
     itself, so the page's content stays near. Its lines don't wrap and indent `0.75rem` a level, as a deep hierarchy
     (NCBITaxon's is about 40 levels) would leave a narrow column no room; it scrolls sideways instead. It opens
-    scrolled, within itself, to show the entity (`static/tree.js`).
+    scrolled, within itself, to show the entity (`static/tree.js`), and so does a column unfolded.
   - **Folding:** a control on the column's far left, a strip with "«", folds it; folded, the strip reads "» Hierarchy"
     down the page's left edge. In the one-page view it's a line above the column, "▾ Hierarchy". It's a checkbox in
     its label, so it works without JS, through `:has`, and `static/entity-page.js` remembers it in `localStorage`
-    (`browl.hierarchyShown`) for every page, as it does "Scroll as one page". A browser without `:has` always shows
-    the column, without the control.
+    (`browl.hierarchyShown`) for every page, as it does "Scroll as one page"; only a stored "false" folds it, so any
+    other value leaves the default. A browser without `:has` always shows the column, without the control.
   - **Width:** `clamp(12rem, 22%, 20rem)` by default. With JS, the handle on the column's right (a `separator`) drags
     it, or the left and right arrow keys change it, from `10rem` to half the page; `entity-page.js` remembers it
-    (`browl.hierarchyWidth`), and a double click goes back to the default. Without JS, the handle is only a line.
+    (`browl.hierarchyWidth`), and a double click goes back to the default. A remembered width is applied as it is,
+    which the stylesheet bounds to the window, so a narrow window doesn't cut it for a wider one later; one that isn't
+    a positive number is ignored. Without JS, the handle is only a line.
   - **Shape:** the entity's ancestors as one merged tree, each drawn once. A node with several parents goes under its
     first parent, by display name. Under each other parent it's a one-line reference to it, which links to its page:
     "↳ organ (also above)", or "(also below)" where it's drawn further down. The entity is highlighted, with its
@@ -1836,8 +1838,9 @@ too (P-38), and the JSON API's (P-33).
   children's list its `group` (by `aria-owns`), and its counts its description. Departures from it: the toggles are
   the mouse's alone (`tabindex="-1"`, `aria-hidden`; a click on one leaves the focus on its item), and the "previous"
   and "Show more" links are tree items, so the keys reach them; after "Show more" the focus goes to the first node
-  added. Enter follows an item's link. Left to P-25: type-ahead, `*`, and the pattern
-  without JS, where the roles are there but the arrow keys aren't, and Tab reaches each toggle and link.
+  added, and after the hierarchy column's "previous", to the last, just above where the link was. Enter follows an
+  item's link. Left to P-25: type-ahead, `*`, and the pattern without JS, where the roles are there but the arrow keys
+  aren't, and Tab reaches each toggle and link.
 
 **Search** (U-10, U-17, P-20): the navigation bar's search box and the full results page, `search` (2.13).
 

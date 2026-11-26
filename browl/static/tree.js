@@ -49,18 +49,13 @@
 
   // The item a request's toggle opens, or whose "Show more" made it.
   const sourceOf = (event) => event.detail.requestConfig?.elt ?? event.detail.elt;
-  const toggleOfRequest = (event) => {
+  const requestFrom = (selector) => (event) => {
     const elt = sourceOf(event);
-    return elt?.matches?.(TOGGLE) ? elt : null;
+    return elt?.matches?.(selector) ? elt : null;
   };
-  const moreOfRequest = (event) => {
-    const elt = sourceOf(event);
-    return elt?.matches?.(`.tree-paging > ${ITEM}`) ? elt : null;
-  };
-  const siblingsOfRequest = (event) => {
-    const elt = sourceOf(event);
-    return elt?.matches?.(`.tree-siblings > ${ITEM}`) ? elt : null;
-  };
+  const toggleOfRequest = requestFrom(TOGGLE);
+  const moreOfRequest = requestFrom(`.tree-paging > ${ITEM}`); // "Show more", or in the column, "previous"
+  const siblingsOfRequest = requestFrom(`.tree-siblings > ${ITEM}`);
 
   // Only one item is in the Tab sequence, the roving one; the toggles are the mouse's, as the keys open and close
   // nodes. Applied to a tree once, and to what's added to it after, leaving the roving item as it is.
@@ -183,6 +178,12 @@
   if (main) {
     new MutationObserver(showCurrent).observe(main, { childList: true }); // a page the hash-IRI script moves in
   }
+  // A column that was folded had nothing to show.
+  document.addEventListener("change", (event) => {
+    if (event.target.id === "hierarchy-shown" && event.target.checked) {
+      showCurrent();
+    }
+  });
 
   // The item focused, e.g. by a click, is the roving one. A toggle a click focuses passes the focus to its item, so
   // the keys work. A tree the page gained later, e.g. through the hash-IRI script, is set up once focus first enters
@@ -278,7 +279,9 @@
     });
   }
 
-  // "Show more" replaces itself with the next page; where it had the focus, the page's first item takes it.
+  // "Show more" replaces itself with the next page; where it had the focus, the page's first item takes it. In the
+  // hierarchy column, the link to the previous page, always its list's first, replaces itself with that page, and its
+  // last item, just above where the link was, takes the focus.
   let shownMore = null; // where the page goes, while it's swapped in
   let siblingsFocused = false; // whether "Show its siblings", which they replace, had the focus
   document.addEventListener("htmx:beforeSwap", (event) => {
@@ -289,7 +292,12 @@
     const more = moreOfRequest(event);
     if (more) {
       const li = more.parentElement;
-      shownMore = { list: li.parentElement, before: li.previousElementSibling, focused: document.activeElement === more };
+      shownMore = {
+        list: li.parentElement,
+        before: li.previousElementSibling,
+        after: li.nextElementSibling,
+        focused: document.activeElement === more,
+      };
     }
   });
 
@@ -312,13 +320,18 @@
     if (!moreOfRequest(event) || !shownMore) {
       return;
     }
-    const { list, before, focused } = shownMore;
+    const { list, before, after, focused } = shownMore;
     shownMore = null;
     if (list.closest(TREE)?.dataset.roving) {
       tame(list);
     }
-    const first = before ? before.nextElementSibling : list.firstElementChild;
-    const item = first && itemOf(first);
+    let edge; // the page's first node, or for a previous page, its last
+    if (before) {
+      edge = before.nextElementSibling;
+    } else {
+      edge = after ? after.previousElementSibling : list.lastElementChild;
+    }
+    const item = edge && itemOf(edge);
     const tree = list.closest(TREE);
     if (focused && item) {
       focusItem(item);

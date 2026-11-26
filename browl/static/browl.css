@@ -1186,7 +1186,7 @@ code {
 .tree li:has(> [role="group"]:not([hidden])) > .tree-row {
   position: sticky;
   top: calc(var(--tree-stick) + var(--tree-slot, 7) * var(--tree-row));
-  z-index: var(--tree-layer, 1);
+  z-index: calc(8 - var(--tree-slot, 7));
   height: var(--tree-row);
   overflow: hidden;
   line-height: var(--tree-row);
@@ -1195,13 +1195,13 @@ code {
   background: var(--bg);
 }
 
-.tree-row[data-depth="0"] { --tree-slot: 0; --tree-layer: 8; }
-.tree-row[data-depth="1"] { --tree-slot: 1; --tree-layer: 7; }
-.tree-row[data-depth="2"] { --tree-slot: 2; --tree-layer: 6; }
-.tree-row[data-depth="3"] { --tree-slot: 3; --tree-layer: 5; }
-.tree-row[data-depth="4"] { --tree-slot: 4; --tree-layer: 4; }
-.tree-row[data-depth="5"] { --tree-slot: 5; --tree-layer: 3; }
-.tree-row[data-depth="6"] { --tree-slot: 6; --tree-layer: 2; }
+.tree-row[data-depth="0"] { --tree-slot: 0; }
+.tree-row[data-depth="1"] { --tree-slot: 1; }
+.tree-row[data-depth="2"] { --tree-slot: 2; }
+.tree-row[data-depth="3"] { --tree-slot: 3; }
+.tree-row[data-depth="4"] { --tree-slot: 4; }
+.tree-row[data-depth="5"] { --tree-slot: 5; }
+.tree-row[data-depth="6"] { --tree-slot: 6; }
 
 /* Moved to by the keys, an item isn't left under the rows stuck above it. */
 .tree [role="treeitem"] {
