@@ -2186,6 +2186,7 @@ flowchart LR
     subgraph P4["Phase 4: Browsing"]
         P39["P-39 Deprecated struck through"]
         P40["P-40 Shorter tree URLs"]
+        P45["P-45 Shared results pager"]
         P47["P-47 Individuals' pages"]
         P48["P-48 Individuals tab and list"]
         P49["P-49 Axiom annotations"]
@@ -2193,7 +2194,6 @@ flowchart LR
     subgraph P5["Phase 5: Search, caching, auth"]
         P43["P-43 Sticky search filters"]
         P44["P-44 Admin search settings"]
-        P45["P-45 Shared results pager"]
         P46["P-46 Prose search"]
         P21["P-21 Page cache"]
         P33["P-33 JSON API"]
@@ -2273,6 +2273,7 @@ go into this document.
 | P-39 | Deprecated entities struck through, with a text equivalent, in the tree pages and the hierarchy column, from a flag stored at pre-caching (2.5); whether to mark them elsewhere too is open | U-46 | P-18 | To do | [#123](https://github.com/jclerman/browl/issues/123) |
 | P-40 | Tree URLs name open nodes by CURIE, else IRI, about 4× shorter; an index on `entity.curie` (2.9, 2.13) | U-17 | P-18 | To do | [#125](https://github.com/jclerman/browl/issues/125) |
 | P-27 | Usage tab on entity pages: the blank-node owner map, streaming up to 20 K usages per request, and the usage table built in the background after a load (2.5, 2.8) | U-26 | P-9, P-16, S-4, S-7 | Done | [#41](https://github.com/jclerman/browl/issues/41) (sub-issues [#108](https://github.com/jclerman/browl/issues/108), [#109](https://github.com/jclerman/browl/issues/109), [#110](https://github.com/jclerman/browl/issues/110)) |
+| P-45 | Shared results pager: one pager model and macro for the Usage tab and the search results page, htmx optional; on the results page at the top, with "Page n of N", a form to go to any page, and the number of results counted up to `MAX_OFFSET + PAGE_SIZE + 1` IRIs, not by the autocomplete; measure the count's cost on NCBITaxon (2.6, 2.9) | U-10, U-17, U-26 | P-20, P-27, P-41 | To do | [#139](https://github.com/jclerman/browl/issues/139) |
 | P-47 | Individuals' pages: named individuals as entities (entity-list query), with names, search and an "Individual" type filter; their Overview sections (Types, Same As, Different From, property assertions), Usage tab and hierarchy column; the owner map lists anonymous individuals' assertions (2.5, 2.8, Proposed) | U-18 | P-16, P-27, P-38, P-42 | To do | [#162](https://github.com/jclerman/browl/issues/162) |
 | P-48 | Individuals tab on class pages (direct members, with a count) and the navigation bar's list of all individuals, both by name with P-45's pager, from tables filled at pre-caching (2.5, 2.8, 2.9, Proposed) | U-18, U-27, U-28 | P-47, P-45 | To do | [#164](https://github.com/jclerman/browl/issues/164) |
 | P-49 | Axiom annotations inline, muted and in brackets, after the annotation value or axiom they annotate: on the Overview's panels and every Usage tab line (2.8, Proposed) | U-35 | P-16, P-27 | To do | [#163](https://github.com/jclerman/browl/issues/163) |
@@ -2287,7 +2288,6 @@ go into this document.
 | P-42 | Every annotation property searchable: a bulk query of their literal values; each property name-like or prose, by built-in lists, the property hierarchy and value lengths; name-like values in lanes keyed by property, walked in an order chosen per query, the name properties and synonyms by default; entailment through the sub-property closure at query time; the results page lists the ontology's properties with counts, and its hits as a table (2.6; measured first, [P-42 findings](../research/P-42/README.md)) | U-47 | P-19, P-20 | Done | [#132](https://github.com/jclerman/browl/issues/132) |
 | P-43 | Sticky search filters: kept in the browser on request, used by the navigation bar's box, with a "Filtered" indicator that clears them (2.6, Proposed) | U-48 | P-20 | To do | [#133](https://github.com/jclerman/browl/issues/133) |
 | P-44 | Admin search settings: name properties and their order, language ranking, properties left out, which are prose and which are searched by default, stored per ontology IRI over the environment's defaults; a settings page from the ontology's properties and languages; applied by pre-caching into a new file beside the served one (2.6, Proposed) | A-11, O-13 | P-22, P-42 | To do | [#134](https://github.com/jclerman/browl/issues/134) |
-| P-45 | Shared results pager: one pager model and macro for the Usage tab and the search results page, htmx optional; on the results page at the top, with "Page n of N", a form to go to any page, and the number of results counted up to `MAX_OFFSET + PAGE_SIZE + 1` IRIs, not by the autocomplete; measure the count's cost on NCBITaxon (2.6, 2.9) | U-10, U-17, U-26 | P-20, P-27, P-41 | To do | [#139](https://github.com/jclerman/browl/issues/139) |
 | P-46 | Prose search: an FTS5 index of the prose properties' values, ranked by BM25, searched when chosen; the results page shows its hits apart from name matches, with the matched words marked (2.6, Proposed) | U-50 | P-42 | To do | [#140](https://github.com/jclerman/browl/issues/140) |
 | P-33 | JSON API over the pages' data: routes under `api/` returning the models the pages render (2.8, 2.13) | U-42 | P-16, P-17, P-18, P-19, P-27, P-38 | To do | [#76](https://github.com/jclerman/browl/issues/76) |
 | P-21 | Page cache keyed by generation | O-10, N-3 | P-16 | To do | [#40](https://github.com/jclerman/browl/issues/40) |
