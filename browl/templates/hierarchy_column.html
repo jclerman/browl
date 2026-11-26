@@ -1,6 +1,5 @@
 {# The hierarchy column (`browl.hierarchy_column`, DESIGN.md §2.9): a tree for each hierarchy the entity is in, each
-   headed "Local hierarchy", as it shows the entity's ancestors but not their siblings, then a link to its tree page.
-   The control on its left folds it (`browl.css`). #}
+   headed "Local hierarchy", then a link to its tree page. The control on its left folds it (`browl.css`). #}
 {% from "tree_nodes.html" import tree_items %}
 
 {% macro hierarchy_column(column) -%}

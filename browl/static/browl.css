@@ -1212,6 +1212,11 @@ code {
   padding-left: 1.25rem;
 }
 
+/* The hierarchy column's row for the levels it leaves out ("… 26 levels hidden"), muted as a paging link is. */
+.tree-elided > .tree-row > [role="treeitem"] {
+  color: var(--muted);
+}
+
 /* The window-filling frame (DESIGN.md §2.9, U-30): on screen, an entity page fills the window, and the page itself
    doesn't scroll. The navigation bar, the header and the tab bar keep their heights, and the tab panel takes the rest;
    it scrolls what doesn't fit, and the Overview's panels scroll within themselves. Medium windows stack the panels at

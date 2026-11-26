@@ -377,6 +377,8 @@ def test_fragment_opens_open_children(client: TestClient) -> None:
         [("children-of", ex("Nope")), ("offset", "500")],
         [("children-of", ex("Big")), ("offset", "1250"), *opened("Top", "Big")],
         [("node", ex("Big")), ("at", "t-1-0"), ("offset", "1500")],
+        [("node", ex("Top")), ("at", "zz-0")],  # neither a tree page's id nor the hierarchy column's
+        [("at", "zz")],
     ],
 )
 def test_not_found(client: TestClient, params: list[tuple[str, str]]) -> None:

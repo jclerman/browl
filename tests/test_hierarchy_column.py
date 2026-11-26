@@ -2,7 +2,6 @@
 
 import html.parser
 import itertools
-import json
 import re
 import urllib.parse
 from collections.abc import Iterator
@@ -12,10 +11,12 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import browl.hierarchy
 from browl.derived import EntityType
 from browl.hierarchy import CHILD_PAGE
+from browl.hierarchy_column import MAX_COLUMN_DEPTH
 from tests.helpers import connect, derived_stage, make_app, make_settings
-from tests.test_trees import EX, SUB_CLASS, SUB_PROPERTY, THING, Tree, ex, loaded, opened, query, tree_stage
+from tests.test_trees import EX, SUB_CLASS, SUB_PROPERTY, THING, TREE, Tree, ex, loaded, opened, query, tree_stage
 
 pytestmark = pytest.mark.usefixtures("data_dir")
 
@@ -137,7 +138,7 @@ def test_root(client: TestClient) -> None:
     found = column(client, "/Top")
     assert shown(found) == [(0, "Top"), (1, "Big"), (1, "Left"), (1, "Right"), (0, "Show its sibling (1)")]
     siblings = Tree(found.trees[0]).items[-1]
-    assert siblings.href == "/_browl/tree/classes"  # without JS, the roots' first page, which holds Top
+    assert siblings.href == "/_browl/tree/classes#t-1"  # without JS, the roots' first page, which holds Top
     assert query(siblings.load or "") == [("at", "hc"), ("siblings-of", ex("Top"))]
     big = Tree(found.trees[0]).item("Big")
     assert big.expanded == "false"
@@ -154,14 +155,14 @@ def test_open_toggles_load_pages(client: TestClient) -> None:
 
 def test_links_independent_of_depth(app: FastAPI) -> None:
     """Check that the column's links don't grow with the entity's depth, as they'd repeat for each of its children."""
-    names = [f"c{index:02}" for index in range(40)]
+    names = [f"c{index:02}" for index in range(MAX_COLUMN_DEPTH)]
     entities = [(ex(name), EntityType.CLASS) for name in [*names, "leaf"]]
     edges = [(ex(child), SUB_CLASS, ex(parent)) for parent, child in itertools.pairwise(names)]
     edges += [(ex("leaf"), SUB_CLASS, ex(names[-1]))]
     with loaded(app, derived_stage(entities, edges=edges)) as client:
         page = client.get(f"/{names[-2]}").text
     links = re.findall(r'(?:href|hx-get)="([^"]*)"', Column(page).html)
-    assert len(links) > 2 * 40
+    assert len(links) > 2 * MAX_COLUMN_DEPTH
     assert max(urllib.parse.unquote(link).count(EX) for link in links) == 1  # its node's, not those above it
 
 
@@ -242,7 +243,8 @@ def test_children_paged(client: TestClient) -> None:
     assert fragment.status_code == 200
     items = Tree(fragment.text).items
     assert items[0].id == f"hc-0-0-{CHILD_PAGE}"
-    assert items[-1].href == "/Big"  # without JS, Big's page, which shows its children's pages
+    # Without JS, the tree page, with the nodes above them open, at the next page.
+    assert query(items[-1].href) == [*opened("Top", "Big"), ("children-of", ex("Big")), ("offset", str(2 * CHILD_PAGE))]
     assert query(items[-1].load or "") == [("node", ex("Big")), ("at", "hc-0-0"), ("offset", str(2 * CHILD_PAGE))]
 
 
@@ -268,14 +270,12 @@ def test_owl_thing_not_shown(client: TestClient) -> None:
 
 
 def test_reads_use_index(client: TestClient) -> None:
-    """Check that walking up `edge` looks each level's nodes up by its `edge_child` index, not by a scan."""
+    """Check that walking up `edge`, and reading each ancestor's parents, look them up by `edge_child`, not a scan."""
     with closing(connect(make_settings(), 1)) as connection:
         plan = connection.execute(
-            "EXPLAIN QUERY PLAN SELECT child, parent FROM edge"
-            " WHERE hierarchy = ? AND child IN (SELECT value FROM json_each(?))",
-            ("class", json.dumps([1, 2])),
+            f"EXPLAIN QUERY PLAN {browl.hierarchy._ANCESTORS}", (1, "class", 10, "class")
         ).fetchall()
-    assert any("edge_child" in row[-1] for row in plan), plan
+    assert sum("USING COVERING INDEX edge_child" in row[-1] for row in plan) == 2, plan
 
 
 def test_siblings(client: TestClient) -> None:
@@ -299,12 +299,195 @@ def test_siblings(client: TestClient) -> None:
 def test_siblings_page_holds_entity(client: TestClient) -> None:
     """Check that the siblings' fragment shows the page of them that holds the entity, after a link to those before."""
     siblings = Tree(column(client, "/kid1249").trees[0]).item("Show its siblings (1,249)")
-    items = Tree(client.get(siblings.load or "").text).items
+    fragment = client.get(siblings.load or "").text
+    items = Tree(fragment).items
     previous = items[0]
-    assert (previous.text, previous.href) == (f"Show the previous {CHILD_PAGE} (501–1,000 of 1,250)", "/Big")
+    assert previous.text == f"Show the previous {CHILD_PAGE} (501–1,000 of 1,250)"
+    # Without JS, the tree page with the nodes above them open, at that page; with htmx, it goes before this one.
+    assert query(previous.href) == [*opened("Top", "Big"), ("children-of", ex("Big")), ("offset", str(CHILD_PAGE))]
+    assert query(previous.load or "") == [("node", ex("Big")), ("at", "hc-0-0"), ("before", "1000")]
     assert [item.id for item in items[1:3]] == ["hc-0-0-1000", "hc-0-0-1001"]
     assert len(items) == 1 + 250
-    assert re.search(r'href="/kid1249" class="tree-current" aria-current="page"', client.get(siblings.load or "").text)
+    assert re.search(r'href="/kid1249" class="tree-current" aria-current="page"', fragment)
+
+
+def siblings_page(client: TestClient, path: str, tree: int = 0) -> Tree:
+    """Return the siblings' fragment that an entity page's column links to."""
+    siblings = Tree(column(client, path).trees[tree]).items[-1]
+    assert siblings.text.startswith("Show its sibling"), siblings
+    fragment = client.get(siblings.load or "")
+    assert fragment.status_code == 200
+    return Tree(fragment.text)
+
+
+def test_siblings_first_page(client: TestClient) -> None:
+    """Check that the siblings' first page has no link before it, and one after it, to the next page."""
+    items = siblings_page(client, "/kid0").items
+    assert [item.id for item in items[:2]] == ["hc-0-0-0", "hc-0-0-1"]
+    assert items[0].expanded is None and items[0].text == "Kid 0000"
+    more = items[-1]
+    assert (more.id, more.text) == (None, f"Show the next {CHILD_PAGE} (501–1,000 of 1,250)")
+    assert query(more.href) == [*opened("Top", "Big"), ("children-of", ex("Big")), ("offset", str(CHILD_PAGE))]
+    assert query(more.load or "") == [("node", ex("Big")), ("at", "hc-0-0"), ("offset", str(CHILD_PAGE))]
+    assert len(items) == CHILD_PAGE + 1
+
+
+def test_siblings_middle_page(client: TestClient) -> None:
+    """Check that a middle page of siblings links to the pages before and after it, with and without JS."""
+    items = siblings_page(client, "/kid600").items
+    previous, more = items[0], items[-1]
+    assert previous.text == f"Show the first {CHILD_PAGE} (1–500)"
+    assert query(previous.href) == opened("Top", "Big")  # the first page, which needs no offset
+    assert query(previous.load or "") == [("node", ex("Big")), ("at", "hc-0-0"), ("before", str(CHILD_PAGE))]
+    assert more.text == "Show the remaining 250 (1,001–1,250)"
+    assert query(more.href) == [*opened("Top", "Big"), ("children-of", ex("Big")), ("offset", "1000")]
+    assert query(more.load or "") == [("node", ex("Big")), ("at", "hc-0-0"), ("offset", "1000")]
+    assert [item.id for item in items[1:3]] == ["hc-0-0-500", "hc-0-0-501"]
+    assert items[101].text == "Kid 0600" and items[101].id == "hc-0-0-600"
+
+
+def test_page_before(client: TestClient) -> None:
+    """Check that a `before=` page links to the page before it, if any, not to the one after, which it goes before."""
+    items = Tree(client.get(TREE, params=[("node", ex("Big")), ("at", "hc-0-0"), ("before", "1000")]).text).items
+    previous = items[0]
+    assert previous.text == f"Show the first {CHILD_PAGE} (1–500)"
+    assert query(previous.load or "") == [("node", ex("Big")), ("at", "hc-0-0"), ("before", str(CHILD_PAGE))]
+    assert [item.id for item in (items[1], items[-1])] == ["hc-0-0-500", "hc-0-0-999"]
+    assert len(items) == 1 + CHILD_PAGE  # and no "more"
+    items = Tree(client.get(previous.load or "").text).items
+    assert [item.id for item in (items[0], items[-1])] == ["hc-0-0-0", "hc-0-0-499"]
+    assert len(items) == CHILD_PAGE
+
+
+def test_siblings_of_later_root(client: TestClient) -> None:
+    """Check that a root past the first page of roots links to its page of roots, which links to the one before."""
+    path = "/_browl/iri?iri=http%3A%2F%2Fexample.org%2Fnote510"
+    siblings = Tree(column(client, path).trees[0]).items[-1]
+    assert siblings.text == "Show its siblings (519)"
+    assert siblings.href == f"/_browl/tree/annotation-properties?offset={CHILD_PAGE}#t-510"
+    assert query(siblings.load or "") == [("at", "ha"), ("siblings-of", ex("note510"))]
+    fragment = client.get(siblings.load or "").text
+    items = Tree(fragment).items
+    previous = items[0]
+    assert (previous.text, previous.href) == (
+        f"Show the first {CHILD_PAGE} (1–500)",
+        "/_browl/tree/annotation-properties",
+    )
+    assert query(previous.load or "") == [("at", "ha"), ("before", str(CHILD_PAGE))]
+    assert [item.id for item in (items[1], items[-1])] == ["ha-500", "ha-519"]
+    assert len(items) == 1 + 20
+    assert re.search(r'id="ha-510" href="[^"]*" class="tree-current" aria-current="page"', fragment)
+
+
+def test_siblings_in_property_hierarchy(app: FastAPI) -> None:
+    """Check that a property's siblings' fragment has its hierarchy's ids, and that its counts are a node's."""
+    entities = [(ex(name), EntityType.OBJECT_PROPERTY) for name in ("p", "q", "r")]
+    edges = [(ex("q"), SUB_PROPERTY, ex("p")), (ex("r"), SUB_PROPERTY, ex("p"))]
+    with loaded(app, derived_stage(entities, edges=edges)) as client:
+        found = Tree(column(client, "/q").trees[0])
+        assert [(item.id, item.text) for item in found.items] == [
+            ("ho-0", ex("p")),
+            ("ho-0-0", ex("q")),
+            (None, "Show its sibling (1)"),
+        ]
+        assert found.items[0].counts == "2 children · 2 descendants"  # the tree pages' words, for properties too
+        assert query(found.items[-1].load or "") == [("node", ex("p")), ("at", "ho-0"), ("siblings-of", ex("q"))]
+        items = Tree(client.get(found.items[-1].load or "").text).items
+    assert [(item.id, item.text) for item in items] == [("ho-0-0", ex("q")), ("ho-0-1", ex("r"))]
+
+
+def chain(length: int) -> tuple[list[str], object]:
+    """Return the names of a chain of classes, each the last's subclass, and a stage that loads them."""
+    names = [f"c{index:03}" for index in range(length)]
+    entities = [(ex(name), EntityType.CLASS) for name in names]
+    edges = [(ex(child), SUB_CLASS, ex(parent)) for parent, child in itertools.pairwise(names)]
+    return names, derived_stage(entities, names={ex(name): (name, None) for name in names}, edges=edges)
+
+
+def test_deep_chain_elided(app: FastAPI) -> None:
+    """Check that past `MAX_COLUMN_DEPTH` levels, one row stands for those left out, linking to the entity's path."""
+    names, stage = chain(40)
+    with loaded(app, stage) as client:
+        page = client.get("/c039").text
+    found = Tree(Column(page).trees[0])
+    hidden = 40 - MAX_COLUMN_DEPTH + 1
+    bottom = MAX_COLUMN_DEPTH - 3 - 1
+    assert found.shown() == [
+        (0, "c000"),
+        (1, "c001"),
+        (2, "c002"),
+        (3, f"… {hidden} levels hidden"),
+        *((4 + index, name) for index, name in enumerate(names[-bottom:])),
+    ]
+    assert len(names[-bottom:]) + 4 == MAX_COLUMN_DEPTH
+    row = found.item(f"… {hidden} levels hidden")
+    assert (row.id, row.expanded) == ("hc-0-0-0-0", "true")
+    assert query(row.href) == opened(*names[:-1])
+    assert row.toggle == row.href
+    assert found.items[4].id == "hc-0-0-0-0-0"
+    assert re.search(r'data-depth="14">.*?id="hc(?:-0){15}" href="/c039" class="tree-current"', page, re.DOTALL)
+    assert page.count('aria-current="page"') == 1
+
+
+@pytest.mark.parametrize("length", [MAX_COLUMN_DEPTH, MAX_COLUMN_DEPTH + 1])
+def test_chain_at_cap(app: FastAPI, length: int) -> None:
+    """Check that a chain of `MAX_COLUMN_DEPTH` levels is drawn whole, and one more is elided, two levels in a row."""
+    names, stage = chain(length)
+    with loaded(app, stage) as client:
+        found = shown(column(client, f"/{names[-1]}"))
+    if length == MAX_COLUMN_DEPTH:
+        assert found == list(enumerate(names))
+    else:
+        assert found == [*enumerate(names[:3]), (3, "… 2 levels hidden"), *enumerate(names[5:], start=4)]
+
+
+def test_very_deep_chain(app: FastAPI) -> None:
+    """Check that an entity hundreds of levels deep gets its page, with its column elided."""
+    _, stage = chain(300)
+    with loaded(app, stage) as client:
+        found = shown(column(client, "/c299"))
+    assert found[3] == (3, "… 286 levels hidden")
+    assert found[-1] == (MAX_COLUMN_DEPTH - 1, "c299")
+
+
+def test_deeper_branch_closed(app: FastAPI) -> None:
+    """Check that, where a parent other than the entity's first is deeper, its branch stops at the last level drawn."""
+    names, _ = chain(20)
+    entities = [(ex(name), EntityType.CLASS) for name in [*names, "A", "E"]]
+    edges = [(ex(child), SUB_CLASS, ex(parent)) for parent, child in itertools.pairwise(names)]
+    edges += [(ex("E"), SUB_CLASS, ex("A")), (ex("E"), SUB_CLASS, ex(names[-1]))]  # under A, its first parent
+    labels = {ex(name): (name, None) for name in [*names, "A", "E"]}
+    with loaded(app, derived_stage(entities, names=labels, edges=edges)) as client:
+        found = Tree(column(client, "/E").trees[0])
+    assert found.shown() == [(0, "A"), (1, "E"), *enumerate(names[:MAX_COLUMN_DEPTH])]
+    last = found.items[-1]
+    assert (last.text, last.expanded) == (names[MAX_COLUMN_DEPTH - 1], "false")  # opens to its children, as any node
+
+
+def test_elided_dag(app: FastAPI) -> None:
+    """Check that the row for the levels left out holds only those after them, and a reference elsewhere stays."""
+    names, _ = chain(20)
+    entities = [(ex(name), EntityType.CLASS) for name in [*names, "zz"]]
+    edges = [(ex(child), SUB_CLASS, ex(parent)) for parent, child in itertools.pairwise(names)]
+    edges += [(ex(names[-1]), SUB_CLASS, ex("zz"))]
+    labels = {ex(name): (name, None) for name in [*names, "zz"]}
+    with loaded(app, derived_stage(entities, names=labels, edges=edges)) as client:
+        found = shown(column(client, f"/{names[-1]}"))
+    assert found == [
+        *enumerate(names[:3]),
+        (3, "… 6 levels hidden"),
+        *enumerate(names[9:], start=4),
+        (0, "zz"),
+        (1, f"{names[-1]} (also above)"),
+    ]
+
+
+def test_most_ancestors(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that past `MAX_ANCESTORS`, the column keeps those nearest the entity, the farthest at the top."""
+    monkeypatch.setattr(browl.hierarchy, "MAX_ANCESTORS", 3)
+    _, stage = chain(10)
+    with loaded(app, stage) as client:
+        assert shown(column(client, "/c009")) == [(0, "c006"), (1, "c007"), (2, "c008"), (3, "c009")]
 
 
 def test_siblings_of_root(client: TestClient) -> None:
@@ -324,8 +507,18 @@ def test_siblings_of_root(client: TestClient) -> None:
         [("node", ex("Left")), ("at", "hc-0-0"), ("siblings-of", ex("Bottom")), ("offset", "500")],
         [("node", ex("Left")), ("siblings-of", ex("Bottom"))],  # no `at`
         [("at", "hc"), ("siblings-of", ex("Left"))],  # not a root
+        [("node", ex("Left")), ("at", "hc-0-0"), ("siblings-of", ex("Bottom")), ("children-of", ex("Left"))],
+        [("node", ex("Left")), ("at", "hc-0-0"), ("siblings-of", ex("Bottom")), ("siblings-of", ex("Bottom"))],
+        [("node", ex("Left")), ("at", "x-0"), ("siblings-of", ex("Bottom"))],  # neither prefix
+        [("node", ex("Big")), ("at", "hc-0-0"), ("before", "1000"), ("siblings-of", ex("kid0"))],
+        [("node", ex("Big")), ("at", "hc-0-0"), ("before", "1000"), ("offset", "500")],
+        [("node", ex("Big")), ("at", "hc-0-0"), ("before", "600")],  # not where a page starts
+        [("node", ex("Big")), ("at", "hc-0-0"), ("before", "1500")],  # past the last
+        [("node", ex("Big")), ("at", "hc-0-0"), ("before", "0")],
+        [("node", ex("Big")), ("at", "t-0-0"), ("before", "500")],  # a tree page's
+        [("node", ex("Big")), ("before", "500")],  # no `at`
     ],
 )
 def test_siblings_not_found(client: TestClient, params: list[tuple[str, str]]) -> None:
-    """Check that a siblings' fragment for a node that isn't the parent's child, or with another id, is a 404."""
+    """Check that a column's fragment for a node not the parent's child, or with bad parameters, is a 404."""
     assert client.get("/_browl/tree/classes", params=params).status_code == 404

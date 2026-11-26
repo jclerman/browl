@@ -1746,7 +1746,21 @@ CSS nesting gets the one-page view, without the toggle. _(P-16d)_
   - **Siblings:** after the entity's first parent's children shown (for a root, after the roots shown), "Show its
     siblings (12)" fetches that parent's children, or the roots, in their place: the page of them that holds the
     entity, which is shown open and marked, after a link to those before it (`siblings-of=` on the tree route's
-    fragment). Without JS, it loads the parent's page, whose column shows its children, or the tree page's roots.
+    fragment). With htmx, that link adds the page before in place, before it (`before=`, which gives the offset of the
+    page after the one shown, and leaves out the link to it). Without JS, "Show its siblings" loads the parent's page,
+    whose column shows its children, or the tree page at the roots' page that holds the entity, scrolled to it.
+  - **Depth:** the column draws at most 15 levels down to the entity's, its own counted (`MAX_COLUMN_DEPTH`), so a
+    deep chain stays readable and the template's nesting is bounded. When the entity is drawn deeper, the column keeps
+    the top three levels and the eleven down to the entity's; between them, one row, itself a level, "… 26 levels
+    hidden", stands for the levels left out. It's an open tree item, whose group holds the nodes below those levels,
+    and it links to the tree page with the entity's path open (along first parents). Levels count by where the merged
+    tree draws each node: under each node of the third level, the row holds the nodes and references drawn at the
+    first level after those left out; anything else drawn at the levels left out, from another branch, is dropped.
+    Another branch stops at the entity's level, or at the 15th if that's deeper: its nodes there are drawn closed,
+    opening as any node does. A reference to a node left out still links to its page.
+  - **Many ancestors:** the column reads at most 300 ancestors (`MAX_ANCESTORS`), nearest first, level by level, so a
+    dense multiple-inheritance graph can't make every page in it large. Past that, those whose parents are all left
+    out are drawn at the top, as roots are.
   - **Only the column merges:** the tree pages (P-18) show a node under each of its parents.
   - **Nodes** are the tree pages': counts, expansion through `?node=`, keyboard use, rows that stick while their
     children scroll past, and deprecated entities struck through (U-46, P-39). The entity's node is marked as in its
@@ -1756,15 +1770,16 @@ CSS nesting gets the one-page view, without the toggle. _(P-16d)_
     it: on NCBITaxon_82596 (821 children, most with children of their own, about 40 levels deep) that made 2.7 MB of
     HTML, and 200 ms to build; without, 0.5 MB and 23 ms. Without JS, a toggle loads its node's page, whose column
     shows its children. A fragment's URL names no open nodes either: the tree route serves the column's element ids
-    (`at=` with the prefixes `hc`, `ho`, `hd` and `ha`, not `t`) with these links. The link after the entity's first
-    page of children loads the tree page with the nodes above it open, along their first parents, showing the next
-    page; in a fragment, it's the parent's page.
+    (`at=` with the prefixes `hc`, `ho`, `hd` and `ha`, not `t`) with these links. Without JS, the links before and
+    after a page of the column's children load the tree page with the nodes above them open, along their first
+    parents, showing that page; a fragment reads that path when it has such a link.
   - **Which hierarchy:** a class's column uses the class hierarchy, a property's its own property hierarchy. A punned
     IRI gets a tree for each hierarchy it's in, in the navigation bar's order, each heading followed by its
     hierarchy's name ("Local hierarchy: Classes"). Every node of a hierarchy gets a tree, one with neither parents
     nor children too: itself, and its siblings' link. Only an entity in no hierarchy, such as `owl:Thing`, has none.
-  - **Data:** from SQLite alone, with no Fuseki query: the ancestors by walking up `edge` a level at a time via
-    `edge_child`, their nodes in one query. Measured (`read_column`, then rendering the column): a few ms on Uberon,
+  - **Data:** from SQLite alone, with no Fuseki query: the ancestors in one recursive query up `edge` via
+    `edge_child` (on NCBITaxon, 0.06 ms for Homo sapiens' 31, against 0.35 ms a level at a time), their nodes in one
+    query. Measured (`read_column`, then rendering the column): a few ms on Uberon,
     e.g. 1 ms and 2 ms for GO_0045829, which has 63 ancestors; on NCBITaxon, 1 ms and 1 ms for Homo sapiens. The
     slowest is sorting the children of NCBITaxon's widest node (47,783), 87 ms, as on its tree page.
 
@@ -1798,7 +1813,10 @@ too (P-38), and the JSON API's (P-33).
   open opens only it and the nodes above it, so it fits. A page renders in the thread pool: one of 5,000 nodes takes
   about 100 ms.
 - **Errors:** an unknown node, a repeated parameter, `children-of` without `offset`, or an offset past the last
-  (checked before anything is read) is a 404, so each page has one URL.
+  (checked before anything is read) is a 404, so each page has one URL. So is an `at=` whose prefix is neither `t`
+  nor the hierarchy column's, and, for the column's `siblings-of=` and `before=`: either without a column's `at=`,
+  with `offset=` or with each other, a `siblings-of=` node that isn't one of `node`'s children (or a root), and a
+  `before=` that isn't a positive multiple of `CHILD_PAGE` or is past the last.
 - **With htmx** the toggle fetches the node's children once (`?node=…&at=…`), and `static/tree.js` then opens and
   closes it in place. The fragment's URL names only the open nodes above it, enough for its links to work without
   JS. Opening in place doesn't change the URL, but the toggle's link follows the node's state. A fragment that
@@ -2011,7 +2029,7 @@ Everything under `/{RESERVED_PREFIX}/` (e.g. `/_browl/`):
 | Path | Purpose |
 | --- | --- |
 | `search` | The full results page, `q=`, `type=` and `property=` (repeated), `values=direct`, `offset=`; with `suggest=1` (no `offset=`), the autocomplete's fragment; both `noindex`. See [2.9](#29-page-layout), Search (P-20) |
-| `tree/{hierarchy}` | Tree page, `hierarchy` one of `classes`, `object-properties`, `data-properties` and `annotation-properties` (the navigation bar links them). `open=` (repeated), `children-of=`, `offset=`; a fragment: `node=`, `at=` (marked `noindex`), also for the hierarchy column, whose `at=` gets its links, and `siblings-of=` its entity's siblings. See [2.9](#29-page-layout), Tree pages (P-18) and Hierarchy column (P-38) |
+| `tree/{hierarchy}` | Tree page, `hierarchy` one of `classes`, `object-properties`, `data-properties` and `annotation-properties` (the navigation bar links them). `open=` (repeated), `children-of=`, `offset=`; a fragment: `node=`, `at=` (marked `noindex`), also for the hierarchy column, whose `at=` gets its links, `siblings-of=` its entity's siblings, and `before=` the page before a page of them. See [2.9](#29-page-layout), Tree pages (P-18) and Hierarchy column (P-38) |
 | `iri?iri=…` | Fallback entity URLs (Q1b) |
 | `hash?path=…&fragment=…` | The page for a hash URL's path and fragment, for the hash-IRI script ([2.3](#23-iri--url-mapping), Lookup); marked `noindex`, as its pages are at their hash URLs |
 | `usage-count?iri=…` | An entity's Usage tab label with its count, "Usage (128)", which its page fetches once it renders ([2.8](#28-entity-pages)); marked `noindex`; a 404 for an IRI with no entity (P-27b) |

@@ -47,6 +47,20 @@
 {%- endif -%}
 {%- endmacro %}
 
+{# In the hierarchy column, the row that stands for the levels it leaves out, a level itself, open, whose group holds
+   the nodes below them. It links to the tree page, as does its toggle without JS. #}
+{% macro elided_row(shown) -%}
+<li role="none" class="tree-elided"><span class="tree-row" data-depth="{{ shown.id.count('-') - 1 }}">
+  {#- #}<a class="tree-toggle" href="{{ shown.href }}" rel="nofollow" hx-get="{{ shown.href }}" hx-target="next ul"
+     hx-swap="innerHTML" hx-sync="this:drop"><span class="visually-hidden">Close the hidden levels</span></a>
+  {#- #}<a role="treeitem" id="{{ shown.id }}" href="{{ shown.href }}" rel="nofollow" aria-expanded="true"
+     aria-owns="{{ shown.id }}-g">… {{ "{:,}".format(shown.levels) }} {{ "level" if shown.levels == 1 else "levels" }}
+     hidden</a></span>
+  <ul role="group" id="{{ shown.id }}-g" data-loaded>
+    {{- tree_items(shown.children) -}}
+  </ul></li>
+{%- endmacro %}
+
 {# A paging link's label: what it shows, the nodes from `start` (counted from 0), `count` of them, and of how many,
    unless they reach the end, `first` or `last`. #}
 {% macro paging_label(word, end_word, start, count, total, at_end) -%}
@@ -56,17 +70,19 @@ Show the {{ end_word if at_end else word }} {{ "{:,}".format(count) }}
 {%- endmacro %}
 
 {# A page of nodes, with links to the pages before and after it, also tree items, so the keyboard reaches them. With
-   htmx, the link to the next page adds it in place. In the hierarchy column, the page's entity's first parent's
-   children end with a link that shows its siblings, with htmx in their place. #}
+   htmx, the link to the next page adds it in place, and in the hierarchy column, the link to the one before. There,
+   the page's entity's first parent's children end with a link that shows its siblings, with htmx in their place. #}
 {% macro tree_items(list) -%}
 {%- set page = list.page -%}
 {%- if list.previous is not none %}
 {%- set start = page.offset - page.previous_count %}
-<li role="none" class="tree-paging"><a role="treeitem" href="{{ list.previous }}" rel="nofollow">
+<li role="none" class="tree-paging"><a role="treeitem" href="{{ list.previous }}" rel="nofollow"
+  {%- if list.previous_load is not none %} hx-get="{{ list.previous_load }}" hx-target="closest li" hx-swap="outerHTML"
+  hx-sync="this:drop"{% endif %}>
   {{- paging_label("previous", "first", start, page.previous_count, page.total, start == 0) }}</a></li>
 {%- endif %}
 {%- for shown in list.nodes %}
-{{ tree_node(shown) }}
+{{ elided_row(shown) if shown.levels is defined else tree_node(shown) }}
 {%- endfor %}
 {%- if list.more is not none %}
 <li role="none" class="tree-paging"><a role="treeitem" href="{{ list.more }}" rel="nofollow"
