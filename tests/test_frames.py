@@ -59,7 +59,7 @@ def test_class_frame() -> None:
         ("Disjoint Union Of", [f"{iri('Liver')}, {iri('Lung')}"]),
         ("Keys", [iri("hasPart")]),
         ("General class axioms", [f"{some_text} SubClassOf {iri('Heart')}"]),
-        ("Other axioms", [f"{iri('Heart')} Type {iri('Organ')}"]),
+        ("Types", [iri("Organ")]),
     ]
     assert [group.section for group in groups] == [
         Section.EQUIVALENT_TO,
@@ -68,8 +68,9 @@ def test_class_frame() -> None:
         Section.DISJOINT_UNION_OF,
         Section.KEYS,
         Section.GENERAL,
-        Section.OTHER,
+        Section.TYPES,
     ]
+    assert groups[-1].kind == EntityKind.NAMED_INDIVIDUAL
     [cor, herz, _] = groups[0].lines
     assert cor.axiom is axioms[5]
     assert herz.axiom is None  # only the equivalence group implies it
@@ -305,14 +306,56 @@ A, Z = entity("A", EntityKind.NAMED_INDIVIDUAL), entity("Z", EntityKind.NAMED_IN
             owl.InverseObjectProperties(first=entity("A", P.kind), second=entity("Z", P.kind)),
             [("Inverse Of", [iri("A")])],
         ),
-        (owl.SameIndividual(members=(A, Z)), [("Other axioms", [f"{iri('Z')} SameAs {iri('A')}"])]),
-        (owl.DifferentIndividuals(members=(A, Z)), [("Other axioms", [f"{iri('Z')} DifferentFrom {iri('A')}"])]),
+        (owl.SameIndividual(members=(A, Z)), [("Same As", [iri("A")])]),
+        (owl.DifferentIndividuals(members=(A, Z)), [("Different From", [iri("A")])]),
     ],
     ids=["disjoint", "equivalent", "inverse", "same", "different"],
 )
 def test_symmetric_entity_first(axiom: owl.AnyAxiom, expected: list[tuple[str, list[str]]]) -> None:
     """Check that a symmetric axiom between two, written with the other first, shows on Z's page with Z first.
 
-    A frame's section shows only the other; an axiom shown whole, such as an individual's, is written with Z first.
+    A frame's section shows only the other.
     """
     assert text(frame_groups([axiom], f"{NS}Z", [], shown_name)) == expected
+
+
+def test_individual_frame() -> None:
+    """Check an individual's sections, in order, with each property's assertions a group of its own, by its name."""
+    knows, likes = (entity(name, EntityKind.OBJECT_PROPERTY) for name in ("knows", "likes"))
+    age, zip_code = (entity(name, EntityKind.DATA_PROPERTY) for name in ("age", "zeta"))  # zeta is shown as "Aeta"
+    b, c = entity("B", EntityKind.NAMED_INDIVIDUAL), entity("C", EntityKind.NAMED_INDIVIDUAL)
+    anonymous = owl.AnonymousIndividual(id="_:x")
+    forty = owl.Literal(lexical="40", datatype="http://www.w3.org/2001/XMLSchema#integer")
+    axioms = [
+        owl.ObjectPropertyAssertion(subject=Z, property=likes, object=b),
+        owl.ObjectPropertyAssertion(subject=Z, property=knows, object=c),
+        owl.ObjectPropertyAssertion(subject=Z, property=knows, object=anonymous),
+        owl.DataPropertyAssertion(subject=Z, property=age, object=forty),
+        owl.DataPropertyAssertion(subject=Z, property=zip_code, object=forty),
+        owl.NegativeObjectPropertyAssertion(subject=Z, property=knows, object=A),
+        owl.NegativeDataPropertyAssertion(subject=Z, property=age, object=forty),
+        owl.DifferentIndividuals(members=(A, Z, b)),
+        owl.SameIndividual(members=(A, Z, b)),
+        owl.SameIndividual(members=(Z, b)),  # b again: one line
+        owl.ClassAssertion(individual=Z, class_=owl.ObjectSomeValuesFrom(property=HAS_PART, filler=MUSCLE)),
+        owl.ClassAssertion(individual=Z, class_=ORGAN),
+        owl.ObjectPropertyAssertion(subject=Z, property=owl.ObjectInverseOf(property=knows), object=A),
+        owl.SubClassOf(sub=entity("Z"), super=ORGAN),  # punning: Z is a class too
+    ]
+    groups = frame_groups(axioms, Z.iri, [], shown_name)
+    forty_text = "40"
+    assert text(groups) == [
+        ("SubClass Of", [iri("Organ")]),
+        ("Types", [iri("Organ"), f"{iri('hasPart')} some {iri('M')}"]),
+        ("Same As", [iri("A"), iri("B")]),
+        ("Different From", [f"{iri('A')}, {iri('B')}"]),
+        ("Object property assertions", [iri("C"), "_:x"]),
+        ("Object property assertions", [iri("B")]),
+        ("Data property assertions", [forty_text]),
+        ("Data property assertions", [forty_text]),
+        ("Negative property assertions", [f"{iri('age')} {forty_text}", f"{iri('knows')} {iri('A')}"]),
+        ("Other axioms", [f"{iri('Z')} inverse ({iri('knows')}) {iri('A')}"]),
+    ]
+    assert [group.property for group in groups[4:8]] == [knows, likes, zip_code, age]
+    assert groups[0].kind == EntityKind.CLASS
+    assert {group.kind for group in groups[1:-1]} == {EntityKind.NAMED_INDIVIDUAL}

@@ -119,17 +119,18 @@ def _manchester_spaced(tokens: Iterable[Token]) -> list[Token]:
     return result
 
 
-def manchester_list(nodes: Iterable[Node], chain: bool = False) -> tuple[Token, ...]:
+def manchester_list(nodes: Iterable[Node], chain: bool = False, spaced: bool = False) -> tuple[Token, ...]:
     """Return nodes in Manchester syntax, as tokens with their spacing, separated as an axiom's operands are.
 
     Args:
         nodes: The nodes, each written as an axiom's operand is: without parentheses.
         chain: Whether they're a property chain, separated by `o`; else they're separated by commas.
+        spaced: Whether they're separated by spaces only, as a property and its value are (`p v`).
     """
     separator = _keyword("o") if chain else _COMMA
     tokens: list[Token] = []
     for index, node in enumerate(nodes):
-        if index:
+        if index and not spaced:
             tokens.append(separator)
         tokens.extend(node.unspaced_manchester_tokens())
     return tuple(_manchester_spaced(tokens))

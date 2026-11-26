@@ -869,3 +869,58 @@ def test_page(data_dir: Path, fuseki_url: str, dataset: str, monkeypatch: pytest
     assert mineral_link in annotations and "<mark>" not in annotations
     assert axioms.count(f"<mark>{mineral_link}</mark>") == 1  # in a general class axiom
     assert "<mark>" not in part_of
+
+
+INDIVIDUALS = [
+    *ENTITIES,
+    *((f"{NS}{name}", EntityType.NAMED_INDIVIDUAL) for name in ("alice", "bob", "carol", "dave", "rex", "tom", "Dog")),
+    *((f"{NS}{name}", EntityType.OBJECT_PROPERTY) for name in ("likes", "hasChild", "hates", "knows")),
+    *((f"{NS}{name}", EntityType.DATA_PROPERTY) for name in ("age", "name", "weight")),
+]
+
+
+def test_individual_page(data_dir: Path, fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check an individual's frame: its sections, each property's assertions under its name, and a punned IRI's."""
+    monkeypatch.setattr(browl.overview, "dataset_name", lambda generation: dataset)
+    app = make_app(FUSEKI_URL=fuseki_url)
+    with TestClient(app) as client:
+        app.state.jobs.register(Stage.PRE_CACHING, derived_stage(INDIVIDUALS))
+        client.portal.call(app.state.jobs.start)
+        client.portal.call(app.state.jobs.wait)
+        pages = {
+            name: client.get("/_browl/hash", params={"path": "/axioms", "fragment": name, "panel": "1"}).text
+            for name in ("alice", "bob", "carol", "Dog")
+        }
+    link = '<a href="/axioms#{0}"><bdi>http://example.org/axioms#{0}</bdi></a>'.format
+    keyword = '<span class="keyword">{}</span>'.format
+
+    def frame(name: str) -> str:
+        page = pages[name]
+        return re.sub(r">\s*\n\s*<", "><", page[page.index('<dl class="frame">') :].split("</dl>")[0].strip())
+
+    code = '<code dir="ltr">&lt;http://example.org/axioms#{}&gt;</code>'.format
+    heading, by = '<dt class="frame-heading">{}</dt>'.format, '<dt class="frame-property">{}</dt>'.format
+    assert frame("alice") == "".join(
+        [
+            '<dl class="frame">',
+            f'<dt>Types</dt><dd dir="ltr">{link("likes")} {keyword("some")} {code("Pet")}</dd>',
+            f'<dt>Different From</dt><dd dir="ltr">{link("bob")}</dd><dd dir="ltr">{link("carol")}, {link("tom")}</dd>',
+            heading("Object property assertions"),
+            f'{by(link("hasChild"))}<dd dir="ltr">{link("bob")}</dd>',
+            f'{by(link("likes"))}<dd dir="ltr">{link("rex")}</dd>',
+            heading("Data property assertions"),
+            f'{by(link("age"))}<dd dir="ltr"><bdi>42</bdi></dd>',
+            f'<dt>Negative property assertions</dt><dd dir="ltr">{link("hates")} {link("rex")}</dd>',
+        ]
+    )
+    bob = frame("bob")
+    assert f'{by(f'<code dir="ltr">{NS}loves</code>')}<dd dir="ltr">_:b1</dd>' in bob  # an anonymous object
+    assert f'<dt>Negative property assertions</dt><dd dir="ltr">{link("age")} <bdi>7</bdi></dd>' in bob
+    carol = frame("carol")
+    assert f'<dt>Same As</dt><dd dir="ltr">{link("dave")}</dd>' in carol
+    assert f'{by(link("knows"))}<dd dir="ltr">{link("dave")} <span class="axiom-annotations">' in carol
+    # Dog is a class and an individual: its class assertion is in its own section, after the class's.
+    dog = frame("Dog")
+    assert dog.index("<dt>SubClass Of</dt>") < dog.index("<dt>General class axioms</dt>") < dog.index("<dt>Types</dt>")
+    assert f'<dt>Types</dt><dd dir="ltr">{link("Animal")}</dd>' in dog
+    assert "Other axioms" not in "".join(pages.values())

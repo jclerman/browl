@@ -147,7 +147,7 @@ class FrameLine(BaseModel):
             implies, through a chain of equivalences or a cycle of subclass axioms (DESIGN.md §2.5), which the page
             marks as implied.
         operands: What the line shows of the axiom, in order; empty to show it whole, or a characteristic by its
-            keyword.
+            keyword. A negative assertion's are its property and object.
         annotations: The annotations of the axioms the line shows, each once (DESIGN.md §2.8, Axiom annotations).
     """
 
@@ -160,8 +160,8 @@ class FrameLine(BaseModel):
     def manchester_tokens(self) -> tuple[Token, ...]:
         """Return the line in Manchester syntax, as tokens with their spacing (`browl.owl.Node.manchester_tokens`).
 
-        Operands are separated by commas, or by `o` in a property chain; a characteristic is its keyword, without its
-        colon (`Functional`).
+        Operands are separated by commas, by `o` in a property chain, or by a space in a negative assertion
+        (`knows bob`); a characteristic is its keyword, without its colon (`Functional`).
         """
         return self._manchester_tokens
 
@@ -171,7 +171,11 @@ class FrameLine(BaseModel):
         if isinstance(self.axiom, _CHARACTERISTICS):
             return (Token(TokenKind.KEYWORD, self.axiom.keyword.removesuffix(":")),)
         if self.operands or self.axiom is None:
-            return owl.manchester_list(self.operands, chain=isinstance(self.axiom, owl.SubPropertyChainOf))
+            return owl.manchester_list(
+                self.operands,
+                chain=isinstance(self.axiom, owl.SubPropertyChainOf),
+                spaced=isinstance(self.axiom, _NEGATIVE_ASSERTIONS),
+            )
         return self.axiom.manchester_tokens()
 
 
