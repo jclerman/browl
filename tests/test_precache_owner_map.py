@@ -1,5 +1,6 @@
 """Tests for the owner-map pre-caching hook (P-27a) on a stubbed Fuseki; tests/test_usages.py uses a real one."""
 
+from collections import Counter
 from collections.abc import Sequence
 from contextlib import closing
 from pathlib import Path
@@ -211,3 +212,32 @@ async def test_owner_map_walk_budget(settings: Settings, monkeypatch: pytest.Mon
     async with fuseki(ONTOLOGY_RESULT, entity_result((A, "Class"), (B, "Class")), shared) as http:
         with pytest.raises(StageError, match=r"share blank nodes too much, over 0 visits"):
             await pre_caching_stage(job(settings, 4), http, hooks=HOOKS_USED)
+
+
+async def test_owner_map_walk_stops_at_anonymous_individuals(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Check that walks stop at anonymous individuals, so many roots that reach a large component of them are cheap.
+
+    10,000 general class axioms, `(p value _:hub) SubClassOf A`, each reach a cycle of 1,000 anonymous individuals
+    linked by p. Walked into, the cycle would cost 10 million visits; with no budget past one visit per node, the stage
+    passes only as each walk stops at the hub, whose assertions are roots of their own.
+    """
+    monkeypatch.setattr(owner_map_module, "WALK_BUDGET", 0)
+    referrers, cycle = 10_000, 1_000
+    triples: list[tuple[str, str, str, str, str]] = []
+    for i in range(referrers):
+        triples += [
+            (f'"g{i}"', f"<{OWL}hasValue>", "", '"n0"', ""),
+            (f'"g{i}"', f"<{OWL}onProperty>", P, "", ""),
+            (f'"g{i}"', f"<{RDFS}subClassOf>", A, "", ""),
+        ]
+    triples += [(f'"n{i}"', P, "", f'"n{(i + 1) % cycle}"', "") for i in range(cycle)]
+    entity_rows = entity_result((A, "Class"), (P, "ObjectProperty"))
+    async with fuseki(ONTOLOGY_RESULT, entity_rows, rows(*triples)) as http:
+        await pre_caching_stage(job(settings, 9), http, hooks=HOOKS_USED)
+    roots, refs, _ = tables(settings, 9)
+    kinds = Counter(kind for _, kind, _, _, _, _ in roots)
+    assert kinds == {"general": referrers, "assertion": cycle}
+    # A's own general class axioms aren't its usages; each assertion names p, and the cycle's nodes nothing else.
+    assert Counter(iri for iri, _ in refs) == {P.strip("<>"): referrers + cycle}
