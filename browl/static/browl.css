@@ -1169,12 +1169,14 @@ code {
 
 /* An open node's row sticks to the top while its children scroll past, below its parent's, so the path to what's in
    view stays in view (§2.9). Rows stack by depth, up to eight; deeper ones share the last place, each covering its
-   parent's. A stuck row is one line, cut short. On a tree page they stick below the navigation bar, whose height
-   `static/tree.js` measures. */
+   parent's. A shallower row is drawn over a deeper one, so a row pushed out as its children end, an opened sibling's,
+   slides under its parents' rather than over them; the tree keeps these layers to itself. A stuck row is one line, cut
+   short. On a tree page they stick below the navigation bar, whose height `static/tree.js` measures. */
 
 .tree {
   --tree-row: 1.6em;
   --tree-stick: 0px;
+  isolation: isolate;
 }
 
 .tree-page .tree {
@@ -1184,7 +1186,7 @@ code {
 .tree li:has(> [role="group"]:not([hidden])) > .tree-row {
   position: sticky;
   top: calc(var(--tree-stick) + var(--tree-slot, 7) * var(--tree-row));
-  z-index: 1;
+  z-index: var(--tree-layer, 1);
   height: var(--tree-row);
   overflow: hidden;
   line-height: var(--tree-row);
@@ -1193,13 +1195,13 @@ code {
   background: var(--bg);
 }
 
-.tree-row[data-depth="0"] { --tree-slot: 0; }
-.tree-row[data-depth="1"] { --tree-slot: 1; }
-.tree-row[data-depth="2"] { --tree-slot: 2; }
-.tree-row[data-depth="3"] { --tree-slot: 3; }
-.tree-row[data-depth="4"] { --tree-slot: 4; }
-.tree-row[data-depth="5"] { --tree-slot: 5; }
-.tree-row[data-depth="6"] { --tree-slot: 6; }
+.tree-row[data-depth="0"] { --tree-slot: 0; --tree-layer: 8; }
+.tree-row[data-depth="1"] { --tree-slot: 1; --tree-layer: 7; }
+.tree-row[data-depth="2"] { --tree-slot: 2; --tree-layer: 6; }
+.tree-row[data-depth="3"] { --tree-slot: 3; --tree-layer: 5; }
+.tree-row[data-depth="4"] { --tree-slot: 4; --tree-layer: 4; }
+.tree-row[data-depth="5"] { --tree-slot: 5; --tree-layer: 3; }
+.tree-row[data-depth="6"] { --tree-slot: 6; --tree-layer: 2; }
 
 /* Moved to by the keys, an item isn't left under the rows stuck above it. */
 .tree [role="treeitem"] {

@@ -39,7 +39,7 @@ from tests.conftest import DATA
 from tests.helpers import AUTH_ON, WAIT_S, LiveServer, derived_stage, iso, make_app, no_axioms, session_cookie
 from tests.test_pages import FakeTables
 from tests.test_search_page import SYNONYM, search_stage
-from tests.test_trees import SUB_CLASS, tree_stage
+from tests.test_trees import SUB_CLASS, kid, tree_stage
 
 pytestmark = pytest.mark.usefixtures("data_dir")
 
@@ -2769,6 +2769,33 @@ def test_column_rows_stick(page: Page, trees: LiveServer) -> None:
     top = heading["y"] + heading["height"]
     assert abs(rows[0]["y"] - top) < 2
     assert abs(rows[1]["y"] - (rows[0]["y"] + rows[0]["height"])) < 2
+
+
+def test_column_row_leaves_under_parents(page: Page, trees: LiveServer) -> None:
+    """Check that an opened sibling's stuck row, pushed out as its children end, slides under its parent's row."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}/Left")
+    column = hierarchy_column(page)
+    column.get_by_role("treeitem", name="Show its siblings (2)").click()
+    tree_toggle(page, "Big").click()
+    expect(tree_item(page, kid(0))).to_be_visible()
+    top = column.locator(".tree-row", has=tree_item(page, "Top"))
+    big = column.locator(".tree-row", has=tree_item(page, "Big"))
+    # Scroll until Big's row, pushed up by Left's, overlaps Top's; the column is short, so it scrolls that far.
+    column.evaluate(
+        """(each) => {
+            each.style.maxHeight = "8rem";
+            const top = each.querySelector("[role=treeitem][aria-current]").closest("li").getBoundingClientRect().y;
+            each.scrollTop += top - each.getBoundingClientRect().y - 50;
+        }"""
+    )
+    at = box(top)
+    assert box(big)["y"] < at["y"] + at["height"]
+    hit = page.evaluate(
+        "([x, y]) => document.elementFromPoint(x, y).closest('.tree-row').textContent",
+        [box(big)["x"] + 30, at["y"] + at["height"] / 2],
+    )
+    assert "Top" in hit and "Big" not in hit
 
 
 def test_tree_page_rows_stick(page: Page, trees: LiveServer) -> None:

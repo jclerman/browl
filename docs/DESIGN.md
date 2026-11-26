@@ -1809,10 +1809,11 @@ too (P-38), and the JSON API's (P-33).
   repeats it; a deeper node's fragment is a 404, so its toggle loads the page.
 - **Sticky rows:** an open node's row (its toggle, name and counts) sticks to the top while its children scroll past,
   below its parent's, so the path to what's in view stays in view, as in some JSON viewers. Rows stack by depth, up to
-  eight; deeper ones share the last place, each covering its parent's. A stuck row is one line, cut short. On a tree
-  page they stick below the navigation bar, whose height `static/tree.js` measures; in the hierarchy column, below its
-  heading. Plain CSS (`position: sticky`, by a row's `data-depth`), so it works without JS, under a bar of about one
-  line.
+  eight; deeper ones share the last place, each covering its parent's. A shallower row is drawn over a deeper one, so
+  an open node's row, pushed out as its children end (say an opened sibling's, above the page's entity), slides under
+  its parents' rows. A stuck row is one line, cut short. On a tree page they stick below the navigation bar, whose
+  height `static/tree.js` measures; in the hierarchy column, below its heading. Plain CSS (`position: sticky` and
+  `z-index`, by a row's `data-depth`), so it works without JS, under a bar of about one line.
 - **Keyboard** (U-17): the WAI-ARIA tree pattern, with roving `tabindex`; a node's link is the `treeitem`, its
   children's list its `group` (by `aria-owns`), and its counts its description. Departures from it: the toggles are
   the mouse's alone (`tabindex="-1"`, `aria-hidden`; a click on one leaves the focus on its item), and the "previous"
