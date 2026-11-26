@@ -17,7 +17,7 @@ name = "PyPI"
 priority = "primary"
 
 [tool.poetry.dependencies]
-fastapi = "^0.163"
+fastapi = "^0.165"
 pydantic-settings = "^2.16.3"
 pydantic = "^2.14.3"
 langcodes = "^3.5.1"

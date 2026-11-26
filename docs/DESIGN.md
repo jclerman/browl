@@ -2007,6 +2007,9 @@ The admins page (P-23, `browl.admins_page`, `admin/admins`) delivers A-7:
   yourself refuses you the admin pages from the next request. Without JS, it removes at once.
 - Both are POSTs refused from another site's page (`Sec-Fetch-Site`), like the upload. If the database can't be written,
   the page says so, with 500, and the error is logged.
+- FastAPI parses a form's body before the routes' dependencies run, so before the admin and cross-site checks. So the
+  router caps it (FastAPI's `max_body_size` and `form_limits`): a body over 4 KB gets 413, a file part 400, whoever
+  sends it.
 - The admin pages link to each other (Upload · Status · Admins) above their titles; the navigation bar's Admin link
   still goes to the upload page.
 

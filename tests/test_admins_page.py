@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 import browl.admins
 from browl.admins import Admin, AdminStore, canonical_email, parse_email
+from browl.admins_page import MAX_FORM_BYTES
 from browl.auth import SESSION_COOKIE
 from browl.jobs import STATE_DB, JobStore
 from tests.helpers import AUTH_ON, make_app, session_cookie
@@ -242,3 +243,19 @@ def test_store_admins(tmp_path: Path) -> None:
     assert admins.admins() == [Admin("a@example.org", at, None), Admin("b@example.org", at, "a@example.org")]
     assert admins.remove("a@example.org")
     assert not admins.remove("a@example.org")
+
+
+@pytest.mark.parametrize("path", [ADMINS, REMOVE])
+def test_body_capped_before_sign_in(data_dir: Path, path: str) -> None:
+    """Check that the forms' bodies are capped, since FastAPI parses them before the admin and CSRF checks (review M1).
+
+    Someone not signed in, from another site, gets 413 for a body over the cap, with or without a Content-Length, and
+    400 for a file part, rather than the server reading it all and then refusing them.
+    """
+    big = b"email=" + b"x" * MAX_FORM_BYTES
+    form = {"Content-Type": "application/x-www-form-urlencoded", "Sec-Fetch-Site": "cross-site"}
+    with TestClient(make_app(**AUTH_ON), follow_redirects=False) as client:
+        assert client.post(path, content=big, headers=form).status_code == 413
+        assert client.post(path, content=iter([big]), headers=form).status_code == 413
+        assert client.post(path, files={"f": ("f", b"x")}).status_code == 400
+        assert client.post(path, data={"email": "a@example.org"}).status_code == 401

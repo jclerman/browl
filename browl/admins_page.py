@@ -21,7 +21,17 @@ from browl.settings import Settings
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin)])
+MAX_FORM_BYTES = 4096
+"""The largest request body the admins page's forms accept: one email address, with room to spare."""
+
+# FastAPI parses a `Form()` body before the dependencies run, so before `require_admin` and `same_origin`; the caps
+# bound what anyone, signed in or not, can make it read: a body over `MAX_FORM_BYTES` gets 413, and a file part 400.
+router = APIRouter(
+    prefix="/admin",
+    dependencies=[Depends(require_admin)],
+    max_body_size=MAX_FORM_BYTES,
+    form_limits={"max_files": 0},
+)
 """The admins page's routes; every one needs an admin signed in."""
 
 
