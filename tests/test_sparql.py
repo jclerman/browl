@@ -164,3 +164,31 @@ def test_filled_query() -> None:
         fuseki.filled_query("CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }", "", {})
     with pytest.raises(ValueError, match=r"no \$entity"):
         fuseki.filled_query(axioms._TYPES, "", {"$entity": "<http://example.org/e>"})
+
+
+SHARED = {
+    "the annotation-property test": [
+        "entity-annotations.rq",
+        "entity-value-annotations.rq",
+        "entity-axiom-annotations.rq",
+    ],
+    "the root path": ["entity-axioms.rq", "entity-axiom-annotations.rq"],
+}
+"""The blocks of query text that more than one file holds, between `# Begin <name>` and `# End <name>.` lines."""
+
+
+def shared_block(path: Path, name: str) -> list[str]:
+    """Return a file's copy of a shared block, each line stripped, as the copies' indents differ."""
+    lines = [line.strip() for line in path.read_text().splitlines()]
+    start = next(index for index, line in enumerate(lines) if line.startswith(f"# Begin {name},"))
+    return lines[start + 1 : lines.index(f"# End {name}.")]
+
+
+@pytest.mark.parametrize("name", SHARED)
+def test_shared_blocks(name: str) -> None:
+    """Check that each copy of a block of query text shared by several files is the same, and that all are listed."""
+    first, *others = (shared_block(SPARQL_DIR / file, name) for file in SHARED[name])
+    assert first
+    assert all(other == first for other in others)
+    holding = sorted(path.name for path in FILES if f"# Begin {name}," in path.read_text())
+    assert holding == sorted(SHARED[name])

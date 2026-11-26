@@ -4,12 +4,14 @@
 # declared an annotation property too is one. A property declared only by a characteristic (owl:TransitiveProperty, …)
 # is an object or data property, not an annotation property. A blank value (an anonymous individual) is left out.
 # `$entity` stands for the entity's IRI, and browl.annotations adds the dataset clause before WHERE and a LIMIT.
-# No DISTINCT, which can slow Fuseki: browl.annotations drops repeats, which only a FROM merge could give.
+# No DISTINCT, which can slow Fuseki: browl.annotations drops repeats, which only a FROM merge could give. The
+# annotation-property test is also in entity-value-annotations.rq and entity-axiom-annotations.rq.
 SELECT ?property ?value
 WHERE {
   $entity ?property ?value
   FILTER (!isBlank(?value))
   FILTER (
+    # Begin the annotation-property test, the same in each copy, as tests/test_sparql.py checks.
     ?property IN (rdfs:label, rdfs:comment, rdfs:seeAlso, rdfs:isDefinedBy, owl:deprecated, owl:versionInfo,
                   owl:priorVersion, owl:backwardCompatibleWith, owl:incompatibleWith)
     || (!STRSTARTS(STR(?property), "http://www.w3.org/1999/02/22-rdf-syntax-ns#")
@@ -23,5 +25,6 @@ WHERE {
                                    owl:InverseFunctionalProperty, owl:TransitiveProperty, owl:SymmetricProperty,
                                    owl:AsymmetricProperty, owl:ReflexiveProperty, owl:IrreflexiveProperty))
             }))
+    # End the annotation-property test.
   )
 }
