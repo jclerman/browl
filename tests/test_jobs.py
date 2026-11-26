@@ -445,9 +445,10 @@ async def test_upload_failure(data_dir: Path) -> None:
     assert (await run_job(runner)).site == Site.AVAILABLE
 
 
-async def upload_slowly(runner: JobRunner) -> None:
-    """Take a second over an upload."""
+async def upload_slowly(runner: JobRunner, started: asyncio.Event) -> None:
+    """Take a second over an upload, setting `started` once it has started."""
     async with runner.upload():
+        started.set()
         await asyncio.sleep(1)
 
 
@@ -456,21 +457,37 @@ async def test_upload_cancelled(data_dir: Path, scope: str) -> None:
     """Check that an upload cancelled from outside is recorded as cancelled, and frees the runner.
 
     It's cancelled by a cancel scope, a time limit, or cancelling the request's task, as a server may when a client
-    disconnects. An anyio cancel scope also cancels the failure record, which must still stop the site serving.
+    disconnects. An anyio cancel scope also cancels the failure record, which must still stop the site serving. Each
+    cancels once the upload has started, not after a fixed time, which a slow machine may spend still claiming the job
+    (`test_claim_cancelled` covers that).
     """
     runner = await open_runner(data_dir)
+    started = asyncio.Event()
     if scope == "anyio":
-        with anyio.move_on_after(0.05):
-            await upload_slowly(runner)
+
+        async def cancel_once_started(cancel_scope: anyio.CancelScope) -> None:
+            await started.wait()
+            cancel_scope.cancel()
+
+        with anyio.CancelScope() as cancel_scope:
+            async with anyio.create_task_group() as group:
+                group.start_soon(cancel_once_started, cancel_scope)
+                await upload_slowly(runner, started)
     elif scope == "asyncio":
+
+        async def expire_once_started(timeout: asyncio.Timeout) -> None:
+            await started.wait()
+            timeout.reschedule(asyncio.get_running_loop().time())
+
         with pytest.raises(TimeoutError):
-            async with asyncio.timeout(0.05):
-                await upload_slowly(runner)
+            async with asyncio.timeout(None) as timeout:
+                expiry = asyncio.create_task(expire_once_started(timeout))
+                await upload_slowly(runner, started)
+        await expiry
     else:
-        task = asyncio.create_task(upload_slowly(runner))
+        task = asyncio.create_task(upload_slowly(runner, started))
         async with asyncio.timeout(5):
-            while not runner.state.running:
-                await asyncio.sleep(0.001)
+            await started.wait()
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
