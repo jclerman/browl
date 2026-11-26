@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 import browl.trees
 from browl.derived import EntityType
-from browl.hierarchy import CHILD_PAGE, node_ids, read_children, read_node
+from browl.hierarchy import CHILD_PAGE, child_index, node_ids, read_children, read_node
 from browl.jobs import Stage
 from browl.pages import TREES
 from tests.helpers import connect, derived_stage, make_app, make_settings
@@ -640,3 +640,32 @@ def test_read_children_order(client: TestClient) -> None:
             ("Free", 0, 0),
             ("Top", 3, 1257),
         ]
+
+
+def test_child_index_ties(app: FastAPI) -> None:
+    """Check that a node's index among its siblings is its place on their pages, across a page, for tied names."""
+    names = {f"a{index:04}": f"a{index:04}" for index in range(CHILD_PAGE - 2)}
+    names |= {
+        "t1": "Tie",
+        "t0": "tie",
+        "t2": "TIE",
+        "t3": "Tie",
+        "t4": "tIe",
+    }  # tied, or by case, so by IRI: 499 to 503
+    names |= {"t5": "Tiara", "u": "tie ", "z": "Z"}
+    entities = [(ex(name), EntityType.CLASS) for name in [*names, "P"]]
+    edges = [(ex(name), SUB_CLASS, ex("P")) for name in names]
+    stage = derived_stage(entities, names={ex(name): (label, None) for name, label in names.items()}, edges=edges)
+    with loaded(app, stage), closing(connect(make_settings(), 1)) as connection:
+        ids = node_ids(connection, EntityType.CLASS, [ex("P"), *(ex(name) for name in names)])
+        parent = read_node(connection, EntityType.CLASS, ids[ex("P")], "_browl", "")
+        assert parent is not None
+        pages = [
+            read_children(connection, EntityType.CLASS, parent, "_browl", "", offset) for offset in (0, CHILD_PAGE)
+        ]
+        order = [node.link.iri for page in pages for node in page.nodes]
+        assert order[CHILD_PAGE - 2 : CHILD_PAGE + 5] == [
+            ex(name) for name in ("t5", "t0", "t1", "t2", "t3", "t4", "u")
+        ]
+        indices = [child_index(connection, EntityType.CLASS, ids[ex("P")], ids[iri]) for iri in order]
+        assert indices == list(range(len(names)))

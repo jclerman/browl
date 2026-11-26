@@ -22,8 +22,20 @@ CHILD_PAGE = 500
 MAX_GROUP_NAMES = 3
 """The most members of an equivalence group a node's label names, its representative included."""
 
+MAX_ANCESTORS = 300
+"""The most ancestors `read_ancestors` reads, nearest first; past it, the walk up stops."""
+
 _ORDER = "coalesce(e.display_name, e.iri) COLLATE NOCASE, e.iri"
-"""The order of a node's children, and of a group's members: by display name, then IRI, so it's total."""
+"""The order of a node's children, and of a group's members, as entities `e`: by display name, then IRI, so it's
+total."""
+
+_ANCESTORS = (
+    "WITH RECURSIVE up(node) AS (SELECT ? UNION SELECT e.parent FROM up JOIN edge AS e"
+    " ON e.hierarchy = ? AND e.child = up.node LIMIT ?)"
+    " SELECT up.node, e.parent FROM up LEFT JOIN edge AS e ON e.hierarchy = ? AND e.child = up.node"
+)
+"""A node, its ancestors, nearest first (`UNION` walks a queue, level by level, each node once), up to a limit, and
+each one's parents, looked up by `edge_child`."""
 
 
 class TreeNode(BaseModel):
@@ -170,17 +182,10 @@ def read_children(
         offset: How many to skip.
         limit: The most to return.
     """
-    params: list[str | int]
+    total = count_roots(connection, hierarchy) if parent is None else parent.children
+    source, where, params = _children(hierarchy, None if parent is None else parent.id)
     columns = "c.node, e.iri, c.children, c.descendants"
     counts = "JOIN counts AS c ON c.hierarchy = r.hierarchy AND c.node = e.id"
-    if parent is None:
-        total = count_roots(connection, hierarchy)
-        source, params = "root AS r JOIN entity AS e ON e.id = r.node", [hierarchy]
-        where = "r.hierarchy = ?"
-    else:
-        total = parent.children
-        source, params = "edge AS r JOIN entity AS e ON e.id = r.child", [hierarchy, parent.id]
-        where = "r.hierarchy = ? AND r.parent = ?"
     rows = connection.execute(
         f"SELECT {columns} FROM {source} {counts} WHERE {where} ORDER BY {_ORDER} LIMIT ? OFFSET ?",
         (*params, limit, offset),
@@ -240,29 +245,49 @@ def _group_members(connection: sqlite3.Connection, nodes: list[int]) -> dict[int
 def child_index(connection: sqlite3.Connection, hierarchy: EntityType, parent: int | None, node: int) -> int | None:
     """Return a node's index among a node's children, or the hierarchy's roots, in their order; None if it isn't one.
 
+    It sorts them as `read_children` does, so the index is the node's place on its pages.
+
     Args:
         connection: The derived database.
         hierarchy: The hierarchy, by its entities' type.
         parent: The parent node; None for the roots.
         node: The node.
     """
-    params: list[str | int]
-    if parent is None:
-        source, params = "root AS r JOIN entity AS e ON e.id = r.node", [hierarchy]
-        where, member = "r.hierarchy = ?", "r.node = ?"
-    else:
-        source, params = "edge AS r JOIN entity AS e ON e.id = r.child", [hierarchy, parent]
-        where, member = "r.hierarchy = ? AND r.parent = ?", "r.child = ?"
+    source, where, params = _children(hierarchy, parent)
     found = connection.execute(
-        f"SELECT coalesce(e.display_name, e.iri), e.iri FROM {source} WHERE {where} AND {member}", (*params, node)
+        f"SELECT place FROM (SELECT e.id, row_number() OVER (ORDER BY {_ORDER}) - 1 AS place"
+        f" FROM {source} WHERE {where}) WHERE id = ?",
+        (*params, node),
     ).fetchone()
-    if found is None:
-        return None
-    name, iri = found
-    key = "coalesce(e.display_name, e.iri)"
-    index: int = connection.execute(
-        f"SELECT count(*) FROM {source} WHERE {where}"
-        f" AND ({key} < ? COLLATE NOCASE OR ({key} = ? COLLATE NOCASE AND e.iri < ?))",
-        (*params, name, name, iri),
-    ).fetchone()[0]
-    return index
+    return None if found is None else int(found[0])
+
+
+def page_offset(index: int) -> int:
+    """Return the offset of the page of children, or roots, that holds the one at an index.
+
+    Examples:
+        >>> page_offset(0), page_offset(499), page_offset(1249)
+        (0, 0, 1000)
+    """
+    return index - index % CHILD_PAGE
+
+
+def read_ancestors(connection: sqlite3.Connection, hierarchy: EntityType, node: int) -> dict[int, list[int]]:
+    """Return a node's and each of its ancestors' parents, by node, in one query.
+
+    Past `MAX_ANCESTORS`, the nearest are kept, level by level, and a parent beyond them is left out, so an ancestor
+    whose parents all are has none.
+    """
+    parents: dict[int, list[int]] = {}
+    for child, parent in connection.execute(_ANCESTORS, (node, hierarchy, MAX_ANCESTORS + 1, hierarchy)):
+        above = parents.setdefault(child, [])
+        if parent is not None:
+            above.append(parent)
+    return {child: [each for each in above if each in parents] for child, above in parents.items()}
+
+
+def _children(hierarchy: EntityType, parent: int | None) -> tuple[str, str, list[str | int]]:
+    """Return the source and condition of a node's children, or of the roots, each an entity `e`, and the parameters."""
+    if parent is None:
+        return "root AS r JOIN entity AS e ON e.id = r.node", "r.hierarchy = ?", [hierarchy]
+    return "edge AS r JOIN entity AS e ON e.id = r.child", "r.hierarchy = ? AND r.parent = ?", [hierarchy, parent]
