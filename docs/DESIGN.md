@@ -2055,8 +2055,24 @@ too (P-38), and the JSON API's (P-33).
 - A system font stack for text and a monospace font for IRIs and CURIEs. Manchester keywords (`some`, `and`,
   `SubClassOf`) are styled lightly to set them apart from entity names.
 - A dark theme that follows the browser setting (`prefers-color-scheme`).
-- Generous but not wasteful spacing; works from phone width up.
-- Plain CSS with custom properties for the colors, so the palette can be tuned in one place. No CSS framework.
+- **Type**: dense, as data-dense UIs are, on a scale of tokens, `--text-xs` to `--text-xl`, in rem, so the browser's
+  font size scales them all. Every font size uses one, except icons and sizes relative to the text around them. The
+  body is `--text-base` at a leading of 1.45; secondary text, such as counts, notes and language tags, `--text-xs`;
+  small UI chrome `--text-sm`. Headings are semibold. Later: prose values, such as definitions, at about 15px, which
+  needs a template marker to tell them apart; `tabular-nums` for counts and pager numbers.
+- **Spacing**: small gaps within a list, larger ones between sections, on a scale of tokens, `--sp-1` to `--sp-6`, and
+  radii `--radius` and `--radius-lg`. Gaps, paddings and radii use them, or a named step off the scale (a hairline, a
+  frame's group gap, a tree's indent, which is its toggle's width); em gaps beside text, and pill and circle radii,
+  are the exceptions. Works from phone width up.
+- **Links**: in running text and axioms, a quiet underline, 1px, offset 0.2em, in the link's color at 45%,
+  full strength on hover and focus; it stays because the accent is only about 2.5:1 against `--fg`, below the 3:1
+  WCAG 1.4.1 needs to tell links by color alone. Where everything is a link (the navigation bar, tree items and
+  paging links, a frame's label column), and on a pager's Previous and Next, none, but on hover and focus; tree items
+  and their paging links are underlined on hover only, since keyboard focus there shows an outline instead. The search
+  box's suggestions get none even on hover: the selected one is highlighted already, and its type isn't a link of its
+  own.
+- Plain CSS with custom properties for the colors, type sizes, spacing and radii, so each can be tuned in one place.
+  No CSS framework.
 
 **Rendering names and IRIs** (from P-11's review, for P-14 and every page after it): display names, CURIEs and IRIs
 come from the uploaded ontology, so they're untrusted text. Autoescaping covers HTML text and quoted attributes, not

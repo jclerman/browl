@@ -836,6 +836,12 @@ def assert_fits(page: Page) -> None:
     assert problems == [], page.url
 
 
+def rem(page: Page) -> float:
+    """Return a rem, the root's font size, in pixels."""
+    size: float = page.evaluate("parseFloat(getComputedStyle(document.documentElement).fontSize)")
+    return size
+
+
 def box(locator: Locator) -> FloatRect:
     """Return a visible element's bounding box."""
     result = locator.bounding_box()
@@ -1259,10 +1265,10 @@ def test_annotations_grid_wide(page: Page, annotated: LiveServer) -> None:
     value_boxes = [box(values.nth(index)) for index in range(6)]
     assert value_boxes[1]["y"] >= value_boxes[0]["y"] + value_boxes[0]["height"]  # one line per value
     assert len({round(each["x"]) for each in value_boxes}) == 1  # one value column for every group
-    char = page.evaluate("parseFloat(getComputedStyle(document.body).fontSize)")
-    assert box(terms.nth(1))["width"] <= 12 * char + 1  # the long label wraps at 12rem
+    assert box(terms.nth(1))["width"] <= 12 * rem(page) + 1  # the long label wraps at 12rem
     comment = value_boxes[3]
-    assert 40 * char < comment["width"] < 60 * char  # not squeezed by the long label, and capped near 75ch
+    em = values.nth(3).evaluate("(each) => parseFloat(getComputedStyle(each).fontSize)")
+    assert 35 * em < comment["width"] < 60 * em  # not squeezed by the long label, and capped near 75ch, about 42em
     assert comment["height"] > 2 * value_boxes[0]["height"]  # so it wraps
     tag = page.locator(".annotations .lang").first
     expect(tag).to_have_text("en")
@@ -1284,8 +1290,7 @@ def frame_step(page: Page) -> float:
             return width;
         }"""
     )
-    char = page.evaluate("parseFloat(getComputedStyle(document.documentElement).fontSize)")
-    assert 4 < step < char
+    assert 4 < step < rem(page)
     return step
 
 
@@ -1427,6 +1432,17 @@ def test_axioms_indented_narrow(page: Page, framed: LiveServer) -> None:
     assert box(panel.locator(".frame dd").first)["x"] == pytest.approx(box(panel.locator("dd.frame-value"))["x"])
 
 
+def test_frames_dense(page: Page, framed: LiveServer) -> None:
+    """Check the denser frames: a frame's groups 6px apart, and a panel's sides 12px, at the default font size."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{framed.url}/example.org/thing")
+    panel = page.locator("section.axioms")
+    assert rem(page) == 16
+    assert panel.evaluate("(each) => getComputedStyle(each).paddingLeft") == "12px"
+    group = panel.locator(".frame dt:not(:first-child)").first
+    assert group.evaluate("(each) => getComputedStyle(each).marginTop") == "6px"
+
+
 def test_frame_stacks_by_panel_width(page: Page, framed: LiveServer) -> None:
     """Check that a frame stacks when its panel is narrow, though the window is wide, and not when the panel is wide.
 
@@ -1435,7 +1451,7 @@ def test_frame_stacks_by_panel_width(page: Page, framed: LiveServer) -> None:
     page.set_viewport_size({"width": 1800, "height": 800})
     page.goto(f"{framed.url}/example.org/thing")
     panel = page.locator("section.axioms")
-    char = page.evaluate("parseFloat(getComputedStyle(document.documentElement).fontSize)")
+    char = rem(page)
     annotations, axioms = panels(page)
     assert annotations["x"] + annotations["width"] < axioms["x"]  # side by side, in a wide window
     assert panel.evaluate("(each) => each.clientWidth") >= 30 * char
@@ -1517,8 +1533,7 @@ def test_panels_fixed(page: Page, varied: LiveServer, size: dict[str, int]) -> N
             assert overflows(page.locator(f"section.{each}")) is (entity == MANY)
     assert boxes[0] == boxes[1]
     annotations, axioms = boxes[0]
-    space = page.evaluate("parseFloat(getComputedStyle(document.body).fontSize)")
-    assert abs(axioms["y"] + axioms["height"] - (size["height"] - space)) < 2  # down to the window's padding
+    assert abs(axioms["y"] + axioms["height"] - (size["height"] - rem(page))) < 2  # down to the window's padding
     if size == WIDE:
         assert annotations["y"] == axioms["y"] and annotations["height"] == axioms["height"]
         assert annotations["x"] + annotations["width"] < axioms["x"]
@@ -3284,7 +3299,7 @@ def test_column_row_leaves_under_parents(page: Page, trees: LiveServer) -> None:
     assert "Top" in hit and "Big" not in hit
 
 
-WRAPPED_BAR = {"width": 900, "height": 800}
+WRAPPED_BAR = {"width": 780, "height": 800}
 """A window in which the navigation bar wraps, onto two lines."""
 
 
@@ -3298,7 +3313,10 @@ def test_tree_page_rows_stick(page: Page, trees: LiveServer, size: dict[str, int
     page.goto(f"{trees.url}/_browl/tree/classes?{TOP_AND_BIG}")
     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
     bar = box(page.locator(".site-bar"))
-    assert (bar["height"] > 60) == (size == WRAPPED_BAR)
+    parts = [box(each) for each in page.locator(".site-nav > :visible").all()]
+    wrapped = any(each["y"] >= parts[0]["y"] + parts[0]["height"] for each in parts)  # a part below the first
+    assert wrapped == (size == WRAPPED_BAR), "the bar should wrap at WRAPPED_BAR alone; a font change may need it moved"
+    assert (bar["height"] > 60) == wrapped
     top, big = (box(page.locator(".tree-row", has=tree_item(page, name))) for name in ("Top", "Big"))
     assert abs(top["y"] - (bar["y"] + bar["height"])) < 2
     assert abs(big["y"] - (top["y"] + top["height"])) < 2
@@ -3804,6 +3822,91 @@ def test_search_page_filters_the_box(page: Page, searchable: LiveServer) -> None
     expect(page.locator(f"input[name=property][value='{SYNONYM}']")).to_be_checked()
 
 
+# Link underlines (DESIGN.md §2.9, Links)
+
+UNDERLINED = ("underline", "underline", "underline")
+"""A link's underline as shown, hovered and focused, where it's always there."""
+ON_HOVER_AND_FOCUS = ("none", "underline", "underline")
+"""Where everything is a link: none until hover and focus."""
+ON_HOVER = ("none", "underline", "none")
+"""A tree's items, whose keyboard focus is an outline instead."""
+NEVER = ("none", "none", "none")
+"""The search box's suggestions."""
+
+
+def underlines(page: Page, link: Locator) -> tuple[str, ...]:
+    """Return a link's underline as shown, hovered, and focused from the keyboard: each `text-decoration-line`.
+
+    For an underlined link, check too that its underline is faint until hovered or focused.
+    """
+    style = "(each) => [getComputedStyle(each).textDecorationLine, getComputedStyle(each).textDecorationColor]"
+    color = link.evaluate("(each) => getComputedStyle(each).color")
+    lines, colors = [], []
+    page.mouse.move(0, 0)
+    for state in ("shown", "hovered", "focused"):
+        if state == "hovered":
+            link.hover()
+        elif state == "focused":
+            page.mouse.move(0, 0)
+            page.keyboard.press("Shift")  # a key, so the focus that follows shows as from the keyboard
+            link.focus()
+            assert link.evaluate("(each) => each.matches(':focus-visible')")
+        line, decoration = link.evaluate(style)
+        lines.append(line)
+        colors.append(decoration == color)
+    if lines[0] == "underline":
+        assert colors == [False, True, True]  # faint, then at full strength
+    return tuple(lines)
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_link_underlines(page: Page, paged: LiveServer, scheme: str) -> None:
+    """Check the links' underlines on an entity's Usage tab, signed in: labels, pager and navigation bar."""
+    page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
+    cookie = session_cookie(paged.app.state.settings.data_dir, AUTH_ON["SEED_ADMINS"][0])
+    page.context.add_cookies([{"name": SESSION_COOKIE, "value": cookie, "url": paged.url}])
+    page.set_viewport_size(WIDE)
+    page.goto(f"{paged.url}{THING}?tab=usage")
+    nav = page.get_by_role("navigation", name="Site")
+    assert underlines(page, page.locator(".usage-frame dt a").first) == ON_HOVER_AND_FOCUS
+    assert underlines(page, pager_link(page, "Next")) == ON_HOVER_AND_FOCUS
+    assert underlines(page, nav.get_by_role("link", name="Classes")) == ON_HOVER_AND_FOCUS
+    assert underlines(page, nav.get_by_role("link", name=TITLE)) == ON_HOVER_AND_FOCUS
+    assert underlines(page, nav.get_by_role("button", name="Sign out")) == ON_HOVER_AND_FOCUS
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_value_link_underlined(page: Page, annotated: LiveServer, scheme: str) -> None:
+    """Check that a link in a value, as in running text and axioms, has a faint underline, full on hover and focus."""
+    page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
+    page.goto(f"{annotated.url}/example.org/thing")
+    link = page.locator(".annotations dd a", has_text="https://example.org/elsewhere")
+    assert underlines(page, link) == UNDERLINED
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_tree_link_underlines(page: Page, trees: LiveServer, scheme: str) -> None:
+    """Check that a tree's items and paging links are underlined on hover only, and outlined on keyboard focus."""
+    page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
+    page.goto(f"{trees.url}/_browl/tree/classes?{TOP_AND_BIG}")
+    item, more = tree_item(page, "Top"), page.get_by_role("treeitem", name="Show the next 500")
+    for each in (item, more):
+        assert underlines(page, each) == ON_HOVER
+        assert each.evaluate("(each) => getComputedStyle(each).outlineStyle") == "solid"
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_suggestion_not_underlined(page: Page, searchable: LiveServer, scheme: str) -> None:
+    """Check that the search box's suggestions aren't underlined, even on hover, though the bar's other links are."""
+    page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
+    typed(page, searchable, "myo")
+    suggestion = page.get_by_role("option").first.locator("a")
+    page.mouse.move(0, 0)
+    assert suggestion.evaluate("(each) => getComputedStyle(each).textDecorationLine") == "none"
+    suggestion.hover()
+    assert suggestion.evaluate("(each) => getComputedStyle(each).textDecorationLine") == "none"
+
+
 def open_admins(page: Page, server: LiveServer, accept: bool) -> list[str]:
     """Open the admins page, answering each confirmation as `accept` says; return the questions asked.
 
@@ -3880,19 +3983,23 @@ PHONE_PAGES = [
 """Pages of each kind, which `test_fits_phone_width` checks; add new pages here."""
 
 
+@pytest.mark.parametrize("font", [16, 24], ids=["default-font", "large-font"])
 @pytest.mark.parametrize("width", PHONE_WIDTHS)
 @pytest.mark.parametrize("path", PHONE_PAGES)
-def test_fits_phone_width(page: Page, server: LiveServer, path: str, width: int) -> None:
+def test_fits_phone_width(page: Page, server: LiveServer, path: str, width: int, font: int) -> None:
     """Check that each kind of page fits a phone's width, also with the menu open (review S4).
 
     It's signed in as an admin, with long addresses listed: the admins table once pushed its Remove buttons off screen.
+    It's checked at the browser's default font size, and at a raised one, which every size in rem follows.
     """
+    page.context.new_cdp_session(page).send("Page.setFontSizes", {"fontSizes": {"standard": font}})
     long = "a.very.long.local.part.for.an.address"
     server.app.state.admins.add(f"{long}@a-long-subdomain.example.org", f"{long}@example.org", datetime.now(UTC))
     cookie = session_cookie(server.app.state.settings.data_dir, AUTH_ON["SEED_ADMINS"][0])
     page.context.add_cookies([{"name": SESSION_COOKIE, "value": cookie, "url": server.url}])
     page.set_viewport_size({"width": width, "height": 700})
     page.goto(f"{server.url}{path}")
+    assert rem(page) == font
     assert_fits(page)
     page.locator(".site-menu summary").click()
     assert_fits(page)
