@@ -16,7 +16,7 @@ from browl import usages as usages_module
 from browl.derived import NotCurrentError, UsageRootKind, entities_with_iri
 from browl.fuseki import UNION_FROM, FusekiClient, SelectResult, SparqlError
 from browl.precache.core import PREFIXES
-from browl.rdf import IRI, RDF, RDFS, BlankNode, Literal, Term, ntriples_iris
+from browl.rdf import IRI, RDF, RDFS, BlankNode, Literal, RDFSyntaxError, Term, ntriples_iris
 from browl.settings import Settings
 from browl.usage_tab import sorted_usages
 from browl.usages import (
@@ -24,6 +24,7 @@ from browl.usages import (
     TooManyUsagesError,
     Usage,
     UsageCounts,
+    UsageRoot,
     UsageSource,
     UsageStore,
     count_usages,
@@ -511,3 +512,25 @@ async def test_values_checked(store: UsageStore) -> None:
     broken = UsageStore(Unbound(), store.derived, store.generation, store.dataset_clause)  # type: ignore[arg-type]
     with pytest.raises(SparqlError, match="gave no value"):
         await read_values(broken, f"{NS}remark", [f"{NS}Cat"])
+
+
+@pytest.mark.parametrize(
+    ("term", "valid"),
+    [
+        (None, True),
+        (f"<{NS}A>", True),
+        ("<_:b0>", True),
+        ('"0123456789abcdef"', True),
+        ("<http://example.org/a> } . ?s ?p ?o {", False),
+        ('"0123" || true', False),
+        ("<_:b 0>", False),
+        ("UNDEF", False),
+    ],
+)
+def test_root_object_checked(term: str | None, valid: bool) -> None:
+    """Check that a usage root's object must be `<iri>`, `<_:label>` or a literal's `"hex"`, as a query holds it."""
+    if valid:
+        UsageRoot(1, UsageRootKind.ASSERTION, BlankNode("b0"), term)
+    else:
+        with pytest.raises(RDFSyntaxError):
+            UsageRoot(1, UsageRootKind.ASSERTION, BlankNode("b0"), term)

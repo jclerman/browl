@@ -16,6 +16,7 @@ annotation assertions alone is missed.
 """
 
 import logging
+import re
 import sqlite3
 import time
 from collections import Counter
@@ -31,7 +32,7 @@ from browl.links import LOOKUP_BATCH
 from browl.loading import dataset_name
 from browl.precache.core import PREFIXES, has_loaded_imports, logged_iri, sparql_file
 from browl.precache.usage_table import Source
-from browl.rdf import IRI, BlankNode, Literal, Term, ntriples_term
+from browl.rdf import IRI, BlankNode, Literal, RDFSyntaxError, Term, ntriples_term
 from browl.tasks import task_group
 from browl.usage_tables import TableNotReadyError, UsageTables
 
@@ -53,6 +54,7 @@ _PREDICATE = PREFIXES + sparql_file("usage-predicate.rq")
 _VALUES = PREFIXES + sparql_file("usage-values.rq")
 _ENTITY = "$entity"
 _NO_SUBJECTS = "VALUES ?subject { }"
+_DIGEST = re.compile(r'"[0-9a-f]+"')  # a literal's digest's hex digits, as `usage_root.object` holds them
 
 
 class TooManyUsagesError(Exception):
@@ -90,6 +92,23 @@ class UsageRoot:
     kind: UsageRootKind
     label: BlankNode
     object: str | None = None
+
+    def __post_init__(self) -> None:
+        """Check the object's shape, `<iri>`, `<_:label>` or a literal's `"hex"`, as a query will hold it.
+
+        Raises:
+            RDFSyntaxError: It's none of those.
+        """
+        term = self.object
+        if term is None or _DIGEST.fullmatch(term):
+            return
+        if not (term.startswith("<") and term.endswith(">")):
+            raise RDFSyntaxError(f"not a usage root's object: {term[:200]!r}")
+        inner = term[1:-1]
+        if inner.startswith("_:"):
+            BlankNode(inner[2:])
+        else:
+            IRI(inner)
 
 
 @dataclass(frozen=True, slots=True)
