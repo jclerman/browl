@@ -47,6 +47,14 @@ _REIFIED_TYPES = frozenset({f"{OWL}Axiom", f"{OWL}Annotation"})
 _THING = f"{OWL}Thing"
 _SAME_AS = f"{OWL}sameAs"
 _DIFFERENT_FROM = f"{OWL}differentFrom"
+_INDIVIDUAL_PREDICATES = frozenset(
+    {_SAME_AS, _DIFFERENT_FROM}
+    | {
+        f"{OWL}{name}"
+        for name in ("deprecated", "versionInfo", "priorVersion", "backwardCompatibleWith", "incompatibleWith")
+    }
+)
+"""The OWL predicates an anonymous individual may have: its assertions', and OWL's built-in annotation properties."""
 _SOURCE_INDIVIDUAL = f"{OWL}sourceIndividual"
 _ALL_DIFFERENT = f"{OWL}AllDifferent"
 _VOCABULARY_TYPES = (OWL, RDF, RDFS, SWRL)  # the namespaces of the types of OWL's RDF mapping's blank nodes
@@ -366,14 +374,14 @@ def _is_mapped(edges: set[tuple[str, _Object]]) -> bool:
 
     That's an axiom, an annotation, a class expression, a data range, a list, an inverse property, a SWRL atom, …: a
     node with a type or a predicate from their vocabularies (`_VOCABULARY_TYPES`, `_VOCABULARY_PREDICATES`), but those
-    of an individual's assertions: `rdf:type` with a class, `owl:Thing` among them, `owl:sameAs` and
-    `owl:differentFrom`.
+    of an individual's assertions: `rdf:type` with a class, `owl:Thing` among them, `owl:sameAs`, `owl:differentFrom`
+    and OWL's built-in annotation properties (`_INDIVIDUAL_PREDICATES`).
     """
     for predicate, item in edges:
         if predicate == _TYPE:
             if isinstance(item, str) and item != _THING and item.startswith(_VOCABULARY_TYPES):
                 return True
-        elif predicate not in (_SAME_AS, _DIFFERENT_FROM) and (
+        elif predicate not in _INDIVIDUAL_PREDICATES and (
             predicate.startswith(_VOCABULARY_PREDICATES) or predicate in _LOGICAL_RDFS
         ):
             return True

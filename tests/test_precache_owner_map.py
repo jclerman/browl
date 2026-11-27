@@ -241,3 +241,64 @@ async def test_owner_map_walk_stops_at_anonymous_individuals(
     assert kinds == {"general": referrers, "assertion": cycle}
     # A's own general class axioms aren't its usages; each assertion names p, and the cycle's nodes nothing else.
     assert Counter(iri for iri, _ in refs) == {P.strip("<>"): referrers + cycle}
+
+
+async def test_owner_map_owl_annotations_on_anonymous_individuals(settings: Settings) -> None:
+    """Check that OWL's built-in annotation properties leave a node an anonymous individual, as `rdfs:label` does.
+
+    `_:x Type A` and `_:x owl:deprecated true`, … are its assertions, so A's usage is listed, not one GENERAL root.
+    """
+    builtin = ("deprecated", "versionInfo", "priorVersion", "backwardCompatibleWith", "incompatibleWith")
+    owner_map_rows = rows(
+        ('"x"', f"<{RDF}type>", A, "", ""),
+        *(('"x"', f"<{OWL}{name}>", '"v"', "", "") for name in builtin),
+    )
+    async with fuseki(ONTOLOGY_RESULT, entity_result((A, "Class")), owner_map_rows) as http:
+        await pre_caching_stage(job(settings, 10), http, hooks=HOOKS_USED)
+    roots, refs, _ = tables(settings, 10)
+    assert [(kind, label, predicate) for _, kind, label, _, _, predicate in roots] == [("assertion", "x", f"{RDF}type")]
+    assert refs == [(A.strip("<>"), 1)]
+
+
+async def test_owner_map_anonymous_thing(settings: Settings) -> None:
+    """Check that a node typed `owl:Thing` is an anonymous individual: its assertions are roots, which name p and B."""
+    owner_map_rows = rows(
+        ('"x"', f"<{RDF}type>", f"<{OWL}Thing>", "", ""),
+        ('"x"', P, B, "", ""),
+    )
+    async with fuseki(ONTOLOGY_RESULT, entity_result((B, "Class"), (P, "ObjectProperty")), owner_map_rows) as http:
+        await pre_caching_stage(job(settings, 11), http, hooks=HOOKS_USED)
+    roots, refs, _ = tables(settings, 11)
+    assert [(kind, label, predicate) for _, kind, label, _, _, predicate in roots] == [
+        ("assertion", "x", P.strip("<>"))
+    ]
+    assert sorted(iri for iri, _ in refs) == [B.strip("<>"), P.strip("<>")]
+
+
+async def test_owner_map_annotated_class_expression_assertion(settings: Settings) -> None:
+    """Check that a reified axiom on an anonymous individual's class assertion to a class expression is left out.
+
+    Its target is a copy of the expression, which the Usage tab's query couldn't find (DESIGN.md §2.5), so the
+    assertion's root names what the expression does, p and B, but not C, in the reified axiom's annotation.
+    """
+    type_, source, property_, target = (
+        f"<{iri}>"
+        for iri in (f"{RDF}type", f"{OWL}annotatedSource", f"{OWL}annotatedProperty", f"{OWL}annotatedTarget")
+    )
+    restriction = [(f"<{OWL}onProperty>", P), (f"<{OWL}someValuesFrom>", B)]
+    owner_map_rows = rows(
+        ('"x"', type_, "", '"e"', ""),
+        *(('"e"', predicate, item, "", "") for predicate, item in restriction),
+        ('"c"', type_, f"<{OWL}Axiom>", "", ""),
+        ('"c"', source, "", '"x"', ""),
+        ('"c"', property_, type_, "", ""),
+        ('"c"', target, "", '"f"', ""),
+        ('"c"', N, C, "", ""),
+        *(('"f"', predicate, item, "", "") for predicate, item in restriction),
+    )
+    known = entity_result((B, "Class"), (C, "Class"), (P, "ObjectProperty"), (N, "AnnotationProperty"))
+    async with fuseki(ONTOLOGY_RESULT, known, owner_map_rows) as http:
+        await pre_caching_stage(job(settings, 12), http, hooks=HOOKS_USED)
+    roots, refs, _ = tables(settings, 12)
+    assert [(kind, label, predicate) for _, kind, label, _, _, predicate in roots] == [("assertion", "x", f"{RDF}type")]
+    assert sorted(iri for iri, _ in refs) == [B.strip("<>"), P.strip("<>")]
