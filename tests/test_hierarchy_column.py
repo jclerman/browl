@@ -17,10 +17,10 @@ import browl.hierarchy
 import browl.hierarchy_column
 import browl.lookup
 from browl.derived import EntityType
-from browl.fuseki import FusekiClient, SparqlError
+from browl.fuseki import UNION_FROM, FusekiClient, SelectResult, SparqlError
 from browl.hierarchy import CHILD_PAGE
 from browl.hierarchy_column import MAX_COLUMN_DEPTH, NO_NAMED_TYPE, IndividualTypes, fetch_types
-from browl.rdf import OWL, RDF
+from browl.rdf import IRI, OWL, RDF, Literal
 from tests.helpers import connect, derived_stage, fuseki_dataset, make_app, make_settings
 from tests.test_trees import (
     CLASS_EDGES,
@@ -687,3 +687,28 @@ async def test_fetch_types(
         async with httpx2.AsyncClient(base_url=fuseki_url) as http:
             types = await fetch_types(FusekiClient(http), dataset, ex("ind"))
     assert types == IndividualTypes(tuple(ex(name) for name in expected), 3)
+
+
+@pytest.mark.anyio
+async def test_fetch_types_union(fuseki_url: str) -> None:
+    """Check that with the imports' dataset clause, a type stated in two graphs is read and counted once."""
+    a_type, b_type = (f"<{ex('ind')}> <{RDF}type> <{ex(name)}> .\n" for name in "AB")
+    graphs = {None: a_type, "http://example.org/import": a_type + b_type, "http://example.org/other": a_type}
+    triples: dict[str | None, bytes] = {graph: text.encode() for graph, text in graphs.items()}
+    with fuseki_dataset(fuseki_url, triples) as dataset:
+        async with httpx2.AsyncClient(base_url=fuseki_url) as http:
+            types = await fetch_types(FusekiClient(http), dataset, ex("ind"), UNION_FROM)
+    assert types == IndividualTypes((ex("A"), ex("B")), 2)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("found", [None, Literal("A")], ids=["unbound", "literal"])
+async def test_fetch_types_malformed(found: Literal | None) -> None:
+    """Check that a row of the types query with no type is an error."""
+
+    class Sparql:
+        async def select(self, *args: object) -> SelectResult:
+            return SelectResult(("type",), [(IRI(ex("A")),), (found,)])
+
+    with pytest.raises(SparqlError, match="no type"):
+        await fetch_types(Sparql(), "dataset", ex("ind"))  # type: ignore[arg-type]

@@ -29,7 +29,7 @@ from browl.hierarchy import (
 from browl.links import read_entity_links
 from browl.pages import TREES, TreePage, link_root, tree_href, tree_path
 from browl.precache.core import PREFIXES, sparql_file
-from browl.rdf import IRI, Literal
+from browl.rdf import IRI
 from browl.trees import (
     COLUMN_IDS,
     INDIVIDUAL_COLUMN_ID,
@@ -60,7 +60,6 @@ NO_NAMED_TYPE = "No named type"
 
 _TYPES = PREFIXES + sparql_file("individual-types.rq")
 _ENTITY = "$entity"
-_LIMIT = "LIMIT 300"  # the query's, which is valid as it is
 _CLASSES = next(tree for tree in TREES if tree.hierarchy == EntityType.CLASS)
 
 
@@ -106,19 +105,14 @@ async def fetch_types(sparql: FusekiClient, dataset: str, iri: str, dataset_clau
         SparqlError: The query failed, or its result is malformed.
         RDFSyntaxError: The IRI isn't valid.
     """
-    filled = filled_query(_TYPES, dataset_clause, {_ENTITY: f"<{IRI(iri)}>", _LIMIT: f"LIMIT {MAX_ANCESTORS}"})
-    result = await sparql.select(dataset, filled)
-    iris: dict[str, None] = {}  # each once: the imports' merge can repeat one
-    count = 0
+    result = await sparql.select(dataset, filled_query(_TYPES, dataset_clause, {_ENTITY: f"<{IRI(iri)}>"}))
+    column = result.variables.index("type")
+    found: set[IRI] = set()  # each once: the imports' merge can repeat one
     for row in result.rows:
-        found, total = row[result.variables.index("type")], row[result.variables.index("count")]
-        if isinstance(found, IRI):
-            iris[found] = None
-        elif isinstance(total, Literal):
-            count = int(total.value)
-        else:
-            raise SparqlError(f"the individual's types query gave a row with neither a type nor a count: {row!r}")
-    return IndividualTypes(tuple(iris), max(count, len(iris)))
+        if not isinstance(each := row[column], IRI):
+            raise SparqlError(f"the individual's types query gave a row with no type: {row!r}")
+        found.add(each)
+    return IndividualTypes(tuple(sorted(found)[:MAX_ANCESTORS]), len(found))
 
 
 def read_column(
@@ -227,7 +221,9 @@ def _individual_tree(
     link = read_entity_links(connection, [individual.iri], prefix, root)[individual.iri]
     node = TreeNode(id=individual.id, link=link, children=0, descendants=0, individual=True)  # no class's id
     parents[node.id] = [seed for seed in seeds if seed in parents]
-    drawn = _drawn(request, connection, _CLASSES, node.id, parents, [*nodes, node], INDIVIDUAL_COLUMN_ID, False)
+    drawn = _drawn(
+        request, connection, _CLASSES, node.id, parents, [*nodes, node], INDIVIDUAL_COLUMN_ID, with_siblings=False
+    )
     note = None
     if not parents[node.id]:
         note = NO_NAMED_TYPE
