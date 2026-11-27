@@ -1,7 +1,8 @@
 // An entity page's controls (DESIGN.md §2.9): the "Scroll as one page" (U-44) and "Hierarchy" (U-45) toggles, and the
 // hierarchy column's width. The stylesheet reacts to the checkboxes themselves, so they work without JS; this only
 // remembers their states in localStorage, across pages, including those the hash-IRI script moves into <main>. The
-// handle beside the column drags its width, or the arrow keys change it; a double click goes back to the default.
+// handle beside the column drags its width, or the arrow keys change it; a double click goes back to the default. And
+// the header's copy buttons.
 (() => {
   "use strict";
   // Each toggle's checkbox id: its storage key, and its state when none is remembered. Only the other state's value
@@ -114,31 +115,53 @@
     }
   }
 
-  // The header's copy buttons (#180): each copies its CURIE or IRI, and says so in its tooltip and to screen
-  // readers for a moment.
-  const COPIED_FOR = 1500; // ms
+  // The header's copy buttons (DESIGN.md §2.8), hidden in the markup as they need this script: each copies its CURIE
+  // or IRI, and for a moment says whether it did, in its tooltip and name, and in the header's status region, which
+  // screen readers announce.
+  const SAID_FOR = 1500; // ms
+  const restoring = new WeakMap(); // a button's timer that puts back its resting label, `data-label`
+
+  function label(button, text) {
+    button.title = text;
+    button.querySelector(".visually-hidden").textContent = text;
+  }
+
+  // Once for each page's buttons: those served, or those the hash-IRI script moves in.
+  function setUpCopyButtons() {
+    for (const button of document.querySelectorAll(".copy-button[hidden]")) {
+      label(button, button.dataset.label);
+      button.hidden = false;
+    }
+  }
+
   document.addEventListener("click", async (event) => {
     const button = event.target.closest(".copy-button");
     if (!button) {
       return;
     }
-    const label = button.querySelector(".visually-hidden");
-    const before = button.title;
-    let said;
+    let said = "Copied";
     try {
       await navigator.clipboard.writeText(button.dataset.copy);
-      said = "Copied";
-      button.classList.add("copied");
     } catch {
       said = "Couldn't copy";
     }
-    button.title = said;
-    label.textContent = said;
-    setTimeout(() => {
-      button.title = before;
-      label.textContent = before;
-      button.classList.remove("copied");
-    }, COPIED_FOR);
+    button.classList.toggle("copied", said === "Copied");
+    label(button, said);
+    const status = button.closest(".entity-header")?.querySelector(".copy-status");
+    if (status) {
+      status.textContent = said;
+    }
+    clearTimeout(restoring.get(button)); // a second click starts the moment afresh
+    restoring.set(
+      button,
+      setTimeout(() => {
+        label(button, button.dataset.label);
+        button.classList.remove("copied");
+        if (status) {
+          status.textContent = "";
+        }
+      }, SAID_FOR),
+    );
   });
 
   document.addEventListener("change", (event) => {
@@ -162,11 +185,13 @@
 
   restore();
   setUpHandle();
+  setUpCopyButtons();
   const main = document.querySelector("main");
   if (main) {
     new MutationObserver(() => {
       restore();
       setUpHandle();
+      setUpCopyButtons();
     }).observe(main, { childList: true });
   }
 })();

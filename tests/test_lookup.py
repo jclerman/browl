@@ -600,11 +600,13 @@ def test_entity_header(app: FastAPI) -> None:
         '<span class="visually-hidden"> · </span><span class="type-badge">Object property</span></p>'
     ) in text
     assert '<code class="entity-id" dir="ltr">oth:y</code>' in text
-    assert '<button type="button" class="copy-button" data-copy="oth:y" title="Copy the CURIE">' in text
+    assert '<button type="button" class="copy-button" data-copy="oth:y" data-label="Copy the CURIE" hidden>' in text
     start = text.index('<details class="entity-iri">')
     details = text[start : text.index("</details>", start)]
     assert f"<dd>{CODE}http://other.org/y</code> " in details
-    assert '<button type="button" class="copy-button" data-copy="http://other.org/y" title="Copy the IRI">' in details
+    assert (
+        '<button type="button" class="copy-button" data-copy="http://other.org/y" data-label="Copy the IRI" hidden>'
+    ) in details
     assert "CURIE" not in details  # shown on the line itself
 
 

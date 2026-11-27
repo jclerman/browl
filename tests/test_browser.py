@@ -1581,9 +1581,8 @@ FEW, MANY = "plain", "thing"
 MANY_VALUES = 80
 
 
-@pytest.fixture
-def varied(server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> LiveServer:
-    """Return the server, `FEW` with one annotation and no axioms, `MANY` with `MANY_VALUES` of each (no Fuseki)."""
+def vary_overview(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give each entity's Overview one annotation and no axioms, and `MANY` `MANY_VALUES` of each (no Fuseki)."""
     label, comment = IRI(f"{RDFS}label"), IRI(f"{RDFS}comment")
     string = IRI(f"{XSD}string")
 
@@ -1603,6 +1602,12 @@ def varied(server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> LiveServer:
     monkeypatch.setattr(browl.overview, "fetch_annotations", fetched)
     monkeypatch.setattr(browl.overview, "fetch_value_annotations", no_value_annotations)
     monkeypatch.setattr(browl.overview, "_read_axioms", read_axioms)
+
+
+@pytest.fixture
+def varied(server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> LiveServer:
+    """Return the server, `FEW` with one annotation and no axioms, `MANY` with `MANY_VALUES` of each (no Fuseki)."""
+    vary_overview(monkeypatch)
     return server
 
 
@@ -2095,6 +2100,129 @@ def test_right_to_left_name(page: Page, varied: LiveServer) -> None:
     meta = box(page.locator(".entity-meta"))
     assert box(heading)["y"] + box(heading)["height"] <= meta["y"]
     assert box(page.locator(".entity-type"))["x"] <= box(heading)["x"] + 1
+
+
+PUN, PUN_CURIE = "pun", "ex:pun"
+"""`headed`'s entity with a CURIE and three types, and that CURIE; its `FEW` has no CURIE and one type."""
+
+
+@pytest.fixture
+def headed(live_server: Callable[[FastAPI], LiveServer], monkeypatch: pytest.MonkeyPatch) -> LiveServer:
+    """Return a live server with `PUN` and `FEW`, at /example.org/…, their Overviews as `varied`'s (no Fuseki)."""
+    vary_overview(monkeypatch)
+    pun = f"{EX}/{PUN}"
+    entities = [(pun, kind) for kind in (EntityType.CLASS, EntityType.OBJECT_PROPERTY, EntityType.ANNOTATION_PROPERTY)]
+    server = live_server(make_app(BASE_URL="http://localhost:8000/"))
+    stage = derived_stage([*entities, (f"{EX}/{FEW}", EntityType.CLASS)], names={pun: ("A pun", PUN_CURIE)})
+    server.app.state.jobs.register(Stage.PRE_CACHING, stage)
+    server.call(server.app.state.jobs.start())
+    server.call(server.app.state.jobs.wait())
+    return server
+
+
+def pause_clock(page: Page) -> None:
+    """Stop the page's clock, installed before it loaded, so that only `page.clock.run_for` moves it."""
+    now: float = page.evaluate("Date.now()")
+    page.clock.pause_at(datetime.fromtimestamp(now / 1000 + 1, UTC))
+
+
+def copy_button(page: Page, label: str) -> Locator:
+    """Return the header's copy button with a resting label, e.g. "Copy the IRI"."""
+    return page.locator(f".copy-button[data-label='{label}']")
+
+
+def clipboard(page: Page) -> str:
+    """Return the clipboard's text."""
+    result: str = page.evaluate("navigator.clipboard.readText()")
+    return result
+
+
+def expect_said(page: Page, button: Locator, said: str, label: str) -> None:
+    """Check that a copy button says what happened in its tooltip and name and to screen readers, or that it doesn't.
+
+    It says nothing, and has its resting label, if `said` is empty.
+    """
+    expect(button).to_have_accessible_name(said or label)
+    expect(button).to_have_attribute("title", said or label)
+    expect(page.locator(".entity-header [role='status']")).to_have_text(said)
+
+
+@pytest.mark.parametrize(("label", "value"), [("Copy the CURIE", PUN_CURIE), ("Copy the IRI", f"{EX}/{PUN}")])
+def test_copy_button(page: Page, headed: LiveServer, label: str, value: str) -> None:
+    """Check that a copy button copies its value, and says so for a moment, also after a second click (review M3, S1).
+
+    A second click within the moment starts it afresh; after it, the button has its label back.
+    """
+    page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+    page.clock.install()
+    page.goto(f"{headed.url}/example.org/{PUN}")
+    pause_clock(page)
+    page.locator(".entity-iri summary").click()
+    button = copy_button(page, label)
+    expect_said(page, button, "", label)
+    button.click()
+    expect_said(page, button, "Copied", label)
+    expect(button).to_contain_class("copied")
+    assert clipboard(page) == value
+    page.clock.run_for(1000)
+    page.evaluate("navigator.clipboard.writeText('')")
+    button.click()
+    wait_until(page, lambda: clipboard(page) == value, "the second copy")
+    page.clock.run_for(1000)  # past the first click's moment
+    expect_said(page, button, "Copied", label)
+    page.clock.run_for(600)
+    expect_said(page, button, "", label)
+    expect(button).not_to_contain_class("copied")
+
+
+def test_copy_button_fails(page: Page, headed: LiveServer) -> None:
+    """Check that a copy button that can't copy says so for a moment, and isn't marked copied."""
+    page.add_init_script(
+        "Object.defineProperty(Clipboard.prototype, 'writeText', { value: () => Promise.reject(new Error('denied')) })"
+    )
+    page.clock.install()
+    page.goto(f"{headed.url}/example.org/{PUN}")
+    pause_clock(page)
+    button = copy_button(page, "Copy the CURIE")
+    button.click()
+    expect_said(page, button, "Couldn't copy", "Copy the CURIE")
+    expect(button).not_to_contain_class("copied")
+    page.clock.run_for(1500)
+    expect_said(page, button, "", "Copy the CURIE")
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_copy_button_look(page: Page, headed: LiveServer, scheme: str) -> None:
+    """Check that a copy button is muted, and the success color once it has copied."""
+    page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
+    page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+    page.goto(f"{headed.url}/example.org/{PUN}")
+    button = copy_button(page, "Copy the CURIE")
+    color = "(each) => getComputedStyle(each).color"
+    assert button.evaluate(color) == token_color(page, "muted")
+    button.click()
+    expect(button).to_contain_class("copied")
+    page.mouse.move(0, 0)
+    assert button.evaluate(color) == token_color(page, "done-fg")
+
+
+@NO_JS
+def test_copy_buttons_without_javascript(page: Page, headed: LiveServer) -> None:
+    """Check that, without JavaScript, which they need, the copy buttons are hidden (review S4)."""
+    page.goto(f"{headed.url}/example.org/{PUN}")
+    page.locator(".entity-iri summary").click()
+    expect(page.locator(".entity-iri dd code")).to_be_visible()
+    expect(page.locator(".copy-button")).to_have_count(2)
+    for each in page.locator(".copy-button").all():
+        expect(each).to_be_hidden()
+
+
+def test_copy_button_on_hash_page(page: Page, server: LiveServer) -> None:
+    """Check that a hash entity's page, which the hash-IRI script moves in, gets a working copy button."""
+    page.goto(f"{server.url}/example.org/vocab#Gamma")
+    expect(page.locator("main h1")).to_have_text(f"{EX}/vocab#Gamma")
+    page.locator(".entity-iri summary").click()
+    expect(page.get_by_role("button", name="Copy the IRI")).to_be_visible()
 
 
 def on_top(page: Page, x: float, y: float, selector: str) -> bool:

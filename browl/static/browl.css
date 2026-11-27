@@ -988,6 +988,10 @@ code {
   cursor: pointer;
 }
 
+.copy-button[hidden] {
+  display: none; /* without JS, which they need */
+}
+
 .copy-button:hover,
 .copy-button:focus-visible {
   background: var(--bar-bg);

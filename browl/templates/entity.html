@@ -1,21 +1,20 @@
 {% extends "base.html" %}
 {% from "hierarchy_column.html" import hierarchy_column %}
 {% from "tabs.html" import tab_list, tab_panel %}
+{# Hidden until `static/entity-page.js`, which labels it and copies `value` on a click, shows it. #}
+{% macro copy_button(value, label) -%}
+<button type="button" class="copy-button" data-copy="{{ value }}" data-label="{{ label }}" hidden>
+  <svg aria-hidden="true" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
+       stroke-width="1.5"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/>
+    <path d="M10.5 3.5v-1a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h1"/></svg>
+  <span class="visually-hidden"></span>
+</button>
+{%- endmacro %}
 {% block title %}{{ name | isolate }}{% endblock %}
 {% block content %}
 {# The window-filling frame and the one-page view: `browl.css`. #}
 <div class="entity-page">
-  {# The header (DESIGN.md §2.8), of fixed height. Its first line: its types, as badges, then its name, clamped. Under
-     the name: its CURIE, if any, with a button that copies it, and its IRI folded away, opening over what's below,
-     never the name, with a button that copies it too (`static/entity-page.js`). #}
-  {% macro copy_button(value, label) -%}
-  <button type="button" class="copy-button" data-copy="{{ value }}" title="{{ label }}">
-    <svg aria-hidden="true" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
-         stroke-width="1.5"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/>
-      <path d="M10.5 3.5v-1a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h1"/></svg>
-    <span class="visually-hidden">{{ label }}</span>
-  </button>
-  {%- endmacro %}
+  {# The header: DESIGN.md §2.8; its copy buttons: `static/entity-page.js`. #}
   <div class="entity-header">
     {% set type_text = types | join(" · ") %}
     <p class="entity-type" title="{{ type_text }}">
@@ -36,6 +35,7 @@
         </dl>
       </details>
     </div>
+    <span class="copy-status visually-hidden" role="status"></span>
   </div>
   {% if column %}
   {# The hierarchy column, folded by the control on its left, and widened by dragging the handle on its right. #}
