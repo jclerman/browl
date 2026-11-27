@@ -3241,6 +3241,22 @@ def test_column_rows_stick_below_wrapped_heading(page: Page, trees: LiveServer) 
     assert abs(box(column.locator(".tree-row", has=tree_item(page, "Top")))["y"] - top) < 2
 
 
+def test_hash_entity_column_rows_stick(page: Page, live_server: Callable[[FastAPI], LiveServer]) -> None:
+    """Check that the hierarchy column of a page the hash-IRI script moves in has its rows stick below its heading."""
+    server = live_server(make_app())
+    top, leaf = f"{EX}/Top", f"{EX}/vocab#Leaf"
+    entities = [(top, EntityType.CLASS), (leaf, EntityType.CLASS)]
+    server.app.state.jobs.register(Stage.PRE_CACHING, derived_stage(entities, edges=[(leaf, SUB_CLASS, top)]))
+    server.call(server.app.state.jobs.start())
+    server.call(server.app.state.jobs.wait())
+    page.set_viewport_size(WIDE)
+    page.goto(f"{server.url}/vocab#Leaf")
+    column = hierarchy_column(page)
+    expect(tree_item(page, leaf)).to_be_visible()
+    height = round(box(column.get_by_role("heading"))["height"])
+    expect(column.locator(".tree")).to_have_css("--tree-stick", f"{height}px")
+
+
 def test_column_row_leaves_under_parents(page: Page, trees: LiveServer) -> None:
     """Check that an opened sibling's stuck row, pushed out as its children end, slides under its parent's row."""
     page.set_viewport_size(WIDE)

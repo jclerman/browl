@@ -243,6 +243,7 @@ def test_json() -> None:
 
 
 P, Q = entity("p", EntityKind.OBJECT_PROPERTY), entity("q", EntityKind.OBJECT_PROPERTY)
+SELF = entity("i", EntityKind.NAMED_INDIVIDUAL)
 
 
 @pytest.mark.parametrize(
@@ -267,6 +268,8 @@ P, Q = entity("p", EntityKind.OBJECT_PROPERTY), entity("q", EntityKind.OBJECT_PR
             HEART,
             [("General class axioms", [f"{iri('Heart')} HasKey"])],
         ),
+        (owl.SameIndividual(members=(SELF,)), SELF, [("Same As", [iri("i")])]),
+        (owl.DifferentIndividuals(members=(SELF,)), SELF, [("Different From", [iri("i")])]),
     ],
     ids=[
         "self-inverse",
@@ -276,6 +279,8 @@ P, Q = entity("p", EntityKind.OBJECT_PROPERTY), entity("q", EntityKind.OBJECT_PR
         "self-disjoint",
         "self-equivalent-property",
         "empty-key",
+        "self-same",
+        "self-different",
     ],
 )
 def test_edge_cases(axiom: owl.AnyAxiom, page: Entity, expected: list[tuple[str, list[str]]]) -> None:
@@ -392,6 +397,32 @@ def test_individual_frame() -> None:
         ("Class", ["SubClass Of"]),
         ("Named individual", ["Types"]),
         (None, ["Other axioms"]),
+    ]
+
+
+def test_individual_json() -> None:
+    """Check that an individual's sections round-trip through JSON (#162, AC8).
+
+    That includes each property's group, with its property, an assertion's anonymous individual or literal, a negative
+    assertion's operands, and an empty Types section.
+    """
+    knows, age = entity("knows", EntityKind.OBJECT_PROPERTY), entity("age", EntityKind.DATA_PROPERTY)
+    forty = owl.Literal(lexical="40", datatype="http://www.w3.org/2001/XMLSchema#integer")
+    axioms = [
+        owl.ObjectPropertyAssertion(subject=Z, property=knows, object=owl.AnonymousIndividual(id="_:x")),
+        owl.DataPropertyAssertion(subject=Z, property=age, object=forty),
+        owl.NegativeObjectPropertyAssertion(subject=Z, property=knows, object=A),
+        owl.SameIndividual(members=(A, Z)),
+    ]
+    groups = frame_groups(axioms, Z.iri, [], shown_name, individual=True)
+    adapter = TypeAdapter(list[AxiomGroup])
+    assert adapter.validate_json(adapter.dump_json(groups)) == groups
+    assert [(group.section, group.property) for group in groups] == [
+        (Section.TYPES, None),
+        (Section.SAME_AS, None),
+        (Section.OBJECT_ASSERTIONS, knows),
+        (Section.DATA_ASSERTIONS, age),
+        (Section.NEGATIVE_ASSERTIONS, None),
     ]
 
 
