@@ -1130,6 +1130,17 @@ async def test_closures_stop_at_anonymous_individuals(jvm: None, fuseki_url: str
     ]
 
 
+async def test_anonymous_tagged_literal(jvm: None, fuseki_url: str, settings: Settings) -> None:
+    """Check an anonymous individual's assertion with a language-tagged literal, found by its digest, on the tab."""
+    triples = (
+        f"<{NS}C> {RDF_TYPE} <{OWL_NS}Class> .\n<{NS}name> {RDF_TYPE} <{OWL_NS}DatatypeProperty> .\n"
+        f'_:x {RDF_TYPE} <{NS}C> .\n_:x <{NS}name> "Colour"@en-GB .\n'
+    )
+    async with loaded(fuseki_url, settings, {None: triples.encode()}, "") as small:
+        lines = await usage_lines(small, f"{NS}name")
+    assert [unlabelled(line) for line, _ in lines] == [f'_: <{NS}name> "Colour"@en-gb']
+
+
 COPIED = (
     CLASSES
     + "".join(
