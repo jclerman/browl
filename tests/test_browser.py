@@ -1260,7 +1260,7 @@ def test_annotations_grid_wide(page: Page, annotated: LiveServer) -> None:
     assert value_boxes[1]["y"] >= value_boxes[0]["y"] + value_boxes[0]["height"]  # one line per value
     assert len({round(each["x"]) for each in value_boxes}) == 1  # one value column for every group
     char = page.evaluate("parseFloat(getComputedStyle(document.body).fontSize)")
-    assert box(terms.nth(1))["width"] <= 20 * char + 1  # the long label wraps at 20rem
+    assert box(terms.nth(1))["width"] <= 12 * char + 1  # the long label wraps at 12rem
     comment = value_boxes[3]
     assert 40 * char < comment["width"] < 60 * char  # not squeezed by the long label, and capped near 75ch
     assert comment["height"] > 2 * value_boxes[0]["height"]  # so it wraps
@@ -1430,21 +1430,21 @@ def test_axioms_indented_narrow(page: Page, framed: LiveServer) -> None:
 def test_frame_stacks_by_panel_width(page: Page, framed: LiveServer) -> None:
     """Check that a frame stacks when its panel is narrow, though the window is wide, and not when the panel is wide.
 
-    At 1100px, the panels side by side beside the hierarchy column are each under 36rem; at 1800px, over it.
+    The panels are side by side in a wide window; one capped under 30rem stacks, and over it, it doesn't.
     """
-    page.set_viewport_size({"width": 1100, "height": 800})
+    page.set_viewport_size({"width": 1800, "height": 800})
     page.goto(f"{framed.url}/example.org/thing")
     panel = page.locator("section.axioms")
     char = page.evaluate("parseFloat(getComputedStyle(document.documentElement).fontSize)")
     annotations, axioms = panels(page)
     assert annotations["x"] + annotations["width"] < axioms["x"]  # side by side, in a wide window
-    assert panel.evaluate("(each) => each.clientWidth") < 36 * char
-    assert_axioms_indented(page)
-    page.set_viewport_size({"width": 1800, "height": 800})
-    assert panel.evaluate("(each) => each.clientWidth") >= 36 * char
+    assert panel.evaluate("(each) => each.clientWidth") >= 30 * char
     label, value = box(panel.locator(".frame dt").first), box(panel.locator(".frame dd").first)
     assert abs(label["y"] - value["y"]) < 2  # beside its label
     assert value["x"] > label["x"] + label["width"]
+    panel.evaluate("(each) => { each.style.maxWidth = '28rem'; }")
+    assert panel.evaluate("(each) => each.clientWidth") < 30 * char
+    assert_axioms_indented(page)
 
 
 # The window-filling frame (P-16d, DESIGN.md §2.9, U-30, U-44)

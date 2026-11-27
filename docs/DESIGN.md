@@ -1256,7 +1256,7 @@ Tabs (U-28; see [2.9](#29-page-layout)):
       (`p o q SubPropertyOf: r`); a characteristic (`Functional: p`); an n-ary axiom written as a list
       (`DisjointClasses: A, B, C`); a negative assertion (`not (…)`); an `OtherAxiom`; and every line with no
       subject. An axiom's annotations follow it on its line, in the rest's column (P-49). In a narrow tab (under
-      36rem, as the frames below) the subject goes above its lines, which keep the two columns, a step in.
+      30rem, as the frames below) the subject goes above its lines, which keep the two columns, a step in.
     - **Symmetric axioms subject first:** `EquivalentTo`, `DisjointWith`, `SameAs`, `DifferentFrom`, equivalent and
       disjoint properties and `InverseOf`, in their two-member form, are written with their members sorted, so the
       subject could be on the right. A line has its subject first (`browl.owl.Axiom.with_first`): on Y's tab,
@@ -1539,11 +1539,13 @@ is (below). Uberon's 67 individuals' pages take 14 ms at p50 and 58 ms at p95, t
 - **Compact layout** (U-32): label column and value column in a two-column grid; tight line spacing within a group and a
   little more between groups. Multi-column values for long lists are Later (U-33). Each panel is a `<dl class="frame">`,
   one `<dt>` per group and one `<dd>` per value; in a narrow panel the values go below their label. The label
-  column fits its labels up to 20rem, so a long one, such as an IRI, wraps rather than squeezing the values.
+  column fits its labels up to 12rem, so a long one, such as an IRI, wraps rather than squeezing the values.
   _(P-16a)_ A panel stacks its frame by its own width, with a CSS container query, not by the window's: side by side,
-  or beside the hierarchy column, a panel can be narrow in a wide window. It stacks under 36rem, so two columns leave
-  a value at least 15rem beside a full label column; narrower, values beside a long label wrap mid-IRI, with their
-  axiom annotations' boxes. A panel the page's full width stacks just where a phone's window (under 40rem) did. The
+  or beside the hierarchy column, a panel can be narrow in a wide window. It stacks under 30rem, so two columns leave
+  a value at least 17rem beside a full label column, and the two panels side by side keep two columns in a desktop
+  window (about 1300px and wider), while one squeezed beside the hierarchy column stacks, its values and their axiom
+  annotations' boxes no longer wrapped into a narrow strip. A panel the page's full width stacks about where a
+  phone's window (under 40rem) did. The
   Usage tab switches its own narrow layout the same way. Stacked, each level is a small step (`--frame-step`,
   0.75rem) under the one above, at any width, so a value isn't taken for a label and the nesting reads on a phone
   without costing much width: a value under its label (in the annotations panel, the logical axioms for every kind of

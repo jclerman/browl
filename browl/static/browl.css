@@ -977,11 +977,11 @@ code {
   font-size: 1.1rem;
 }
 
-/* The label column fits its labels up to 20rem, so a long unbroken one, such as an IRI, wraps rather than squeezing
+/* The label column fits its labels up to 12rem, so a long unbroken one, such as an IRI, wraps rather than squeezing
    the values. The stacked layout, for a narrow panel, follows the Usage tab's rules, as it changes them too. */
 .frame {
   display: grid;
-  grid-template-columns: fit-content(20rem) minmax(0, 1fr);
+  grid-template-columns: fit-content(12rem) minmax(0, 1fr);
   column-gap: var(--space);
   margin: 0;
 }
@@ -1021,7 +1021,7 @@ code {
    them, under none (DESIGN.md §2.8). One grid holds them all, so the values line up across the headings. */
 .frame-kinds {
   display: grid;
-  grid-template-columns: fit-content(20rem) minmax(0, 1fr);
+  grid-template-columns: fit-content(12rem) minmax(0, 1fr);
   column-gap: var(--space);
 }
 
@@ -1152,10 +1152,10 @@ code {
   container: panel / inline-size;
 }
 
-/* A frame in a panel narrower than 36rem stacks. Two columns then leave a value at least 15rem beside a label column
-   of up to 20rem; narrower, values beside a long label wrap mid-IRI. A panel the page's full width stacks just where
-   a phone's window (under 40rem) did. */
-@container panel (width < 36rem) {
+/* A frame in a panel narrower than 30rem stacks. Two columns then leave a value at least 17rem beside a label column
+   of up to 12rem, so the panels side by side keep two columns in a desktop window, and a panel squeezed beside the
+   hierarchy column stacks. A panel the page's full width stacks about where a phone's window (under 40rem) did. */
+@container panel (width < 30rem) {
   .frame,
   .frame-kinds {
     grid-template-columns: minmax(0, 1fr);
