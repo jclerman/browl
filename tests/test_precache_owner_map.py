@@ -302,3 +302,37 @@ async def test_owner_map_annotated_class_expression_assertion(settings: Settings
     roots, refs, _ = tables(settings, 12)
     assert [(kind, label, predicate) for _, kind, label, _, _, predicate in roots] == [("assertion", "x", f"{RDF}type")]
     assert sorted(iri for iri, _ in refs) == [B.strip("<>"), P.strip("<>")]
+
+
+class CountedEdges(set):
+    """A node's edges that count how many times they're iterated."""
+
+    iterations = 0
+
+    def __iter__(self):
+        """Count an iteration, and iterate."""
+        self.iterations += 1
+        return super().__iter__()
+
+
+def test_owner_map_reified_edges_scanned_once() -> None:
+    """Check that finding the roots scans each node's edges a few times, not once per edge of a reified axiom.
+
+    One reified axiom has 1,000 `owl:annotatedSource` edges to anonymous individuals, and 1,000 reified axioms each have
+    the same blank node as source.
+    """
+    many = 1_000
+    axiom, annotated = (f"{RDF}type", f"{OWL}Axiom"), f"{OWL}annotated"
+    triples = owner_map_module._Triples()
+    triples.children["c"] = CountedEdges(
+        {axiom, (f"{annotated}Property", f"{RDF}type"), (f"{annotated}Target", A.strip("<>"))}
+        | {(f"{annotated}Source", f"_:x{i}") for i in range(many)}
+    )
+    for i in range(many):
+        triples.children[f"x{i}"] = CountedEdges({(f"{RDF}type", A.strip("<>"))})
+        triples.children[f"a{i}"] = CountedEdges(
+            {axiom, (f"{annotated}Source", "_:s"), (f"{annotated}Property", f"{OWL}onProperty")}
+        )
+    triples.children["s"] = CountedEdges({(f"{OWL}onProperty", P.strip("<>"))})
+    owner_map_module._Walk(triples)
+    assert max(edges.iterations for edges in triples.children.values()) <= 4

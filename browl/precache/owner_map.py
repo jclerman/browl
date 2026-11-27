@@ -234,9 +234,11 @@ class _Walk:
         self._annotations: dict[str, list[str]] = {}
         self._linked: set[str] = set()  # blank nodes in another's root
         self._copies: set[str] = set()  # copies of a main triple's blank node, as a reified axiom's target or source
+        predicates: dict[str, set[str]] = {}  # a reified axiom's blank source's predicates, found once per source
         for node, edges in children.items():
             reified = node in self._reified
-            property_ = next((o for p, o in edges if p == _PROPERTY), None) if reified else None
+            annotated = {p: o for p, o in edges if p in (_PROPERTY, _TARGET)} if reified else {}
+            property_, target = annotated.get(_PROPERTY), annotated.get(_TARGET)
             for predicate, item in edges:
                 if (label := _blank(item)) is None:
                     continue
@@ -245,12 +247,13 @@ class _Walk:
                 elif reified and predicate == _SOURCE and label in self._individuals:
                     # An anonymous individual's assertion's; one whose target is a copy of a class expression is left
                     # out, as the Usage tab's query couldn't find the copy (DESIGN.md §2.5).
-                    target = next((o for p, o in edges if p == _TARGET), None)
                     if isinstance(property_, str) and target is not None:
                         self._on_assertions.setdefault((label, property_, target), []).append(node)
                     self._linked.add(node)
                 elif reified and predicate == _SOURCE:
-                    if any(p == property_ for p, _ in children.get(label, ())):  # it holds the main triple
+                    if label not in predicates:
+                        predicates[label] = {p for p, _ in children.get(label, ())}
+                    if property_ in predicates[label]:  # it holds the main triple
                         self._annotations.setdefault(label, []).append(node)
                         self._linked.add(node)
                     else:
