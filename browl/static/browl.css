@@ -1017,7 +1017,7 @@ code {
   grid-template-columns: max-content minmax(0, 1fr);
   gap: var(--sp-1) var(--sp-4);
   width: max-content;
-  max-width: min(40rem, calc(100vw - 2 * var(--sp-4)));
+  max-width: min(40rem, 100%); /* within the line, from where the name starts to the header's end */
   margin: var(--sp-1) 0 0;
   padding: var(--sp-2) var(--sp-4);
   background: var(--surface);
@@ -1025,6 +1025,17 @@ code {
   border-radius: var(--radius);
   box-shadow: 0 4px 8px rgb(0 0 0 / 15%);
   text-align: start;
+}
+
+/* On a phone, the header's width, below it, rather than the narrower column from where the name starts. */
+@media (width < 40rem) {
+  .entity-header {
+    position: relative;
+  }
+
+  .entity-meta {
+    position: static;
+  }
 }
 
 @media print {

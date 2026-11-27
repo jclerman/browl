@@ -2160,6 +2160,30 @@ def test_iri_box_stacking(page: Page, varied: LiveServer) -> None:
     assert covered_by(page.locator(".entity-iri dl")) == []
 
 
+LONG_TYPES = '<span class="type-badge">Annotation property</span>' * 3
+"""Several long type badges, for an `.entity-type`'s `innerHTML`."""
+
+
+@pytest.mark.parametrize("width", [320, 375, 390, 800])
+def test_iri_box_fits(page: Page, varied: LiveServer, width: int) -> None:
+    """Check that the opened IRI box, with a long IRI, fits the window, below the CURIE's line and clear of the name.
+
+    Phones get the one-page view, where the box takes the header's width; at 800px, the frame, with several long types
+    taking the most room they may.
+    """
+    page.set_viewport_size({"width": width, "height": 700})
+    page.goto(f"{varied.url}/example.org/{FEW}")
+    page.locator(".entity-type").evaluate(f"(each) => {{ each.innerHTML = '{LONG_TYPES}'; }}")
+    page.locator(".entity-iri summary").click()
+    page.locator(".entity-iri dd code").evaluate(f"(each) => {{ each.textContent = '{LONG_IRI}'; }}")
+    assert_fits(page)
+    details, meta, heading = (box(page.locator(each)) for each in (".entity-iri dl", ".entity-meta", "main h1"))
+    assert details["y"] >= meta["y"] + meta["height"]  # below the CURIE's line
+    assert details["y"] >= heading["y"] + heading["height"]  # never over the name
+    if width < 640:
+        assert details["x"] == box(page.locator(".entity-header"))["x"]
+
+
 def test_other_tab_fills_frame(page: Page, varied: LiveServer) -> None:
     """Check that the Usage tab's panel fills the same area, and scrolls within it what doesn't fit."""
     page.set_viewport_size(WIDE)
