@@ -1161,7 +1161,8 @@ no CURIE. _(Q18b)_
 Header, above the tabs (U-5):
 
 - Display name as the title, and the entity type. An IRI with several types (punning) lists them all, e.g.
-  "Class · Object property". _(P-14c)_
+  "Class · Object property", in the navigation bar's order, as the hierarchy column and the logical-axioms panel
+  order them. _(P-14c, P-47)_
 - A `<details>` element with the full IRI and CURIE, closed at first. The IRI is text, not a link: on a browl site it
   often resolves to the page it's on. _(P-14c)_
 - A fixed height, so the panels below start at the same place on every entity page (U-30): the title is clamped to two

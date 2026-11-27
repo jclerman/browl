@@ -280,7 +280,8 @@ async def _page(
     assert tab is not None  # an entity page has tabs
     links = tab_links(tabs, tab, href(request, at.page), at.fragment, href(request, at.panel or at.page))
     entity = entities[0]
-    types = [TYPE_LABELS[each.type] for each in entities]
+    found_types = {each.type for each in entities}
+    types = [TYPE_LABELS[each] for each in EntityType if each in found_types]
     context: dict[str, object] = {"entity": entity, "name": names[entity.iri], "types": types, "tab": tab}
     count = None
     if tab.slug == OVERVIEW:

@@ -229,7 +229,10 @@ class Meta:
 
 
 class EntityType(StrEnum):
-    """An entity's type, as `entity.type` stores it."""
+    """An entity's type, as `entity.type` stores it.
+
+    Declared in the navigation bar's order, as `browl.owl.EntityKind` is, in which pages list an IRI's types.
+    """
 
     ONTOLOGY = "ontology"
     CLASS = "class"
