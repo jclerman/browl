@@ -5,24 +5,37 @@
 {% block content %}
 {# The window-filling frame and the one-page view: `browl.css`. #}
 <div class="entity-page">
-  {# The header (DESIGN.md §2.8), of fixed height: its type and IRI first, then the name, clamped. #}
+  {# The header (DESIGN.md §2.8), of fixed height. Its first line: its types, as badges, then its name, clamped. Under
+     the name: its CURIE, if any, with a button that copies it, and its IRI folded away, opening over what's below,
+     never the name, with a button that copies it too (`static/entity-page.js`). #}
+  {% macro copy_button(value, label) -%}
+  <button type="button" class="copy-button" data-copy="{{ value }}" title="{{ label }}">
+    <svg aria-hidden="true" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
+         stroke-width="1.5"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/>
+      <path d="M10.5 3.5v-1a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h1"/></svg>
+    <span class="visually-hidden">{{ label }}</span>
+  </button>
+  {%- endmacro %}
   <div class="entity-header">
+    {% set type_text = types | join(" · ") %}
+    <p class="entity-type" title="{{ type_text }}">
+      {%- for type in types %}{% if not loop.first %}<span class="visually-hidden"> · </span>{% endif -%}
+      <span class="type-badge">{{ type }}</span>{% endfor -%}
+    </p>
+    <h1 title="{{ name | isolate }}" dir="auto">{{ name }}</h1>
     <div class="entity-meta">
-      {% set type_text = types | join(" · ") %}
-      <p class="entity-type" title="{{ type_text }}">{{ type_text }}</p>
+      {% if entity.curie %}
+      <code class="entity-id" dir="ltr">{{ entity.curie }}</code>
+      {{ copy_button(entity.curie, "Copy the CURIE") }}
+      {% endif %}
       <details class="entity-iri">
         <summary>IRI</summary>
         <dl>
           <dt>IRI</dt>
-          <dd><code dir="ltr">{{ entity.iri }}</code></dd>
-          {% if entity.curie %}
-          <dt>CURIE</dt>
-          <dd><code dir="ltr">{{ entity.curie }}</code></dd>
-          {% endif %}
+          <dd><code dir="ltr">{{ entity.iri }}</code> {{ copy_button(entity.iri, "Copy the IRI") }}</dd>
         </dl>
       </details>
     </div>
-    <h1 title="{{ name | isolate }}" dir="auto">{{ name }}</h1>
   </div>
   {% if column %}
   {# The hierarchy column, folded by the control on its left, and widened by dragging the handle on its right. #}

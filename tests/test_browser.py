@@ -1192,18 +1192,26 @@ def test_entity_header_iri_folded(page: Page, server: LiveServer) -> None:
 
 @pytest.mark.parametrize("scheme", ["light", "dark"])
 def test_entity_header_look(page: Page, server: LiveServer, scheme: str) -> None:
-    """Check that the header's type line and the IRI's summary are muted, unlike the heading."""
+    """Check that the header's types are accent-colored badges, and the IRI's summary muted (#180)."""
     page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
     page.goto(f"{server.url}/example.org/plain")
     color = "(element) => getComputedStyle(element).color"
-    muted = page.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--muted').trim()")
-    probe = page.evaluate(
-        f"""() => {{ const probe = document.createElement('span'); probe.style.color = '{muted}';
-        document.body.append(probe); const value = getComputedStyle(probe).color; probe.remove(); return value; }}"""
-    )
+
+    def computed(name: str) -> str:
+        """Return the computed color a custom property names."""
+        value = page.evaluate(f"getComputedStyle(document.documentElement).getPropertyValue('{name}').trim()")
+        result: str = page.evaluate(
+            f"""() => {{ const probe = document.createElement('span'); probe.style.color = '{value}';
+            document.body.append(probe); const shown = getComputedStyle(probe).color; probe.remove();
+            return shown; }}"""
+        )
+        return result
+
+    muted = computed("--muted")
     heading = page.locator("main h1").evaluate(color)
-    assert page.locator(".entity-type").evaluate(color) == probe != heading
-    assert page.locator(".entity-iri summary").evaluate(color) == probe
+    expect(page.locator(".type-badge")).to_have_text("Class")
+    assert page.locator(".type-badge").evaluate(color) == computed("--accent")
+    assert page.locator(".entity-iri summary").evaluate(color) == muted != heading
 
 
 # The Overview tab's annotations panel (P-16a, DESIGN.md §2.8, U-30, U-32)
@@ -2026,7 +2034,7 @@ def test_toggle_follows_changes(page: Page, varied: LiveServer) -> None:
 
 
 def test_header_fixed_height(page: Page, varied: LiveServer) -> None:
-    """Check that a long name is clamped to two lines, whole in its tooltip, and the opened IRI overlays the panels.
+    """Check that a long name is clamped to one line, whole in its tooltip, and the opened IRI covers what's below.
 
     Neither moves the panels.
     """
@@ -2035,15 +2043,16 @@ def test_header_fixed_height(page: Page, varied: LiveServer) -> None:
     heading = page.locator("main h1")
     expect(heading).to_have_attribute("title", iso(f"{EX}/{FEW}"))
     line = box(heading)["height"]
-    assert box(page.locator(".entity-meta"))["x"] < box(heading)["x"]  # type and IRI first
+    meta = box(page.locator(".entity-meta"))
+    assert box(heading)["y"] + box(heading)["height"] <= meta["y"]  # the CURIE and IRI on a line below
     shown = panels(page)
     heading.evaluate("(each) => { each.textContent = 'long name '.repeat(60); }")
-    assert 1.5 * line < box(heading)["height"] < 2.5 * line
+    assert abs(box(heading)["height"] - line) < 1
     assert panels(page) == shown
     types = page.locator(".entity-type")
     type_line = box(types)["height"]
     types.evaluate("(each) => { each.textContent = 'Class · '.repeat(30); }")
-    assert box(types)["height"] == type_line  # one line, cut short
+    assert box(types)["height"] < 1.5 * type_line  # one line, cut short
     assert types.evaluate("(each) => each.scrollWidth > each.clientWidth")
     assert panels(page) == shown
     page.locator(".entity-iri summary").click()
@@ -2053,19 +2062,39 @@ def test_header_fixed_height(page: Page, varied: LiveServer) -> None:
     header = box(page.locator(".entity-header"))
     details = box(page.locator(".entity-iri dl"))
     assert details["y"] + details["height"] > header["y"] + header["height"]  # over what's below the header
+    assert details["y"] >= box(heading)["y"] + box(heading)["height"]  # never over the name
+
+
+def test_header_one_page_types_whole(page: Page, varied: LiveServer) -> None:
+    """Check that the one-page view shows many types whole, wrapping in their column, clear of the name (#180)."""
+    page.set_viewport_size(MEDIUM)
+    page.goto(f"{varied.url}/example.org/{FEW}")
+    one_page_toggle(page).check()
+    types = page.locator(".entity-type")
+    line = box(types)["height"]
+    types.evaluate(
+        """(each) => { each.innerHTML = '<span class="type-badge">Annotation property</span>'.repeat(6); }"""
+    )
+    assert box(types)["height"] > 1.5 * line  # wrapped, not cut short
+    assert not types.evaluate("(each) => each.scrollWidth > each.clientWidth")
+    badges = types.locator(".type-badge")
+    right = max(box(badges.nth(index))["x"] + box(badges.nth(index))["width"] for index in range(6))
+    assert right <= box(page.locator("main h1"))["x"]
 
 
 def test_right_to_left_name(page: Page, varied: LiveServer) -> None:
     """Check that a right-to-left name is laid out right to left, so cut short it ends in "…" on its left.
 
-    The type and IRI stay first, on the left.
+    The types and the name share a line, the types first, on the left; the CURIE and IRI are on a line below.
     """
     page.set_viewport_size(MEDIUM)
     page.goto(f"{varied.url}/example.org/{FEW}")
     heading = page.locator("main h1")
     heading.evaluate("(each) => { each.textContent = 'שם ארוך '.repeat(60); }")
     assert heading.evaluate("(each) => getComputedStyle(each).direction") == "rtl"
-    assert box(page.locator(".entity-meta"))["x"] < box(heading)["x"]
+    meta = box(page.locator(".entity-meta"))
+    assert box(heading)["y"] + box(heading)["height"] <= meta["y"]
+    assert box(page.locator(".entity-type"))["x"] <= box(heading)["x"] + 1
 
 
 def on_top(page: Page, x: float, y: float, selector: str) -> bool:
@@ -3135,7 +3164,7 @@ def test_iri_box_over_column(page: Page, trees: LiveServer, size: dict[str, int]
     details.evaluate("(each) => each.insertAdjacentHTML('beforeend', '<dt>more</dt><dd>line</dd>'.repeat(20))")
     heading = box(hierarchy_column(page).locator("h2").first)
     shown = box(details)
-    assert shown["x"] < heading["x"] + 8 < shown["x"] + shown["width"]
+    assert shown["x"] < heading["x"] + heading["width"] and heading["x"] < shown["x"] + shown["width"]
     assert shown["y"] < heading["y"] and heading["y"] + heading["height"] < shown["y"] + shown["height"]
     assert covered_by(details) == []
 

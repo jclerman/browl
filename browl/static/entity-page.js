@@ -114,6 +114,33 @@
     }
   }
 
+  // The header's copy buttons (#180): each copies its CURIE or IRI, and says so in its tooltip and to screen
+  // readers for a moment.
+  const COPIED_FOR = 1500; // ms
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest(".copy-button");
+    if (!button) {
+      return;
+    }
+    const label = button.querySelector(".visually-hidden");
+    const before = button.title;
+    let said;
+    try {
+      await navigator.clipboard.writeText(button.dataset.copy);
+      said = "Copied";
+      button.classList.add("copied");
+    } catch {
+      said = "Couldn't copy";
+    }
+    button.title = said;
+    label.textContent = said;
+    setTimeout(() => {
+      button.title = before;
+      label.textContent = before;
+      button.classList.remove("copied");
+    }, COPIED_FOR);
+  });
+
   document.addEventListener("change", (event) => {
     const toggle = TOGGLES[event.target.id];
     if (toggle) {

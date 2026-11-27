@@ -1160,16 +1160,23 @@ no CURIE. _(Q18b)_
 
 Header, above the tabs (U-5):
 
-- Display name as the title, and the entity type. An IRI with several types (punning) lists them all, e.g.
-  "Class · Object property", in the navigation bar's order, as the hierarchy column and the logical-axioms panel
-  order them. _(P-14c, P-47)_
-- A `<details>` element with the full IRI and CURIE, closed at first. The IRI is text, not a link: on a browl site it
-  often resolves to the page it's on. _(P-14c)_
-- A fixed height, so the panels below start at the same place on every entity page (U-30): the title is clamped to two
-  lines, with the full name in its tooltip; the type and the IRI's `<details>` come first, to its left, the type on one
-  line, cut short if need be, with all the types in its tooltip; the opened IRI and CURIE overlay the page rather than
-  push it down. The one-page view (U-44, 2.9) shows the title and types whole, the header still at least two
-  title lines high, so switching views doesn't move a short name. _(P-16d)_
+- Two lines (#180), for an audience of domain experts first and ontologists second. The first: the entity's types,
+  then its display name as the title. The types are badges, small, uppercase, in the accent on a tint of it, one per
+  type for an IRI with several (punning), in the navigation bar's order, as the hierarchy column and the
+  logical-axioms panel order them, separated by a visually hidden " · " for screen readers and copied text; they take
+  at most 40% of the width. _(P-14c, P-47)_
+- The second, starting where the name starts: the CURIE, if there is one, muted and monospace, with a button that
+  copies it, then "▸ IRI", a `<details>` element, closed at first, whose box shows the full IRI with a button that
+  copies the IRI (`static/entity-page.js`; it says "Copied" in its tooltip and to screen readers for a moment). The
+  CURIE is shown, as it says at once where the entity is defined; the full IRI, inline, was too noisy, and it's also
+  in the address bar. The IRI is text, not a link: on a browl site it often resolves to the page it's on. _(P-14c)_
+- A fixed height, so the panels below start at the same place on every entity page (U-30): `--header-height`, one
+  title line (`--title-lines`) and the second line (`--meta-row`). In the window-filling frame the title is clamped to
+  one line, with the full name in its tooltip, and the types to one line, cut short if need be, with all of them in
+  its tooltip. The opened IRI box opens below the second line, over the tabs, panels and hierarchy column rather than
+  pushing them down, and never over the name; in print it takes its own room. The one-page view (U-44, 2.9) shows the
+  title whole and the types whole, wrapping in their column, the header still at least `--header-height` high, so
+  switching views doesn't move a short name. _(P-16d)_
 
 Tabs (U-28; see [2.9](#29-page-layout)):
 
@@ -1763,8 +1770,8 @@ Every page has the same frame (U-27, U-28, U-29):
 │ <ontology name>   [ Search… ]   Classes  Object props  Admin sign-in │  navigation bar
 │                    Data props  Annotation props    hosted with browl │
 ├──────────────────────────────────────────────────────────────────────┤
-│  Class  Heart                                                        │  page header
-│  ▸ IRI                                                               │
+│  CLASS  Heart                                                        │  page header
+│         UBERON:0000948 ⧉  ▸ IRI                                      │
 │  Overview   Usage (128)                         ☐ Scroll as one page │  page tabs
 │  ═════════────────────────────────────────────────────────────────── │
 │  ┌ Annotations ───────────────┐  ┌ Logical axioms ────────────────┐  │  tab panel: the rest
