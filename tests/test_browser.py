@@ -1259,7 +1259,7 @@ def test_annotations_grid_wide(page: Page, annotated: LiveServer) -> None:
     value_boxes = [box(values.nth(index)) for index in range(6)]
     assert value_boxes[1]["y"] >= value_boxes[0]["y"] + value_boxes[0]["height"]  # one line per value
     assert len({round(each["x"]) for each in value_boxes}) == 1  # one value column for every group
-    char = page.evaluate("parseFloat(getComputedStyle(document.body).fontSize)")
+    char = page.evaluate("parseFloat(getComputedStyle(document.documentElement).fontSize)")
     assert box(terms.nth(1))["width"] <= 12 * char + 1  # the long label wraps at 12rem
     comment = value_boxes[3]
     assert 40 * char < comment["width"] < 60 * char  # not squeezed by the long label, and capped near 75ch
@@ -1517,7 +1517,7 @@ def test_panels_fixed(page: Page, varied: LiveServer, size: dict[str, int]) -> N
             assert overflows(page.locator(f"section.{each}")) is (entity == MANY)
     assert boxes[0] == boxes[1]
     annotations, axioms = boxes[0]
-    space = page.evaluate("parseFloat(getComputedStyle(document.body).fontSize)")
+    space = page.evaluate("parseFloat(getComputedStyle(document.documentElement).fontSize)")
     assert abs(axioms["y"] + axioms["height"] - (size["height"] - space)) < 2  # down to the window's padding
     if size == WIDE:
         assert annotations["y"] == axioms["y"] and annotations["height"] == axioms["height"]
@@ -3284,7 +3284,7 @@ def test_column_row_leaves_under_parents(page: Page, trees: LiveServer) -> None:
     assert "Top" in hit and "Big" not in hit
 
 
-WRAPPED_BAR = {"width": 900, "height": 800}
+WRAPPED_BAR = {"width": 780, "height": 800}
 """A window in which the navigation bar wraps, onto two lines."""
 
 
