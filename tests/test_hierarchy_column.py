@@ -632,6 +632,18 @@ def test_individual_types_left_out(app: FastAPI, monkeypatch: pytest.MonkeyPatch
     assert f'<p class="note">{note.replace("'", "&#39;")}</p>' in found.html
 
 
+def test_individual_types_left_out_none_shown(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that if none of the types read is in the class hierarchy but more were left out, the note says so.
+
+    One left out may be a named class, so it doesn't say "No named type".
+    """
+    with_types(monkeypatch, "Nowhere", count=5)
+    with loaded(app, individual_stage()) as client:
+        found = column(client, "/ind")
+    assert shown(found) == [(0, IND)]
+    assert re.findall(r'<p class="note">([^<]*)</p>', found.html) == ["4 more types aren&#39;t shown."]
+
+
 def test_individual_ancestors_capped(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that past `MAX_ANCESTORS`, an individual's tree keeps the ancestors nearest its types."""
     monkeypatch.setattr(browl.hierarchy_column, "MAX_ANCESTORS", 3)

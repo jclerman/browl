@@ -1923,8 +1923,8 @@ CSS nesting gets the one-page view, without the toggle. _(P-16d)_
     the tab is read, as the derived database holds no types until P-48's `member`. They're the first level read, so they
     count toward `MAX_ANCESTORS`; past it, the column says how many types are left out ("N more types aren't shown.").
     An individual with no named type in the hierarchy (none, or only class expressions) has a column with the individual
-    alone, noted "No named type". A punned IRI gets this tree after its other hierarchies' trees, as U-45 gives each
-    hierarchy its own, headed "Local hierarchy: Named individual"; its element ids start `hi`
+    alone, noted "No named type" unless types are left out. A punned IRI gets this tree after its other hierarchies'
+    trees, as U-45 gives each hierarchy its own, headed "Local hierarchy: Named individual"; its element ids start `hi`
     (`trees.INDIVIDUAL_COLUMN_ID`). If the types can't be read, that's logged (a timeout without a traceback) and the
     column has no tree for them.
   - **Only the column merges:** the tree pages (P-18) show a node under each of its parents.

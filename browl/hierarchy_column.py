@@ -225,11 +225,11 @@ def _individual_tree(
         request, connection, _CLASSES, node.id, parents, [*nodes, node], INDIVIDUAL_COLUMN_ID, with_siblings=False
     )
     note = None
-    if not parents[node.id]:
-        note = NO_NAMED_TYPE
-    elif types.count > len(types.iris):
+    if types.count > len(types.iris):  # first, as one left out may be in the hierarchy
         left_out = types.count - len(types.iris)
         note = f"{left_out:,} more {"type isn't" if left_out == 1 else "types aren't"} shown."
+    elif not parents[node.id]:
+        note = NO_NAMED_TYPE
     return drawn, note
 
 
