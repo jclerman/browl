@@ -1211,9 +1211,9 @@ code {
   display: inline-block;
   max-width: 100%;
   margin: 0.15em 0;
-  padding: 0.05em 0.5em;
-  border-left: 2px solid var(--annotation-border);
-  border-radius: 0 calc(var(--radius) / 2) calc(var(--radius) / 2) 0; /* round where it has no rule */
+  padding: 0.1em 0.45em;
+  border: 1px solid var(--annotation-border);
+  border-radius: var(--radius);
   background: var(--annotation-bg);
   color: var(--muted);
   font-size: var(--text-xs);

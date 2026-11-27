@@ -1486,19 +1486,19 @@ is (below). Uberon's 67 individuals' pages take 14 ms at p50 and 58 ms at p95, t
   - **Data:** each section (`AxiomGroup`) holds its label and lines; a line (`FrameLine`) its axiom, None for an
     implied equivalent, and the operands it shows, so the JSON API (U-42) returns the frame as the page shows it.
 - **Axiom annotations** _(P-49; U-35)_: an annotation value or a logical axiom shows its axiom's annotations after it,
-  on its line: a box per property, `property: value, value`, small and muted, tinted teal, with no border but a 2px
-  teal rule on its left (`--annotation-bg`, `--annotation-border`): `A hollow, muscular organ … ⟨database cross
+  on its line: a box per property, `property: value, value`, small and muted, tinted teal with a thin teal border
+  (`--annotation-bg`, `--annotation-border`): `A hollow, muscular organ … ⟨database cross
   reference: PMID:1234, ZFA:0000114⟩ ⟨has synonym type: plural form⟩`. The property is a label, as a frame's are: muted
   and not underlined, in the accent and underlined on hover; the template marks it (`annotation-property`), so a value
   that's a link keeps its underline. Properties and values are sorted as the annotations panel's are, with
   no language ranking (`browl.annotations.shown_annotations`). A box doesn't split across lines: it moves to the next if
   it doesn't fit, and one wider than its line wraps within it, its first line on the text's; its padding keeps the
-  rule off the text, and its margin off the lines above and below. An annotation's own annotations are boxes within
+  border off the text, and its margin off the lines above and below. An annotation's own annotations are boxes within
   its value's box. Values and links render as an annotation's do, and a blank value (an anonymous individual) is left
   out, as in the panel. The boxes are the template's markup (`annotations.html`'s `axiom_annotations`), outside each
   value's `<bdi>`, so a value's own text can't pass for an annotation; visually hidden brackets around each keep where
   it starts and ends in what screen readers read and in copied text. `--muted` and `--accent` are AA on the tint in both
-  themes, and the rule is 3:1 or more against the page and the cards; the page's entity, marked where it's in them, is
+  themes, and the border is 3:1 or more against the page and the cards; the page's entity, marked where it's in them, is
   `--fg` on `--mark-bg`, where `--muted` isn't AA in the dark theme.
   - **Annotations panel:** a second query (`entity-value-annotations.rq`), run alongside the panel's, reads the
     annotations of the reified `owl:Axiom`s whose source is the entity, whose property is an annotation property
