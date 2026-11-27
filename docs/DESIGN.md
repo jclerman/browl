@@ -1582,7 +1582,8 @@ axioms of each.
      and lists, to a blank node nothing links to but an axiom annotation;
    - the triples where another named entity states a symmetric axiom with it as the object: `owl:disjointWith`,
      `owl:equivalentClass`, `owl:equivalentProperty`, `owl:propertyDisjointWith`, `owl:inverseOf`, `owl:sameAs`,
-     `owl:differentFrom`;
+     `owl:differentFrom`; and an anonymous individual's `owl:sameAs` or `owl:differentFrom` with it, as a bare triple,
+     since the first query drops a blank node linked from elsewhere _(P-47)_;
    - the named types of every IRI they mention, so the OWLAPI parses each as the kind of entity it is.
 
    Each query sees the imports when the ontology has any (`browl.fuseki.UNION_FROM`, 2.4).

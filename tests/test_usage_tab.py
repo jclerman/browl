@@ -35,7 +35,7 @@ from browl.owlapi import ntriples_ontology
 from browl.pager import PageLink
 from browl.pages import templates
 from browl.precache.stage import pre_cache
-from browl.rdf import IRI
+from browl.rdf import IRI, RDF
 from browl.settings import Settings
 from browl.usage_tab import (
     UsageFragments,
@@ -1066,6 +1066,37 @@ async def test_symmetric_on_both_tabs(jvm: None, fuseki_url: str, settings: Sett
     [section] = frame_groups(axioms, f"{NS}A", [], str)
     assert section.label == "Disjoint With"
     assert [owl.manchester_text(line.manchester_tokens()) for line in section.lines] == [f"<{NS}Z>"]
+
+
+@pytest.mark.parametrize(("predicate", "label"), [("sameAs", "Same As"), ("differentFrom", "Different From")])
+@pytest.mark.parametrize("link", ["property", "member"])
+async def test_linked_anonymous_same_or_different(
+    jvm: None, fuseki_url: str, settings: Settings, predicate: str, label: str, link: str
+) -> None:
+    """Check `_:x SameAs a`, `_:x` linked from elsewhere, on a's Overview, not its Usage tab, as an unlinked one is.
+
+    `_:x` is linked as `b knows _:x`, or as a member of an n-ary `DifferentIndividuals`.
+    """
+    declared = "".join(f"<{NS}{name}> {RDF_TYPE} <{OWL_NS}NamedIndividual> .\n" for name in "ab")
+    declared += f"<{NS}knows> {RDF_TYPE} <{OWL_NS}ObjectProperty> .\n"
+    if link == "property":
+        linked = f"<{NS}b> <{NS}knows> _:x .\n"
+    else:
+        linked = (
+            f"_:d {RDF_TYPE} <{OWL_NS}AllDifferent> .\n_:d <{OWL_NS}distinctMembers> _:l .\n"
+            f"_:l <{RDF}first> _:x .\n_:l <{RDF}rest> _:m .\n_:m <{RDF}first> <{NS}b> .\n_:m <{RDF}rest> <{RDF}nil> .\n"
+        )
+    triples = f"{declared}{linked}_:x <{OWL_NS}{predicate}> <{NS}a> .\n"
+    async with loaded(fuseki_url, settings, {None: triples.encode()}, "") as small:
+        assert await read_usages(small, f"{NS}a") == []
+        fragment = await fetch_fragment(small.sparql, small.dataset, f"{NS}a", small.dataset_clause)
+    axioms = await owlapi.run_java(entity_axioms, fragment.ntriples, f"{NS}a")
+    sections = frame_groups(axioms, f"{NS}a", [], str, individual=True)
+    shown = [
+        (each.label, [unlabelled(owl.manchester_text(line.manchester_tokens())) for line in each.lines])
+        for each in sections
+    ]
+    assert shown == [("Types", []), (label, ["_:"])]
 
 
 COPIED = (

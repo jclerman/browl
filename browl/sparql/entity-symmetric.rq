@@ -1,6 +1,8 @@
 # The symmetric axioms stated on another named entity, with this one as the object: `A owl:disjointWith <entity>`
-# belongs to both pages (DESIGN.md §2.8). Blank subjects are roots, which entity-axioms.rq finds. `$entity` stands for
-# the entity's IRI, and browl.axioms adds the dataset clause before WHERE.
+# belongs to both pages (DESIGN.md §2.8). Blank subjects are roots, which entity-axioms.rq finds, but for an anonymous
+# individual's owl:sameAs or owl:differentFrom: its bare triple, as entity-axioms.rq drops a blank node linked from
+# elsewhere (DESIGN.md §2.5). `$entity` stands for the entity's IRI, and browl.axioms adds the dataset clause before
+# WHERE.
 CONSTRUCT { ?subject ?predicate $entity }
 WHERE {
   VALUES ?predicate {
@@ -8,5 +10,5 @@ WHERE {
     owl:differentFrom
   }
   ?subject ?predicate $entity
-  FILTER isIRI(?subject)
+  FILTER (isIRI(?subject) || ?predicate IN (owl:sameAs, owl:differentFrom))
 }
