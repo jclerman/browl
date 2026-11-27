@@ -1473,12 +1473,12 @@ def test_axioms_indented_narrow(page: Page, framed: LiveServer) -> None:
 
 
 def test_frames_dense(page: Page, framed: LiveServer) -> None:
-    """Check the denser frames: a frame's groups 6px apart, and a panel's sides 12px, at the default font size."""
+    """Check the denser frames: a frame's groups 6px apart, on a card with 16px sides, at the default font size."""
     page.set_viewport_size(WIDE)
     page.goto(f"{framed.url}/example.org/thing")
     panel = page.locator("section.axioms")
     assert rem(page) == 16
-    assert panel.evaluate("(each) => getComputedStyle(each).paddingLeft") == "12px"
+    assert panel.evaluate("(each) => getComputedStyle(each).paddingLeft") == "16px"
     group = panel.locator(".frame dt:not(:first-child)").first
     assert group.evaluate("(each) => getComputedStyle(each).marginTop") == "6px"
 
