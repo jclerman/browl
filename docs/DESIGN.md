@@ -1919,13 +1919,14 @@ CSS nesting gets the one-page view, without the toggle. _(P-16d)_
     drawn once, with the individual beneath its types, and no children or siblings; a type with no subclasses is open
     above it. The individual's label leads with a diamond (◆), with "(named individual)" for screen readers, so it isn't
     taken for a class; circles are kept for a class icon, if one is added. Its types are read from Fuseki
-    (`individual-types.rq`, `hierarchy_column.fetch_types`: by IRI, at most `MAX_ANCESTORS`, with their count), as the
-    derived database holds no types until P-48's `member`. They're the first level read, so they count toward
-    `MAX_ANCESTORS`; past it, the column says how many types are left out ("N more types aren't shown."). An individual
-    with no named type in the hierarchy (none, or only class expressions) has a column with the individual alone, noted
-    "No named type". A punned IRI gets this tree after its other hierarchies' trees, as U-45 gives each hierarchy its
-    own, headed "Local hierarchy: Named individual"; its element ids start `hi` (`trees.INDIVIDUAL_COLUMN_ID`). If the
-    types can't be read, that's logged and the column has no tree for them.
+    (`individual-types.rq`, `hierarchy_column.fetch_types`: by IRI, at most `MAX_ANCESTORS`, with their count), while
+    the tab is read, as the derived database holds no types until P-48's `member`. They're the first level read, so they
+    count toward `MAX_ANCESTORS`; past it, the column says how many types are left out ("N more types aren't shown.").
+    An individual with no named type in the hierarchy (none, or only class expressions) has a column with the individual
+    alone, noted "No named type". A punned IRI gets this tree after its other hierarchies' trees, as U-45 gives each
+    hierarchy its own, headed "Local hierarchy: Named individual"; its element ids start `hi`
+    (`trees.INDIVIDUAL_COLUMN_ID`). If the types can't be read, that's logged (a timeout without a traceback) and the
+    column has no tree for them.
   - **Only the column merges:** the tree pages (P-18) show a node under each of its parents.
   - **Nodes** are the tree pages': counts, expansion through `?node=`, keyboard use, rows that stick while their
     children scroll past, and deprecated entities struck through (U-46, P-39). The entity's node is marked as in its

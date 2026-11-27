@@ -35,7 +35,7 @@ from browl.derived import (
     is_hash_prefix,
     read_meta,
 )
-from browl.fuseki import SparqlError
+from browl.fuseki import SparqlError, SparqlTimeoutError
 from browl.hierarchy_column import IndividualTypes, fetch_types, read_column
 from browl.home import read_home
 from browl.jobs import JobState
@@ -70,6 +70,7 @@ from browl.tabs import (
     tab_links,
     with_query,
 )
+from browl.tasks import task_group
 from browl.urls import FALLBACK_PATH, fallback_path
 from browl.usage_tab import (
     POLL_S,
@@ -283,61 +284,64 @@ async def _page(
     found_types = {each.type for each in entities}
     types = [TYPE_LABELS[each] for each in EntityType if each in found_types]
     context: dict[str, object] = {"entity": entity, "name": names[entity.iri], "types": types, "tab": tab}
-    count = None
-    if tab.slug == OVERVIEW:
-        individual = any(each.type == EntityType.NAMED_INDIVIDUAL for each in entities)
-        context["overview"] = await read_overview(request, state, entity.iri, individual=individual)
-    elif tab.slug == USAGE:
-        page = read_page(request)
-        if page == 1 and PAGE_PARAM in request.query_params and not query.panel and at.panel is None:
-            # The first page's URL is without `page`, so each page has one URL; a fragment is kept by the browser.
-            location = href(request, with_query(at.page, [(TAB_PARAM, USAGE)]), at.fragment)
-            return Response(status_code=301, headers={"Location": location})
-        if page is None and hash_path is None:
-            return not_found(request)
-        try:
-            usage = await read_usage_tab(request, state, entity.iri, page or 1)
-        except PageNotFoundError:
-            # A poll's page can be past those listed once the table is ready: htmx doesn't swap a 404, so it'd poll on.
-            if hash_path is None and request.headers.get("HX-Trigger") != POLL_ID:
+    individual = next((each for each in entities if each.type == EntityType.NAMED_INDIVIDUAL), None)
+    async with task_group() as group:
+        # Its types are read while its tab is, for the page's column, not a panel's (below).
+        types_task = None
+        if individual is not None and not query.panel:
+            types_task = group.create_task(_individual_types(request, state, individual))
+        count = None
+        if tab.slug == OVERVIEW:
+            is_individual = individual is not None
+            context["overview"] = await read_overview(request, state, entity.iri, individual=is_individual)
+        elif tab.slug == USAGE:
+            page = read_page(request)
+            if page == 1 and PAGE_PARAM in request.query_params and not query.panel and at.panel is None:
+                # The first page's URL is without `page`, so each page has one URL; a fragment is kept by the browser.
+                location = href(request, with_query(at.page, [(TAB_PARAM, USAGE)]), at.fragment)
+                return Response(status_code=301, headers={"Location": location})
+            if page is None and hash_path is None:
                 return not_found(request)
-            usage = await read_usage_tab(request, state, entity.iri, 1)
-        context["usage"] = usage
-        context["pager"] = _pager(request, at, usage)
-        context["poll"] = None
-        if usage.preparing:
-            params = [(TAB_PARAM, USAGE), *page_params(usage.page)]
-            url = href(request, with_query(at.panel or at.page, [*params, (PANEL_PARAM, "1")]))
-            context["poll"] = _Poll(url, POLL_S, remaining_text(usage.remaining_s))
-        count = usage.count
+            try:
+                usage = await read_usage_tab(request, state, entity.iri, page or 1)
+            except PageNotFoundError:
+                # A poll's page can be past those listed once the table is ready: htmx doesn't swap a 404, so it'd
+                # poll on.
+                if hash_path is None and request.headers.get("HX-Trigger") != POLL_ID:
+                    return not_found(request)
+                usage = await read_usage_tab(request, state, entity.iri, 1)
+            context["usage"] = usage
+            context["pager"] = _pager(request, at, usage)
+            context["poll"] = None
+            if usage.preparing:
+                params = [(TAB_PARAM, USAGE), *page_params(usage.page)]
+                url = href(request, with_query(at.panel or at.page, [*params, (PANEL_PARAM, "1")]))
+                context["poll"] = _Poll(url, POLL_S, remaining_text(usage.remaining_s))
+            count = usage.count
     context["tabs"] = _usage_label(request, links, entity.iri, count)
     if query.panel:
         return templates.TemplateResponse(request, "entity_panel.html", context, headers=PANEL_HEADERS)
     # Not in a panel alone, as the tabs keep the page's column.
-    individual_types = await _individual_types(request, state, entities)
+    individual_types = None if types_task is None else types_task.result()
     context["column"] = await read_derived(
         request, lambda connection: read_column(request, connection, entities, individual_types), state
     )
     return templates.TemplateResponse(request, "entity.html", context | common)
 
 
-async def _individual_types(
-    request: Request, state: JobState, entities: list[Entity]
-) -> dict[str, IndividualTypes] | None:
-    """Return the named types of the individual among an IRI's entities, for its column, by IRI; None if there's none.
+async def _individual_types(request: Request, state: JobState, individual: Entity) -> IndividualTypes | None:
+    """Return an individual's named types, for its column; None if they can't be read, which is logged.
 
-    If they can't be read, which is logged, there are none, and the column has no tree for them.
+    The column then has no tree for them.
     """
-    individual = next((each for each in entities if each.type == EntityType.NAMED_INDIVIDUAL), None)
-    if individual is None:
-        return None
     generation, clause = ready_store(state)
     try:
-        types = await fetch_types(request.app.state.sparql, dataset_name(generation), individual.iri, clause)
+        return await fetch_types(request.app.state.sparql, dataset_name(generation), individual.iri, clause)
+    except SparqlTimeoutError as error:  # not a fault in browl: no traceback
+        logger.error("Couldn't read the types of %s for its hierarchy column: %s", logged_iri(individual.iri), error)
     except (SparqlError, RDFSyntaxError):
         logger.exception("Couldn't read the types of %s for its hierarchy column", logged_iri(individual.iri))
-        return {}
-    return {individual.iri: types}
+    return None
 
 
 def _hash_script(request: Request, prefix: str, path: str, prefix_only: bool) -> dict[str, str]:

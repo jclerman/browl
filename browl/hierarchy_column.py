@@ -7,7 +7,7 @@ types' ancestors in the class hierarchy, with the individual beneath its types (
 """
 
 import sqlite3
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 
 from fastapi import Request
@@ -119,7 +119,7 @@ def read_column(
     request: Request,
     connection: sqlite3.Connection,
     entities: Sequence[Entity],
-    types: Mapping[str, IndividualTypes] | None = None,
+    types: IndividualTypes | None = None,
 ) -> list[ColumnTree]:
     """Return the hierarchy column of an IRI's page, given its entities, one of each type.
 
@@ -127,22 +127,22 @@ def read_column(
         request: The request.
         connection: The derived database.
         entities: The IRI's entities.
-        types: If it's an individual, its named types (`fetch_types`), by IRI; none, or None, if they couldn't be
-            read, when it has no tree for them.
+        types: If it's an individual, its named types (`fetch_types`); None if it isn't, or they couldn't be read, when
+            it has no tree for them.
 
     Returns:
         A tree for each hierarchy the IRI is in, in the navigation bar's order, then its individual's tree: a punned
         IRI may have several.
     """
+    by_type = {each.type: each for each in entities}
     found: list[tuple[TreePage, ShownList, str, str, str | None]] = []
     for tree in TREES:
-        entity = next((each for each in entities if each.type == tree.hierarchy), None)
+        entity = by_type.get(tree.hierarchy)
         roots = None if entity is None else _merged_tree(request, connection, tree, entity.iri)
         if roots is not None:
             found.append((tree, roots, COLUMN_IDS[tree.hierarchy], tree.label, None))
-    individual = next((each for each in entities if each.type == EntityType.NAMED_INDIVIDUAL), None)
-    if individual is not None and types is not None and (its := types.get(individual.iri)) is not None:
-        roots, note = _individual_tree(request, connection, individual, its)
+    if types is not None:
+        roots, note = _individual_tree(request, connection, by_type[EntityType.NAMED_INDIVIDUAL], types)
         found.append((_CLASSES, roots, INDIVIDUAL_COLUMN_ID, TYPE_LABELS[EntityType.NAMED_INDIVIDUAL], note))
     return [
         ColumnTree(

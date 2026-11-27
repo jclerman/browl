@@ -1,5 +1,6 @@
 """Tests for the hierarchy column on entity pages (P-38, U-45, DESIGN.md §2.9 "Hierarchy column")."""
 
+import asyncio
 import html.parser
 import itertools
 import logging
@@ -7,6 +8,7 @@ import re
 import urllib.parse
 from collections.abc import Iterator
 from contextlib import closing
+from typing import Any
 
 import httpx2
 import pytest
@@ -17,7 +19,7 @@ import browl.hierarchy
 import browl.hierarchy_column
 import browl.lookup
 from browl.derived import EntityType
-from browl.fuseki import UNION_FROM, FusekiClient, SelectResult, SparqlError
+from browl.fuseki import UNION_FROM, FusekiClient, SelectResult, SparqlError, SparqlTimeoutError
 from browl.hierarchy import CHILD_PAGE
 from browl.hierarchy_column import MAX_COLUMN_DEPTH, NO_NAMED_TYPE, IndividualTypes, fetch_types
 from browl.rdf import IRI, OWL, RDF, Literal
@@ -664,9 +666,47 @@ def test_individual_types_fail(app: FastAPI, monkeypatch: pytest.MonkeyPatch, ca
     with loaded(app, individual_stage(EntityType.CLASS)) as client, caplog.at_level(logging.ERROR, "browl.lookup"):
         found = column(client, "/ind")
     assert found.headings == [("Local hierarchy", "/_browl/tree/classes")]  # the class's, alone
-    assert [record.getMessage() for record in caplog.records if record.name == "browl.lookup"] == [
-        f"Couldn't read the types of {ex('ind')} for its hierarchy column"
-    ]
+    [record] = [record for record in caplog.records if record.name == "browl.lookup"]
+    assert record.getMessage() == f"Couldn't read the types of {ex('ind')} for its hierarchy column"
+    assert record.exc_info is not None
+
+
+def test_individual_types_concurrent(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that an individual's types are read while its tab is, not after."""
+    started = asyncio.Event()
+    read_overview = browl.lookup.read_overview
+
+    async def fetched(*args: object) -> IndividualTypes:
+        started.set()
+        return IndividualTypes((ex("Left"),), 1)
+
+    async def overview(*args: Any, **kwargs: Any) -> object:
+        async with asyncio.timeout(5):  # read after the tab, the types would never start
+            await started.wait()
+        return await read_overview(*args, **kwargs)
+
+    monkeypatch.setattr(browl.lookup, "fetch_types", fetched)
+    monkeypatch.setattr(browl.lookup, "read_overview", overview)
+    with loaded(app, individual_stage()) as client:
+        assert shown(column(client, "/ind")) == [(0, "Top"), (1, "Left"), (2, IND)]
+
+
+def test_individual_types_timeout(
+    app: FastAPI, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Check that a timeout reading an individual's types is logged without a traceback, unlike other errors."""
+
+    async def failed(*args: object) -> IndividualTypes:
+        raise SparqlTimeoutError("timed out after 30 s")
+
+    monkeypatch.setattr(browl.lookup, "fetch_types", failed)
+    with loaded(app, individual_stage()) as client, caplog.at_level(logging.ERROR, "browl.lookup"):
+        assert column(client, "/ind").trees == []
+    [record] = [record for record in caplog.records if record.name == "browl.lookup"]
+    assert (
+        record.getMessage() == f"Couldn't read the types of {ex('ind')} for its hierarchy column: timed out after 30 s"
+    )
+    assert record.exc_info is None
 
 
 @pytest.mark.anyio
