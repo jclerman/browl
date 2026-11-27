@@ -1,10 +1,14 @@
 /* browl's stylesheet (DESIGN.md §2.9): soft contrast, muted accents, a dark theme that follows the browser, dense
-   type, and quiet link underlines. The palette, type sizes, spacing and radii are set once, as custom properties;
-   every text color meets WCAG AA (4.5:1) on both backgrounds. */
+   type, quiet link underlines, and what's read on soft cards. The palette, type sizes, spacing and radii are set once,
+   as custom properties; every text color meets WCAG AA (4.5:1) on both the page and the cards' surface, in both
+   themes. */
 
 :root {
   color-scheme: light dark;
-  --bg: #fafaf7;
+  --bg: #f6f5f1; /* the page, under the cards: --muted 5.3:1, --accent 5.2:1 on it */
+  --surface: #ffffff; /* a card's: --muted 5.8:1, --accent 5.7:1 */
+  --card-ring: rgb(0 0 0 / 4%); /* a card's edge */
+  --card-shadow: 0 1px 3px rgb(0 0 0 / 6%);
   --fg: #2b2b2b;
   --muted: #666660;
   --bar-bg: #ecebe4;
@@ -13,7 +17,7 @@
   --danger: #a33a32;
   --mark-bg: #f7eab8; /* the page's entity, in an axiom: --fg 11.7:1, --accent 4.7:1 on it */
   --annotation-bg: #dfeeec; /* an axiom annotation's box: --muted 4.8:1, --accent 4.8:1 on it */
-  --annotation-border: #4f8f88; /* 3.6:1 on --bg */
+  --annotation-border: #4f8f88; /* 3.4:1 on --bg, 3.7:1 on --surface */
   /* A load stage's state (`_load_progress.html`): done, running, failed; not started uses --bar-bg and --muted. */
   --done-bg: #e1f0e1;
   --done-fg: #25622f; /* 6.2:1 on --done-bg */
@@ -56,7 +60,10 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #1d1f21;
+    --bg: #1a1c1e; /* --muted 6.0:1, --accent 6.8:1 */
+    --surface: #25282b; /* --muted 5.2:1, --accent 5.9:1 */
+    --card-ring: rgb(255 255 255 / 6%);
+    --card-shadow: none;
     --fg: #dcdcd6;
     --muted: #9a9a92;
     --bar-bg: #26292c;
@@ -65,12 +72,20 @@
     --danger: #e08a80;
     --mark-bg: #3d3822; /* --fg 8.5:1, --accent 4.7:1 */
     --annotation-bg: #1f3331; /* --muted 4.7:1, --accent 5.3:1 */
-    --annotation-border: #4f8a83; /* 4.2:1 on --bg */
+    --annotation-border: #4f8a83; /* 4.3:1 on --bg, 3.7:1 on --surface */
     --done-bg: #1f3524;
     --done-fg: #93d19d; /* 7.4:1 */
     --active-bg: #3b3214;
     --active-fg: #f0d27a; /* 8.6:1 */
     --failed-bg: #3c2321;
+  }
+}
+
+/* Printed, without backgrounds or shadows, a card is told apart by its edge alone: a light border's color. */
+@media print {
+  :root {
+    --card-ring: var(--border);
+    --card-shadow: none;
   }
 }
 
@@ -114,6 +129,7 @@ a:focus-visible {
 .tree [role="treeitem"],
 .tree-paging a,
 .frame dt a,
+.annotation-property a,
 .pager a {
   text-decoration-line: none;
 }
@@ -126,6 +142,8 @@ a:focus-visible {
 .tree-paging a:hover,
 .frame dt a:hover,
 .frame dt a:focus-visible,
+.annotation-property a:hover,
+.annotation-property a:focus-visible,
 .pager a:hover,
 .pager a:focus-visible {
   text-decoration-line: underline;
@@ -219,7 +237,7 @@ code {
   padding: var(--sp-1) var(--sp-2);
   color: var(--fg);
   font: inherit;
-  background: var(--bg);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
@@ -683,11 +701,6 @@ code {
   max-width: var(--measure);
 }
 
-.upload fieldset {
-  border: 1px solid var(--border);
-  padding: var(--sp-2) var(--sp-4);
-}
-
 /* Groups the form's controls so they can be disabled together while a job runs; not shown as a box. */
 .upload .upload-controls {
   border: 0;
@@ -807,7 +820,6 @@ code {
   .hierarchy-column {
     max-height: 40vh;
     overflow: auto;
-    border-bottom: 1px solid var(--border);
   }
 }
 
@@ -826,7 +838,7 @@ code {
   margin: 0;
   font-size: var(--text-base);
   line-height: 1.75rem;
-  background: var(--bg);
+  background: var(--layer);
 }
 
 .hierarchy-full {
@@ -943,7 +955,7 @@ code {
   max-width: min(40rem, calc(100vw - 2 * var(--sp-4)));
   margin: var(--sp-1) 0 0;
   padding: var(--sp-2) var(--sp-4);
-  background: var(--bg);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: 0 4px 8px rgb(0 0 0 / 15%);
@@ -1035,10 +1047,52 @@ code {
   container: panel / inline-size;
 }
 
+/* Cards: what's read sits on a surface a little lighter than the page, without a border: the panels, the
+   hierarchy column, a tree page's tree, the Usage tab's usages, the search filters and results, and the upload form's
+   Reasoner group.
+   `--layer` is a card's surface, which what sticks within it takes, to cover what scrolls beneath. A plain list, not
+   `:is()`, so each selector keeps its own specificity, and a later rule for one card overrides this. */
+.panel,
+.hierarchy-column,
+.tree-page .tree,
+.usage-frame,
+.search-filters > fieldset,
+.results-body,
+.upload-controls > fieldset {
+  --layer: var(--surface);
+
+  border: 0; /* a fieldset's own */
+  border-radius: var(--radius-lg);
+  outline: 1px solid var(--card-ring);
+  outline-offset: -1px; /* inside, so a scrolling parent doesn't clip it, and it takes no room */
+  background: var(--surface);
+  box-shadow: var(--card-shadow);
+}
+
 .panel {
+  padding: 0 var(--sp-4) var(--sp-3);
+}
+
+/* Narrower sides than the other cards': the column is narrow, and the hits' table pads its own cells. */
+.hierarchy-column,
+.results-body {
   padding: 0 var(--sp-3) var(--sp-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+}
+
+.tree-page .tree,
+.usage-frame,
+.search-filters > fieldset,
+.upload-controls > fieldset {
+  padding: var(--sp-3) var(--sp-4);
+}
+
+/* A legend inside its card, not on its edge. */
+.search-filters > fieldset > legend,
+.upload-controls > fieldset > legend {
+  float: left;
+  width: 100%;
+  margin-bottom: var(--sp-2);
+  padding: 0;
 }
 
 .panel + .panel {
@@ -1075,6 +1129,20 @@ code {
   min-width: 8rem;
   color: var(--muted);
   overflow-wrap: anywhere;
+}
+
+/* A label that links to its property's page, a frame's or an axiom annotation's, looks like one that doesn't until
+   hovered or focused: in the label's color, and underlined then only (the link lists at the top). */
+.frame dt a,
+.annotation-property a {
+  color: inherit;
+}
+
+.frame dt a:hover,
+.frame dt a:focus-visible,
+.annotation-property a:hover,
+.annotation-property a:focus-visible {
+  color: var(--accent);
 }
 
 .frame dd {
@@ -1170,6 +1238,14 @@ code {
 .axiom-annotation .axiom-annotation {
   margin: 0 0 0 0.2em;
   font-size: 1em; /* not smaller again */
+}
+
+/* Its property is a label, set apart from its values by weight and color, which a literal value's text can't fake:
+   semibold in the text color, a link to its page showing as one only when hovered or focused (above). A text value
+   stays muted; an entity value is a link, with its underline. */
+.annotation-property {
+  color: var(--fg);
+  font-weight: 600;
 }
 
 .axiom-annotation mark {
@@ -1402,7 +1478,7 @@ code {
   line-height: var(--tree-row);
   white-space: nowrap;
   text-overflow: ellipsis;
-  background: var(--bg);
+  background: var(--layer);
 }
 
 .tree-row[data-depth="0"] { --tree-slot: 0; }
@@ -1478,7 +1554,6 @@ code {
         min-height: 0;
         max-height: none;
         margin-top: var(--sp-4);
-        border-bottom: none;
       }
 
       & .hierarchy-fold {
@@ -1589,7 +1664,8 @@ code {
       & .panel h2 {
         position: sticky;
         top: 0;
-        background: var(--bg);
+        z-index: 1; /* over the axiom annotations' boxes, positioned and later, which would scroll over it */
+        background: var(--layer);
       }
 
       /* The Usage tab's paging stays in view as its usages scroll beneath it. It's pulled up over the tab panel's
@@ -1703,6 +1779,22 @@ code {
   max-width: 60rem;
 }
 
+/* The filters' groups, cards, side by side as they fit, the flexbox's gap between them. Before the layout beside the
+   results, below, which makes them blocks. */
+.search-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+}
+
+.search-filters > fieldset {
+  margin: 0;
+}
+
+.search-filters label {
+  display: block;
+}
+
 /* A wide, tall enough window: the form in a column on the left and the results in a panel on the right, each
    scrolling within the window, so the filters stay in view (DESIGN.md §2.9, Search). Otherwise they stack. */
 @supports selector(:has(a)) {
@@ -1781,7 +1873,7 @@ code {
     .search-results thead th {
       position: sticky;
       top: 0;
-      background: var(--bg);
+      background: var(--layer);
     }
 
     /* Stacked, full width; as blocks, since a column flexbox that wraps sizes the multi-column properties box too
@@ -1838,26 +1930,23 @@ code {
   overflow-wrap: anywhere;
 }
 
-.search-filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-4);
-}
-
-.search-filters fieldset {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-.search-filters label {
-  display: block;
-}
-
 /* Stacked, the properties scroll in a box of their own; beside the results, the filters scroll as one. */
 @media not screen and (width >= 56rem) and (height >= 32rem) {
   .search-properties {
     max-height: 16rem;
     overflow-y: auto;
+  }
+
+  /* Its legend, floated into the box, would scroll away with the choices: it sticks instead, covering the box's top
+     padding and the gap below it, so the choices scroll under it out of sight. (A sticky box's offset is from inside
+     its scroller's padding.) */
+  .search-filters > .search-properties > legend {
+    position: sticky;
+    top: calc(-1 * var(--sp-3));
+    z-index: 1;
+    margin: calc(-1 * var(--sp-3)) 0 0;
+    padding: var(--sp-3) 0 var(--sp-2);
+    background: var(--layer);
   }
 }
 

@@ -740,7 +740,7 @@ def test_navigation_bar_sticky(page: Page, server: LiveServer) -> None:
     assert (box["x"], box["y"], box["width"]) == (0, 0, NARROW["width"])
 
 
-@pytest.mark.parametrize(("scheme", "background"), [("light", "rgb(250, 250, 247)"), ("dark", "rgb(29, 31, 33)")])
+@pytest.mark.parametrize(("scheme", "background"), [("light", "rgb(246, 245, 241)"), ("dark", "rgb(26, 28, 30)")])
 def test_theme_follows_browser(page: Page, server: LiveServer, scheme: str, background: str) -> None:
     """Check that the palette follows the browser's color scheme."""
     page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
@@ -1336,30 +1336,129 @@ def test_annotations_layout(page: Page, annotated: LiveServer) -> None:
 BOX_TEXT = "a box of several words"
 
 
-def test_annotation_box_whole(page: Page, server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Check that an axiom annotation's box doesn't split across lines: after a value that wraps, at any phone width."""
+def annotate_comment(monkeypatch: pytest.MonkeyPatch, notes: tuple[owl.Annotation, ...], lexical: str) -> None:
+    """Make every entity's Overview show one `rdfs:comment`, with these axiom annotations on it, and no axioms."""
     comment = IRI(f"{RDFS}comment")
-    value = LiteralValue(lexical=LONG_VALUE, datatype=IRI(f"{XSD}string"))
-    note = owl.Annotation(
-        property=owl.Entity(kind=owl.EntityKind.ANNOTATION_PROPERTY, iri=f"{EX}/note"),
-        value=owl.Literal(lexical=BOX_TEXT, datatype=IRI(f"{XSD}string")),
-    )
+    value = LiteralValue(lexical=lexical, datatype=IRI(f"{XSD}string"))
 
     async def fetched(*args: object) -> list[tuple[IRI, AnnotationValue]]:
         return [(comment, value)]
 
     async def annotations(*args: object) -> dict[tuple[IRI, AnnotationValue], tuple[owl.Annotation, ...]]:
-        return {(comment, value): (note,)}
+        return {(comment, value): notes}
 
     monkeypatch.setattr(browl.overview, "fetch_annotations", fetched)
     monkeypatch.setattr(browl.overview, "fetch_value_annotations", annotations)
     monkeypatch.setattr(browl.overview, "_read_axioms", no_axioms)
+
+
+def test_annotation_box_whole(page: Page, server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that an axiom annotation's box doesn't split across lines: after a value that wraps, at any phone width."""
+    note = owl.Annotation(
+        property=owl.Entity(kind=owl.EntityKind.ANNOTATION_PROPERTY, iri=f"{EX}/note"),
+        value=owl.Literal(lexical=BOX_TEXT, datatype=IRI(f"{XSD}string")),
+    )
+    annotate_comment(monkeypatch, (note,), LONG_VALUE)
     page.goto(f"{server.url}/example.org/thing")
     annotation = page.locator(".axiom-annotation")
     expect(annotation).to_contain_text(BOX_TEXT)
     for width in range(320, 640, 16):
         page.set_viewport_size({"width": width, "height": 700})
         assert annotation.evaluate("each => each.getClientRects().length") == 1, width
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_annotation_property_quiet(
+    page: Page, server: LiveServer, monkeypatch: pytest.MonkeyPatch, scheme: str
+) -> None:
+    """Check that an axiom annotation's property is a semibold label, not underlined, but a value's link is.
+
+    The label is in the text color, unlike a muted text value and an accent link value; a label that links shows as
+    one, in the accent and underlined, when hovered or focused. One box's property has a page, so it's a link; the
+    other's has none, so its value's link comes first in it. Each box has a thin full border.
+    """
+    page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
+    elsewhere = owl.IRIReference(iri="https://example.org/elsewhere")
+    linked, unlinked = (
+        owl.Entity(kind=owl.EntityKind.ANNOTATION_PROPERTY, iri=iri) for iri in (f"{EX}/thing", "urn:example:note")
+    )
+    notes = (owl.Annotation(property=linked, value=elsewhere), owl.Annotation(property=unlinked, value=elsewhere))
+    annotate_comment(monkeypatch, notes, "a value")
+    page.goto(f"{server.url}/example.org/thing")
+    boxes = page.locator(".axiom-annotation")
+    expect(boxes).to_have_count(2)
+    border = """(each) => ['Top', 'Right', 'Bottom', 'Left'].map((side) => { const style = getComputedStyle(each);
+        return [style[`border${side}Width`], style[`border${side}Style`], style[`border${side}Color`]]; })"""
+    for each in boxes.all():
+        assert each.evaluate(border) == [["1px", "solid", token_color(page, "annotation-border")]] * 4
+    style = "each => [getComputedStyle(each).textDecorationLine, getComputedStyle(each).color]"
+    muted = page.evaluate("getComputedStyle(document.querySelector('.axiom-annotation')).color")
+    values = [boxes.nth(each).locator("a", has_text="https://example.org/elsewhere") for each in range(2)]
+    linked_box = page.locator(".axiom-annotation:has(.annotation-property a)")
+    expect(page.locator(".axiom-annotation:has(.annotation-property code)")).to_have_count(1)
+    accent = token_color(page, "accent")
+    assert accent != muted
+    for value_link in values:
+        assert value_link.evaluate(style) == ["underline", accent]
+    fg = token_color(page, "fg")
+    assert fg != muted
+    for label in page.locator(".annotation-property").all():
+        assert label.evaluate("each => [getComputedStyle(each).fontWeight, getComputedStyle(each).color]") == [
+            "600",
+            fg,
+        ]
+    property_ = linked_box.locator(".annotation-property a")
+    assert property_.evaluate(style) == ["none", fg]
+    property_.hover()
+    assert property_.evaluate(style) == ["underline", accent]
+    page.mouse.move(0, 0)
+    page.keyboard.press("Shift")  # a key, so the focus that follows shows as from the keyboard
+    property_.focus()
+    assert property_.evaluate(style) == ["underline", accent]
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_label_columns_alike(page: Page, server: LiveServer, monkeypatch: pytest.MonkeyPatch, scheme: str) -> None:
+    """Check that both Overview panels' labels look alike: muted plain text, where a link shows as one only when needed.
+
+    The annotations panel's label links to its property's page; the axioms panel's doesn't. Both sit as far into their
+    panels. Hovered or focused, the link is in the accent and underlined.
+    """
+    page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
+    page.set_viewport_size(WIDE)
+    thing = f"{EX}/thing"
+    string = IRI(f"{XSD}string")
+
+    async def fetched(*args: object) -> list[tuple[IRI, AnnotationValue]]:
+        return [(IRI(thing), LiteralValue(lexical="a value", datatype=string))]
+
+    async def read_axioms(*args: object) -> ReadAxioms:
+        entity, other = (owl.Entity(kind=owl.EntityKind.CLASS, iri=iri) for iri in (thing, f"{EX}/Type"))
+        return ReadAxioms([owl.SubClassOf(sub=entity, super=other)])
+
+    monkeypatch.setattr(browl.overview, "fetch_annotations", fetched)
+    monkeypatch.setattr(browl.overview, "fetch_value_annotations", no_value_annotations)
+    monkeypatch.setattr(browl.overview, "_read_axioms", read_axioms)
+    page.goto(f"{server.url}/example.org/thing")
+    labels = [page.locator(f"section.{each} dt").first for each in ("annotations", "axioms")]
+    link = labels[0].get_by_role("link")
+    expect(link).to_have_count(1)
+    expect(labels[1].get_by_role("link")).to_have_count(0)
+    look = """(each) => { const style = getComputedStyle(each);
+        return [style.color, style.fontSize, style.fontWeight, style.textDecorationLine]; }"""
+    muted = token_color(page, "muted")
+    assert labels[0].evaluate(look) == labels[1].evaluate(look)
+    assert link.evaluate(look) == labels[1].evaluate(look)
+    assert labels[1].evaluate(look)[0] == muted
+    indents = [
+        box(label)["x"] - box(page.locator(f"section.{each}"))["x"]
+        for label, each in zip(labels, ("annotations", "axioms"), strict=True)
+    ]
+    assert indents[0] == indents[1]
+    assert underlines(page, link) == ON_HOVER_AND_FOCUS
+    assert link.evaluate("(each) => getComputedStyle(each).color") == token_color(page, "accent")  # focused
+    link.hover()
+    assert link.evaluate("(each) => getComputedStyle(each).color") == token_color(page, "accent")
 
 
 @pytest.fixture
@@ -1433,12 +1532,12 @@ def test_axioms_indented_narrow(page: Page, framed: LiveServer) -> None:
 
 
 def test_frames_dense(page: Page, framed: LiveServer) -> None:
-    """Check the denser frames: a frame's groups 6px apart, and a panel's sides 12px, at the default font size."""
+    """Check the denser frames: a frame's groups 6px apart, on a card with 16px sides, at the default font size."""
     page.set_viewport_size(WIDE)
     page.goto(f"{framed.url}/example.org/thing")
     panel = page.locator("section.axioms")
     assert rem(page) == 16
-    assert panel.evaluate("(each) => getComputedStyle(each).paddingLeft") == "12px"
+    assert panel.evaluate("(each) => getComputedStyle(each).paddingLeft") == "16px"
     group = panel.locator(".frame dt:not(:first-child)").first
     assert group.evaluate("(each) => getComputedStyle(each).marginTop") == "6px"
 
@@ -1547,7 +1646,8 @@ def test_panel_scrolls(page: Page, varied: LiveServer) -> None:
     """Check that long panels scroll within themselves, by mouse and by keyboard, their headings staying in view.
 
     The keyboard reaches them with Tab after the tab panel, and they show a focus ring; the page itself doesn't move.
-    The panels have borders, and their headings a background, so the content scrolls out of sight under them.
+    The panels are cards, and their headings have the card's background, so the content scrolls out of sight under
+    them.
     """
     page.set_viewport_size(WIDE)
     page.goto(f"{varied.url}/example.org/{MANY}")
@@ -1566,9 +1666,9 @@ def test_panel_scrolls(page: Page, varied: LiveServer) -> None:
     assert abs(box(heading)["y"] - box(panel)["y"]) < 2  # the heading stays at the top
     expect(panel.get_by_text(f"comment {MANY_VALUES - 1}", exact=True)).to_be_in_viewport()
     assert page.evaluate("window.scrollY") == 0
-    assert panel.evaluate("(each) => getComputedStyle(each).borderTopStyle") == "solid"
-    assert heading.evaluate("(each) => getComputedStyle(each).backgroundColor") == page.evaluate(
-        "getComputedStyle(document.body).backgroundColor"
+    assert panel.evaluate("(each) => getComputedStyle(each).boxShadow") != "none"
+    assert heading.evaluate("(each) => getComputedStyle(each).backgroundColor") == panel.evaluate(
+        "(each) => getComputedStyle(each).backgroundColor"
     )
     axioms = page.get_by_role("region", name="Logical axioms")
     page.keyboard.press("Tab")
@@ -1576,6 +1676,156 @@ def test_panel_scrolls(page: Page, varied: LiveServer) -> None:
     page.keyboard.press("End")
     wait_until(page, lambda: axioms.evaluate("(each) => each.scrollTop") > 0, "the axioms panel to scroll")
     expect(axioms.get_by_text(f"<{EX}/super{MANY_VALUES - 1}>", exact=True)).to_be_in_viewport()
+
+
+def token_color(page: Page, token: str) -> str:
+    """Return a color custom property's value as the browser computes a color, e.g. `rgb(…)`."""
+    result: str = page.evaluate(
+        """(token) => { const probe = document.createElement('span'); probe.style.color = `var(--${token})`;
+        document.body.append(probe); const value = getComputedStyle(probe).color; probe.remove(); return value; }""",
+        token,
+    )
+    return result
+
+
+def test_cards_printed(page: Page, varied: LiveServer) -> None:
+    """Check that printed, where backgrounds and shadows aren't, a card's edge is a border's color, with no shadow."""
+    page.goto(f"{varied.url}/example.org/{FEW}")
+    page.emulate_media(media="print")
+    panel = page.locator("section.annotations")
+    style = "(each) => [getComputedStyle(each).outlineColor, getComputedStyle(each).boxShadow]"
+    assert panel.evaluate(style) == [token_color(page, "border"), "none"]
+
+
+def assert_card(page: Page, card: Locator, scheme: str) -> None:
+    """Check that an element is a card: on the surface, not the page; its edge an inset ring; no border; rounded.
+
+    Light, it has a faint shadow; dark, none. A fieldset's legend is inside it, not on its edge.
+    """
+    look = """(each) => { const style = getComputedStyle(each);
+        return [style.backgroundColor, style.outlineStyle, style.outlineWidth, style.outlineColor, style.outlineOffset,
+            style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth,
+            style.borderTopLeftRadius, style.borderBottomRightRadius]; }"""
+    page.mouse.move(0, 0)
+    surface = token_color(page, "surface")
+    assert surface != page.evaluate("getComputedStyle(document.body).backgroundColor")
+    ring = token_color(page, "card-ring")
+    assert card.evaluate(look) == [surface, "solid", "1px", ring, "-1px", *["0px"] * 4, "8px", "8px"]
+    shadow = card.evaluate("(each) => getComputedStyle(each).boxShadow")
+    assert (shadow == "none") is (scheme == "dark")
+    legend = card.locator(":scope > legend")
+    if legend.count():  # its text below the card's top padding, as a fieldset's box includes a legend on its edge
+        padding = "(each) => parseFloat(getComputedStyle(each).paddingTop)"
+        assert box(legend)["y"] + legend.evaluate(padding) >= box(card)["y"] + card.evaluate(padding) - 1
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+@pytest.mark.parametrize(
+    ("path", "selector", "size"),
+    [
+        ("/Bottom", "section.annotations", WIDE),
+        ("/Bottom", "section.axioms", WIDE),
+        ("/Bottom", "section.axioms", NARROW),
+        ("/Bottom", ".hierarchy-column", WIDE),
+        ("/Bottom", ".hierarchy-column", NARROW),
+        ("/_browl/tree/classes", ".tree-page .tree", WIDE),
+        ("/_browl/tree/classes", ".tree-page .tree", NARROW),
+        ("/_browl/admin/upload", ".upload-controls > fieldset", WIDE),
+        ("/_browl/admin/upload", ".upload-controls > fieldset", NARROW),
+    ],
+)
+def test_cards_look(page: Page, trees: LiveServer, scheme: str, path: str, selector: str, size: dict[str, int]) -> None:
+    """Check that the panels, the hierarchy column, a tree page's tree and the upload's Reasoner group are cards."""
+    page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
+    page.set_viewport_size(size)
+    page.goto(f"{trees.url}{path}")
+    assert_card(page, page.locator(selector), scheme)
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+@pytest.mark.parametrize("size", [WIDE, NARROW], ids=["wide", "narrow"])
+def test_search_cards_look(page: Page, searchable: LiveServer, scheme: str, size: dict[str, int]) -> None:
+    """Check that the search filters' groups, each, and the results are cards, beside each other or stacked."""
+    page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
+    page.set_viewport_size(size)
+    page.goto(f"{searchable.url}/_browl/search?q=item")
+    groups = page.locator(".search-filters > fieldset")
+    expect(groups).to_have_count(3)
+    for group in groups.all():
+        assert_card(page, group, scheme)
+    assert_card(page, page.locator(".results-body"), scheme)
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_usage_card_look(page: Page, paged: LiveServer, scheme: str) -> None:
+    """Check that the Usage tab's usages are a card, and its pager isn't: it stays on the page."""
+    page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
+    page.set_viewport_size(WIDE)
+    page.goto(f"{paged.url}{THING}?tab=usage")
+    assert_card(page, page.locator(".usage-frame"), scheme)
+    pager = page.get_by_role("navigation", name="Usage pages")
+    assert pager.evaluate("(each) => getComputedStyle(each).backgroundColor") == token_color(page, "bg")
+
+
+STUCK_ROW = ".tree li:has(> [role='group']:not([hidden])) > .tree-row"
+"""An open node's row, which sticks as its children scroll past."""
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+@pytest.mark.parametrize(
+    ("path", "selector"),
+    [
+        ("/Bottom", ".panel h2"),
+        ("/Bottom", ".hierarchy-column h2"),
+        ("/Bottom", f".hierarchy-column {STUCK_ROW}"),
+        (f"/_browl/tree/classes?open={urllib.parse.quote(EX + '/Top')}", f".tree-page {STUCK_ROW}"),
+    ],
+    ids=["panel-heading", "column-heading", "column-row", "tree-page-row"],
+)
+def test_sticky_on_card_surface(page: Page, trees: LiveServer, scheme: str, path: str, selector: str) -> None:
+    """Check that what sticks within a card has its surface, so what scrolls under it isn't seen through it."""
+    page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}{path}")
+    stuck = page.locator(selector)
+    expect(stuck.first).to_be_visible()
+    surface = token_color(page, "surface")
+    for each in stuck.all():
+        assert each.evaluate("(each) => getComputedStyle(each).position") == "sticky"
+        assert each.evaluate("(each) => getComputedStyle(each).backgroundColor") == surface
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_results_head_on_card_surface(page: Page, searchable: LiveServer, scheme: str) -> None:
+    """Check that the results' table head, sticking as the hits scroll beside the filters, has the card's surface."""
+    page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
+    page.set_viewport_size(WIDE)
+    page.goto(f"{searchable.url}/_browl/search?q=item")
+    head = page.locator(".search-results thead th").first
+    assert head.evaluate("(each) => getComputedStyle(each).position") == "sticky"
+    assert head.evaluate("(each) => getComputedStyle(each).backgroundColor") == token_color(page, "surface")
+
+
+@pytest.mark.parametrize("size", [WIDE, NARROW], ids=["beside", "stacked"])
+def test_search_filters_layout(page: Page, searchable: LiveServer, size: dict[str, int]) -> None:
+    """Check the search filters' groups: blocks the column's width beside the results, else side by side as they fit.
+
+    Either way, 16px apart, whether one is beside or below the one before.
+    """
+    page.set_viewport_size(size)
+    page.goto(f"{searchable.url}/_browl/search?q=item")
+    filters = page.locator(".search-filters")
+    groups = [box(each) for each in page.locator(".search-filters > fieldset").all()]
+    if size == WIDE:
+        assert filters.evaluate("(each) => getComputedStyle(each).display") == "block"
+        assert {round(each["width"]) for each in groups} == {round(box(filters)["width"])}
+    else:
+        assert filters.evaluate("(each) => getComputedStyle(each).display") == "flex"
+    for before, after in itertools.pairwise(groups):
+        if abs(after["y"] - before["y"]) < 1:
+            assert abs(after["x"] - (before["x"] + before["width"]) - 16) < 1
+        else:
+            assert abs(after["y"] - (before["y"] + before["height"]) - 16) < 1
 
 
 def expect_one_page(page: Page) -> None:
@@ -3792,6 +4042,30 @@ def test_search_page_stacked_when_narrow(page: Page, searchable: LiveServer) -> 
     expect(properties).to_have_css("max-height", "256px")  # a box of its own; beside the results, the filters scroll
     page.set_viewport_size({"width": 1200, "height": 700})
     expect(properties).to_have_css("max-height", "none")
+
+
+def test_search_properties_legend_stays(page: Page, searchable: LiveServer) -> None:
+    """Check that on a phone the properties' legend stays at the top of their box as they scroll, covering them.
+
+    More choices are added, so the box scrolls. Above the legend, its card shows, not a choice.
+    """
+    page.set_viewport_size(NARROW)
+    page.goto(f"{searchable.url}/_browl/search?q=item")
+    properties = page.locator(".search-properties")
+    properties.locator(".property-choices").first.evaluate(
+        "(choices) => { for (let i = 0; i < 40; i++) choices.append(choices.querySelector('label').cloneNode(true)); }"
+    )
+    legend = properties.locator("> legend")
+    top = box(legend)["y"]
+    assert abs(top - box(properties)["y"]) < 1  # over the box's top padding
+    properties.evaluate("(each) => { each.scrollTop = 200; }")
+    assert properties.evaluate("(each) => each.scrollTop") == 200
+    assert box(legend)["y"] == top
+    covering = properties.evaluate(
+        """(each) => { const rect = each.getBoundingClientRect();
+        return document.elementFromPoint(rect.x + rect.width / 2, rect.y + 2).closest('legend') !== null; }"""
+    )
+    assert covering
 
 
 def test_advanced_search_link(page: Page, searchable: LiveServer) -> None:

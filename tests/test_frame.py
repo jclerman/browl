@@ -366,9 +366,12 @@ def contrast(foreground: str, background: str) -> float:
 
 @pytest.mark.parametrize("theme", [0, 1], ids=["light", "dark"])
 @pytest.mark.parametrize("text", ["fg", "muted", "accent", "danger"])
-@pytest.mark.parametrize("background", ["bg", "bar-bg"])
+@pytest.mark.parametrize("background", ["bg", "surface", "bar-bg"])
 def test_contrast(theme: int, text: str, background: str) -> None:
-    """Check that each text color meets WCAG AA (4.5:1) on each background, in both themes (U-29)."""
+    """Check that each text color meets WCAG AA (4.5:1) on each background, in both themes (U-29).
+
+    The backgrounds are the page, a card's surface and the navigation bar.
+    """
     palette = palettes()[theme]
     assert contrast(palette[text], palette[background]) >= 4.5
 
@@ -382,10 +385,11 @@ def test_annotation_contrast(theme: int, text: str) -> None:
 
 
 @pytest.mark.parametrize("theme", [0, 1], ids=["light", "dark"])
-def test_annotation_border(theme: int) -> None:
-    """Check that an axiom annotation's border is 3:1 or more against the page (WCAG 1.4.11), in both themes."""
+@pytest.mark.parametrize("background", ["bg", "surface"])
+def test_annotation_border(theme: int, background: str) -> None:
+    """Check that an axiom annotation's border is 3:1 or more against the page and a card (WCAG 1.4.11), both themes."""
     palette = palettes()[theme]
-    assert contrast(palette["annotation-border"], palette["bg"]) >= 3
+    assert contrast(palette["annotation-border"], palette[background]) >= 3
 
 
 def declarations() -> list[tuple[str, str]]:

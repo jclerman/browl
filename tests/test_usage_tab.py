@@ -1254,7 +1254,8 @@ def test_highlight(client: TestClient) -> None:
     mineral = panel(client, "Mineral").text  # in an n-ary axiom's annotations
     assert mark.replace("Dog", "Mineral") in mineral.split(ANNOTATIONS)[1]
     note = panel(client, "note").text  # as an annotation's property, in each box it names
-    marked = f'<span class="visually-hidden">[</span><mark><a href="/axioms#note"><bdi>{NS}note</bdi></a></mark>:'
+    property_ = f'<mark><a href="/axioms#note"><bdi>{NS}note</bdi></a></mark>'
+    marked = f'<span class="visually-hidden">[</span><span class="annotation-property">{property_}</span>:'
     assert note.count(marked) == len(annotations_shown(note))
 
 
