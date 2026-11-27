@@ -1099,6 +1099,37 @@ async def test_linked_anonymous_same_or_different(
     assert shown == [("Types", []), (label, ["_:"])]
 
 
+async def test_closures_stop_at_anonymous_individuals(jvm: None, fuseki_url: str, settings: Settings) -> None:
+    """Check that a class expression's closure doesn't bring the anonymous individuals in it's assertions onto a page.
+
+    p's usages are a general class axiom, `(p value _:x) SubClassOf C`, and `_:w Type p value _:z`; `_:x DifferentFrom
+    f` and `_:z Type D` are roots of their own, on f's Overview and D's Usage tab.
+    """
+    declared = f"<{NS}p> {RDF_TYPE} <{OWL_NS}ObjectProperty> .\n<{NS}f> {RDF_TYPE} <{OWL_NS}NamedIndividual> .\n"
+    declared += "".join(f"<{NS}{name}> {RDF_TYPE} <{OWL_NS}Class> .\n" for name in "CD")
+
+    def restriction(node: str, value: str) -> str:
+        return "".join(
+            f"{node} {predicate} {item} .\n"
+            for predicate, item in [
+                (RDF_TYPE, f"<{OWL_NS}Restriction>"),
+                (f"<{OWL_NS}onProperty>", f"<{NS}p>"),
+                (f"<{OWL_NS}hasValue>", value),
+            ]
+        )
+
+    triples = (
+        f"{declared}{restriction('_:r', '_:x')}_:r {SUBCLASS} <{NS}C> .\n_:x <{OWL_NS}differentFrom> <{NS}f> .\n"
+        f"_:w {RDF_TYPE} _:e .\n{restriction('_:e', '_:z')}_:z {RDF_TYPE} <{NS}D> .\n"
+    )
+    async with loaded(fuseki_url, settings, {None: triples.encode()}, "") as small:
+        lines = await usage_lines(small, f"{NS}p")
+    assert sorted(unlabelled(line) for line, _ in lines) == [
+        f"<{NS}p> value _: SubClassOf <{NS}C>",
+        f"_: Type <{NS}p> value _:",
+    ]
+
+
 COPIED = (
     CLASSES
     + "".join(

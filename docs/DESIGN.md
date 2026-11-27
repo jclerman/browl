@@ -747,8 +747,8 @@ by value. Fuseki can (`?s ?p <entity>`), so P-27 keeps two things instead ([S-7 
     of `browl.rdf.literal_digest`), since the subject and predicate alone don't pick the triple. A reified axiom on
     such an assertion is part of its root when its `owl:annotatedTarget` is the same term as the object; one on a
     class assertion to a class expression's copy is left out. A node is an anonymous individual if none of its types
-    or predicates is from OWL's RDF mapping (`_is_mapped`); one with only annotation assertions isn't found by the
-    query, so its usages are counted but not listed;
+    or predicates is from OWL's RDF mapping (`browl.precache.owner_map.is_mapped`); one with only annotation
+    assertions isn't found by the query, so its usages are counted but not listed;
   - per entity, how many triples with a blank subject have it as object or predicate (`usage_blank`), which the count
     subtracts.
 
@@ -1290,9 +1290,8 @@ Tabs (U-28; see [2.9](#29-page-layout)):
     group with no subject. A page fetches them exactly (`usage-assertions.rq`): by subject label, predicate and object
     (`usage_root.object`), with their reified axioms and no blank-node closure; a class-expression object is
     `DESCRIBE`d into a fragment of its own (`UsageFragments.assertions`), parsed with them. A `DESCRIBE` closure can
-    still reach an anonymous individual shared through a class expression (`hasValue`, `oneOf`), so the general
-    fragment drops the assertion-kind axioms it yields (`_ASSERTION_TYPES`), and a subject's fragment the axioms
-    none of its usages claims that contain an anonymous individual.
+    still reach an anonymous individual (through `hasValue`, `oneOf`, an annotation's value), so every closure drops
+    the triples of each blank subject that `is_mapped` (2.5) finds is one (`_without_individuals`).
   - **Before the usage table is ready** (about 4 minutes after a NCBITaxon load; seconds for Uberon and HPO): an
     entity with up to T = 20,000 usages streams them all, sorts and slices, per request: at most 0.21 s on NCBITaxon
     (8–11 µs per usage) and 0.1 s on Uberon and HPO (2–4 µs). That's every entity but 28 in NCBITaxon, 7 in Uberon and

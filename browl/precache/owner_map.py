@@ -226,7 +226,7 @@ class _Walk:
         self._reified = {
             node for node, edges in children.items() if any(p == _TYPE and o in _REIFIED_TYPES for p, o in edges)
         }
-        self._individuals = {node for node, edges in children.items() if not _is_mapped(edges)}
+        self._individuals = {node for node, edges in children.items() if not is_mapped(edges)}
         # The reified axioms on each anonymous individual's assertion, by its (individual, predicate, object).
         self._on_assertions: dict[tuple[str, str, _Object], list[str]] = {}
         # The reified nodes whose source is a blank node: a general class axiom's, or a reified axiom's, so another
@@ -372,7 +372,7 @@ def _merge(iris: dict[str, _Named], more: dict[str, _Named]) -> None:
         iris[iri] = max(iris.get(iri, _Named.ANNOTATION), named)
 
 
-def _is_mapped(edges: set[tuple[str, _Object]]) -> bool:
+def is_mapped(edges: Iterable[tuple[str, _Object]]) -> bool:
     """Return whether a blank node is part of OWL's RDF mapping, not an anonymous individual.
 
     That's an axiom, an annotation, a class expression, a data range, a list, an inverse property, a SWRL atom, …: a
