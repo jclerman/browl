@@ -1160,7 +1160,7 @@ no CURIE. _(Q18b)_
 
 Header, above the tabs (U-5):
 
-- Two lines (#180), for an audience of domain experts first and ontologists second. The first: the entity's types,
+- Two lines, for an audience of domain experts first and ontologists second. The first: the entity's types,
   then its display name as the title. The types are badges, small, uppercase, in the accent on a tint of it, one per
   type for an IRI with several (punning), in the navigation bar's order, as the hierarchy column and the
   logical-axioms panel order them, separated by a visually hidden " · " for screen readers and copied text; they take
@@ -2072,9 +2072,9 @@ too (P-38), and the JSON API's (P-33).
   small UI chrome `--text-sm`. Headings are semibold. Later: prose values, such as definitions, at about 15px, which
   needs a template marker to tell them apart; `tabular-nums` for counts and pager numbers.
 - **Spacing**: small gaps within a list, larger ones between sections, on a scale of tokens, `--sp-1` to `--sp-6`, and
-  radii `--radius` and `--radius-lg`. Gaps, paddings and radii use them, or a named step off the scale (a hairline, a
-  frame's group gap, a tree's indent, which is its toggle's width); em gaps beside text, and pill and circle radii,
-  are the exceptions. Works from phone width up.
+  radii `--radius-sm`, `--radius` and `--radius-lg`. Gaps, paddings and radii use them, or a named step off the scale
+  (a hairline, a frame's group gap, a tree's indent, which is its toggle's width); em gaps beside text, and pill and
+  circle radii, are the exceptions. Works from phone width up.
 - **Links**: in running text and axioms, a quiet underline, 1px, offset 0.2em, in the link's color at 45%,
   full strength on hover and focus; it stays because the accent is only about 2.5:1 against `--fg`, below the 3:1
   WCAG 1.4.1 needs to tell links by color alone. Where everything is a link (the navigation bar, tree items and
