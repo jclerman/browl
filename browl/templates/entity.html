@@ -24,14 +24,15 @@
     <h1 title="{{ name | isolate }}" dir="auto">{{ name }}</h1>
     <div class="entity-meta">
       {% if entity.curie %}
-      <code class="entity-id" dir="ltr">{{ entity.curie }}</code>
+      {% set curie = entity.curie | bidi_encoded %}
+      <code class="entity-id" dir="ltr" title="{{ curie }}">{{ curie }}</code>
       {{ copy_button(entity.curie, "Copy the CURIE") }}
       {% endif %}
       <details class="entity-iri">
         <summary>IRI</summary>
         <dl>
           <dt>IRI</dt>
-          <dd><code dir="ltr">{{ entity.iri }}</code> {{ copy_button(entity.iri, "Copy the IRI") }}</dd>
+          <dd><code dir="ltr">{{ entity.iri | bidi_encoded }}</code> {{ copy_button(entity.iri, "Copy the IRI") }}</dd>
         </dl>
       </details>
     </div>
