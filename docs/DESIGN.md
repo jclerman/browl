@@ -2076,13 +2076,14 @@ too (P-38), and the JSON API's (P-33).
   box's suggestions get none even on hover: the selected one is highlighted already, and its type isn't a link of its
   own.
 - **Cards**: structure comes from surfaces, type and spacing rather than nested borders. What's read sits on a
-  card, a surface a little lighter than the page, with a faint shadow (`--card-shadow`) and no border, radius
+  card, a surface a little lighter than the page, with a faint edge drawn inside it (`--card-ring`, an inset outline
+  that scrolling parents can't clip and that takes no room) and shadow (`--card-shadow`) but no border, radius
   `--radius-lg`: the Overview's panels, the hierarchy column, a tree page's tree, the Usage tab's usages (its pager
   stays above, on the page), the search filters' groups and the results, and the upload form's fields. The page is
   `--bg` #f6f5f1 (dark #1a1c1e), a card's `--surface` #fff (dark #25282b); `--muted` and `--accent` stay AA on both
-  (5.2–5.3:1 on the page). A darker page, #f1f0eb, cut the hierarchy's contrast too much. What opens over the page (the
-  IRI box, the search suggestions) and the search box have the card's surface. A card sets `--layer` to its surface,
-  and what sticks within it (panel headings, the hierarchy column's heading and stuck tree rows, the results' table
+  (5.2–5.3:1 on the page). A darker page, #f1f0eb, cut the hierarchy's contrast too much. The IRI box and the search box
+  have the card's surface; the search suggestions keep the page's. A card sets `--layer` to its surface, and what
+  sticks within it (panel headings, the hierarchy column's heading and stuck tree rows, the results' table
   head) takes it, so nothing scrolls through in the page's color. The hierarchy column's drag handle keeps its 1px line
   beside the card, marking the one border that can be dragged, unlike the gap between the Overview's two cards.
   Chosen over borderless panels (a heading over a hairline), compared side by side in #175's prototype.
