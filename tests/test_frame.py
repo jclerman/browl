@@ -45,6 +45,13 @@ ADMIN_LINK = ("/_browl/admin/upload", "Admin")
 ADVANCED = ("/_browl/search", "Advanced search")
 SIGN_IN = ("/_browl/admin/sign-in", "Admin sign-in")
 CREDIT = (PROJECT_URL, "hosted with")
+TOKEN_FONT_SIZES = {"var(--title-size)", "inherit", "1em", "0.8em", "0.85em"}
+"""Font sizes allowed besides `var(--text-*)`: an entity's title, and sizes inherited or relative to the text around,
+such as an icon's or a language tag's in an axiom annotation."""
+TOKEN_RADII = {"999px", "50%", "2px"}
+"""Radii allowed besides the tokens: a pill's and a circle's, and a highlighted word's, under `--radius`."""
+SPACING = re.compile(r"(row-|column-)?gap|padding(-\w+)*|border(-\w+)*-radius")
+"""The properties whose values must be spacing or radius tokens (DESIGN.md §2.9, Spacing)."""
 
 
 class Frame(html.parser.HTMLParser):
@@ -379,3 +386,37 @@ def test_annotation_border(theme: int) -> None:
     """Check that an axiom annotation's border is 3:1 or more against the page (WCAG 1.4.11), in both themes."""
     palette = palettes()[theme]
     assert contrast(palette["annotation-border"], palette["bg"]) >= 3
+
+
+def declarations() -> list[tuple[str, str]]:
+    """Return the stylesheet's declarations as `(property, value)`, outside comments and the `:root` blocks."""
+    css = re.sub(r"/\*.*?\*/", "", (STATIC_DIR / "browl.css").read_text(), flags=re.DOTALL)
+    css = re.sub(r":root \{[^}]*\}", "", css)
+    return [(name, value.strip()) for name, value in re.findall(r"([\w-]+)\s*:\s*([^;{}]+);", css)]
+
+
+def on_scale(value: str) -> bool:
+    """Return whether each part of a spacing value is 0, a custom property, `calc` of them, or em beside text."""
+    parts = re.findall(r"calc\((?:[^()]|\([^()]*\))*\)|\S+", value)
+    for part in parts:
+        if part.startswith("calc("):
+            part = re.sub(r"var\(--[\w-]+\)", "", part.removeprefix("calc(").removesuffix(")"))
+            if not re.fullmatch(r"[\d.\s*/+-]*", part):
+                return False
+        elif not re.fullmatch(r"0|var\(--[\w-]+\)|[\d.]+em", part):
+            return False
+    return True
+
+
+def test_font_sizes_use_tokens() -> None:
+    """Check that every font size is a type token, or on the short list of exceptions (DESIGN.md §2.9, Type)."""
+    sizes = {value for name, value in declarations() if name == "font-size"}
+    assert {each for each in sizes if not re.fullmatch(r"var\(--text-\w+\)", each)} <= TOKEN_FONT_SIZES
+
+
+def test_spacing_uses_tokens() -> None:
+    """Check that every gap, padding and radius is on the spacing scale, or a named exception (DESIGN.md §2.9)."""
+    values = {(name, value) for name, value in declarations() if SPACING.fullmatch(name)}
+    off = {(name, value) for name, value in values if not on_scale(value)}
+    assert {value for name, value in off if "radius" in name} <= TOKEN_RADII
+    assert {(name, value) for name, value in off if "radius" not in name} == set()
