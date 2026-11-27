@@ -1,6 +1,6 @@
-/* browl's stylesheet (DESIGN.md §2.9): soft contrast, muted accents, a dark theme that follows the browser, dense type,
-   and quiet link underlines. The palette, type sizes, spacing and radii are set once, as custom properties; every text
-   color meets WCAG AA (4.5:1) on both backgrounds. */
+/* browl's stylesheet (DESIGN.md §2.9): soft contrast, muted accents, a dark theme that follows the browser, dense
+   type, and quiet link underlines. The palette, type sizes, spacing and radii are set once, as custom properties;
+   every text color meets WCAG AA (4.5:1) on both backgrounds. */
 
 :root {
   color-scheme: light dark;
@@ -23,7 +23,7 @@
   --failed-fg: var(--danger); /* 5.2:1, dark 5.6:1 */
   --font-text: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-  /* Type (#176): UI, labels, trees and tables at --text-base; secondary text, counts and notes smaller. In rem, so the
+  /* Type: UI, labels, trees and tables at --text-base; secondary text, counts and notes smaller. In rem, so the
      browser's font size scales them all. */
   --text-xs: 0.75rem;
   --text-sm: 0.8125rem;
@@ -32,7 +32,7 @@
   --text-lg: 1.25rem;
   --text-xl: 1.5rem;
   --leading: 1.45;
-  /* Spacing (#177): small steps within a list, larger ones between sections. */
+  /* Spacing: small steps within a list, larger ones between sections. */
   --sp-1: 0.25rem;
   --sp-2: 0.5rem;
   --sp-3: 0.75rem;
@@ -94,9 +94,9 @@ samp {
   font-family: var(--font-mono);
 }
 
-/* Links (#178): a thin, faint underline in running text and axioms, so they're told apart from text without color
-   alone (the accent is about 2.5:1 against --fg); full strength on hover and focus. Where everything is a link, and
-   on a pager, none; tree items are underlined on hover only, since their focus is outlined. */
+/* Links: a thin, faint underline in running text and axioms, so they're told apart from text without color alone
+   (the accent is about 2.5:1 against --fg), at full strength on hover and focus. Where everything is a link, and on a
+   pager, none until hover and focus; tree items are underlined on hover only, since their focus is outlined. */
 a {
   color: var(--accent);
   text-decoration-line: underline;
@@ -118,9 +118,10 @@ a:focus-visible {
   text-decoration-line: none;
 }
 
-/* Not the search box's suggestions, in the bar too: the selected one is highlighted, and its type isn't a link. */
-.site-nav a:not(.search-list a):hover,
-.site-nav a:not(.search-list a):focus-visible,
+.site-nav a:hover,
+.site-nav a:focus-visible,
+.sign-out button:hover,
+.sign-out button:focus-visible,
 .tree [role="treeitem"]:hover,
 .tree-paging a:hover,
 .frame dt a:hover,
@@ -132,7 +133,7 @@ a:focus-visible {
 
 h1 {
   font-size: var(--text-xl);
-  line-height: 1.25;
+  line-height: var(--title-leading);
 }
 
 h2 {
@@ -188,12 +189,6 @@ code {
 
 .site-name a {
   color: inherit;
-  text-decoration: none;
-}
-
-.site-name a:hover,
-.site-name a:focus-visible {
-  text-decoration: underline;
 }
 
 /* The box, then the link to the search page. */
@@ -276,7 +271,8 @@ code {
   background: none;
   color: var(--accent);
   font-family: inherit;
-  text-decoration: none;
+  text-decoration-thickness: 1px; /* on hover and focus, as the links' */
+  text-underline-offset: 0.2em;
   cursor: pointer;
 }
 
@@ -286,12 +282,6 @@ code {
   align-items: center;
   color: var(--muted);
   font-size: var(--text-xs);
-  text-decoration: none;
-}
-
-.hosted-with:hover,
-.hosted-with:focus-visible {
-  text-decoration: underline;
 }
 
 .hosted-with img {
@@ -1639,6 +1629,12 @@ code {
   text-decoration: none;
 }
 
+/* Not underlined even on hover, as the bar's other links are: the selected one is highlighted already, and its type
+   isn't a link of its own. */
+.search-list li > a:hover {
+  text-decoration-line: none;
+}
+
 .search-list [aria-selected="true"] > a {
   background: var(--bar-bg);
   outline: 2px solid var(--accent);
@@ -1895,7 +1891,7 @@ code {
 
 .hits .hit:hover .hit-name,
 .hits .hit:focus-visible .hit-name {
-  text-decoration: underline;
+  text-decoration-line: underline;
 }
 
 .hit-id {
