@@ -690,11 +690,6 @@ code {
   max-width: var(--measure);
 }
 
-.upload fieldset {
-  border: 1px solid var(--border);
-  padding: var(--sp-2) var(--sp-4);
-}
-
 /* Groups the form's controls so they can be disabled together while a job runs; not shown as a box. */
 .upload .upload-controls {
   border: 0;
@@ -814,7 +809,6 @@ code {
   .hierarchy-column {
     max-height: 40vh;
     overflow: auto;
-    border-bottom: 1px solid var(--border);
   }
 }
 
@@ -1044,12 +1038,18 @@ code {
 
 /* Cards: what's read sits on a surface a little lighter than the page, without a border: the panels, the
    hierarchy column, a tree page's tree, the Usage tab's usages, the search filters and results, and the upload form.
-   `--layer` is a card's surface, which what sticks within it takes, to cover what scrolls beneath. */
-:is(.panel, .hierarchy-column, .tree-page > .tree, .usage-frame, .search-filters > fieldset, .results-body,
-    .upload-controls > fieldset) {
+   `--layer` is a card's surface, which what sticks within it takes, to cover what scrolls beneath. A plain list, not
+   `:is()`, so each selector keeps its own specificity, and a later rule for one card overrides this. */
+.panel,
+.hierarchy-column,
+.tree-page .tree,
+.usage-frame,
+.search-filters > fieldset,
+.results-body,
+.upload-controls > fieldset {
   --layer: var(--surface);
 
-  border: 0;
+  border: 0; /* a fieldset's own */
   border-radius: var(--radius-lg);
   outline: 1px solid var(--card-ring);
   outline-offset: -1px; /* inside, so a scrolling parent doesn't clip it, and it takes no room */
@@ -1065,7 +1065,7 @@ code {
   padding: 0 var(--sp-3) var(--sp-2);
 }
 
-.tree-page > .tree,
+.tree-page .tree,
 .usage-frame,
 .search-filters > fieldset,
 .upload-controls > fieldset {
@@ -1550,7 +1550,6 @@ code {
         min-height: 0;
         max-height: none;
         margin-top: var(--sp-4);
-        border-bottom: none;
       }
 
       & .hierarchy-fold {
