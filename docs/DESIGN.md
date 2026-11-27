@@ -2078,8 +2078,9 @@ too (P-38), and the JSON API's (P-33).
   own.
 - **Cards**: structure comes from surfaces, type and spacing rather than nested borders. What's read sits on a card, a
   surface a little lighter than the page, with a faint edge drawn inside it (`--card-ring`, an inset outline that
-  scrolling parents can't clip and that takes no room) and shadow (`--card-shadow`) but no border, radius `--radius-lg`:
-  the Overview's panels, the hierarchy column, a tree page's tree, the Usage tab's usages (its pager stays above, on the
+  scrolling parents can't clip and that takes no room) and shadow (`--card-shadow`) but no border, radius `--radius-lg`;
+  printed, where backgrounds and shadows aren't, the edge is in `--border`'s color, so the cards stay apart: the
+  Overview's panels, the hierarchy column, a tree page's tree, the Usage tab's usages (its pager stays above, on the
   page), the search filters' groups and the results, and the upload form's Reasoner group. The page is `--bg` #f6f5f1
   (dark #1a1c1e), a card's `--surface` #fff (dark #25282b); `--muted` and `--accent` stay AA on both (5.2–5.3:1 on the
   page). A darker page, #f1f0eb, cut the hierarchy's contrast too much. The IRI box and the search box have the card's

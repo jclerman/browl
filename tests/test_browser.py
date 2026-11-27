@@ -1627,6 +1627,25 @@ def test_panel_scrolls(page: Page, varied: LiveServer) -> None:
     expect(axioms.get_by_text(f"<{EX}/super{MANY_VALUES - 1}>", exact=True)).to_be_in_viewport()
 
 
+def token_color(page: Page, token: str) -> str:
+    """Return a color custom property's value as the browser computes a color, e.g. `rgb(…)`."""
+    result: str = page.evaluate(
+        """(token) => { const probe = document.createElement('span'); probe.style.color = `var(--${token})`;
+        document.body.append(probe); const value = getComputedStyle(probe).color; probe.remove(); return value; }""",
+        token,
+    )
+    return result
+
+
+def test_cards_printed(page: Page, varied: LiveServer) -> None:
+    """Check that printed, where backgrounds and shadows aren't, a card's edge is a border's color, with no shadow."""
+    page.goto(f"{varied.url}/example.org/{FEW}")
+    page.emulate_media(media="print")
+    panel = page.locator("section.annotations")
+    style = "(each) => [getComputedStyle(each).outlineColor, getComputedStyle(each).boxShadow]"
+    assert panel.evaluate(style) == [token_color(page, "border"), "none"]
+
+
 def expect_one_page(page: Page) -> None:
     """Check the one-page view: the page scrolls, the panels don't, and the axioms come after the annotations."""
     assert page_scrolls(page)

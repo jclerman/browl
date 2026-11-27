@@ -81,6 +81,14 @@
   }
 }
 
+/* Printed, without backgrounds or shadows, a card is told apart by its edge alone: a light border's color. */
+@media print {
+  :root {
+    --card-ring: var(--border);
+    --card-shadow: none;
+  }
+}
+
 * {
   box-sizing: border-box;
 }
