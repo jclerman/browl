@@ -153,6 +153,12 @@ textarea {
   font-size: inherit;
 }
 
+/* Notes beside a label, such as a tree's counts and the search filters' hints: secondary text, not the browser's
+   smaller size. */
+small {
+  font-size: var(--text-xs);
+}
+
 p {
   max-width: var(--measure);
 }
@@ -1167,6 +1173,11 @@ code {
 
 .axiom-annotation mark {
   color: var(--fg);
+}
+
+/* Smaller than the annotation's own small text, so a language tag stands apart from its value. */
+.axiom-annotation .lang {
+  font-size: 0.85em;
 }
 
 /* Text for screen readers alone. */
