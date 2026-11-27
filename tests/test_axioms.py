@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import TypeAdapter
 
+import browl.lookup
 import browl.overview
 from browl import axioms, frames, nesting, owl, owlapi
 from browl.derived import EntityType
@@ -937,3 +938,20 @@ def test_individual_page(data_dir: Path, fuseki_url: str, dataset: str, monkeypa
     # An individual alone has no heading over its sections.
     assert all("frame-kind" not in pages[name] for name in ("alice", "bob", "carol"))
     assert "Other axioms" not in "".join(pages.values())
+
+
+def test_individual_column(data_dir: Path, fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that an individual's full page reads its types from Fuseki for its column's tree."""
+    monkeypatch.setattr(browl.overview, "dataset_name", lambda generation: dataset)
+    monkeypatch.setattr(browl.lookup, "dataset_name", lambda generation: dataset)
+    app = make_app(FUSEKI_URL=fuseki_url)
+    with TestClient(app) as client:
+        edges = [(f"{NS}Dog", f"{RDFS}subClassOf", f"{NS}Animal")]
+        app.state.jobs.register(Stage.PRE_CACHING, derived_stage(INDIVIDUALS, edges=edges))
+        client.portal.call(app.state.jobs.start)
+        client.portal.call(app.state.jobs.wait)
+        page = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "rex"})
+    assert page.status_code == 200
+    column = page.text[page.text.index('<nav class="hierarchy-column"') :].split("</nav>")[0]
+    items = re.findall(r'<a role="treeitem" id="(hi[-\d]*)" href="([^"]*)"', column)
+    assert items == [("hi-0", "/axioms#Animal"), ("hi-0-0", "/axioms#Dog"), ("hi-0-0-0", "/axioms#rex")]

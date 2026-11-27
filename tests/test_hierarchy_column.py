@@ -665,6 +665,23 @@ def test_individual_ancestors_capped(app: FastAPI, monkeypatch: pytest.MonkeyPat
         assert shown(column(client, "/ind")) == [(0, "Left"), (1, "Bottom"), (2, "Deep"), (3, IND)]
 
 
+@pytest.mark.parametrize(
+    ("limit", "expected"),
+    [
+        (2, [(0, "Left"), (1, IND), (0, "Right"), (1, f"{IND} (also above)")]),  # the types alone
+        (3, [(0, "Top"), (1, "Left"), (2, IND), (1, "Right"), (2, f"{IND} (also above)")]),  # their shared parent
+    ],
+)
+def test_individual_types_count_toward_cap(
+    app: FastAPI, monkeypatch: pytest.MonkeyPatch, limit: int, expected: list[tuple[int, str]]
+) -> None:
+    """Check that each of an individual's types counts toward `MAX_ANCESTORS`, then their ancestors, nearest first."""
+    monkeypatch.setattr(browl.hierarchy_column, "MAX_ANCESTORS", limit)
+    with_types(monkeypatch, "Left", "Right")
+    with loaded(app, individual_stage()) as client:
+        assert shown(column(client, "/ind")) == expected
+
+
 def test_individual_punned(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that an IRI that's a class and an individual has both trees, side by side, each named."""
     with_types(monkeypatch, "Left")
@@ -679,6 +696,19 @@ def test_individual_punned(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> Non
         [(0, "Top"), (1, "Left"), (2, IND)],  # no siblings; the class tree's ind is unmarked
     ]
     assert [Tree(tree).items[0].id for tree in found.trees] == ["hc-0", "hi-0"]
+
+
+def test_individual_punned_no_named_type(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a punned IRI's individual with no types has its own tree, alone, with the note, after the class's."""
+    with_types(monkeypatch)
+    with loaded(app, individual_stage(EntityType.CLASS)) as client:
+        found = column(client, "/ind")
+    assert [heading for heading, _ in found.headings] == [
+        "Local hierarchy: Classes",
+        "Local hierarchy: Named individual",
+    ]
+    assert shown(found, 1) == [(0, IND)]
+    assert found.html.count(f'<p class="note">{NO_NAMED_TYPE}</p>') == 1
 
 
 def test_individual_types_fail(app: FastAPI, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
