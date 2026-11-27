@@ -2071,8 +2071,10 @@ too (P-38), and the JSON API's (P-33).
 - **Links** (#178): in running text and axioms, a quiet underline, 1px, offset 0.2em, in the link's color at 45%,
   full strength on hover and focus; it stays because the accent is only about 2.5:1 against `--fg`, below the 3:1
   WCAG 1.4.1 needs to tell links by color alone. Where everything is a link (the navigation bar, tree items and
-  paging links, a frame's label column), none, but on hover and focus. The search box's suggestions get none even on
-  hover: the selected one is highlighted already, and its type isn't a link of its own.
+  paging links, a frame's label column), and on a pager's Previous and Next, none, but on hover and focus; tree items
+  and their paging links are underlined on hover only, since keyboard focus there shows an outline instead. The search
+  box's suggestions get none even on hover: the selected one is highlighted already, and its type isn't a link of its
+  own.
 - Plain CSS with custom properties for the colors, type sizes, spacing and radii, so each can be tuned in one place.
   No CSS framework.
 

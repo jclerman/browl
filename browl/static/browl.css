@@ -90,7 +90,8 @@ samp {
 }
 
 /* Links (#178): a thin, faint underline in running text and axioms, so they're told apart from text without color
-   alone (the accent is about 2.5:1 against --fg); full strength on hover. Where everything is a link, below, none. */
+   alone (the accent is about 2.5:1 against --fg); full strength on hover and focus. Where everything is a link, and
+   on a pager, none; tree items are underlined on hover only, since their focus is outlined. */
 a {
   color: var(--accent);
   text-decoration-line: underline;
@@ -107,7 +108,8 @@ a:focus-visible {
 .site-nav a,
 .tree [role="treeitem"],
 .tree-paging a,
-.frame dt a {
+.frame dt a,
+.pager a {
   text-decoration-line: none;
 }
 
@@ -117,7 +119,9 @@ a:focus-visible {
 .tree [role="treeitem"]:hover,
 .tree-paging a:hover,
 .frame dt a:hover,
-.frame dt a:focus-visible {
+.frame dt a:focus-visible,
+.pager a:hover,
+.pager a:focus-visible {
   text-decoration-line: underline;
 }
 
