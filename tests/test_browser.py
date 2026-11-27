@@ -1362,6 +1362,46 @@ def test_annotation_box_whole(page: Page, server: LiveServer, monkeypatch: pytes
         assert annotation.evaluate("each => each.getClientRects().length") == 1, width
 
 
+def test_annotation_property_quiet(page: Page, server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that an axiom annotation's property is muted and not underlined, but a value that's a link is (#179).
+
+    One box's property has a page, so it's a link; the other's has none, so its value's link comes first in it.
+    """
+    comment = IRI(f"{RDFS}comment")
+    value = LiteralValue(lexical="a value", datatype=IRI(f"{XSD}string"))
+    elsewhere = owl.IRIReference(iri="https://example.org/elsewhere")
+    linked, unlinked = (
+        owl.Entity(kind=owl.EntityKind.ANNOTATION_PROPERTY, iri=iri) for iri in (f"{EX}/thing", "urn:example:note")
+    )
+    notes = (owl.Annotation(property=linked, value=elsewhere), owl.Annotation(property=unlinked, value=elsewhere))
+
+    async def fetched(*args: object) -> list[tuple[IRI, AnnotationValue]]:
+        return [(comment, value)]
+
+    async def annotations(*args: object) -> dict[tuple[IRI, AnnotationValue], tuple[owl.Annotation, ...]]:
+        return {(comment, value): notes}
+
+    monkeypatch.setattr(browl.overview, "fetch_annotations", fetched)
+    monkeypatch.setattr(browl.overview, "fetch_value_annotations", annotations)
+    monkeypatch.setattr(browl.overview, "_read_axioms", no_axioms)
+    page.goto(f"{server.url}/example.org/thing")
+    boxes = page.locator(".axiom-annotation")
+    expect(boxes).to_have_count(2)
+    style = "each => [getComputedStyle(each).textDecorationLine, getComputedStyle(each).color]"
+    muted = page.evaluate("getComputedStyle(document.querySelector('.axiom-annotation')).color")
+    values = [boxes.nth(each).locator("a", has_text="https://example.org/elsewhere") for each in range(2)]
+    linked_box = page.locator(".axiom-annotation:has(.annotation-property a)")
+    expect(page.locator(".axiom-annotation:has(.annotation-property code)")).to_have_count(1)
+    accent = values[0].evaluate("each => getComputedStyle(each).color")
+    assert accent != muted
+    for value_link in values:
+        assert value_link.evaluate(style) == ["underline", accent]
+    property_ = linked_box.locator(".annotation-property a")
+    assert property_.evaluate(style) == ["none", muted]
+    property_.hover()
+    assert property_.evaluate(style) == ["underline", accent]
+
+
 @pytest.fixture
 def framed(server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> LiveServer:
     """Return the server, every entity's logical axioms those of a class and an individual, and no annotations.

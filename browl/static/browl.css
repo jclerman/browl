@@ -1068,12 +1068,6 @@ code {
   padding: var(--sp-3) var(--sp-4);
 }
 
-/* The flexbox's gap spaces them. (Beside the results the filters were meant to be blocks, but the base rule, later,
-   overrides that, so a margin there would double the gap.) */
-.search-filters > fieldset {
-  margin: 0;
-}
-
 /* A legend inside its card, not on its edge. */
 .search-filters > fieldset > legend {
   float: left;
@@ -1234,16 +1228,15 @@ code {
   font-size: 1em; /* not smaller again */
 }
 
-/* Its property, first, is a label: not underlined, as a frame's labels aren't, until hovered. (A value that's a link is
-   first when the property isn't one; the template would mark the property, to tell them apart.) */
-.axiom-annotation > a:first-of-type,
-.axiom-annotation > mark:first-of-type > a {
+/* Its property is a label: muted and not underlined, as a frame's labels aren't, until hovered or focused. A value
+   that's a link keeps its underline. */
+.annotation-property a {
   color: inherit;
   text-decoration-line: none;
 }
 
-.axiom-annotation > a:first-of-type:hover,
-.axiom-annotation > mark:first-of-type > a:hover {
+.annotation-property a:hover,
+.annotation-property a:focus-visible {
   color: var(--accent);
   text-decoration-line: underline;
 }
@@ -1780,6 +1773,22 @@ code {
   max-width: 60rem;
 }
 
+/* The filters' groups, cards (#179), side by side as they fit, the flexbox's gap between them; before the layout
+   beside the results, below, which makes them blocks. */
+.search-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+}
+
+.search-filters > fieldset {
+  margin: 0;
+}
+
+.search-filters label {
+  display: block;
+}
+
 /* A wide, tall enough window: the form in a column on the left and the results in a panel on the right, each
    scrolling within the window, so the filters stay in view (DESIGN.md §2.9, Search). Otherwise they stack. */
 @supports selector(:has(a)) {
@@ -1913,21 +1922,6 @@ code {
 .property-choices label > span {
   min-width: 0;
   overflow-wrap: anywhere;
-}
-
-.search-filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-4);
-}
-
-.search-filters fieldset {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-.search-filters label {
-  display: block;
 }
 
 /* Stacked, the properties scroll in a box of their own; beside the results, the filters scroll as one. */
