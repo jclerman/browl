@@ -1160,16 +1160,30 @@ no CURIE. _(Q18b)_
 
 Header, above the tabs (U-5):
 
-- Display name as the title, and the entity type. An IRI with several types (punning) lists them all, e.g.
-  "Class · Object property", in the navigation bar's order, as the hierarchy column and the logical-axioms panel
-  order them. _(P-14c, P-47)_
-- A `<details>` element with the full IRI and CURIE, closed at first. The IRI is text, not a link: on a browl site it
-  often resolves to the page it's on. _(P-14c)_
-- A fixed height, so the panels below start at the same place on every entity page (U-30): the title is clamped to two
-  lines, with the full name in its tooltip; the type and the IRI's `<details>` come first, to its left, the type on one
-  line, cut short if need be, with all the types in its tooltip; the opened IRI and CURIE overlay the page rather than
-  push it down. The one-page view (U-44, 2.9) shows the title and types whole, the header still at least two
-  title lines high, so switching views doesn't move a short name. _(P-16d)_
+- Two lines, for an audience of domain experts first and ontologists second. The first: the entity's types,
+  then its display name as the title. _(P-14c, P-47)_
+- The types are badges, small, uppercase, in the accent on a tint of it, one per type for an IRI with several
+  (punning). They're in the navigation bar's order, as the hierarchy column and the logical-axioms panel order them,
+  separated by a visually hidden " · " for screen readers and copied text, and take at most 40% of the width.
+- The second line, starting where the name starts: the CURIE, if there is one, muted and monospace, then "▸ IRI", a
+  `<details>` element, closed at first, whose box shows the full IRI. The CURIE is shown, as it says at once where the
+  entity is defined; the full IRI, inline, was too noisy, and it's also in the address bar. The IRI is text, not a
+  link: on a browl site it often resolves to the page it's on. Both are shown with their bidirectional-text controls
+  encoded ([2.9](#29-page-layout)). _(P-14c)_
+- A button beside the CURIE copies it, and one in the IRI's box copies the IRI, as they are (`static/entity-page.js`).
+  For a moment a button then says "Copied", or "Couldn't copy" if the browser refuses, in its tooltip and name, and
+  the header's status region (`role="status"`) says it to screen readers. The buttons need the script, so the markup
+  hides them, and the script shows them; without it there are none. They aren't printed.
+- A fixed height, so the panels below start at the same place on every entity page (U-30): `--header-height`, one
+  title line (`--title-lines`, `--title-height`) and the second line (`--meta-row`). In the window-filling frame the
+  title is clamped to one line, with the full name in its tooltip, and the types to one line, each badge cut short
+  with "…" if need be, with all of them in its tooltip. A long CURIE is cut short too. _(P-16d)_
+- The opened IRI box opens below the second line, over the tabs, panels and hierarchy column rather than pushing them
+  down, and never over the name; it's no wider than the second line, or, on a phone, than the header, below which it
+  opens. In print it takes its own room, the CURIE on the IRI's line.
+- The one-page view (U-44, 2.9) shows the title whole and the types whole, wrapping in their column, a long badge
+  within itself, without pushing the second line from the name. The header is still at least `--header-height` high,
+  so switching views doesn't move a short name.
 
 Tabs (U-28; see [2.9](#29-page-layout)):
 
@@ -1763,8 +1777,8 @@ Every page has the same frame (U-27, U-28, U-29):
 │ <ontology name>   [ Search… ]   Classes  Object props  Admin sign-in │  navigation bar
 │                    Data props  Annotation props    hosted with browl │
 ├──────────────────────────────────────────────────────────────────────┤
-│  Class  Heart                                                        │  page header
-│  ▸ IRI                                                               │
+│  CLASS  Heart                                                        │  page header
+│         UBERON:0000948 ⧉  ▸ IRI                                      │
 │  Overview   Usage (128)                         ☐ Scroll as one page │  page tabs
 │  ═════════────────────────────────────────────────────────────────── │
 │  ┌ Annotations ───────────────┐  ┌ Logical axioms ────────────────┐  │  tab panel: the rest
@@ -2065,9 +2079,9 @@ too (P-38), and the JSON API's (P-33).
   small UI chrome `--text-sm`. Headings are semibold. Later: prose values, such as definitions, at about 15px, which
   needs a template marker to tell them apart; `tabular-nums` for counts and pager numbers.
 - **Spacing**: small gaps within a list, larger ones between sections, on a scale of tokens, `--sp-1` to `--sp-6`, and
-  radii `--radius` and `--radius-lg`. Gaps, paddings and radii use them, or a named step off the scale (a hairline, a
-  frame's group gap, a tree's indent, which is its toggle's width); em gaps beside text, and pill and circle radii,
-  are the exceptions. Works from phone width up.
+  radii `--radius-sm`, `--radius` and `--radius-lg`. Gaps, paddings and radii use them, or a named step off the scale
+  (a hairline, a frame's group gap, a tree's indent, which is its toggle's width); em gaps beside text, and pill and
+  circle radii, are the exceptions. Works from phone width up.
 - **Links**: in running text and axioms, a quiet underline, 1px, offset 0.2em, in the link's color at 45%,
   full strength on hover and focus; it stays because the accent is only about 2.5:1 against `--fg`, below the 3:1
   WCAG 1.4.1 needs to tell links by color alone. Where everything is a link (the navigation bar, tree items and

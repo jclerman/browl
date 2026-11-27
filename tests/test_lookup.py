@@ -589,18 +589,40 @@ NAMES = {
 
 
 def test_entity_header(app: FastAPI) -> None:
-    """Check the entity page's header (U-5): the display name, the types, and the IRI and CURIE in a <details>."""
+    """Check the entity page's header (U-5): the display name, the types, the CURIE, and the IRI in a <details>."""
     with TestClient(app) as client:
         run(client, app, names=NAMES)
         text = client.get("/other.org/y").text
     assert f"<title>{iso('Why &lt;y&gt;')} · {ONTO_TITLE}</title>" in text
     assert entity_heading("Why &lt;y&gt;") in text
-    assert '<p class="entity-type" title="Class · Object property">Class · Object property</p>' in text
+    assert (
+        '<p class="entity-type" title="Class · Object property"><span class="type-badge">Class</span>'
+        '<span class="visually-hidden"> · </span><span class="type-badge">Object property</span></p>'
+    ) in text
+    assert '<code class="entity-id" dir="ltr" title="oth:y">oth:y</code>' in text
+    assert '<button type="button" class="copy-button" data-copy="oth:y" data-label="Copy the CURIE" hidden>' in text
     start = text.index('<details class="entity-iri">')
     details = text[start : text.index("</details>", start)]
-    assert f"<dd>{CODE}http://other.org/y</code></dd>" in details
-    assert "<dt>CURIE</dt>" in details
-    assert f"<dd>{CODE}oth:y</code></dd>" in details
+    assert f"<dd>{CODE}http://other.org/y</code> " in details
+    assert (
+        '<button type="button" class="copy-button" data-copy="http://other.org/y" data-label="Copy the IRI" hidden>'
+    ) in details
+    assert "CURIE" not in details  # shown on the line itself
+
+
+def test_entity_header_bidi_encoded(app: FastAPI) -> None:
+    """Check that the header shows a CURIE's and an IRI's bidi controls encoded, but copies them as they are.
+
+    See DESIGN.md §2.9; review S2.
+    """
+    iri, curie = "http://other.org/y\u202e", "oth:y\u202e"
+    with TestClient(app) as client:
+        run(client, app, [(iri, EntityType.CLASS)], names={iri: ("Why", curie)})
+        text = client.get("/other.org/y%E2%80%AE").text
+    assert '<code class="entity-id" dir="ltr" title="oth:y%E2%80%AE">oth:y%E2%80%AE</code>' in text
+    assert f"<dd>{CODE}http://other.org/y%E2%80%AE</code> " in text
+    assert f'data-copy="{curie}"' in text
+    assert f'data-copy="{iri}"' in text
 
 
 def test_entity_header_types_order(app: FastAPI) -> None:
@@ -614,8 +636,11 @@ def test_entity_header_types_order(app: FastAPI) -> None:
     with TestClient(app) as client:
         run(client, app, entities)
         text = client.get("/other.org/pun").text
-    types = "Object property · Annotation property · Named individual"
-    assert f'<p class="entity-type" title="{types}">{types}</p>' in text
+    names = ["Object property", "Annotation property", "Named individual"]
+    badges = '<span class="visually-hidden"> · </span>'.join(
+        f'<span class="type-badge">{each}</span>' for each in names
+    )
+    assert f'<p class="entity-type" title="{" · ".join(names)}">{badges}</p>' in text
 
 
 def test_entity_header_without_names(client: TestClient) -> None:
@@ -623,7 +648,7 @@ def test_entity_header_without_names(client: TestClient) -> None:
     text = client.get("/other.org/y").text
     assert entity_heading("http://other.org/y") in text
     assert f"<title>{iso('http://other.org/y')} · {ONTO_TITLE}</title>" in text
-    assert f"<dd>{CODE}http://other.org/y</code></dd>" in text
+    assert f"<dd>{CODE}http://other.org/y</code> " in text
     assert "CURIE" not in text
 
 

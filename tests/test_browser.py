@@ -1192,18 +1192,15 @@ def test_entity_header_iri_folded(page: Page, server: LiveServer) -> None:
 
 @pytest.mark.parametrize("scheme", ["light", "dark"])
 def test_entity_header_look(page: Page, server: LiveServer, scheme: str) -> None:
-    """Check that the header's type line and the IRI's summary are muted, unlike the heading."""
+    """Check that the header's types are accent-colored badges, and the IRI's summary muted (#180)."""
     page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
     page.goto(f"{server.url}/example.org/plain")
     color = "(element) => getComputedStyle(element).color"
-    muted = page.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--muted').trim()")
-    probe = page.evaluate(
-        f"""() => {{ const probe = document.createElement('span'); probe.style.color = '{muted}';
-        document.body.append(probe); const value = getComputedStyle(probe).color; probe.remove(); return value; }}"""
-    )
+    muted = token_color(page, "muted")
     heading = page.locator("main h1").evaluate(color)
-    assert page.locator(".entity-type").evaluate(color) == probe != heading
-    assert page.locator(".entity-iri summary").evaluate(color) == probe
+    expect(page.locator(".type-badge")).to_have_text("Class")
+    assert page.locator(".type-badge").evaluate(color) == token_color(page, "accent")
+    assert page.locator(".entity-iri summary").evaluate(color) == muted != heading
 
 
 # The Overview tab's annotations panel (P-16a, DESIGN.md §2.8, U-30, U-32)
@@ -1573,9 +1570,8 @@ FEW, MANY = "plain", "thing"
 MANY_VALUES = 80
 
 
-@pytest.fixture
-def varied(server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> LiveServer:
-    """Return the server, `FEW` with one annotation and no axioms, `MANY` with `MANY_VALUES` of each (no Fuseki)."""
+def vary_overview(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give each entity's Overview one annotation and no axioms, and `MANY` `MANY_VALUES` of each (no Fuseki)."""
     label, comment = IRI(f"{RDFS}label"), IRI(f"{RDFS}comment")
     string = IRI(f"{XSD}string")
 
@@ -1595,6 +1591,12 @@ def varied(server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> LiveServer:
     monkeypatch.setattr(browl.overview, "fetch_annotations", fetched)
     monkeypatch.setattr(browl.overview, "fetch_value_annotations", no_value_annotations)
     monkeypatch.setattr(browl.overview, "_read_axioms", read_axioms)
+
+
+@pytest.fixture
+def varied(server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> LiveServer:
+    """Return the server, `FEW` with one annotation and no axioms, `MANY` with `MANY_VALUES` of each (no Fuseki)."""
+    vary_overview(monkeypatch)
     return server
 
 
@@ -2025,26 +2027,40 @@ def test_toggle_follows_changes(page: Page, varied: LiveServer) -> None:
     expect(one_page_toggle(page)).not_to_be_checked()
 
 
-def test_header_fixed_height(page: Page, varied: LiveServer) -> None:
-    """Check that a long name is clamped to two lines, whole in its tooltip, and the opened IRI overlays the panels.
+def badges_right(page: Page) -> float:
+    """Return the right edge of the header's rightmost type badge."""
+    return max(each["x"] + each["width"] for each in map(box, page.locator(".type-badge").all()))
 
-    Neither moves the panels.
+
+def test_header_fixed_height(page: Page, varied: LiveServer) -> None:
+    """Check that a long name is clamped to one line, whole in its tooltip, and the opened IRI covers what's below.
+
+    Many types take one line, at most 40% of the header's width, before the name, each badge cut short with "…".
+    None of these moves the panels.
     """
     page.set_viewport_size(MEDIUM)
     page.goto(f"{varied.url}/example.org/{FEW}")
     heading = page.locator("main h1")
     expect(heading).to_have_attribute("title", iso(f"{EX}/{FEW}"))
     line = box(heading)["height"]
-    assert box(page.locator(".entity-meta"))["x"] < box(heading)["x"]  # type and IRI first
+    meta = box(page.locator(".entity-meta"))
+    assert box(heading)["y"] + box(heading)["height"] <= meta["y"]  # the CURIE and IRI on a line below
     shown = panels(page)
     heading.evaluate("(each) => { each.textContent = 'long name '.repeat(60); }")
-    assert 1.5 * line < box(heading)["height"] < 2.5 * line
+    assert abs(box(heading)["height"] - line) < 1
     assert panels(page) == shown
     types = page.locator(".entity-type")
     type_line = box(types)["height"]
-    types.evaluate("(each) => { each.textContent = 'Class · '.repeat(30); }")
-    assert box(types)["height"] == type_line  # one line, cut short
-    assert types.evaluate("(each) => each.scrollWidth > each.clientWidth")
+    types.evaluate(f"(each) => {{ each.innerHTML = '{LONG_TYPES * 3}'; }}")
+    assert box(types)["height"] < 1.5 * type_line  # one line
+    assert box(types)["width"] <= 0.4 * box(page.locator(".entity-header"))["width"] + 1
+    assert badges_right(page) <= box(heading)["x"]
+    badge = page.locator(".type-badge").first
+    assert badge.evaluate("(each) => each.scrollWidth > each.clientWidth")  # cut short
+    assert badge.evaluate("(each) => getComputedStyle(each).textOverflow") == "ellipsis"
+    types.evaluate(f"(each) => {{ each.innerHTML = '{LONG_TYPES * 30}'; }}")  # more badges than their padding fits
+    assert box(types)["x"] + box(types)["width"] <= box(heading)["x"]
+    assert types.evaluate("(each) => getComputedStyle(each).overflowX") == "hidden"  # the rest clipped
     assert panels(page) == shown
     page.locator(".entity-iri summary").click()
     iri = page.locator(".entity-iri dd code")
@@ -2053,19 +2069,221 @@ def test_header_fixed_height(page: Page, varied: LiveServer) -> None:
     header = box(page.locator(".entity-header"))
     details = box(page.locator(".entity-iri dl"))
     assert details["y"] + details["height"] > header["y"] + header["height"]  # over what's below the header
+    assert details["y"] >= box(heading)["y"] + box(heading)["height"]  # never over the name
+
+
+@pytest.mark.parametrize("size", [MEDIUM, NARROW], ids=["toggled", "narrow"])
+def test_header_one_page_whole(page: Page, varied: LiveServer, size: dict[str, int]) -> None:
+    """Check that the one-page view shows a long name whole, and many long types whole, wrapping in their column.
+
+    The types stay clear of the name, and the CURIE's line stays under the name, however many lines the types take.
+    """
+    page.set_viewport_size(size)
+    page.goto(f"{varied.url}/example.org/{FEW}")
+    if size == MEDIUM:
+        one_page_toggle(page).check()
+    heading, types = page.locator("main h1"), page.locator(".entity-type")
+    line, type_line = box(heading)["height"], box(types)["height"]
+    heading.evaluate("(each) => { each.textContent = 'name '.repeat(12); }")
+    types.evaluate(f"(each) => {{ each.innerHTML = '{LONG_TYPES * 3}'; }}")
+    assert box(heading)["height"] > 1.5 * line  # wrapped, not clamped
+    assert not heading.evaluate("(each) => each.scrollHeight > each.clientHeight")
+    assert box(types)["height"] > 1.5 * type_line  # wrapped, not cut short
+    for each in [types, *page.locator(".type-badge").all()]:
+        assert not each.evaluate("(each) => each.scrollWidth > each.clientWidth")
+    assert badges_right(page) <= box(heading)["x"]
+    meta = box(page.locator(".entity-meta"))
+    assert 0 <= meta["y"] - (box(heading)["y"] + box(heading)["height"]) < 4
+    assert box(types)["y"] + box(types)["height"] > meta["y"] + meta["height"]  # the types go on below it
+
+
+@pytest.mark.parametrize("size", [WIDE, MEDIUM], ids=["wide", "medium"])
+def test_header_alike_across_pages(page: Page, headed: LiveServer, size: dict[str, int]) -> None:
+    """Check that the panels start at the same place with a CURIE and several types as with neither.
+
+    On both, the line under the name starts where the name starts.
+    """
+    page.set_viewport_size(size)
+    shown = []
+    for entity, curies, types in [(PUN, 1, 3), (FEW, 0, 1)]:
+        page.goto(f"{headed.url}/example.org/{entity}")
+        expect(page.locator(".entity-id")).to_have_count(curies)
+        expect(page.locator(".type-badge")).to_have_count(types)
+        first = page.locator(".entity-meta > *").first
+        assert abs(box(first)["x"] - box(page.locator("main h1"))["x"]) < 1
+        shown.append(panels(page))
+    assert shown[0] == shown[1]
+
+
+def test_long_curie_cut(page: Page, headed: LiveServer) -> None:
+    """Check that a long CURIE is cut short with "…", its copy button and the IRI's summary still in view."""
+    page.set_viewport_size(MEDIUM)
+    page.goto(f"{headed.url}/example.org/{PUN}")
+    line = box(page.locator(".entity-iri summary"))["height"]
+    curie = page.locator(".entity-id")
+    curie.evaluate("(each) => { each.textContent = 'ex:' + 'x'.repeat(300); }")
+    assert curie.evaluate("(each) => each.scrollWidth > each.clientWidth")
+    assert curie.evaluate("(each) => getComputedStyle(each).textOverflow") == "ellipsis"
+    header = box(page.locator(".entity-header"))
+    summary = page.locator(".entity-iri summary")
+    for each in (copy_button(page, "Copy the CURIE"), summary):
+        assert box(each)["x"] + box(each)["width"] <= header["x"] + header["width"]
+    assert box(summary)["height"] == line  # "▸ IRI" not squeezed onto two lines
+    summary.click()
+    assert_fits(page)
+
+
+def test_header_printed(page: Page, headed: LiveServer) -> None:
+    """Check that printed, the CURIE stays on the opened IRI's line, not beside its box, without copy buttons."""
+    page.set_viewport_size(WIDE)
+    page.emulate_media(media="print")
+    page.goto(f"{headed.url}/example.org/{PUN}")
+    page.locator(".entity-iri summary").click()
+    expect(page.locator(".entity-iri dd code")).to_be_visible()
+    summary = box(page.locator(".entity-iri summary"))
+    assert box(page.locator(".entity-id"))["y"] < summary["y"] + summary["height"]
+    expect(page.locator(".copy-button").first).to_be_hidden()
+    details = box(page.locator(".entity-iri dl"))
+    heading = box(page.locator("main h1"))
+    assert details["y"] >= heading["y"] + heading["height"]  # never over the name
 
 
 def test_right_to_left_name(page: Page, varied: LiveServer) -> None:
     """Check that a right-to-left name is laid out right to left, so cut short it ends in "…" on its left.
 
-    The type and IRI stay first, on the left.
+    The types and the name share a line, the types first, on the left; the CURIE and IRI are on a line below.
     """
     page.set_viewport_size(MEDIUM)
     page.goto(f"{varied.url}/example.org/{FEW}")
     heading = page.locator("main h1")
     heading.evaluate("(each) => { each.textContent = 'שם ארוך '.repeat(60); }")
     assert heading.evaluate("(each) => getComputedStyle(each).direction") == "rtl"
-    assert box(page.locator(".entity-meta"))["x"] < box(heading)["x"]
+    meta = box(page.locator(".entity-meta"))
+    assert box(heading)["y"] + box(heading)["height"] <= meta["y"]
+    assert box(page.locator(".entity-type"))["x"] <= box(heading)["x"] + 1
+
+
+PUN, PUN_CURIE = "pun", "ex:pun"
+"""`headed`'s entity with a CURIE and three types, and that CURIE; its `FEW` has no CURIE and one type."""
+
+
+@pytest.fixture
+def headed(live_server: Callable[[FastAPI], LiveServer], monkeypatch: pytest.MonkeyPatch) -> LiveServer:
+    """Return a live server with `PUN` and `FEW`, at /example.org/…, their Overviews as `varied`'s (no Fuseki)."""
+    vary_overview(monkeypatch)
+    pun = f"{EX}/{PUN}"
+    entities = [(pun, kind) for kind in (EntityType.CLASS, EntityType.OBJECT_PROPERTY, EntityType.ANNOTATION_PROPERTY)]
+    server = live_server(make_app(BASE_URL="http://localhost:8000/"))
+    stage = derived_stage([*entities, (f"{EX}/{FEW}", EntityType.CLASS)], names={pun: ("A pun", PUN_CURIE)})
+    server.app.state.jobs.register(Stage.PRE_CACHING, stage)
+    server.call(server.app.state.jobs.start())
+    server.call(server.app.state.jobs.wait())
+    return server
+
+
+def pause_clock(page: Page) -> None:
+    """Stop the page's clock, installed before it loaded, so that only `page.clock.run_for` moves it."""
+    now: float = page.evaluate("Date.now()")
+    page.clock.pause_at(datetime.fromtimestamp(now / 1000 + 1, UTC))
+
+
+def copy_button(page: Page, label: str) -> Locator:
+    """Return the header's copy button with a resting label, e.g. "Copy the IRI"."""
+    return page.locator(f".copy-button[data-label='{label}']")
+
+
+def clipboard(page: Page) -> str:
+    """Return the clipboard's text."""
+    result: str = page.evaluate("navigator.clipboard.readText()")
+    return result
+
+
+def expect_said(page: Page, button: Locator, said: str, label: str) -> None:
+    """Check that a copy button says what happened in its tooltip and name and to screen readers, or that it doesn't.
+
+    It says nothing, and has its resting label, if `said` is empty.
+    """
+    expect(button).to_have_accessible_name(said or label)
+    expect(button).to_have_attribute("title", said or label)
+    expect(page.locator(".entity-header [role='status']")).to_have_text(said)
+
+
+@pytest.mark.parametrize(("label", "value"), [("Copy the CURIE", PUN_CURIE), ("Copy the IRI", f"{EX}/{PUN}")])
+def test_copy_button(page: Page, headed: LiveServer, label: str, value: str) -> None:
+    """Check that a copy button copies its value, and says so for a moment, also after a second click (review M3, S1).
+
+    A second click within the moment starts it afresh; after it, the button has its label back.
+    """
+    page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+    page.clock.install()
+    page.goto(f"{headed.url}/example.org/{PUN}")
+    pause_clock(page)
+    page.locator(".entity-iri summary").click()
+    button = copy_button(page, label)
+    expect_said(page, button, "", label)
+    button.click()
+    expect_said(page, button, "Copied", label)
+    expect(button).to_contain_class("copied")
+    assert clipboard(page) == value
+    page.clock.run_for(1000)
+    page.evaluate("navigator.clipboard.writeText('')")
+    button.click()
+    wait_until(page, lambda: clipboard(page) == value, "the second copy")
+    page.clock.run_for(1000)  # past the first click's moment
+    expect_said(page, button, "Copied", label)
+    page.clock.run_for(600)
+    expect_said(page, button, "", label)
+    expect(button).not_to_contain_class("copied")
+
+
+def test_copy_button_fails(page: Page, headed: LiveServer) -> None:
+    """Check that a copy button that can't copy says so for a moment, and isn't marked copied."""
+    page.add_init_script(
+        "Object.defineProperty(Clipboard.prototype, 'writeText', { value: () => Promise.reject(new Error('denied')) })"
+    )
+    page.clock.install()
+    page.goto(f"{headed.url}/example.org/{PUN}")
+    pause_clock(page)
+    button = copy_button(page, "Copy the CURIE")
+    button.click()
+    expect_said(page, button, "Couldn't copy", "Copy the CURIE")
+    expect(button).not_to_contain_class("copied")
+    page.clock.run_for(1500)
+    expect_said(page, button, "", "Copy the CURIE")
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_copy_button_look(page: Page, headed: LiveServer, scheme: str) -> None:
+    """Check that a copy button is muted, and the success color once it has copied."""
+    page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
+    page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+    page.goto(f"{headed.url}/example.org/{PUN}")
+    button = copy_button(page, "Copy the CURIE")
+    color = "(each) => getComputedStyle(each).color"
+    assert button.evaluate(color) == token_color(page, "muted")
+    button.click()
+    expect(button).to_contain_class("copied")
+    page.mouse.move(0, 0)
+    assert button.evaluate(color) == token_color(page, "done-fg")
+
+
+@NO_JS
+def test_copy_buttons_without_javascript(page: Page, headed: LiveServer) -> None:
+    """Check that, without JavaScript, which they need, the copy buttons are hidden (review S4)."""
+    page.goto(f"{headed.url}/example.org/{PUN}")
+    page.locator(".entity-iri summary").click()
+    expect(page.locator(".entity-iri dd code")).to_be_visible()
+    expect(page.locator(".copy-button")).to_have_count(2)
+    for each in page.locator(".copy-button").all():
+        expect(each).to_be_hidden()
+
+
+def test_copy_button_on_hash_page(page: Page, server: LiveServer) -> None:
+    """Check that a hash entity's page, which the hash-IRI script moves in, gets a working copy button."""
+    page.goto(f"{server.url}/example.org/vocab#Gamma")
+    expect(page.locator("main h1")).to_have_text(f"{EX}/vocab#Gamma")
+    page.locator(".entity-iri summary").click()
+    expect(page.get_by_role("button", name="Copy the IRI")).to_be_visible()
 
 
 def on_top(page: Page, x: float, y: float, selector: str) -> bool:
@@ -2078,10 +2296,26 @@ COVERING = """(element) => {
   const rect = element.getBoundingClientRect();
   const width = document.documentElement.clientWidth;
   const height = document.documentElement.clientHeight;
+  const style = getComputedStyle(element);
+  // Each corner's radii, across and down, and whether a point lies outside its curve, or within 1px inside it,
+  // where anti-aliasing may draw what's below.
+  const corners = [["Top", "Left"], ["Top", "Right"], ["Bottom", "Left"], ["Bottom", "Right"]].map(([v, h]) => {
+    const [across, down = across] = style[`border${v}${h}Radius`].split(" ").map(parseFloat);
+    const cx = h === "Left" ? rect.left + across : rect.right - across;
+    const cy = v === "Top" ? rect.top + down : rect.bottom - down;
+    return (x, y) => {
+      const dx = h === "Left" ? cx - x : x - cx;
+      const dy = v === "Top" ? cy - y : y - cy;
+      return across > 1 && down > 1 && dx > 0 && dy > 0 && (dx / (across - 1)) ** 2 + (dy / (down - 1)) ** 2 > 1;
+    };
+  });
   const found = new Set();
-  // Every 16px across and 5px down, finer than a heading or a tree row; 1px in from the edges, which round.
+  // Every 16px across and 5px down, finer than a heading or a tree row; 1px in from the edges, and inside the corners.
   for (let x = rect.left + 1; x < Math.min(rect.right, width) - 1; x += 16) {
     for (let y = rect.top + 1; y < Math.min(rect.bottom, height) - 1; y += 5) {
+      if (corners.some((outside) => outside(x, y))) {
+        continue;
+      }
       const shown = document.elementFromPoint(x, y);
       if (shown && !element.contains(shown) && !shown.closest(".site-bar")) {
         found.add(`<${shown.localName}${[...shown.classList].map((each) => "." + each).join("")}>`);
@@ -2113,6 +2347,30 @@ def test_iri_box_stacking(page: Page, varied: LiveServer) -> None:
     heading = box(page.locator(".annotations h2"))
     assert box(page.locator(".entity-iri dl"))["y"] + box(page.locator(".entity-iri dl"))["height"] > heading["y"]
     assert covered_by(page.locator(".entity-iri dl")) == []
+
+
+LONG_TYPES = '<span class="type-badge">Annotation property</span>' * 3
+"""Several long type badges, for an `.entity-type`'s `innerHTML`."""
+
+
+@pytest.mark.parametrize("width", [320, 375, 390, 800])
+def test_iri_box_fits(page: Page, varied: LiveServer, width: int) -> None:
+    """Check that the opened IRI box, with a long IRI, fits the window, below the CURIE's line and clear of the name.
+
+    Phones get the one-page view, where the box takes the header's width; at 800px, the frame, with several long types
+    taking the most room they may.
+    """
+    page.set_viewport_size({"width": width, "height": 700})
+    page.goto(f"{varied.url}/example.org/{FEW}")
+    page.locator(".entity-type").evaluate(f"(each) => {{ each.innerHTML = '{LONG_TYPES}'; }}")
+    page.locator(".entity-iri summary").click()
+    page.locator(".entity-iri dd code").evaluate(f"(each) => {{ each.textContent = '{LONG_IRI}'; }}")
+    assert_fits(page)
+    details, meta, heading = (box(page.locator(each)) for each in (".entity-iri dl", ".entity-meta", "main h1"))
+    assert details["y"] >= meta["y"] + meta["height"]  # below the CURIE's line
+    assert details["y"] >= heading["y"] + heading["height"]  # never over the name
+    if width < 640:
+        assert details["x"] == box(page.locator(".entity-header"))["x"]
 
 
 def test_other_tab_fills_frame(page: Page, varied: LiveServer) -> None:
@@ -3135,7 +3393,7 @@ def test_iri_box_over_column(page: Page, trees: LiveServer, size: dict[str, int]
     details.evaluate("(each) => each.insertAdjacentHTML('beforeend', '<dt>more</dt><dd>line</dd>'.repeat(20))")
     heading = box(hierarchy_column(page).locator("h2").first)
     shown = box(details)
-    assert shown["x"] < heading["x"] + 8 < shown["x"] + shown["width"]
+    assert shown["x"] < heading["x"] + heading["width"] and heading["x"] < shown["x"] + shown["width"]
     assert shown["y"] < heading["y"] and heading["y"] + heading["height"] < shown["y"] + shown["height"]
     assert covered_by(details) == []
 
