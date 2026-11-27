@@ -1037,7 +1037,8 @@ code {
 }
 
 /* Cards: what's read sits on a surface a little lighter than the page, without a border: the panels, the
-   hierarchy column, a tree page's tree, the Usage tab's usages, the search filters and results, and the upload form.
+   hierarchy column, a tree page's tree, the Usage tab's usages, the search filters and results, and the upload form's
+   Reasoner group.
    `--layer` is a card's surface, which what sticks within it takes, to cover what scrolls beneath. A plain list, not
    `:is()`, so each selector keeps its own specificity, and a later rule for one card overrides this. */
 .panel,
@@ -1073,7 +1074,8 @@ code {
 }
 
 /* A legend inside its card, not on its edge. */
-.search-filters > fieldset > legend {
+.search-filters > fieldset > legend,
+.upload-controls > fieldset > legend {
   float: left;
   width: 100%;
   margin-bottom: var(--sp-2);
