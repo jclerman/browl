@@ -1440,15 +1440,14 @@ is (below). Uberon's 67 individuals' pages take 14 ms at p50 and 58 ms at p95, t
   - **Individuals** _(P-47)_: Types, Same As, Different From, Object property assertions, Data property assertions, and
     Negative property assertions. Each property under Object and Data property assertions is a group of its own
     (`AxiomGroup.property`): the section's label spans both columns, then the property's name, indented, with its
-    values, as an annotation's are; in a narrow window, where the values go under the labels, they're a step further
+    values, as an annotation's are; in a narrow panel, where the values go under the labels, they're a step further
     in than the property (Compact layout, below). Same As has a line per other member, Different From one per axiom,
     its others separated by commas, and a negative assertion is `property value`. A punned individual's assertions go
     under these sections, after its other kinds', not Other axioms; an assertion of an inverse property is shown whole
     there.
     Its Types section is shown even if it has no types, with the note "None asserted.": it's where a reader looks
     first, and the only place that says so when the hierarchy column ("No named type") is folded away. A type that's
-    a class expression is a type, so its Types aren't empty. Its other sections are omitted when empty, as every
-    entity's are.
+    a class expression is a type, so its Types aren't empty.
   - **Frame-style lines** (`browl.frames`): a line shows an axiom by its operands that aren't the entity, from its
     named roles: on Heart's page, `Heart SubClassOf Organ` is `Organ` under SubClass Of.
     - An n-ary disjointness is one line, its other members separated by commas, as are a disjoint union's members and
@@ -1477,8 +1476,8 @@ is (below). Uberon's 67 individuals' pages take 14 ms at p50 and 58 ms at p95, t
     axioms, which are no one type's, come after the groups, under no heading. An IRI with one type's sections, Other
     axioms besides or not, has no headings. _(P-47)_
   - **Symmetric axioms:** one stated on another entity shows the page's entity first. A section shows only the
-    other members (`B` under Disjoint With on A's page); an axiom shown whole, such as an individual's `SameAs` under
-    Other axioms, is written with the entity first (`browl.owl.Axiom.with_first`), as on the Usage tab. _(P-27b)_
+    other members (`B` under Disjoint With on A's page); an axiom shown whole, such as an inverse property's assertion
+    under Other axioms, is written with the entity first (`browl.owl.Axiom.with_first`), as on the Usage tab. _(P-27b)_
   - **The entity highlighted** where a line shows it, such as in a general class axiom, as on the Usage tab
     (`<mark>`); not in the annotations panel. The frame keeps its two columns. _(P-27b)_
   - **Line breaks and keyword styles** (P-37): long axioms, with more than one set of parentheses, will be broken
@@ -1539,18 +1538,11 @@ is (below). Uberon's 67 individuals' pages take 14 ms at p50 and 58 ms at p95, t
   little more between groups. Multi-column values for long lists are Later (U-33). Each panel is a `<dl class="frame">`,
   one `<dt>` per group and one `<dd>` per value; in a narrow panel the values go below their label. The label
   column fits its labels up to 12rem, so a long one, such as an IRI, wraps rather than squeezing the values.
-  _(P-16a)_ A panel stacks its frame by its own width, with a CSS container query, not by the window's: side by side,
-  or beside the hierarchy column, a panel can be narrow in a wide window. It stacks under 30rem, so two columns leave
-  a value at least 17rem beside a full label column, and the two panels side by side keep two columns in a desktop
-  window (about 1300px and wider), while one squeezed beside the hierarchy column stacks, its values and their axiom
-  annotations' boxes no longer wrapped into a narrow strip. A panel the page's full width stacks about where a
-  phone's window (under 40rem) did. The
-  Usage tab switches its own narrow layout the same way. Stacked, each level is a small step (`--frame-step`,
-  0.75rem) under the one above, at any width, so a value isn't taken for a label and the nesting reads on a phone
-  without costing much width: a value under its label (in the annotations panel, the logical axioms for every kind of
-  entity, and the home page's panels), and a usage under its subject; a property assertion's values under the
-  property, under its section's label; a punned IRI's sections, and its property assertions' heading, under their
-  type's heading, which isn't indented. A wrapped line keeps its hanging indent. _(P-47)_
+  _(P-16a)_ A panel (and the Usage tab) stacks its frame below 30rem of its own width, by a CSS container query, so a
+  panel narrowed by the hierarchy column or the panel beside it stacks even in a wide window. Stacked, each level is
+  indented `--frame-step` (0.75rem) under the one above: a value under its label, an individual's property under its
+  section label and its values under the property, a punned IRI's sections under their type's heading, a usage under
+  its subject. A wrapped line keeps its hanging indent. _(P-47)_
 
 **Panel data apart from its HTML** (for U-42): each panel and tab is built in two steps. First a function returns its
 content as typed data (Pydantic models), with no HTML in it: annotations grouped by property, axioms grouped by kind,
@@ -1918,7 +1910,7 @@ CSS nesting gets the one-page view, without the toggle. _(P-16d)_
   - **An individual's column** _(P-47)_: its named types' ancestors in the class hierarchy as one merged tree, each
     drawn once, with the individual beneath its types, and no children or siblings; a type with no subclasses is open
     above it. The individual's label leads with a diamond (◆), with "(named individual)" for screen readers, so it isn't
-    taken for a class; circles are kept for a class icon, if one is added. Its types are read from Fuseki
+    taken for a class. Its types are read from Fuseki
     (`individual-types.rq`, `hierarchy_column.fetch_types`: by IRI, at most `MAX_ANCESTORS`, with their count), while
     the tab is read, as the derived database holds no types until P-48's `member`. They're the first level read, so they
     count toward `MAX_ANCESTORS`; past it, the column says how many types are left out ("N more types aren't shown.").
