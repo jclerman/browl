@@ -1340,6 +1340,62 @@ def test_annotation_box_whole(page: Page, server: LiveServer, monkeypatch: pytes
         assert annotation.evaluate("each => each.getClientRects().length") == 1, width
 
 
+@pytest.fixture
+def framed(server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> LiveServer:
+    """Return the server, every entity's logical axioms those of a class and an individual, and no annotations.
+
+    Under "Class", SubClass Of has a long IRI, which wraps on a phone; under "Named individual", Types, then one
+    object property's assertion.
+    """
+    thing, individual = f"{EX}/thing", owl.EntityKind.NAMED_INDIVIDUAL
+    entity, its = owl.Entity(kind=owl.EntityKind.CLASS, iri=thing), owl.Entity(kind=individual, iri=thing)
+    likes = owl.Entity(kind=owl.EntityKind.OBJECT_PROPERTY, iri=f"{EX}/likes")
+    axioms = [
+        owl.SubClassOf(sub=entity, super=owl.Entity(kind=owl.EntityKind.CLASS, iri=f"{EX}/{'long' * 40}")),
+        owl.ClassAssertion(individual=its, class_=owl.Entity(kind=owl.EntityKind.CLASS, iri=f"{EX}/Type")),
+        owl.ObjectPropertyAssertion(subject=its, property=likes, object=owl.Entity(kind=individual, iri=f"{EX}/x")),
+    ]
+
+    async def read_axioms(*args: object) -> ReadAxioms:
+        return ReadAxioms(axioms)
+
+    async def fetched(*args: object) -> list[tuple[IRI, AnnotationValue]]:
+        return []
+
+    monkeypatch.setattr(browl.overview, "fetch_annotations", fetched)
+    monkeypatch.setattr(browl.overview, "fetch_value_annotations", no_value_annotations)
+    monkeypatch.setattr(browl.overview, "_read_axioms", read_axioms)
+    return server
+
+
+def test_axioms_indented_narrow(page: Page, framed: LiveServer) -> None:
+    """Check that on a phone the logical axioms' values are a step under their label, a property's a step further.
+
+    The headings for a punned IRI's types aren't indented, and a wrapped line keeps its hanging indent.
+    """
+    page.set_viewport_size(NARROW)
+    page.goto(f"{framed.url}/example.org/thing")
+    panel = page.locator("section.axioms")
+    left = box(panel.locator(".frame dt").first)["x"]
+    assert abs(box(panel.locator(".frame-kind h3").first)["x"] - left) < 1
+    value = box(panel.locator(".frame dd").first)
+    step = value["x"] - left
+    assert step > 4
+    assert value["y"] >= box(panel.locator(".frame dt").first)["y"]
+    lines = panel.locator(".frame dd").first.evaluate(
+        "(each) => { const range = document.createRange(); range.selectNodeContents(each);"
+        " return [...range.getClientRects()].map((rect) => rect.x); }"
+    )
+    assert min(lines) == pytest.approx(value["x"], abs=1)  # the first line starts at the value's edge
+    assert max(lines) > value["x"] + 4  # and the rest hang
+    assert abs(box(panel.locator("dt:not(.frame-heading):not(.frame-property)").nth(1))["x"] - left) < 1  # Types
+    named = box(panel.locator("dt.frame-property code"))
+    assert named["x"] - left == pytest.approx(step, abs=1)
+    assert box(panel.locator("dd.frame-value"))["x"] - left == pytest.approx(2 * step, abs=1)
+    page.set_viewport_size(WIDE)
+    assert box(panel.locator(".frame dd").first)["x"] == pytest.approx(box(panel.locator("dd.frame-value"))["x"])
+
+
 # The window-filling frame (P-16d, DESIGN.md §2.9, U-30, U-44)
 
 MEDIUM = {"width": 800, "height": 800}

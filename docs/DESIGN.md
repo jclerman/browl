@@ -1441,10 +1441,11 @@ is (below). Uberon's 67 individuals' pages take 14 ms at p50 and 58 ms at p95, t
   - **Individuals** _(P-47)_: Types, Same As, Different From, Object property assertions, Data property assertions, and
     Negative property assertions. Each property under Object and Data property assertions is a group of its own
     (`AxiomGroup.property`): the section's label spans both columns, then the property's name, indented, with its
-    values, as an annotation's are; in a narrow window, where the values go under the labels, they're indented under
-    their property. Same As has a line per other member, Different From one per axiom, its others separated by commas,
-    and a negative assertion is `property value`. A punned individual's assertions go under these sections, after its
-    other kinds', not Other axioms; an assertion of an inverse property is shown whole there.
+    values, as an annotation's are; in a narrow window, where the values go under the labels, they're a step further
+    in than the property (Compact layout, below). Same As has a line per other member, Different From one per axiom,
+    its others separated by commas, and a negative assertion is `property value`. A punned individual's assertions go
+    under these sections, after its other kinds', not Other axioms; an assertion of an inverse property is shown whole
+    there.
     Its Types section is shown even if it has no types, with the note "None asserted.": it's where a reader looks
     first, and the only place that says so when the hierarchy column ("No named type") is folded away. A type that's
     a class expression is a type, so its Types aren't empty. Its other sections are omitted when empty, as every
@@ -1537,8 +1538,12 @@ is (below). Uberon's 67 individuals' pages take 14 ms at p50 and 58 ms at p95, t
     them), and each panel why they're left out, if they are (`annotations_left_out`), so the JSON API returns them too.
 - **Compact layout** (U-32): label column and value column in a two-column grid; tight line spacing within a group and a
   little more between groups. Multi-column values for long lists are Later (U-33). Each panel is a `<dl class="frame">`,
-  one `<dt>` per group and one `<dd>` per value; on a phone the values go below their label. The label column fits
-  its labels up to 20rem, so a long one, such as an IRI, wraps rather than squeezing the values. _(P-16a)_
+  one `<dt>` per group and one `<dd>` per value; on a phone (under 40rem) the values go below their label. The label
+  column fits its labels up to 20rem, so a long one, such as an IRI, wraps rather than squeezing the values.
+  _(P-16a)_ On a phone, the logical axioms' values are indented a step under their label, for every kind of entity,
+  so a value isn't taken for a label; a wrapped line keeps its hanging indent. A property assertion's values are a step
+  under the property, which is a step under its section's label; a punned IRI's headings for its types aren't
+  indented. The other panels' values aren't indented. _(P-47)_
 
 **Panel data apart from its HTML** (for U-42): each panel and tab is built in two steps. First a function returns its
 content as typed data (Pydantic models), with no HTML in it: annotations grouped by property, axioms grouped by kind,

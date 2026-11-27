@@ -1059,8 +1059,13 @@ code {
     margin-top: 0;
   }
 
-  /* A property's values, indented under it, as its name is under its section's label. */
-  .frame dd.frame-value {
+  /* The logical axioms' values, each a step under its label, so they're told apart: a section's under its label; a
+     property's under its name, itself a step under its section's label (DESIGN.md §2.8). */
+  .axioms .frame dd {
+    margin-left: var(--space);
+  }
+
+  .axioms .frame dd.frame-value {
     margin-left: calc(var(--space) * 2);
   }
 }
