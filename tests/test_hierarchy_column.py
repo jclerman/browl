@@ -597,6 +597,19 @@ def test_individual(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
     assert '<p class="note">' not in found.html
 
 
+def test_individual_open_leaf_type(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that a type with no subclasses, open above the individual, owns its group, with no counts to refer to."""
+    with_types(monkeypatch, "Deep")
+    with loaded(app, individual_stage()) as client:
+        found = column(client, "/ind")
+    [deep] = re.findall(r'<a role="treeitem" id="hi-0-0-0-0"[^>]*>', found.html)
+    assert 'aria-expanded="true"' in deep and 'aria-owns="hi-0-0-0-0-g"' in deep
+    assert "aria-describedby" not in deep
+    assert 'id="hi-0-0-0-0-g"' in found.html
+    for described in re.findall(r'aria-describedby="([^"]+)"', found.html):  # none dangles
+        assert f'id="{described}"' in found.html
+
+
 def test_individual_fragment(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check that a toggle in an individual's tree fetches a type's children with the individual tree's ids."""
     with_types(monkeypatch, "Top")

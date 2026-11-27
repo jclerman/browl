@@ -37,7 +37,8 @@
   <a role="treeitem" id="{{ shown.id }}" href="{{ node.link.href }}"
      {%- if shown.current %} class="tree-current" aria-current="page"{% endif %}
      {%- if node.children or is_open %} aria-expanded="{{ 'true' if is_open else 'false' }}" aria-owns="{{ shown.id }}-g"
-     aria-describedby="{{ shown.id }}-n"{% endif %}>{{ node_label(node) }}</a>
+     {%- endif %}
+     {%- if node.children %} aria-describedby="{{ shown.id }}-n"{% endif %}>{{ node_label(node) }}</a>
   {%- if node.children %}
   <span class="tree-counts" id="{{ shown.id }}-n">{{ counts(node) }}</span>
   {%- endif -%}
