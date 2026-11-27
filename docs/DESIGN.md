@@ -1161,22 +1161,29 @@ no CURIE. _(Q18b)_
 Header, above the tabs (U-5):
 
 - Two lines, for an audience of domain experts first and ontologists second. The first: the entity's types,
-  then its display name as the title. The types are badges, small, uppercase, in the accent on a tint of it, one per
-  type for an IRI with several (punning), in the navigation bar's order, as the hierarchy column and the
-  logical-axioms panel order them, separated by a visually hidden " · " for screen readers and copied text; they take
-  at most 40% of the width. _(P-14c, P-47)_
-- The second, starting where the name starts: the CURIE, if there is one, muted and monospace, with a button that
-  copies it, then "▸ IRI", a `<details>` element, closed at first, whose box shows the full IRI with a button that
-  copies the IRI (`static/entity-page.js`; it says "Copied" in its tooltip and to screen readers for a moment). The
-  CURIE is shown, as it says at once where the entity is defined; the full IRI, inline, was too noisy, and it's also
-  in the address bar. The IRI is text, not a link: on a browl site it often resolves to the page it's on. _(P-14c)_
+  then its display name as the title. _(P-14c, P-47)_
+- The types are badges, small, uppercase, in the accent on a tint of it, one per type for an IRI with several
+  (punning). They're in the navigation bar's order, as the hierarchy column and the logical-axioms panel order them,
+  separated by a visually hidden " · " for screen readers and copied text, and take at most 40% of the width.
+- The second line, starting where the name starts: the CURIE, if there is one, muted and monospace, then "▸ IRI", a
+  `<details>` element, closed at first, whose box shows the full IRI. The CURIE is shown, as it says at once where the
+  entity is defined; the full IRI, inline, was too noisy, and it's also in the address bar. The IRI is text, not a
+  link: on a browl site it often resolves to the page it's on. Both are shown with their bidirectional-text controls
+  encoded ([2.9](#29-page-layout)). _(P-14c)_
+- A button beside the CURIE copies it, and one in the IRI's box copies the IRI, as they are (`static/entity-page.js`).
+  For a moment a button then says "Copied", or "Couldn't copy" if the browser refuses, in its tooltip and name, and
+  the header's status region (`role="status"`) says it to screen readers. The buttons need the script, so the markup
+  hides them, and the script shows them; without it there are none. They aren't printed.
 - A fixed height, so the panels below start at the same place on every entity page (U-30): `--header-height`, one
-  title line (`--title-lines`) and the second line (`--meta-row`). In the window-filling frame the title is clamped to
-  one line, with the full name in its tooltip, and the types to one line, cut short if need be, with all of them in
-  its tooltip. The opened IRI box opens below the second line, over the tabs, panels and hierarchy column rather than
-  pushing them down, and never over the name; in print it takes its own room. The one-page view (U-44, 2.9) shows the
-  title whole and the types whole, wrapping in their column, the header still at least `--header-height` high, so
-  switching views doesn't move a short name. _(P-16d)_
+  title line (`--title-lines`, `--title-height`) and the second line (`--meta-row`). In the window-filling frame the
+  title is clamped to one line, with the full name in its tooltip, and the types to one line, each badge cut short
+  with "…" if need be, with all of them in its tooltip. A long CURIE is cut short too. _(P-16d)_
+- The opened IRI box opens below the second line, over the tabs, panels and hierarchy column rather than pushing them
+  down, and never over the name; it's no wider than the second line, or, on a phone, than the header, below which it
+  opens. In print it takes its own room, the CURIE on the IRI's line.
+- The one-page view (U-44, 2.9) shows the title whole and the types whole, wrapping in their column, a long badge
+  within itself, without pushing the second line from the name. The header is still at least `--header-height` high,
+  so switching views doesn't move a short name.
 
 Tabs (U-28; see [2.9](#29-page-layout)):
 

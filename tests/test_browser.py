@@ -1196,21 +1196,10 @@ def test_entity_header_look(page: Page, server: LiveServer, scheme: str) -> None
     page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
     page.goto(f"{server.url}/example.org/plain")
     color = "(element) => getComputedStyle(element).color"
-
-    def computed(name: str) -> str:
-        """Return the computed color a custom property names."""
-        value = page.evaluate(f"getComputedStyle(document.documentElement).getPropertyValue('{name}').trim()")
-        result: str = page.evaluate(
-            f"""() => {{ const probe = document.createElement('span'); probe.style.color = '{value}';
-            document.body.append(probe); const shown = getComputedStyle(probe).color; probe.remove();
-            return shown; }}"""
-        )
-        return result
-
-    muted = computed("--muted")
+    muted = token_color(page, "muted")
     heading = page.locator("main h1").evaluate(color)
     expect(page.locator(".type-badge")).to_have_text("Class")
-    assert page.locator(".type-badge").evaluate(color) == computed("--accent")
+    assert page.locator(".type-badge").evaluate(color) == token_color(page, "accent")
     assert page.locator(".entity-iri summary").evaluate(color) == muted != heading
 
 
