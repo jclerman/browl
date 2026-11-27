@@ -3843,6 +3843,30 @@ def test_search_page_stacked_when_narrow(page: Page, searchable: LiveServer) -> 
     expect(properties).to_have_css("max-height", "none")
 
 
+def test_search_properties_legend_stays(page: Page, searchable: LiveServer) -> None:
+    """Check that on a phone the properties' legend stays at the top of their box as they scroll, covering them.
+
+    More choices are added, so the box scrolls. Above the legend, its card shows, not a choice.
+    """
+    page.set_viewport_size(NARROW)
+    page.goto(f"{searchable.url}/_browl/search?q=item")
+    properties = page.locator(".search-properties")
+    properties.locator(".property-choices").first.evaluate(
+        "(choices) => { for (let i = 0; i < 40; i++) choices.append(choices.querySelector('label').cloneNode(true)); }"
+    )
+    legend = properties.locator("> legend")
+    top = box(legend)["y"]
+    assert abs(top - box(properties)["y"]) < 1  # over the box's top padding
+    properties.evaluate("(each) => { each.scrollTop = 200; }")
+    assert properties.evaluate("(each) => each.scrollTop") == 200
+    assert box(legend)["y"] == top
+    covering = properties.evaluate(
+        """(each) => { const rect = each.getBoundingClientRect();
+        return document.elementFromPoint(rect.x + rect.width / 2, rect.y + 2).closest('legend') !== null; }"""
+    )
+    assert covering
+
+
 def test_advanced_search_link(page: Page, searchable: LiveServer) -> None:
     """Check that the bar links to the full search page, beside the box, on wide and narrow windows."""
     for width in (1200, 400):

@@ -1934,6 +1934,18 @@ code {
     max-height: 16rem;
     overflow-y: auto;
   }
+
+  /* Its legend, floated into the box, would scroll away with the choices: it sticks instead, covering the box's top
+     padding and the gap below it, so the choices scroll under it out of sight. (A sticky box's offset is from inside
+     its scroller's padding.) */
+  .search-filters > .search-properties > legend {
+    position: sticky;
+    top: calc(-1 * var(--sp-3));
+    z-index: 1;
+    margin: calc(-1 * var(--sp-3)) 0 0;
+    padding: var(--sp-3) 0 var(--sp-2);
+    background: var(--layer);
+  }
 }
 
 .common-values {
