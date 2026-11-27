@@ -955,8 +955,12 @@ code {
    A panel is a container, so its frame stacks by the panel's own width, not the window's: side by side, or beside the
    hierarchy column, a panel in a wide window can be narrow too. */
 
-.panel {
+.panel,
+.usage {
   container: panel / inline-size;
+}
+
+.panel {
   padding: 0 var(--space) calc(var(--space) / 2);
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -978,11 +982,16 @@ code {
 }
 
 /* The label column fits its labels up to 12rem, so a long unbroken one, such as an IRI, wraps rather than squeezing
-   the values. The stacked layout, for a narrow panel, follows the Usage tab's rules, as it changes them too. */
-.frame {
+   the values. A punned IRI's frames share one grid (`.frame-kinds`, below). The stacked layout, for a narrow panel,
+   comes after the Usage tab's rules, as it overrides some of them. */
+.frame,
+.frame-kinds {
   display: grid;
   grid-template-columns: fit-content(12rem) minmax(0, 1fr);
   column-gap: var(--space);
+}
+
+.frame {
   margin: 0;
 }
 
@@ -1019,12 +1028,6 @@ code {
 
 /* A punned IRI's sections, under a heading for each of its types, ruled off from the next; its other axioms after
    them, under none (DESIGN.md §2.8). One grid holds them all, so the values line up across the headings. */
-.frame-kinds {
-  display: grid;
-  grid-template-columns: fit-content(12rem) minmax(0, 1fr);
-  column-gap: var(--space);
-}
-
 .frame-kinds > *,
 .frame-kind > * {
   grid-column: 1 / -1;
@@ -1146,10 +1149,6 @@ code {
   .usage-whole .usage-axiom {
     grid-column: 1 / -1;
   }
-}
-
-.usage {
-  container: panel / inline-size;
 }
 
 /* A frame in a panel narrower than 30rem stacks. Two columns then leave a value at least 17rem beside a label column
