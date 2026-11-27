@@ -33,7 +33,7 @@
   {% elif not panel.groups %}
   <p class="note">None.</p>
   {% else %}
-  {% set blocks = panel.by_kind() %}
+  {% set blocks = panel.kind_groups() %}
   {% set headed = blocks[0].label is not none %}
   {% if headed %}
   <div class="frame-kinds">
@@ -49,8 +49,7 @@
     {% if group.property is none %}
     <dt>{{ group.label }}</dt>
     {% else %}
-    {% set previous = loop.previtem if not loop.first else none %}
-    {% if previous is none or previous.section != group.section or previous.kind != group.kind %}
+    {% if loop.first or loop.previtem.section != group.section %}
     <dt class="frame-heading">{{ group.label }}</dt>
     {% endif %}
     <dt class="frame-property">{{ named_iri(group.property.iri, links) }}</dt>

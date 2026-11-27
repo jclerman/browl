@@ -86,7 +86,7 @@ class AxiomsPanel(BaseModel):
     more_equivalents: bool = False
     annotations_left_out: LeftOut | None = None
 
-    def by_kind(self) -> list[KindGroups]:
+    def kind_groups(self) -> list[KindGroups]:
         """Return the sections under their kinds' headings, if a punned IRI has sections for several (`by_kind`)."""
         return by_kind(self.groups or [])
 

@@ -14,6 +14,7 @@ from typing import Annotated, TypeGuard
 from pydantic import BaseModel, ConfigDict, Field
 
 from browl import owl
+from browl.derived import TYPE_LABELS, EntityType
 from browl.owl import AnyAxiom, Entity, EntityKind, Token, TokenKind
 from browl.rdf import IRI
 
@@ -65,16 +66,10 @@ SECTION_LABELS = {
 }
 """Each section's label, as the page shows it."""
 
-KIND_LABELS = {
-    EntityKind.CLASS: "Class",
-    EntityKind.DATATYPE: "Datatype",
-    EntityKind.OBJECT_PROPERTY: "Object property",
-    EntityKind.DATA_PROPERTY: "Data property",
-    EntityKind.ANNOTATION_PROPERTY: "Annotation property",
-    EntityKind.NAMED_INDIVIDUAL: "Named individual",
+KIND_LABELS = {EntityKind.DATATYPE: "Datatype"} | {
+    EntityKind[type_.name]: label for type_, label in TYPE_LABELS.items() if type_ is not EntityType.ONTOLOGY
 }
-"""Each kind's heading over a punned IRI's sections for it (`by_kind`), as the page header and the hierarchy column
-name the kind (`browl.derived.TYPE_LABELS`)."""
+"""Each kind's heading over a punned IRI's sections for it (`by_kind`): its type's name (`TYPE_LABELS`), or Datatype."""
 
 _CLASS_ORDER = (
     Section.EQUIVALENT_TO,
@@ -266,7 +261,7 @@ def frame_groups(
     # property has a group for each.
     sections: dict[_Key, dict[object, tuple[FrameLine, dict[owl.Annotation, None]]]] = {}
     for axiom in axioms:
-        for kind, section, line, by in _place(axiom.without_annotations(), iri):
+        for (kind, section, by), line in _sections(axiom.without_annotations(), iri):
             same = line.operands[0] if section in (Section.EQUIVALENT_TO, Section.SAME_AS) else line
             _, annotations = sections.setdefault((kind, section, by), {}).setdefault(same, (line, {}))
             annotations.update(dict.fromkeys(axiom.annotations))
@@ -307,62 +302,51 @@ type _Key = tuple[EntityKind | None, Section, Entity | None]
 """A group of a frame's lines: its section's kind, the section, and for a section by property, the property."""
 
 
-def _place(axiom: AnyAxiom, iri: str) -> Iterator[tuple[EntityKind | None, Section, FrameLine, Entity | None]]:
+def _sections(axiom: AnyAxiom, iri: str) -> Iterator[tuple[_Key, FrameLine]]:
     """Yield the group (`_Key`) of each line that shows an axiom on the entity's page, and the line."""
-    for kind, section, line in _sections(axiom, iri):
-        by: Entity | None = None
-        if section in _BY_PROPERTY:
-            assert isinstance(line.axiom, owl.ObjectPropertyAssertion | owl.DataPropertyAssertion)
-            assert isinstance(line.axiom.property, Entity)  # an assertion of an inverse property is shown whole
-            by = line.axiom.property
-        yield kind, section, line, by
-
-
-def _sections(axiom: AnyAxiom, iri: str) -> Iterator[tuple[EntityKind | None, Section, FrameLine]]:
-    """Yield the section, and its kind, of each line that shows an axiom on the entity's page."""
     if isinstance(axiom, owl.SubClassOf) and _is(axiom.sub, iri):
-        yield EntityKind.CLASS, Section.SUB_CLASS_OF, FrameLine(axiom=axiom, operands=(axiom.super,))
+        yield (EntityKind.CLASS, Section.SUB_CLASS_OF, None), FrameLine(axiom=axiom, operands=(axiom.super,))
     elif isinstance(axiom, _EQUIVALENTS) and (entity := _member(axiom.members, iri)):
         # One member, from `C owl:equivalentClass C`: the entity is its own equivalent.
         for member in [member for member in axiom.members if member is not entity] or [entity]:
-            yield entity.kind, Section.EQUIVALENT_TO, FrameLine(axiom=axiom, operands=(member,))
+            yield (entity.kind, Section.EQUIVALENT_TO, None), FrameLine(axiom=axiom, operands=(member,))
     elif isinstance(axiom, _DISJOINTS) and (entity := _member(axiom.members, iri)):
         # One member, from `C owl:disjointWith C`: the entity is disjoint with itself, so it's empty.
         others = tuple(member for member in axiom.members if member is not entity) or (entity,)
-        yield entity.kind, Section.DISJOINT_WITH, FrameLine(axiom=axiom, operands=others)
+        yield (entity.kind, Section.DISJOINT_WITH, None), FrameLine(axiom=axiom, operands=others)
     elif isinstance(axiom, owl.DisjointUnion) and _is(axiom.class_, iri) and axiom.members:
-        yield EntityKind.CLASS, Section.DISJOINT_UNION_OF, FrameLine(axiom=axiom, operands=axiom.members)
+        yield (EntityKind.CLASS, Section.DISJOINT_UNION_OF, None), FrameLine(axiom=axiom, operands=axiom.members)
     elif (
         isinstance(axiom, owl.HasKey)
         and _is(axiom.class_, iri)
         and (keys := (*axiom.object_properties, *axiom.data_properties))
     ):
-        yield EntityKind.CLASS, Section.KEYS, FrameLine(axiom=axiom, operands=keys)
+        yield (EntityKind.CLASS, Section.KEYS, None), FrameLine(axiom=axiom, operands=keys)
     elif isinstance(axiom, _CLASS_AXIOMS):
-        yield EntityKind.CLASS, Section.GENERAL, FrameLine(axiom=axiom)
+        yield (EntityKind.CLASS, Section.GENERAL, None), FrameLine(axiom=axiom)
     elif isinstance(axiom, _DOMAINS) and _is(axiom.property, iri):
-        yield axiom.property.kind, Section.DOMAINS, FrameLine(axiom=axiom, operands=(axiom.domain,))
+        yield (axiom.property.kind, Section.DOMAINS, None), FrameLine(axiom=axiom, operands=(axiom.domain,))
     elif isinstance(axiom, _RANGES) and _is(axiom.property, iri):
-        yield axiom.property.kind, Section.RANGES, FrameLine(axiom=axiom, operands=(axiom.range,))
+        yield (axiom.property.kind, Section.RANGES, None), FrameLine(axiom=axiom, operands=(axiom.range,))
     elif isinstance(axiom, _CHARACTERISTICS) and _is(axiom.property, iri):
-        yield axiom.property.kind, Section.CHARACTERISTICS, FrameLine(axiom=axiom)
+        yield (axiom.property.kind, Section.CHARACTERISTICS, None), FrameLine(axiom=axiom)
     elif isinstance(axiom, _SUB_PROPERTIES) and _is(axiom.sub, iri):
-        yield axiom.sub.kind, Section.SUB_PROPERTY_OF, FrameLine(axiom=axiom, operands=(axiom.super,))
+        yield (axiom.sub.kind, Section.SUB_PROPERTY_OF, None), FrameLine(axiom=axiom, operands=(axiom.super,))
     elif isinstance(axiom, owl.SubPropertyChainOf) and _is(axiom.super, iri):
-        yield axiom.super.kind, Section.CHAINS, FrameLine(axiom=axiom, operands=axiom.chain)
+        yield (axiom.super.kind, Section.CHAINS, None), FrameLine(axiom=axiom, operands=axiom.chain)
     elif isinstance(axiom, owl.InverseObjectProperties) and (entity := _member((axiom.first, axiom.second), iri)):
         # The other side; or the entity itself, if it's its own inverse (`p owl:inverseOf p`).
         other = axiom.second if entity is axiom.first else axiom.first
-        yield entity.kind, Section.INVERSE_OF, FrameLine(axiom=axiom, operands=(other,))
+        yield (entity.kind, Section.INVERSE_OF, None), FrameLine(axiom=axiom, operands=(other,))
     elif isinstance(axiom, owl.ClassAssertion) and _is(axiom.individual, iri):
-        yield EntityKind.NAMED_INDIVIDUAL, Section.TYPES, FrameLine(axiom=axiom, operands=(axiom.class_,))
+        yield (EntityKind.NAMED_INDIVIDUAL, Section.TYPES, None), FrameLine(axiom=axiom, operands=(axiom.class_,))
     elif isinstance(axiom, owl.SameIndividual) and (entity := _member(axiom.members, iri)):
         # One member, from `i owl:sameAs i`: the individual is the same as itself.
         for same in [each for each in axiom.members if each is not entity] or [entity]:
-            yield EntityKind.NAMED_INDIVIDUAL, Section.SAME_AS, FrameLine(axiom=axiom, operands=(same,))
+            yield (EntityKind.NAMED_INDIVIDUAL, Section.SAME_AS, None), FrameLine(axiom=axiom, operands=(same,))
     elif isinstance(axiom, owl.DifferentIndividuals) and (entity := _member(axiom.members, iri)):
         different = tuple(each for each in axiom.members if each is not entity) or (entity,)
-        yield EntityKind.NAMED_INDIVIDUAL, Section.DIFFERENT_FROM, FrameLine(axiom=axiom, operands=different)
+        yield (EntityKind.NAMED_INDIVIDUAL, Section.DIFFERENT_FROM, None), FrameLine(axiom=axiom, operands=different)
     elif (
         isinstance(axiom, owl.ObjectPropertyAssertion | owl.DataPropertyAssertion)
         and _is(axiom.subject, iri)
@@ -370,12 +354,12 @@ def _sections(axiom: AnyAxiom, iri: str) -> Iterator[tuple[EntityKind | None, Se
     ):
         is_object = isinstance(axiom, owl.ObjectPropertyAssertion)
         section = Section.OBJECT_ASSERTIONS if is_object else Section.DATA_ASSERTIONS
-        yield EntityKind.NAMED_INDIVIDUAL, section, FrameLine(axiom=axiom, operands=(axiom.object,))
+        yield (EntityKind.NAMED_INDIVIDUAL, section, axiom.property), FrameLine(axiom=axiom, operands=(axiom.object,))
     elif isinstance(axiom, _NEGATIVE_ASSERTIONS) and _is(axiom.subject, iri):
         line = FrameLine(axiom=axiom, operands=(axiom.property, axiom.object))
-        yield EntityKind.NAMED_INDIVIDUAL, Section.NEGATIVE_ASSERTIONS, line
+        yield (EntityKind.NAMED_INDIVIDUAL, Section.NEGATIVE_ASSERTIONS, None), line
     else:  # such as an inverse property's assertion, written with the entity first
-        yield None, Section.OTHER, FrameLine(axiom=axiom.with_first(iri))
+        yield (None, Section.OTHER, None), FrameLine(axiom=axiom.with_first(iri))
 
 
 def _is(node: owl.Node, iri: str) -> TypeGuard[Entity]:
