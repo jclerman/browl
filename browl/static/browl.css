@@ -702,6 +702,7 @@ code {
 
 .upload input[type="file"] {
   display: block;
+  max-width: 100%; /* its button and "No file chosen" fit a phone at a raised font size */
   margin-top: var(--sp-1);
 }
 
