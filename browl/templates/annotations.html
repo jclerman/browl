@@ -21,8 +21,8 @@
 
 {# The axiom annotations on a value or an axiom (`browl.owl.Annotation`), from `links`: a box per property, each value's
    own in boxes within it (DESIGN.md §2.8, Axiom annotations). The hidden brackets mark each box's ends for screen
-   readers and copied text. The property is marked (`annotation-property`), so it's styled as a label and a value that's
-   a link isn't. The IRI `mark`, the page's entity, is highlighted, as in an axiom. #}
+   readers and copied text. The property is marked (`annotation-property`), to be styled as a label. The IRI `mark`, the
+   page's entity, is highlighted, as in an axiom. #}
 {% macro axiom_annotations(annotations, links, mark=none) -%}
 {%- if annotations -%}
 {%- set groups = page_annotations(annotations, links) -%}

@@ -1492,11 +1492,11 @@ is (below). Uberon's 67 individuals' pages take 14 ms at p50 and 58 ms at p95, t
   can't fake: semibold in the text color, not underlined, in the accent and underlined on hover. A text value stays
   muted, and an entity value is a link, in the accent with its underline; the template marks the property
   (`annotation-property`), so it's styled apart from a value that's a link. Properties and values are sorted as the
-  annotations panel's are, with no language ranking (`browl.annotations.shown_annotations`). A box doesn't split
-  across lines: it moves to the next if it doesn't fit, and one wider than its line wraps within it, its first line on
-  the text's; its padding keeps the border off the text, and its margin off the lines above and below. An annotation's
-  own annotations are boxes within its value's box. Values and links render as an annotation's do, and a blank value
-  (an anonymous individual) is left out, as in the panel. The boxes are the template's markup (`annotations.html`'s
+  annotations panel's are, with no language ranking (`browl.annotations.shown_annotations`). A box doesn't split across
+  lines: it moves to the next if it doesn't fit, and one wider than its line wraps within it, its first line on the
+  text's; its padding keeps the border off the text, and its margin off the lines above and below. An annotation's own
+  annotations are boxes within its value's box. Values and links render as an annotation's do, and a blank value (an
+  anonymous individual) is left out, as in the panel. The boxes are the template's markup (`annotations.html`'s
   `axiom_annotations`), outside each value's `<bdi>`, so a value's own text can't pass for an annotation; visually
   hidden brackets around each keep where it starts and ends in what screen readers read and in copied text. `--muted`
   and `--accent` are AA on the tint in both themes, and the border is 3:1 or more against the page and the cards; the
@@ -1863,10 +1863,9 @@ CSS nesting gets the one-page view, without the toggle. _(P-16d)_
   moves in; storage that fails is ignored. The script isn't deferred, so the page isn't first drawn in the frame, and
   it also restores the state on a page from the back-forward cache and on another tab's change. No cookie, so the
   server's pages don't vary with it, and no URL parameter.
-- **The panels** are cards (below, Visual design), and their headings, with no rule, stay in view while they scroll,
-  on the card's surface. Each panel is a `<section>`,
-  named by its heading (`aria-labelledby`), with `tabindex="0"` and a visible focus ring, so the keyboard can scroll
-  it.
+- **The panels** are cards (below, Visual design), and their headings stay in view while they scroll, on the card's
+  surface. Each panel is a `<section>`, named by its heading (`aria-labelledby`), with `tabindex="0"` and a visible
+  focus ring, so the keyboard can scroll it.
 - **Hierarchy column** (U-45, P-38): a narrow column, which folds away, shows the entity's place in its hierarchy, on
   every tab. The frame's grid has named areas (`header`, `fold`, `tree`, `resize`, `tabs`, `panel`), so the column
   takes the `tree` area without changing the panels' layout. A tab's panel served alone has no column, as the page

@@ -1073,7 +1073,9 @@ code {
   padding: 0 var(--sp-4) var(--sp-3);
 }
 
-.hierarchy-column {
+/* Narrower sides than the other cards': the column is narrow, and the hits' table pads its own cells. */
+.hierarchy-column,
+.results-body {
   padding: 0 var(--sp-3) var(--sp-2);
 }
 
@@ -1091,10 +1093,6 @@ code {
   width: 100%;
   margin-bottom: var(--sp-2);
   padding: 0;
-}
-
-.results-body {
-  padding: 0 var(--sp-3) var(--sp-2);
 }
 
 .panel + .panel {
@@ -1666,7 +1664,7 @@ code {
       & .panel h2 {
         position: sticky;
         top: 0;
-        z-index: 1;
+        z-index: 1; /* over the axiom annotations' boxes, positioned and later, which would scroll over it */
         background: var(--layer);
       }
 
@@ -1781,8 +1779,8 @@ code {
   max-width: 60rem;
 }
 
-/* The filters' groups, cards, side by side as they fit, the flexbox's gap between them; before the layout
-   beside the results, below, which makes them blocks. */
+/* The filters' groups, cards, side by side as they fit, the flexbox's gap between them. Before the layout beside the
+   results, below, which makes them blocks. */
 .search-filters {
   display: flex;
   flex-wrap: wrap;

@@ -506,7 +506,8 @@ async def loaded(
 def boxed(*texts: str) -> str:
     """Return axiom annotations' markup around each property's HTML: a box each, with visually hidden brackets.
 
-    Each text is the property's HTML, then ": " and its values', and the property is marked.
+    Each text is the property's HTML, then ": " and its values', and the property is marked: it ends at the first
+    ": ", so its own HTML mustn't hold one.
     """
     hidden = '<span class="visually-hidden">{}</span>'.format
     marked = [f'<span class="annotation-property">{text.replace(": ", "</span>: ", 1)}' for text in texts]
