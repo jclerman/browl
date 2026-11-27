@@ -21,7 +21,7 @@ import browl.lookup
 from browl.derived import EntityType
 from browl.fuseki import UNION_FROM, FusekiClient, SelectResult, SparqlError, SparqlTimeoutError
 from browl.hierarchy import CHILD_PAGE
-from browl.hierarchy_column import MAX_COLUMN_DEPTH, NO_NAMED_TYPE, IndividualTypes, fetch_types
+from browl.hierarchy_column import MAX_COLUMN_DEPTH, MORE_TYPES, NO_NAMED_TYPE, IndividualTypes, fetch_types
 from browl.rdf import IRI, OWL, RDF, Literal
 from tests.helpers import connect, derived_stage, fuseki_dataset, make_app, make_settings
 from tests.test_trees import (
@@ -563,12 +563,11 @@ def individual_stage(*punned: EntityType) -> object:
     )
 
 
-def with_types(monkeypatch: pytest.MonkeyPatch, *names: str, count: int | None = None) -> None:
-    """Make the page's individual's types those named, without a query, `count` of them in all."""
+def with_types(monkeypatch: pytest.MonkeyPatch, *names: str, more: bool = False) -> None:
+    """Make the page's individual's types those named, without a query, and `more` whether others are left out."""
 
     async def fetched(*args: object) -> IndividualTypes:
-        iris = tuple(ex(name) for name in names)
-        return IndividualTypes(iris, len(iris) if count is None else count)
+        return IndividualTypes(tuple(ex(name) for name in names), more)
 
     monkeypatch.setattr(browl.lookup, "fetch_types", fetched)
 
@@ -634,15 +633,12 @@ def test_individual_no_named_type(app: FastAPI, monkeypatch: pytest.MonkeyPatch,
     assert "Show its sibling" not in found.html
 
 
-@pytest.mark.parametrize(
-    ("count", "note"), [(3, "1 more type isn't shown."), (1_002, "1,000 more types aren't shown.")]
-)
-def test_individual_types_left_out(app: FastAPI, monkeypatch: pytest.MonkeyPatch, count: int, note: str) -> None:
-    """Check that an individual's tree says how many of its types it leaves out (`MAX_ANCESTORS`)."""
-    with_types(monkeypatch, "Left", "Right", count=count)
+def test_individual_types_left_out(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that an individual's tree says when it leaves some of its types out (`MAX_ANCESTORS`)."""
+    with_types(monkeypatch, "Left", "Right", more=True)
     with loaded(app, individual_stage()) as client:
         found = column(client, "/ind")
-    assert f'<p class="note">{note.replace("'", "&#39;")}</p>' in found.html
+    assert re.findall(r'<p class="note">([^<]*)</p>', found.html) == [MORE_TYPES.replace("'", "&#39;")]
 
 
 def test_individual_types_left_out_none_shown(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -650,11 +646,11 @@ def test_individual_types_left_out_none_shown(app: FastAPI, monkeypatch: pytest.
 
     One left out may be a named class, so it doesn't say "No named type".
     """
-    with_types(monkeypatch, "Nowhere", count=5)
+    with_types(monkeypatch, "Nowhere", more=True)
     with loaded(app, individual_stage()) as client:
         found = column(client, "/ind")
     assert shown(found) == [(0, IND)]
-    assert re.findall(r'<p class="note">([^<]*)</p>', found.html) == ["4 more types aren&#39;t shown."]
+    assert re.findall(r'<p class="note">([^<]*)</p>', found.html) == [MORE_TYPES.replace("'", "&#39;")]
 
 
 def test_individual_ancestors_capped(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -733,7 +729,7 @@ def test_individual_types_concurrent(app: FastAPI, monkeypatch: pytest.MonkeyPat
 
     async def fetched(*args: object) -> IndividualTypes:
         started.set()
-        return IndividualTypes((ex("Left"),), 1)
+        return IndividualTypes((ex("Left"),), False)
 
     async def overview(*args: Any, **kwargs: Any) -> object:
         async with asyncio.timeout(5):  # read after the tab, the types would never start
@@ -765,11 +761,13 @@ def test_individual_types_timeout(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize(("limit", "expected"), [(300, ("A", "B", "C")), (2, ("A", "B"))])
+@pytest.mark.parametrize(
+    ("limit", "expected", "more"), [(300, ("A", "B", "C"), False), (3, ("A", "B", "C"), False), (2, ("A", "B"), True)]
+)
 async def test_fetch_types(
-    fuseki_url: str, monkeypatch: pytest.MonkeyPatch, limit: int, expected: tuple[str, ...]
+    fuseki_url: str, monkeypatch: pytest.MonkeyPatch, limit: int, expected: tuple[str, ...], more: bool
 ) -> None:
-    """Check that an individual's named types are read by IRI, at most `MAX_ANCESTORS`, with how many there are.
+    """Check that an individual's named types are read by IRI, at most `MAX_ANCESTORS`, and whether there are more.
 
     OWL's types and class expressions aren't named types.
     """
@@ -781,7 +779,7 @@ async def test_fetch_types(
     with fuseki_dataset(fuseki_url, {None: "\n".join(triples).encode()}) as dataset:
         async with httpx2.AsyncClient(base_url=fuseki_url) as http:
             types = await fetch_types(FusekiClient(http), dataset, ex("ind"))
-    assert types == IndividualTypes(tuple(ex(name) for name in expected), 3)
+    assert types == IndividualTypes(tuple(ex(name) for name in expected), more)
 
 
 @pytest.mark.anyio
@@ -793,7 +791,7 @@ async def test_fetch_types_union(fuseki_url: str) -> None:
     with fuseki_dataset(fuseki_url, triples) as dataset:
         async with httpx2.AsyncClient(base_url=fuseki_url) as http:
             types = await fetch_types(FusekiClient(http), dataset, ex("ind"), UNION_FROM)
-    assert types == IndividualTypes((ex("A"), ex("B")), 2)
+    assert types == IndividualTypes((ex("A"), ex("B")), False)
 
 
 @pytest.mark.anyio
@@ -807,3 +805,19 @@ async def test_fetch_types_malformed(found: Literal | None) -> None:
 
     with pytest.raises(SparqlError, match="no type"):
         await fetch_types(Sparql(), "dataset", ex("ind"))  # type: ignore[arg-type]
+
+
+@pytest.mark.anyio
+async def test_fetch_types_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that the types query reads one past `MAX_ANCESTORS`, so an individual with very many isn't read whole."""
+    monkeypatch.setattr(browl.hierarchy_column, "MAX_ANCESTORS", 2)
+    queries: list[str] = []
+
+    class Sparql:
+        async def select(self, dataset: str, query: str) -> SelectResult:
+            queries.append(query)
+            return SelectResult(("type",), [(IRI(ex(name)),) for name in "CAB"])
+
+    types = await fetch_types(Sparql(), "dataset", ex("ind"))  # type: ignore[arg-type]
+    assert types == IndividualTypes((ex("A"), ex("B")), True)
+    assert queries[0].rstrip().endswith("LIMIT 3")

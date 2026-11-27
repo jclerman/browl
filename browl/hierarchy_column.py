@@ -57,6 +57,8 @@ TOP_LEVELS = 3
 
 NO_NAMED_TYPE = "No named type"
 """The note under an individual's tree when none of its types is a named class in the class hierarchy."""
+MORE_TYPES = "More types aren't shown."
+"""The note under an individual's tree when it has more types than `MAX_ANCESTORS`, which aren't counted."""
 
 _TYPES = PREFIXES + sparql_file("individual-types.rq")
 _ENTITY = "$entity"
@@ -69,11 +71,11 @@ class IndividualTypes:
 
     Attributes:
         iris: Their IRIs, by IRI, at most `MAX_ANCESTORS`, as they count toward it.
-        count: How many it has in all.
+        more: Whether it may have more, as the query reads one past `MAX_ANCESTORS`.
     """
 
     iris: tuple[str, ...]
-    count: int
+    more: bool
 
 
 @dataclass(frozen=True)
@@ -86,7 +88,7 @@ class ColumnTree:
         href: The link to its tree page, after the heading.
         id: The prefix of the tree's element ids; its heading's id is `{id}-h`.
         roots: The tree's roots, as shown.
-        note: Under an individual's tree, `NO_NAMED_TYPE`, or how many of its types are left out (`MAX_ANCESTORS`);
+        note: Under an individual's tree, `NO_NAMED_TYPE`, or `MORE_TYPES` if some of its types are left out;
             else None.
     """
 
@@ -105,14 +107,17 @@ async def fetch_types(sparql: FusekiClient, dataset: str, iri: str, dataset_clau
         SparqlError: The query failed, or its result is malformed.
         RDFSyntaxError: The IRI isn't valid.
     """
-    result = await sparql.select(dataset, filled_query(_TYPES, dataset_clause, {_ENTITY: f"<{IRI(iri)}>"}))
+    limit = MAX_ANCESTORS + 1  # one past, to know there are more; no ORDER BY, which would sort them all
+    query = filled_query(_TYPES, dataset_clause, {_ENTITY: f"<{IRI(iri)}>"}) + f"LIMIT {limit}\n"
+    result = await sparql.select(dataset, query)
     column = result.variables.index("type")
     found: set[IRI] = set()  # each once: the imports' merge can repeat one
     for row in result.rows:
         if not isinstance(each := row[column], IRI):
             raise SparqlError(f"the individual's types query gave a row with no type: {row!r}")
         found.add(each)
-    return IndividualTypes(tuple(sorted(found)[:MAX_ANCESTORS]), len(found))
+    # A full page means more, though repeats may have filled it with no type left out; rare enough to accept.
+    return IndividualTypes(tuple(sorted(found)[:MAX_ANCESTORS]), len(result.rows) >= limit)
 
 
 def read_column(
@@ -225,9 +230,8 @@ def _individual_tree(
         request, connection, _CLASSES, node.id, parents, [*nodes, node], INDIVIDUAL_COLUMN_ID, with_siblings=False
     )
     note = None
-    if types.count > len(types.iris):  # first, as one left out may be in the hierarchy
-        left_out = types.count - len(types.iris)
-        note = f"{left_out:,} more {"type isn't" if left_out == 1 else "types aren't"} shown."
+    if types.more:  # first, as one left out may be in the hierarchy
+        note = MORE_TYPES
     elif not parents[node.id]:
         note = NO_NAMED_TYPE
     return drawn, note
