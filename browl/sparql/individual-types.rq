@@ -1,0 +1,15 @@
+# An individual's named types, for its tree in the hierarchy column (browl.hierarchy_column.fetch_types; DESIGN.md
+# §2.9), which adds a LIMIT one past MAX_ANCESTORS, as they count toward it, and keeps the first by IRI. A type in OWL's,
+# RDF's or RDFS's vocabularies, such as owl:NamedIndividual or owl:Thing, isn't one, as no tree holds it. No DISTINCT,
+# which can slow Fuseki: a repeat is dropped in Python. `$entity` stands for the individual's IRI, and
+# browl.hierarchy_column adds the dataset clause before WHERE.
+SELECT ?type
+WHERE {
+  $entity rdf:type ?type
+  FILTER (
+    isIRI(?type)
+    && !(STRSTARTS(STR(?type), "http://www.w3.org/2002/07/owl#")
+         || STRSTARTS(STR(?type), "http://www.w3.org/1999/02/22-rdf-syntax-ns#")
+         || STRSTARTS(STR(?type), "http://www.w3.org/2000/01/rdf-schema#"))
+  )
+}

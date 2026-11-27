@@ -131,7 +131,7 @@
     {
       "name": "entity",
       "type": "table",
-      "comment": "The ontology itself and every declared class and property, with the URL its IRI implies (DESIGN.md 2.3, browl.urls), filled by the entities pre-caching hook. An IRI declared with several types (punning) has a row for each. Several IRIs can share a URL, e.g. the http and https forms of one (U-15).",
+      "comment": "The ontology itself and every declared class, property and named individual, with the URL its IRI implies (DESIGN.md 2.3, browl.urls), filled by the entities pre-caching hook. An IRI declared with several types (punning) has a row for each. Several IRIs can share a URL, e.g. the http and https forms of one (U-15).",
       "columns": [
         {
           "name": "id",
@@ -149,7 +149,7 @@
           "name": "type",
           "type": "TEXT",
           "nullable": false,
-          "comment": "\"Its type (browl.derived.EntityType): ontology, class, object_property, data_property or annotation_property.\""
+          "comment": "Its type (browl.derived.EntityType): ontology, class, object_property, data_property, annotation_property or named_individual."
         },
         {
           "name": "path",
@@ -1091,7 +1091,7 @@
     {
       "name": "usage_root",
       "type": "table",
-      "comment": "The blank-node owner map's roots (P-27, DESIGN.md 2.5, browl.precache.owner_map): the axioms that reach entities through blank nodes (class expressions, lists, annotations on reified axioms), by the top-level triple, reified axiom or unlinked blank node each hangs from. Only roots that are some entity's usage (usage_ref) are kept.",
+      "comment": "The blank-node owner map's roots (P-27, DESIGN.md 2.5, browl.precache.owner_map): the axioms that reach entities through blank nodes (class expressions, lists, annotations on reified axioms), by the top-level triple, reified axiom or unlinked blank node each hangs from; and the anonymous individuals' assertions (P-47). Only roots that are some entity's usage (usage_ref) are kept.",
       "columns": [
         {
           "name": "id",
@@ -1103,13 +1103,13 @@
           "name": "kind",
           "type": "TEXT",
           "nullable": false,
-          "comment": "What it is (browl.derived.UsageRootKind): triple, a triple from an IRI to a blank node (owner predicate _:label); axiom, a reified axiom (owl:Axiom), with the annotations on it; general, a blank node nothing links to, with no owner (a general class axiom, an n-ary axiom, a negative property assertion, a SWRL rule)."
+          "comment": "What it is (browl.derived.UsageRootKind): triple, a triple from an IRI to a blank node (owner predicate _:label); axiom, a reified axiom (owl:Axiom), with the annotations on it; general, a blank node nothing links to, with no owner (a general class axiom, an n-ary axiom, a negative property assertion, a SWRL rule); assertion, a triple whose subject is an anonymous individual (_:label predicate object), with no owner."
         },
         {
           "name": "label",
           "type": "TEXT",
           "nullable": false,
-          "comment": "The root's blank node, by its label in the store (Jena's afn:bnode), which a query can name as \u003c_:label\u003e."
+          "comment": "The root's blank node, by its label in the store (Jena's afn:bnode), which a query can name as \u003c_:label\u003e; for an assertion, its anonymous individual."
         },
         {
           "name": "owner",
@@ -1121,13 +1121,19 @@
           "name": "owner_iri",
           "type": "TEXT",
           "nullable": true,
-          "comment": "The owner's IRI, if it's no entity (an individual, an undeclared IRI); else NULL."
+          "comment": "The owner's IRI, if it's no entity (an undeclared IRI); else NULL."
         },
         {
           "name": "predicate",
           "type": "TEXT",
           "nullable": true,
-          "comment": "A triple's predicate, or a reified axiom's owl:annotatedProperty; NULL for a general root."
+          "comment": "A triple's or an assertion's predicate, or a reified axiom's owl:annotatedProperty; NULL for a general root."
+        },
+        {
+          "name": "object",
+          "type": "TEXT",
+          "nullable": true,
+          "comment": "An assertion's object, as the Usage tab's query names it: \u003ciri\u003e; a blank node as \u003c_:label\u003e; a literal as the first browl.precache.owner_map.DIGEST_CHARS hex digits of its digest (browl.rdf.literal_digest), in double quotes. NULL for any other root."
         }
       ],
       "constraints": [
@@ -1141,7 +1147,7 @@
           ]
         }
       ],
-      "def": "CREATE TABLE usage_root (\n    id INTEGER PRIMARY KEY,\n    kind TEXT NOT NULL,\n    label TEXT NOT NULL,\n    owner INTEGER,\n    owner_iri TEXT,\n    predicate TEXT\n)"
+      "def": "CREATE TABLE usage_root (\n    id INTEGER PRIMARY KEY,\n    kind TEXT NOT NULL,\n    label TEXT NOT NULL,\n    owner INTEGER,\n    owner_iri TEXT,\n    predicate TEXT,\n    object TEXT\n)"
     },
     {
       "name": "usage_ref",

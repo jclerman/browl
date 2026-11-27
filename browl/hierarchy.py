@@ -8,7 +8,7 @@ will the JSON API (P-33).
 
 import json
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from itertools import batched
 
 from pydantic import BaseModel, ConfigDict
@@ -30,12 +30,12 @@ _ORDER = "coalesce(e.display_name, e.iri) COLLATE NOCASE, e.iri"
 total."""
 
 _ANCESTORS = (
-    "WITH RECURSIVE up(node) AS (SELECT ? UNION SELECT e.parent FROM up JOIN edge AS e"
+    "WITH RECURSIVE up(node) AS (SELECT value FROM json_each(?) UNION SELECT e.parent FROM up JOIN edge AS e"
     " ON e.hierarchy = ? AND e.child = up.node LIMIT ?)"
     " SELECT up.node, e.parent FROM up LEFT JOIN edge AS e ON e.hierarchy = ? AND e.child = up.node"
 )
-"""A node, its ancestors, nearest first (`UNION` walks a queue, level by level, each node once), up to a limit, and
-each one's parents, looked up by `edge_child`."""
+"""Some nodes, their ancestors, nearest first (`UNION` walks a queue, level by level, each node once), up to a limit,
+and each one's parents, looked up by `edge_child`."""
 
 
 class TreeNode(BaseModel):
@@ -49,6 +49,8 @@ class TreeNode(BaseModel):
         more_equivalents: How many other members its label doesn't name.
         children: How many immediate children it has (U-7).
         descendants: How many distinct descendants it has (U-8).
+        individual: Whether it's a named individual beneath its types, in its hierarchy column (P-47), not a class;
+            its label leads with a diamond.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -59,6 +61,7 @@ class TreeNode(BaseModel):
     more_equivalents: int = 0
     children: int
     descendants: int
+    individual: bool = False
 
 
 class ChildPage(BaseModel):
@@ -278,8 +281,19 @@ def read_ancestors(connection: sqlite3.Connection, hierarchy: EntityType, node: 
     Past `MAX_ANCESTORS`, the nearest are kept, level by level, and a parent beyond them is left out, so an ancestor
     whose parents all are has none.
     """
+    return read_ancestors_of(connection, hierarchy, [node], MAX_ANCESTORS + 1)
+
+
+def read_ancestors_of(
+    connection: sqlite3.Connection, hierarchy: EntityType, nodes: Sequence[int], limit: int
+) -> dict[int, list[int]]:
+    """Return some nodes' and each of their ancestors' parents, by node, in one query, at most `limit` nodes in all.
+
+    The nodes come first, then their ancestors, nearest first, level by level; a parent beyond the limit is left out,
+    so an ancestor whose parents all are has none.
+    """
     parents: dict[int, list[int]] = {}
-    for child, parent in connection.execute(_ANCESTORS, (node, hierarchy, MAX_ANCESTORS + 1, hierarchy)):
+    for child, parent in connection.execute(_ANCESTORS, (json.dumps(list(nodes)), hierarchy, limit, hierarchy)):
         above = parents.setdefault(child, [])
         if parent is not None:
             above.append(parent)

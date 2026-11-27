@@ -188,14 +188,15 @@ comments:
         distributions' versions, Python's version) and the values of the settings they declare.
   - table: entity
     tableComment: >-
-      The ontology itself and every declared class and property, with the URL its IRI implies (DESIGN.md 2.3,
-      browl.urls), filled by the entities pre-caching hook. An IRI declared with several types (punning) has a row
-      for each. Several IRIs can share a URL, e.g. the http and https forms of one (U-15).
+      The ontology itself and every declared class, property and named individual, with the URL its IRI implies
+      (DESIGN.md 2.3, browl.urls), filled by the entities pre-caching hook. An IRI declared with several types
+      (punning) has a row for each. Several IRIs can share a URL, e.g. the http and https forms of one (U-15).
     columnComments:
       id: The entity's number, dense, in the order the entity list returned it; the other tables refer to it.
       iri: The entity's IRI, as the ontology has it.
       type: >-
-        Its type (browl.derived.EntityType): ontology, class, object_property, data_property or annotation_property.
+        Its type (browl.derived.EntityType): ontology, class, object_property, data_property, annotation_property or
+        named_individual.
       path: >-
         Its URL's path from the site's root (BASE_URL), in URI form (non-ASCII percent-encoded as UTF-8). For a
         fallback URL, the path and query string, /{RESERVED_PREFIX}/iri?iri={the percent-encoded IRI}.
@@ -352,19 +353,28 @@ comments:
     tableComment: >-
       The blank-node owner map's roots (P-27, DESIGN.md 2.5, browl.precache.owner_map): the axioms that reach entities
       through blank nodes (class expressions, lists, annotations on reified axioms), by the top-level triple, reified
-      axiom or unlinked blank node each hangs from. Only roots that are some entity's usage (usage_ref) are kept.
+      axiom or unlinked blank node each hangs from; and the anonymous individuals' assertions (P-47). Only roots that
+      are some entity's usage (usage_ref) are kept.
     columnComments:
       id: The root's number, dense.
       kind: >-
         What it is (browl.derived.UsageRootKind): triple, a triple from an IRI to a blank node (owner predicate
         _:label); axiom, a reified axiom (owl:Axiom), with the annotations on it; general, a blank node nothing links
-        to, with no owner (a general class axiom, an n-ary axiom, a negative property assertion, a SWRL rule).
-      label: The root's blank node, by its label in the store (Jena's afn:bnode), which a query can name as <_:label>.
+        to, with no owner (a general class axiom, an n-ary axiom, a negative property assertion, a SWRL rule);
+        assertion, a triple whose subject is an anonymous individual (_:label predicate object), with no owner.
+      label: >-
+        The root's blank node, by its label in the store (Jena's afn:bnode), which a query can name as <_:label>; for
+        an assertion, its anonymous individual.
       owner: >-
         The entity whose axiom it is (entity.id, its IRI's first): a triple's subject, a reified axiom's
         owl:annotatedSource; NULL if that's no entity (owner_iri) or there's none.
-      owner_iri: The owner's IRI, if it's no entity (an individual, an undeclared IRI); else NULL.
-      predicate: A triple's predicate, or a reified axiom's owl:annotatedProperty; NULL for a general root.
+      owner_iri: The owner's IRI, if it's no entity (an undeclared IRI); else NULL.
+      predicate: >-
+        A triple's or an assertion's predicate, or a reified axiom's owl:annotatedProperty; NULL for a general root.
+      object: >-
+        An assertion's object, as the Usage tab's query names it: <iri>; a blank node as <_:label>; a literal as the
+        first browl.precache.owner_map.DIGEST_CHARS hex digits of its digest (browl.rdf.literal_digest), in double
+        quotes. NULL for any other root.
   - table: usage_ref
     tableComment: >-
       Which roots are which entities' usages, stored in key order: a root is a usage of each entity it names, except

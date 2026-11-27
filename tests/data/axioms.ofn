@@ -56,6 +56,7 @@ Declaration(DataProperty(:weight))
 Declaration(AnnotationProperty(:note))
 Declaration(AnnotationProperty(:comment))
 Declaration(AnnotationProperty(:remark))
+Declaration(AnnotationProperty(:aside))
 Declaration(Datatype(:Adulthood))
 Declaration(Datatype(:Grade))
 Declaration(NamedIndividual(:rex))
@@ -179,6 +180,26 @@ NegativeDataPropertyAssertion(:age :bob "7"^^xsd:integer)
 SameIndividual(:carol :dave)
 DifferentIndividuals(:alice :bob)
 DifferentIndividuals(:alice :carol :tom)
+# Anonymous individuals (P-47): each of their assertions is a usage of the entities it names, and a walk stops at one,
+# as they can link each other in a cycle. One is typed by a class expression, has two values of a property, and an
+# annotated assertion; one is a named individual's object, and in an n-ary DifferentIndividuals and a negative
+# assertion.
+ClassAssertion(:Pet _:fido)
+ClassAssertion(ObjectSomeValuesFrom(:likes :Cat) _:fido)
+ObjectPropertyAssertion(Annotation(:note "seen") :likes _:fido :rex)
+ObjectPropertyAssertion(:knows _:fido _:spot)
+ObjectPropertyAssertion(:hates _:spot _:fido)
+DataPropertyAssertion(:age _:fido "3"^^xsd:integer)
+DataPropertyAssertion(:age _:fido "4"^^xsd:integer)
+AnnotationAssertion(:remark _:spot :Fungus)
+ObjectPropertyAssertion(:loves :bob _:spot)
+DifferentIndividuals(:tom _:spot _:fido)
+NegativeObjectPropertyAssertion(:hates _:spot :tom)
+# An undeclared IRI's annotation: its subject isn't in `entity`, so it's after the subjects that are, and the axioms
+# with no single subject, such as an anonymous individual's.
+AnnotationAssertion(:aside :ghost "a ghost's")
+AnnotationAssertion(:aside :Seed "a seed's")
+AnnotationAssertion(:aside _:spot "a dog's")
 
 # Rules.
 DLSafeRule(Body(ClassAtom(:Dog Variable(:x))) Head(ClassAtom(:Animal Variable(:x))))

@@ -603,6 +603,21 @@ def test_entity_header(app: FastAPI) -> None:
     assert f"<dd>{CODE}oth:y</code></dd>" in details
 
 
+def test_entity_header_types_order(app: FastAPI) -> None:
+    """Check that the header lists a punned IRI's types in the navigation bar's order, not alphabetically."""
+    pun = "http://other.org/pun"
+    entities = [
+        (pun, EntityType.ANNOTATION_PROPERTY),
+        (pun, EntityType.NAMED_INDIVIDUAL),
+        (pun, EntityType.OBJECT_PROPERTY),
+    ]
+    with TestClient(app) as client:
+        run(client, app, entities)
+        text = client.get("/other.org/pun").text
+    types = "Object property · Annotation property · Named individual"
+    assert f'<p class="entity-type" title="{types}">{types}</p>' in text
+
+
 def test_entity_header_without_names(client: TestClient) -> None:
     """Check that an entity without a display name is named by its IRI, and that one without a CURIE shows none."""
     text = client.get("/other.org/y").text

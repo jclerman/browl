@@ -7,15 +7,18 @@
 {%- endmacro %}
 
 {# A node's name, and an equivalence group's other members' (U-9). The link is to the representative's page, which
-   links to the others. #}
+   links to the others. A named individual's leads with a diamond, so it can't be taken for a class. #}
 {% macro node_label(node) -%}
+{%- if node.individual %}<span class="tree-icon-individual" aria-hidden="true">◆</span>{% endif -%}
 <bdi>{{ node.link.name }}</bdi>
+{%- if node.individual %}<span class="visually-hidden"> (named individual)</span>{% endif -%}
 {%- for other in node.equivalents %} ≡ <bdi>{{ other.name }}</bdi>{% endfor %}
 {%- if node.more_equivalents %} ≡ … <small>(+{{ "{:,}".format(node.more_equivalents) }})</small>{% endif %}
 {%- endmacro %}
 
 {# A node, or in the hierarchy column, a reference to one drawn elsewhere in it, which links to its page. A node's
-   line is a row, which sticks to the top, stacked by its depth, while its children scroll past (`browl.css`). #}
+   line is a row, which sticks to the top, stacked by its depth, while its children scroll past (`browl.css`). An
+   individual's type is open above it even if it has no subclasses (`browl.hierarchy_column`). #}
 {% macro tree_node(shown) -%}
 {%- set node = shown.node -%}
 {%- set is_open = shown.children is not none -%}
@@ -32,13 +35,14 @@
   {%- else %}<span class="tree-leaf"></span>{% endif -%}
   <a role="treeitem" id="{{ shown.id }}" href="{{ node.link.href }}"
      {%- if shown.current %} class="tree-current" aria-current="page"{% endif %}
-     {%- if node.children %} aria-expanded="{{ 'true' if is_open else 'false' }}" aria-owns="{{ shown.id }}-g"
-     aria-describedby="{{ shown.id }}-n"{% endif %}>{{ node_label(node) }}</a>
+     {%- if node.children or is_open %} aria-expanded="{{ 'true' if is_open else 'false' }}" aria-owns="{{ shown.id }}-g"
+     {%- endif %}
+     {%- if node.children %} aria-describedby="{{ shown.id }}-n"{% endif %}>{{ node_label(node) }}</a>
   {%- if node.children %}
   <span class="tree-counts" id="{{ shown.id }}-n">{{ counts(node) }}</span>
   {%- endif -%}
   </span>
-  {%- if node.children %}
+  {%- if node.children or is_open %}
   <ul role="group" id="{{ shown.id }}-g"{% if is_open %} data-loaded{% else %} hidden{% endif %}>
     {%- if is_open %}{{ tree_items(shown.children) }}{% endif -%}
   </ul>

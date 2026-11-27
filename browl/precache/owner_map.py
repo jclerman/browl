@@ -1,7 +1,8 @@
 """The owner-map pre-caching hook (P-27): `usage_root`, `usage_ref` and `usage_blank`, which DESIGN.md §2.5 describes.
 
-One bulk query (`owner-map.rq`) streams the blank nodes' triples and IRI parents; the roots, and the entities each is a
-usage of, are worked out on the database's thread. Entities are referred to by the first `entity.id` of their IRI.
+One bulk query (`owner-map.rq`) streams the blank nodes' triples and IRI parents, the anonymous individuals' among them
+(P-47); the roots, and the entities each is a usage of, are worked out on the database's thread. Entities are referred
+to by the first `entity.id` of their IRI.
 """
 
 import functools
@@ -18,7 +19,7 @@ from browl.derived import PROPERTY_TYPES, EntityType, UsageRootKind
 from browl.fuseki import SparqlError
 from browl.jobtypes import StageError
 from browl.precache.core import PreCacheContext, batched, hook, sparql_file
-from browl.rdf import IRI, OWL, RDF, RDFS, XSD, Literal, Term
+from browl.rdf import IRI, OWL, RDF, RDFS, XSD, Literal, Term, literal_digest
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,12 @@ SWRL = "http://www.w3.org/2003/11/swrl#"
 
 WALK_BUDGET = 1_000_000
 """How many visits to blank nodes the roots' walks may make beyond one per node, as roots can share blank nodes; a
-store that needs more fails the stage, rather than run for hours."""
+store that needs more fails the stage, rather than run for hours. A walk stops at an anonymous individual, whose
+assertions are roots of their own, as anonymous individuals can link each other freely (DESIGN.md §2.14)."""
+
+DIGEST_CHARS = 16
+"""How many hex digits of a literal's digest (`browl.rdf.literal_digest`) an anonymous individual's assertion's root
+keeps, by which the Usage tab's query finds its literal (`usage_root.object`)."""
 
 _TYPE = f"{RDF}type"
 _FIRST = f"{RDF}first"
@@ -38,6 +44,21 @@ _PROPERTY = f"{OWL}annotatedProperty"
 _TARGET = f"{OWL}annotatedTarget"
 _ANNOTATED = frozenset({_SOURCE, _PROPERTY, _TARGET})
 _REIFIED_TYPES = frozenset({f"{OWL}Axiom", f"{OWL}Annotation"})
+_THING = f"{OWL}Thing"
+_SAME_AS = f"{OWL}sameAs"
+_DIFFERENT_FROM = f"{OWL}differentFrom"
+_INDIVIDUAL_PREDICATES = frozenset(
+    {_SAME_AS, _DIFFERENT_FROM}
+    | {
+        f"{OWL}{name}"
+        for name in ("deprecated", "versionInfo", "priorVersion", "backwardCompatibleWith", "incompatibleWith")
+    }
+)
+"""The OWL predicates an anonymous individual may have: its assertions', and OWL's built-in annotation properties."""
+_SOURCE_INDIVIDUAL = f"{OWL}sourceIndividual"
+_ALL_DIFFERENT = f"{OWL}AllDifferent"
+_VOCABULARY_TYPES = (OWL, RDF, RDFS, SWRL)  # the namespaces of the types of OWL's RDF mapping's blank nodes
+_VOCABULARY_PREDICATES = (OWL, RDF, XSD, SWRL)  # and of their predicates, with `_LOGICAL_RDFS`
 _CLASS_AXIOM_PREDICATES = frozenset({f"{RDFS}subClassOf", f"{OWL}equivalentClass", f"{OWL}disjointWith"})
 _LOGICAL_RDFS = frozenset({f"{RDFS}{name}" for name in ("subClassOf", "subPropertyOf", "domain", "range")})
 _NOT_CLASS = frozenset(
@@ -58,7 +79,8 @@ _NOT_CLASS = frozenset(
 _BLANK = "_:"  # a blank object's key in `_Triples.children` is its label after this; no IRI starts with it
 
 type _Object = str | int
-"""A blank node's triple's object: an IRI, a blank node as `_BLANK` and its label, or a literal's hash."""
+"""A blank node's triple's object: an IRI, a blank node as `_BLANK` and its label, or a literal's digest's first
+`DIGEST_CHARS` hex digits as a number."""
 
 
 class _Form(Enum):
@@ -67,6 +89,7 @@ class _Form(Enum):
     CLASS_AXIOM = auto()  # a general class axiom, or an n-ary DisjointClasses
     PROPERTY_AXIOM = auto()  # an n-ary DisjointObjectProperties or DisjointDataProperties
     OTHER = auto()  # a negative property assertion, a SWRL rule, n-ary DifferentIndividuals, …
+    ASSERTION = auto()  # an anonymous individual's assertion
 
 
 class _Named(IntEnum):
@@ -131,7 +154,8 @@ def _object_key(term: Term | None) -> _Object:
     if isinstance(term, IRI):
         return sys.intern(str(term))
     if isinstance(term, Literal):
-        return hash(term)  # only told apart from the node's other objects, so a hash will do
+        # Told apart from the node's other objects, and by which the Usage tab finds an anonymous individual's.
+        return int(literal_digest(term)[:DIGEST_CHARS], 16)
     raise SparqlError(f"the owner map's query gave an object that isn't an IRI or a literal: {term!r}")
 
 
@@ -156,6 +180,11 @@ class _Root:
         predicate: A triple's predicate, or a reified axiom's `owl:annotatedProperty`; else None.
         iris: The IRIs it names, each with how.
         form: For a root with no owner, what its axiom is; else None.
+        object: For an anonymous individual's assertion, its object, as the Usage tab's query names it
+            (`usage_root.object`); else None.
+        individuals: The named individuals whose own axiom it is, which their Overview lists: a negative property
+            assertion's source, an n-ary `DifferentIndividuals`' members, and the other individual of an anonymous
+            one's `owl:sameAs` or `owl:differentFrom`.
     """
 
     kind: UsageRootKind
@@ -164,6 +193,8 @@ class _Root:
     predicate: str | None
     iris: dict[str, _Named]
     form: _Form | None = None
+    object: str | None = None
+    individuals: frozenset[str] = frozenset()
 
 
 @hook()
@@ -195,21 +226,34 @@ class _Walk:
         self._reified = {
             node for node, edges in children.items() if any(p == _TYPE and o in _REIFIED_TYPES for p, o in edges)
         }
+        self._individuals = {node for node, edges in children.items() if not is_mapped(edges)}
+        # The reified axioms on each anonymous individual's assertion, by its (individual, predicate, object).
+        self._on_assertions: dict[tuple[str, str, _Object], list[str]] = {}
         # The reified nodes whose source is a blank node: a general class axiom's, or a reified axiom's, so another
         # annotation; each is part of that node's root.
         self._annotations: dict[str, list[str]] = {}
         self._linked: set[str] = set()  # blank nodes in another's root
         self._copies: set[str] = set()  # copies of a main triple's blank node, as a reified axiom's target or source
+        predicates: dict[str, set[str]] = {}  # a reified axiom's blank source's predicates, found once per source
         for node, edges in children.items():
             reified = node in self._reified
-            property_ = next((o for p, o in edges if p == _PROPERTY), None) if reified else None
+            annotated = {p: o for p, o in edges if p in (_PROPERTY, _TARGET)} if reified else {}
+            property_, target = annotated.get(_PROPERTY), annotated.get(_TARGET)
             for predicate, item in edges:
                 if (label := _blank(item)) is None:
                     continue
                 if reified and predicate == _TARGET:
                     self._copies.add(label)
+                elif reified and predicate == _SOURCE and label in self._individuals:
+                    # An anonymous individual's assertion's; one whose target is a copy of a class expression is left
+                    # out, as the Usage tab's query couldn't find the copy (DESIGN.md §2.5).
+                    if isinstance(property_, str) and target is not None:
+                        self._on_assertions.setdefault((label, property_, target), []).append(node)
+                    self._linked.add(node)
                 elif reified and predicate == _SOURCE:
-                    if any(p == property_ for p, _ in children.get(label, ())):  # it holds the main triple
+                    if label not in predicates:
+                        predicates[label] = {p for p, _ in children.get(label, ())}
+                    if property_ in predicates[label]:  # it holds the main triple
                         self._annotations.setdefault(label, []).append(node)
                         self._linked.add(node)
                     else:
@@ -224,12 +268,12 @@ class _Walk:
         Raises:
             StageError: The walks would exceed `WALK_BUDGET`.
         """
-        children, parents = self._triples.children, self._triples.parents
-        for node in sorted(parents):
+        children, parents, individuals = self._triples.children, self._triples.parents, self._individuals
+        for node in sorted(parents.keys() - individuals):  # a triple with an anonymous individual names nothing within
             iris = self._inside(node)
             for owner, predicate in sorted(parents[node]):
                 yield _Root(UsageRootKind.TRIPLE, node, owner, predicate, iris)
-        unlinked = children.keys() - self._linked - parents.keys()
+        unlinked = children.keys() - self._linked - parents.keys() - individuals
         for node in sorted(unlinked - (self._copies - self._reified)):
             iris = self._inside(node)
             edges = children[node]
@@ -244,7 +288,39 @@ class _Walk:
                 source, property_ = annotated.get(_SOURCE), annotated.get(_PROPERTY)
                 yield _Root(UsageRootKind.AXIOM, node, _named(source), _named(property_), iris)
             else:
-                yield _Root(UsageRootKind.GENERAL, node, None, None, iris, _form(edges))
+                owning = _owning(edges, iris)
+                yield _Root(UsageRootKind.GENERAL, node, None, None, iris, _form(edges), individuals=owning)
+        for node in sorted(individuals):
+            for predicate, item in sorted(children[node], key=lambda edge: (edge[0], str(edge[1]))):
+                yield self._assertion(node, predicate, item)
+
+    def _assertion(self, node: str, predicate: str, item: _Object) -> _Root:
+        """Return the root of an anonymous individual's assertion: one of its triples, with the axioms annotating it.
+
+        It names its predicate, if that's a property, and its object, or the IRIs in it if it's a class expression;
+        not another anonymous individual's, whose own assertions are roots of their own.
+
+        Raises:
+            StageError: The walks would exceed `WALK_BUDGET`.
+        """
+        iris: dict[str, _Named] = {}
+        if _is_annotation(predicate):  # any property, as no vocabulary's is one
+            iris[predicate] = _Named.LOGICAL
+        named, label = _named(item), _blank(item)
+        if named is not None and not (predicate == _TYPE and named.startswith((OWL, RDF))):
+            iris[named] = _Named.CLASS if predicate == _TYPE else _Named.LOGICAL
+        if label is not None and label not in self._individuals:
+            _merge(iris, self._inside(label))
+        for each in self._on_assertions.get((node, predicate, item), ()):
+            _merge(iris, self._inside(each))
+        if named is not None:
+            term = f"<{named}>"
+        elif label is not None:
+            term = f"<_:{label}>"
+        else:
+            term = f'"{item:0{DIGEST_CHARS}x}"'
+        owning = frozenset({named}) if named is not None and predicate in (_SAME_AS, _DIFFERENT_FROM) else frozenset()
+        return _Root(UsageRootKind.ASSERTION, node, None, predicate, iris, _Form.ASSERTION, term, owning)
 
     def _inside(self, root: str) -> dict[str, _Named]:
         """Return the IRIs reached from a root's blank node through blank nodes and the annotations on them, with how.
@@ -277,7 +353,7 @@ class _Walk:
                 if isinstance(item, int):
                     continue
                 if (label := _blank(item)) is not None:
-                    if label not in seen:
+                    if label not in seen and label not in self._individuals:
                         seen.add(label)
                         stack.append((label, role if predicate in (_FIRST, _REST) else predicate))
                 elif not (item == _NIL or (predicate == _TYPE and item.startswith((OWL, RDF)))):
@@ -288,6 +364,38 @@ class _Walk:
                         named = _Named.LOGICAL if position in _NOT_CLASS else _Named.CLASS
                     found[item] = max(found.get(item, _Named.ANNOTATION), named)
         return found
+
+
+def _merge(iris: dict[str, _Named], more: dict[str, _Named]) -> None:
+    """Add IRIs a root names, each with the most of the ways it does."""
+    for iri, named in more.items():
+        iris[iri] = max(iris.get(iri, _Named.ANNOTATION), named)
+
+
+def is_mapped(edges: Iterable[tuple[str, _Object]]) -> bool:
+    """Return whether a blank node is part of OWL's RDF mapping, not an anonymous individual.
+
+    That's an axiom, an annotation, a class expression, a data range, a list, an inverse property, a SWRL atom, …: a
+    node with a type or a predicate from their vocabularies (`_VOCABULARY_TYPES`, `_VOCABULARY_PREDICATES`), but those
+    of an individual's assertions: `rdf:type` with a class, `owl:Thing` among them, `owl:sameAs`, `owl:differentFrom`
+    and OWL's built-in annotation properties (`_INDIVIDUAL_PREDICATES`).
+    """
+    for predicate, item in edges:
+        if predicate == _TYPE:
+            if isinstance(item, str) and item != _THING and item.startswith(_VOCABULARY_TYPES):
+                return True
+        elif predicate not in _INDIVIDUAL_PREDICATES and (
+            predicate.startswith(_VOCABULARY_PREDICATES) or predicate in _LOGICAL_RDFS
+        ):
+            return True
+    return False
+
+
+def _owning(edges: set[tuple[str, _Object]], iris: dict[str, _Named]) -> frozenset[str]:
+    """Return the named individuals whose own axiom a root with no owner is (`_Root.individuals`)."""
+    if any(p == _TYPE and o == _ALL_DIFFERENT for p, o in edges):
+        return frozenset(iri for iri, named in iris.items() if named > _Named.ANNOTATION)
+    return frozenset(iri for p, o in edges if p == _SOURCE_INDIVIDUAL and (iri := _named(o)) is not None)
 
 
 def _form(edges: set[tuple[str, _Object]]) -> _Form:
@@ -311,11 +419,12 @@ def _is_annotation(predicate: str) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class _Entity:
-    """What the owner map needs of an IRI in `entity`: its first id, and whether it's a class and a property."""
+    """What the owner map needs of an IRI in `entity`: its first id, and which of its types it has."""
 
     id: int
     is_class: bool
     is_property: bool
+    is_individual: bool
 
 
 def _read_entities(connection: sqlite3.Connection, iris: Iterable[str]) -> dict[str, _Entity]:
@@ -325,17 +434,22 @@ def _read_entities(connection: sqlite3.Connection, iris: Iterable[str]) -> dict[
         connection.executemany("INSERT INTO owner_map_iri (iri) VALUES (?)", ((iri,) for iri in iris))
         properties = ", ".join("?" * len(PROPERTY_TYPES))
         rows = connection.execute(
-            f"SELECT e.iri, min(e.id), max(e.type = ?), max(e.type IN ({properties}))"
+            f"SELECT e.iri, min(e.id), max(e.type = ?), max(e.type IN ({properties})), max(e.type = ?)"
             " FROM owner_map_iri AS t JOIN entity AS e ON e.iri = t.iri GROUP BY e.iri",
-            (EntityType.CLASS, *sorted(PROPERTY_TYPES)),
+            (EntityType.CLASS, *sorted(PROPERTY_TYPES), EntityType.NAMED_INDIVIDUAL),
         )
-        return {iri: _Entity(number, bool(is_class), bool(is_property)) for iri, number, is_class, is_property in rows}
+        return {
+            iri: _Entity(number, bool(is_class), bool(is_property), bool(is_individual))
+            for iri, number, is_class, is_property, is_individual in rows
+        }
     finally:
         connection.execute("DROP TABLE temp.owner_map_iri")
 
 
-def _is_own(root: _Root, entity: _Entity, named: _Named) -> bool:
+def _is_own(root: _Root, iri: str, entity: _Entity, named: _Named) -> bool:
     """Return whether a root is an entity's own axiom, which its Overview lists, not its usage (DESIGN.md §2.5)."""
+    if entity.is_individual and iri in root.individuals:
+        return True
     if root.form is _Form.CLASS_AXIOM:
         return entity.is_class and named is _Named.CLASS
     if root.form is _Form.PROPERTY_AXIOM:
@@ -359,14 +473,16 @@ def _write_owner_map(triples: _Triples, connection: sqlite3.Connection) -> None:
     # Every IRI a root names or is owned by is a blank node's predicate or object, or a triple's subject.
     owners = {owner for parents in triples.parents.values() for owner, _ in parents}
     entities = _read_entities(connection, blank_object.keys() | blank_predicate.keys() | owners)
-    root_rows: list[tuple[int, str, str, int | None, str | None, str | None]] = []
+    root_rows: list[tuple[int, str, str, int | None, str | None, str | None, str | None]] = []
     refs: list[tuple[int, int]] = []
     for root in _Walk(triples).roots():
         used = sorted(
             {
                 entity.id
                 for iri, named in root.iris.items()
-                if (entity := entities.get(iri)) is not None and iri != root.owner and not _is_own(root, entity, named)
+                if (entity := entities.get(iri)) is not None
+                and iri != root.owner
+                and not _is_own(root, iri, entity, named)
             }
         )
         if not used:
@@ -375,7 +491,7 @@ def _write_owner_map(triples: _Triples, connection: sqlite3.Connection) -> None:
         owner = entities.get(root.owner) if root.owner is not None else None
         owner_iri = root.owner if owner is None else None
         root_rows.append(
-            (number, root.kind, root.label, None if owner is None else owner.id, owner_iri, root.predicate)
+            (number, root.kind, root.label, None if owner is None else owner.id, owner_iri, root.predicate, root.object)
         )
         refs.extend((entity, number) for entity in used)
     refs.sort()
@@ -385,7 +501,8 @@ def _write_owner_map(triples: _Triples, connection: sqlite3.Connection) -> None:
         if blank_object[iri] or blank_predicate[iri]
     )
     connection.executemany(
-        "INSERT INTO usage_root (id, kind, label, owner, owner_iri, predicate) VALUES (?, ?, ?, ?, ?, ?)", root_rows
+        "INSERT INTO usage_root (id, kind, label, owner, owner_iri, predicate, object) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        root_rows,
     )
     connection.executemany("INSERT INTO usage_ref (entity, root) VALUES (?, ?)", refs)
     connection.executemany("INSERT INTO usage_blank (entity, object, predicate) VALUES (?, ?, ?)", blank_rows)

@@ -74,6 +74,7 @@ TYPE_PLURALS = {
     EntityType.OBJECT_PROPERTY: "object properties",
     EntityType.DATA_PROPERTY: "data properties",
     EntityType.ANNOTATION_PROPERTY: "annotation properties",
+    EntityType.NAMED_INDIVIDUAL: "named individuals",
 }
 """Each entity type's name for a count of them, as the results page's common values show it."""
 

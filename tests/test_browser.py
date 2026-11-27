@@ -1260,7 +1260,7 @@ def test_annotations_grid_wide(page: Page, annotated: LiveServer) -> None:
     assert value_boxes[1]["y"] >= value_boxes[0]["y"] + value_boxes[0]["height"]  # one line per value
     assert len({round(each["x"]) for each in value_boxes}) == 1  # one value column for every group
     char = page.evaluate("parseFloat(getComputedStyle(document.body).fontSize)")
-    assert box(terms.nth(1))["width"] <= 20 * char + 1  # the long label wraps at 20rem
+    assert box(terms.nth(1))["width"] <= 12 * char + 1  # the long label wraps at 12rem
     comment = value_boxes[3]
     assert 40 * char < comment["width"] < 60 * char  # not squeezed by the long label, and capped near 75ch
     assert comment["height"] > 2 * value_boxes[0]["height"]  # so it wraps
@@ -1272,13 +1272,30 @@ def test_annotations_grid_wide(page: Page, annotated: LiveServer) -> None:
     assert tag.evaluate("each => getComputedStyle(each).color") == muted
 
 
+def frame_step(page: Page) -> float:
+    """Return a level's indent in a stacked frame (`--frame-step`), in pixels: more than nothing, less than a rem."""
+    step: float = page.evaluate(
+        """() => {
+            const probe = document.createElement("div");
+            probe.style.width = "var(--frame-step)";
+            document.body.append(probe);
+            const width = probe.getBoundingClientRect().width;
+            probe.remove();
+            return width;
+        }"""
+    )
+    char = page.evaluate("parseFloat(getComputedStyle(document.documentElement).fontSize)")
+    assert 4 < step < char
+    return step
+
+
 def test_annotations_grid_narrow(page: Page, annotated: LiveServer) -> None:
-    """Check that on a phone each group's values go below its label, and nothing long makes the page scroll sideways."""
+    """Check that on a phone each group's values go below its label, a step in, and nothing scrolls sideways."""
     page.set_viewport_size(NARROW)
     page.goto(f"{annotated.url}/example.org/thing")
     term, value = box(page.locator(".annotations dt").first), box(page.locator(".annotations dd").first)
     assert value["y"] >= term["y"] + term["height"]
-    assert abs(value["x"] - term["x"]) < 2
+    assert value["x"] - term["x"] == pytest.approx(frame_step(page), abs=1)
     assert_fits(page)
 
 
@@ -1338,6 +1355,96 @@ def test_annotation_box_whole(page: Page, server: LiveServer, monkeypatch: pytes
     for width in range(320, 640, 16):
         page.set_viewport_size({"width": width, "height": 700})
         assert annotation.evaluate("each => each.getClientRects().length") == 1, width
+
+
+@pytest.fixture
+def framed(server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> LiveServer:
+    """Return the server, every entity's logical axioms those of a class and an individual, and no annotations.
+
+    Under "Class", SubClass Of has a long IRI, which wraps on a phone; under "Named individual", Types, then one
+    object property's assertion.
+    """
+    thing, individual = f"{EX}/thing", owl.EntityKind.NAMED_INDIVIDUAL
+    entity, its = owl.Entity(kind=owl.EntityKind.CLASS, iri=thing), owl.Entity(kind=individual, iri=thing)
+    likes = owl.Entity(kind=owl.EntityKind.OBJECT_PROPERTY, iri=f"{EX}/likes")
+    axioms = [
+        owl.SubClassOf(sub=entity, super=owl.Entity(kind=owl.EntityKind.CLASS, iri=f"{EX}/{'long' * 40}")),
+        owl.ClassAssertion(individual=its, class_=owl.Entity(kind=owl.EntityKind.CLASS, iri=f"{EX}/Type")),
+        owl.ObjectPropertyAssertion(subject=its, property=likes, object=owl.Entity(kind=individual, iri=f"{EX}/x")),
+    ]
+
+    async def read_axioms(*args: object) -> ReadAxioms:
+        return ReadAxioms(axioms)
+
+    async def fetched(*args: object) -> list[tuple[IRI, AnnotationValue]]:
+        return []
+
+    monkeypatch.setattr(browl.overview, "fetch_annotations", fetched)
+    monkeypatch.setattr(browl.overview, "fetch_value_annotations", no_value_annotations)
+    monkeypatch.setattr(browl.overview, "_read_axioms", read_axioms)
+    return server
+
+
+def assert_axioms_indented(page: Page) -> None:
+    """Check that the `framed` logical axioms are stacked, each level a step under the one above.
+
+    A punned IRI's type headings at the panel's edge; their sections' labels a step in, the property assertions'
+    heading too; a section's values, and the property's name, two steps in; the property's values three. A wrapped line
+    keeps its hanging indent.
+    """
+    panel = page.locator("section.axioms")
+    step = frame_step(page)
+    left = box(panel.locator(".frame-kind h3").first)["x"]
+    assert abs(box(panel.locator("h2"))["x"] - left) < 1
+    label = box(panel.locator(".frame dt").first)
+    value = box(panel.locator(".frame dd").first)
+    assert value["y"] >= label["y"] + label["height"]  # below its label
+    assert label["x"] - left == pytest.approx(step, abs=1)
+    assert value["x"] - left == pytest.approx(2 * step, abs=1)
+    lines = panel.locator(".frame dd").first.evaluate(
+        "(each) => { const range = document.createRange(); range.selectNodeContents(each);"
+        " return [...range.getClientRects()].map((rect) => rect.x); }"
+    )
+    assert min(lines) == pytest.approx(value["x"], abs=1)  # the first line starts at the value's edge
+    assert max(lines) > value["x"] + 4  # and the rest hang
+    types = panel.locator("dt:not(.frame-heading):not(.frame-property)").nth(1)
+    expect(types).to_have_text("Types")
+    assert box(types)["x"] - left == pytest.approx(step, abs=1)
+    assert box(panel.locator("dt.frame-heading"))["x"] - left == pytest.approx(step, abs=1)
+    assert box(panel.locator("dt.frame-property code"))["x"] - left == pytest.approx(2 * step, abs=1)
+    assert box(panel.locator("dd.frame-value"))["x"] - left == pytest.approx(3 * step, abs=1)
+
+
+def test_axioms_indented_narrow(page: Page, framed: LiveServer) -> None:
+    """Check that on a phone the logical axioms stack, each level indented; wide, the values line up in a column."""
+    page.set_viewport_size(NARROW)
+    page.goto(f"{framed.url}/example.org/thing")
+    assert_axioms_indented(page)
+    assert_fits(page)
+    page.set_viewport_size(WIDE)
+    one_page_toggle(page).check()
+    panel = page.locator("section.axioms")
+    assert box(panel.locator(".frame dd").first)["x"] == pytest.approx(box(panel.locator("dd.frame-value"))["x"])
+
+
+def test_frame_stacks_by_panel_width(page: Page, framed: LiveServer) -> None:
+    """Check that a frame stacks when its panel is narrow, though the window is wide, and not when the panel is wide.
+
+    The panels are side by side in a wide window; one capped under 30rem stacks, and over it, it doesn't.
+    """
+    page.set_viewport_size({"width": 1800, "height": 800})
+    page.goto(f"{framed.url}/example.org/thing")
+    panel = page.locator("section.axioms")
+    char = page.evaluate("parseFloat(getComputedStyle(document.documentElement).fontSize)")
+    annotations, axioms = panels(page)
+    assert annotations["x"] + annotations["width"] < axioms["x"]  # side by side, in a wide window
+    assert panel.evaluate("(each) => each.clientWidth") >= 30 * char
+    label, value = box(panel.locator(".frame dt").first), box(panel.locator(".frame dd").first)
+    assert abs(label["y"] - value["y"]) < 2  # beside its label
+    assert value["x"] > label["x"] + label["width"]
+    panel.evaluate("(each) => { each.style.maxWidth = '28rem'; }")
+    assert panel.evaluate("(each) => each.clientWidth") < 30 * char
+    assert_axioms_indented(page)
 
 
 # The window-filling frame (P-16d, DESIGN.md §2.9, U-30, U-44)
@@ -1858,10 +1965,14 @@ def test_usage_tab_look(page: Page, paged: LiveServer) -> None:
 
 
 def test_usage_tab_narrow(page: Page, paged: LiveServer) -> None:
-    """Check that on a phone the Usage tab doesn't make the page scroll sideways."""
+    """Check that on a phone the Usage tab's lines are a step under their subject, and nothing scrolls sideways."""
     page.set_viewport_size(NARROW)
     page.goto(f"{paged.url}{THING}?tab=usage&page=2")
-    expect(page.locator(".usage-frame dt").first).to_be_visible()
+    subject = page.locator(".usage-frame dt").first
+    expect(subject).to_be_visible()
+    line = box(page.locator(".usage-frame dt + dd").first)
+    assert line["y"] >= box(subject)["y"] + box(subject)["height"]
+    assert line["x"] - box(subject)["x"] == pytest.approx(frame_step(page), abs=1)
     assert_fits(page)
 
 
@@ -3110,6 +3221,40 @@ def test_column_rows_stick(page: Page, trees: LiveServer) -> None:
     top = heading["y"] + heading["height"]
     assert abs(rows[0]["y"] - top) < 2
     assert abs(rows[1]["y"] - (rows[0]["y"] + rows[0]["height"])) < 2
+
+
+def test_column_rows_stick_below_wrapped_heading(page: Page, trees: LiveServer) -> None:
+    """Check that a heading too long for the column shows its link on a line of its own, with the rows stuck below."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{trees.url}/Big")
+    column = hierarchy_column(page)
+    heading, label = column.get_by_role("heading"), column.get_by_role("heading").locator("span")
+    label.evaluate("(each) => { each.textContent = 'Local hierarchy: Named individual'; }")  # a punned IRI's
+    link = heading.get_by_role("link", name="Full tree")
+    expect(link).to_be_in_viewport()
+    assert box(link)["y"] >= box(label)["y"] + box(label)["height"]
+    assert box(link)["x"] + box(link)["width"] <= box(column)["x"] + box(column)["width"]
+    height = round(box(heading)["height"])
+    expect(column.locator(".tree")).to_have_css("--tree-stick", f"{height}px")
+    column.evaluate("(each) => { each.scrollTop = each.scrollHeight; }")
+    top = box(heading)["y"] + box(heading)["height"]
+    assert abs(box(column.locator(".tree-row", has=tree_item(page, "Top")))["y"] - top) < 2
+
+
+def test_hash_entity_column_rows_stick(page: Page, live_server: Callable[[FastAPI], LiveServer]) -> None:
+    """Check that the hierarchy column of a page the hash-IRI script moves in has its rows stick below its heading."""
+    server = live_server(make_app())
+    top, leaf = f"{EX}/Top", f"{EX}/vocab#Leaf"
+    entities = [(top, EntityType.CLASS), (leaf, EntityType.CLASS)]
+    server.app.state.jobs.register(Stage.PRE_CACHING, derived_stage(entities, edges=[(leaf, SUB_CLASS, top)]))
+    server.call(server.app.state.jobs.start())
+    server.call(server.app.state.jobs.wait())
+    page.set_viewport_size(WIDE)
+    page.goto(f"{server.url}/vocab#Leaf")
+    column = hierarchy_column(page)
+    expect(tree_item(page, leaf)).to_be_visible()
+    height = round(box(column.get_by_role("heading"))["height"])
+    expect(column.locator(".tree")).to_have_css("--tree-stick", f"{height}px")
 
 
 def test_column_row_leaves_under_parents(page: Page, trees: LiveServer) -> None:

@@ -631,7 +631,7 @@ are documented in [`SCHEMA.md`](SCHEMA.md):
 
 | Table | Holds | Filled from |
 | --- | --- | --- |
-| `entity` | The ontology and every declared class and property, and (P-47) every declared named individual: its IRI, type, URL path and fragment (2.3), display name and CURIE | The entity-list query (every declared class and property with its type, and from P-47 `owl:NamedIndividual`; the ontology's IRI comes from the header query): 22–29 s on NCBITaxon, 3.03 M rows. The whole hook, which computes each batch's URLs and inserts it before reading the next, takes 25–26 s, and the table and its indexes 530–650 MiB (P-10) |
+| `entity` | The ontology and every declared class and property, and (P-47) every declared named individual: its IRI, type, URL path and fragment (2.3), display name and CURIE | The entity-list query (every declared class and property with its type, and from P-47 `owl:NamedIndividual`; the ontology's IRI comes from the header query): 22–29 s on NCBITaxon, 3.03 M rows. The whole hook, which computes each batch's URLs and inserts it before reading the next, takes 25–26 s, and the table and its indexes 530–650 MiB (P-10). Individuals cost what classes do; Uberon's 67 add 4 KiB, and the hook's time is unchanged (P-47) |
 | `member` _(Proposed, P-48)_ | Each class's members, numbered from 0 in the Individuals tab's order, so a class's count is its last position plus one; and every named individual, under a stand-in class id, for the list page (U-18, [2.8](#28-entity-pages)). Indexed by individual too, for a member's other types | One bulk query of the `rdf:type` triples whose subject is a named individual and object a declared class (asserted, or inferred where a reasoner ran), kept where both are entities, and the stand-in's rows from `entity`; numbered in SQLite by the members' casefolded display names, then IRI, after the names hook |
 | `name_value` | Name-property values, for display names, one row per direct and per RDFS-entailed property | The name values query, through a property path (below): 41–48 s on NCBITaxon, 3.56 M rows. The whole hook, which also sets each entity's CURIE and display name, takes about 85 s ([P-11 findings](../research/P-11/README.md)) |
 | `edge` | Parent → child per hierarchy (classes; each property type), between equivalence-group representatives | The edges query (subclass, sub-property and equivalent-class triples): 20–21 s on NCBITaxon, 3.02 M rows. The whole hook, which also groups, counts and inserts `equiv_group` and `counts`, takes about 42 s and 0.9 GB, and `edge`, `counts` and their index 164 MiB; on Uberon and HPO, 0.5 s ([P-12 findings](../research/P-12/README.md)) |
@@ -741,18 +741,36 @@ by value. Fuseki can (`?s ?p <entity>`), so P-27 keeps two things instead ([S-7 
     axioms, which their Overview lists. (A class punned as a property, named only as a restriction's property, is
     such an axiom's usage.) Deciding that at load keeps the Usage tab's reads to one range of `usage_ref`; a root
     that's no one's usage isn't stored;
+  - one root per assertion of an anonymous individual _(P-47)_: each of its triples is a root of its own, kind
+    `assertion`, with no owner, so a usage is one axiom, as the OWLAPI's are. `usage_root.object` holds the triple's
+    object as the Usage tab's query names it (`<iri>`, `<_:label>`, or for a literal `"…"`, the first 16 hex digits
+    of `browl.rdf.literal_digest`), since the subject and predicate alone don't pick the triple. A reified axiom on
+    such an assertion is part of its root when its `owl:annotatedTarget` is the same term as the object; one on a
+    class assertion to a class expression's copy is left out. A node is an anonymous individual if none of its types
+    or predicates is from OWL's RDF mapping (`browl.precache.owner_map.is_mapped`); one with only annotation
+    assertions isn't found by the query, so its usages are counted but not listed;
   - per entity, how many triples with a blank subject have it as object or predicate (`usage_blank`), which the count
     subtracts.
 
+  A named individual's own axioms aren't its usages, as the OWLAPI's `getAxioms` gives them: its assertions, an n-ary
+  `DifferentIndividuals`' members, a negative assertion's source, and the other individual of an anonymous one's
+  `owl:sameAs` or `owl:differentFrom` (`_Root.individuals`, `_is_own`).
+
   The walks from the roots may visit at most a million blank nodes more than the store holds
   (`owner_map.WALK_BUDGET`), so a store whose roots share blank nodes widely fails the stage rather than run for
-  hours; Uberon's and NCBITaxon's visit each about once.
+  hours; Uberon's and NCBITaxon's visit each about once. OWL's class expressions and lists are trees, but anonymous
+  individuals can link each other freely, so a walk stops at one: a triple whose object is an anonymous individual
+  names nothing within it, and each of its assertions is walked once, as its own root. A test checks that 10 K
+  referrers of a 1 K-node cycle of anonymous individuals stay within the budget.
 
   The blank nodes are found by their types (`owl:Axiom`, `owl:Restriction`, the n-ary and SWRL types) and by the
-  predicates of anonymous classes, lists, datatypes and inverse properties. That takes 26 s on NCBITaxon. Filtering
-  on node kind instead gives the same map in 70 s, since it makes TDB2 decode every triple's nodes; on Uberon and
-  HPO both take 5–7 s. The types come from OWL's RDF mapping, so anonymous individuals would be missed; U-18
-  (P-47) revisits that, and the filter is the fallback.
+  predicates of anonymous classes, lists, datatypes and inverse properties. Anonymous individuals are found as the
+  blank subjects of `rdf:type` with a blank class or a class outside OWL's, RDF's, RDFS's and SWRL's vocabularies
+  (`owl:Thing` allowed), of `owl:sameAs` and `owl:differentFrom`, and of declared object and data properties. The
+  type is tested before the subject, in one `IF`: as separate filters, Jena tests `isBlank` first, decoding every
+  `rdf:type` subject (18 s on NCBITaxon, against 1 s). The query takes 21–23 s on NCBITaxon, and the hook 35–37 s,
+  before and after P-47 ([`research/P-47`](../research/P-47/README.md)); 9 s on Uberon and 6.5 s on HPO. Filtering
+  on node kind instead gives the same map in 70 s, since it makes TDB2 decode every triple's nodes.
 - **The usage table** _(P-27c)_, built in the background once a generation is live, not by pre-caching: every usage,
   keyed by the entity it refers to and its position in the Usage tab's order, so any page of any entity's Usage tab,
   and its count, is one range read ([2.8](#28-entity-pages)). It's in its own SQLite file per generation
@@ -1143,7 +1161,8 @@ no CURIE. _(Q18b)_
 Header, above the tabs (U-5):
 
 - Display name as the title, and the entity type. An IRI with several types (punning) lists them all, e.g.
-  "Class · Object property". _(P-14c)_
+  "Class · Object property", in the navigation bar's order, as the hierarchy column and the logical-axioms panel
+  order them. _(P-14c, P-47)_
 - A `<details>` element with the full IRI and CURIE, closed at first. The IRI is text, not a link: on a browl site it
   often resolves to the page it's on. _(P-14c)_
 - A fixed height, so the panels below start at the same place on every entity page (U-30): the title is clamped to two
@@ -1186,19 +1205,20 @@ Tabs (U-28; see [2.9](#29-page-layout)):
     revisited; the ontologies browl targets have few general class axioms.
   - **The count** is of axioms, as Protégé counts "uses", not of referring entities: Fuseki's counts of the first
     two sources, without a filter on `?s`, less the entity's triples about itself and the owner map's blank-subject
-    counts, plus the owner map's roots that are usages. Blank nodes the owner map misses, such as anonymous
-    individuals (until P-47), are counted but not listed. _(P-27b)_ So once a page's usages are read, its pages come from
-    those listed, not from the count: a page past them is a 404, not blank. An entity none of whose usages
-    can be listed says so, and its label still shows the count, which says what the ontology holds; counting only
-    the listed ones would need a filter on `?s`, which costs seconds for the largest (below). P-47 lists them.
-    That's 2 ms for most entities, and 0.21–0.26 s for NCBITaxon's
+    counts, plus the owner map's roots that are usages. Blank nodes the owner map misses, now only anonymous
+    individuals with annotation assertions alone (P-47 lists the others' assertions), are counted but not listed.
+    _(P-27b)_ So once a page's usages are read, its pages come from those listed, not from the count: a page past
+    them is a 404, not blank. An entity none of whose usages can be listed says so, and its label still shows the
+    count, which says what the ontology holds; counting only the listed ones would need a filter on `?s`, which costs
+    seconds for the largest (below). That's 2 ms for most entities, and 0.21–0.26 s for NCBITaxon's
     largest (2.5–3.1 M), 0.47 s just after a restart; filtering `?s` to IRIs makes TDB2 decode every subject,
     12–19 s. An entity's counts over 100 ms (13 entities in NCBITaxon) are kept in memory per generation, at most
     1,000. Once the usage table is ready, counts come from it, as do the label's (`usage-count`): the same counts, as
     its build counts the blank subjects' triples too ([2.5](#25-derived-data-pre-caching)) _(P-27c)_.
   - **Order and pages:** axioms sorted by their subject's casefolded display name, then IRI; then, for a property,
-    the general class axioms that mention it; then subjects not in `entity` (undeclared IRIs, and individuals until
-    P-47 makes declared ones entities: 261 usages in Uberon, none in HPO or NCBITaxon). Pages of 50 axioms: next,
+    the general class axioms that mention it; then subjects not in `entity`: undeclared IRIs, since P-47 made
+    declared individuals entities. Uberon's 261 such usages, from 70 subjects, are now 3, from SWRL variables; HPO and
+    NCBITaxon have none. Pages of 50 axioms: next,
     previous and go to page. An entity split across pages is marked "(continued)". A property's usage is known by its
     subject and its place among that subject's values of the property, in N-Triples order, a blank one's by its store
     label, which a page reads for its own usages (`browl.usages.read_values`), so each page holds exactly 50 _(P-27c)_.
@@ -1235,8 +1255,8 @@ Tabs (U-28; see [2.9](#29-page-layout)):
       keyword spans both columns: a property chain, which the property it implies owns
       (`p o q SubPropertyOf: r`); a characteristic (`Functional: p`); an n-ary axiom written as a list
       (`DisjointClasses: A, B, C`); a negative assertion (`not (…)`); an `OtherAxiom`; and every line with no
-      subject. An axiom's annotations follow it on its line, in the rest's column (P-49). On a phone the subject goes
-      above its lines, which keep the two columns.
+      subject. An axiom's annotations follow it on its line, in the rest's column (P-49). In a narrow tab (under
+      30rem, as the frames below) the subject goes above its lines, which keep the two columns, a step in.
     - **Symmetric axioms subject first:** `EquivalentTo`, `DisjointWith`, `SameAs`, `DifferentFrom`, equivalent and
       disjoint properties and `InverseOf`, in their two-member form, are written with their members sorted, so the
       subject could be on the right. A line has its subject first (`browl.owl.Axiom.with_first`): on Y's tab,
@@ -1266,6 +1286,12 @@ Tabs (U-28; see [2.9](#29-page-layout)):
       annotations counted, as the Overview's is (Axiom annotations, below). If these would take the page past
       `CONSTRUCT_MAX_BYTES`, `MAX_FRAGMENT_IRIS` or `MAX_FRAGMENT_ANNOTATIONS`, or their query fails, the lines are
       shown without them, with a note; past the caps without them, the page is too large to show.
+  - **Anonymous individuals' assertions** _(P-47)_: each is an `assertion` root (the owner map, above), listed in the
+    group with no subject. A page fetches them exactly (`usage-assertions.rq`): by subject label, predicate and object
+    (`usage_root.object`), with their reified axioms and no blank-node closure; a class-expression object is
+    `DESCRIBE`d into a fragment of its own (`UsageFragments.assertions`), parsed with them. A `DESCRIBE` closure can
+    still reach an anonymous individual (through `hasValue`, `oneOf`, an annotation's value), so every closure drops
+    the triples of each blank subject that `is_mapped` (2.5) finds is one (`_without_individuals`).
   - **Before the usage table is ready** (about 4 minutes after a NCBITaxon load; seconds for Uberon and HPO): an
     entity with up to T = 20,000 usages streams them all, sorts and slices, per request: at most 0.21 s on NCBITaxon
     (8–11 µs per usage) and 0.1 s on Uberon and HPO (2–4 µs). That's every entity but 28 in NCBITaxon, 7 in Uberon and
@@ -1346,16 +1372,17 @@ Tabs (U-28; see [2.9](#29-page-layout)):
   each page is a range read of `member` and a capped read of its members' types. Anonymous individuals have no page
   and aren't listed; their class assertions stay on the class's Usage tab.
 
-**Individuals' pages** _(Proposed, P-47; U-18)_: a named individual (`owl:NamedIndividual`) is an entity, with a page
+**Individuals' pages** _(P-47; U-18)_: a named individual (`owl:NamedIndividual`) is an entity, with a page
 at its IRI's URL like any other ([2.3](#23-iri--url-mapping)), its type "Named individual" in the header and among the
 search's type filters ([2.6](#26-search)), and its names searchable. Its Overview has the annotations panel, and its
 own sections in the logical-axioms panel (Individuals, below). Its Usage tab lists the axioms that name it, such as
 other individuals' assertions with it as value, and class expressions with it in `ObjectOneOf` or `ObjectHasValue`.
 Its hierarchy column is in [2.9](#29-page-layout). An individual typed or used but not declared gets no page, as an
 undeclared class gets none, and its usages stay under subjects not in `entity`. Anonymous individuals get no page
-either: they're shown where they're used, as now, and P-47 extends the owner map to find their assertions, so the
-Usage tabs list them, not only count them ([2.5](#25-derived-data-pre-caching); the node-kind filter is the
-fallback). The page's data is typed models, as every entity page's is (below).
+either: they're shown where they're used, and the owner map finds their assertions, so the Usage tabs list them,
+not only count them ([2.5](#25-derived-data-pre-caching)). The page's data is typed models, as every entity page's
+is (below). Uberon's 67 individuals' pages take 14 ms at p50 and 58 ms at p95, their Usage tabs 16 and 84 ms
+([`research/P-47`](../research/P-47/README.md)), within N-3.
 
 **Overview tab:**
 
@@ -1404,15 +1431,23 @@ fallback). The page's data is typed models, as every entity page's is (below).
     characters as Fuseki sends them (`MAX_ANNOTATIONS_CHARS`, so huge values can't exhaust the app's memory), gets a
     note instead, as for too many axioms. A failed query fails only this panel, as the axioms' does (below).
 - **Logical-axioms panel:** grouped by axiom kind under familiar section names (Equivalent To, SubClass Of, …), in
-  frame style (below). Empty sections are omitted. _(P-16b, P-16c)_
+  frame style (below). Empty sections are omitted, but an individual's Types (below). _(P-16b, P-16c)_
   - **Classes:** Equivalent To, SubClass Of, Disjoint With, Disjoint Union Of, Keys, and General class axioms that
     mention the class.
   - **Properties** (U-31): Equivalent To, SubProperty Of, Domains, Ranges, Characteristics (functional, transitive,
     …), Inverse Of, Disjoint With, and SuperProperty Of (Chain), the chains that imply the property. An annotation
     property has only SubProperty Of, Domains and Ranges.
-  - **Individuals** _(Proposed, P-47)_: Types, Same As, Different From, Object property assertions, Data property
-    assertions (each under its property's name, as an annotation is), and Negative property assertions. A punned
-    individual's assertions go under these sections, not Other axioms.
+  - **Individuals** _(P-47)_: Types, Same As, Different From, Object property assertions, Data property assertions, and
+    Negative property assertions. Each property under Object and Data property assertions is a group of its own
+    (`AxiomGroup.property`): the section's label spans both columns, then the property's name, indented, with its
+    values, as an annotation's are; in a narrow panel, where the values go under the labels, they're a step further
+    in than the property (Compact layout, below). Same As has a line per other member, Different From one per axiom,
+    its others separated by commas, and a negative assertion is `property value`. A punned individual's assertions go
+    under these sections, after its other kinds', not Other axioms; an assertion of an inverse property is shown whole
+    there.
+    Its Types section is shown even if it has no types, with the note "None asserted.": it's where a reader looks
+    first, and the only place that says so when the hierarchy column ("No named type") is folded away. A type that's
+    a class expression is a type, so its Types aren't empty.
   - **Frame-style lines** (`browl.frames`): a line shows an axiom by its operands that aren't the entity, from its
     named roles: on Heart's page, `Heart SubClassOf Organ` is `Organ` under SubClass Of.
     - An n-ary disjointness is one line, its other members separated by commas, as are a disjoint union's members and
@@ -1423,8 +1458,7 @@ fallback). The page's data is typed models, as every entity page's is (below).
       under Equivalent To and Inverse Of, and `C owl:disjointWith C` (C is empty) under Disjoint With.
     - An axiom whose entity isn't where its section expects it, or an empty key or disjoint union, is shown whole:
       under General class axioms if it's a class axiom, such as `hasPart some Heart SubClassOf Vertebrate`, else
-      under Other axioms, last, such as `inverse (p) Domain C` on p's page, or, until P-47, a punned individual's
-      assertions.
+      under Other axioms, last, such as `inverse (p) Domain C` on p's page.
   - **Implied equivalents:** a member of the class's equivalence group (`equiv_group`, 2.5) that no axiom of the
     class states is a line under Equivalent To marked "(implied)". It's equivalent through a chain of equivalences or a
     cycle of subclass axioms. That includes a three-way `EquivalentClasses`, which the store holds as pairwise
@@ -1434,11 +1468,16 @@ fallback). The page's data is typed models, as every entity page's is (below).
   - **Order:** a class's sections in the order above, then each property type's, then Other axioms. Within a section,
     lines that show one named entity come first, stated and implied alike, by the name the page shows for it,
     case-insensitively. Then come the others, by their text with the names the page shows, then by IRI.
-  - **Punning:** an IRI with several types has each type's sections; where two of them share a label, both add their
-    type ("Equivalent To (object property)").
+  - **Punning:** an IRI with sections for several types has each type's under a heading naming the type, as the
+    header and the hierarchy column name it ("Class", "Named individual"; `browl.frames.by_kind`), in the order above,
+    which is the column's; so "SubClass Of Animal" and "Types Animal" on `Dog`'s page are told apart. The headings are
+    `<h3>`s, each type's sections a `role="group"` labelled by its heading, so screen readers see the grouping too. A
+    section keeps its own label, which the heading makes unambiguous where two types share it (Equivalent To). Other
+    axioms, which are no one type's, come after the groups, under no heading. An IRI with one type's sections, Other
+    axioms besides or not, has no headings. _(P-47)_
   - **Symmetric axioms:** one stated on another entity shows the page's entity first. A section shows only the
-    other members (`B` under Disjoint With on A's page); an axiom shown whole, such as an individual's `SameAs` under
-    Other axioms, is written with the entity first (`browl.owl.Axiom.with_first`), as on the Usage tab. _(P-27b)_
+    other members (`B` under Disjoint With on A's page); an axiom shown whole, such as an inverse property's assertion
+    under Other axioms, is written with the entity first (`browl.owl.Axiom.with_first`), as on the Usage tab. _(P-27b)_
   - **The entity highlighted** where a line shows it, such as in a general class axiom, as on the Usage tab
     (`<mark>`); not in the annotations panel. The frame keeps its two columns. _(P-27b)_
   - **Line breaks and keyword styles** (P-37): long axioms, with more than one set of parentheses, will be broken
@@ -1451,14 +1490,14 @@ fallback). The page's data is typed models, as every entity page's is (below).
   (`--annotation-bg`, `--annotation-border`): `A hollow, muscular organ … ⟨database cross reference: PMID:1234,
   ZFA:0000114⟩ ⟨has synonym type: plural form⟩`. Properties and values are sorted as the annotations panel's are, with
   no language ranking (`browl.annotations.shown_annotations`). A box doesn't split across lines: it moves to the next if
-  it doesn't fit, and one wider than its line wraps within it; its padding keeps the border off the text, and its margin
-  off the lines above and below. An annotation's own annotations are boxes within its value's box. Values and links
-  render as an annotation's do, and a blank value (an anonymous individual) is left out, as in the panel. The boxes are
-  the template's markup (`annotations.html`'s `axiom_annotations`), outside each value's `<bdi>`, so a value's own text
-  can't pass for an annotation; visually hidden brackets around each keep where it starts and ends in what screen
-  readers read and in copied text. `--muted` and `--accent` are AA on the tint in both themes, and the border is 3:1 or
-  more against the page; the page's entity, marked where it's in them, is `--fg` on `--mark-bg`, where `--muted` isn't
-  AA in the dark theme.
+  it doesn't fit, and one wider than its line wraps within it, its first line on the text's; its padding keeps the
+  border off the text, and its margin off the lines above and below. An annotation's own annotations are boxes within
+  its value's box. Values and links render as an annotation's do, and a blank value (an anonymous individual) is left
+  out, as in the panel. The boxes are the template's markup (`annotations.html`'s `axiom_annotations`), outside each
+  value's `<bdi>`, so a value's own text can't pass for an annotation; visually hidden brackets around each keep where
+  it starts and ends in what screen readers read and in copied text. `--muted` and `--accent` are AA on the tint in both
+  themes, and the border is 3:1 or more against the page; the page's entity, marked where it's in them, is `--fg` on
+  `--mark-bg`, where `--muted` isn't AA in the dark theme.
   - **Annotations panel:** a second query (`entity-value-annotations.rq`), run alongside the panel's, reads the
     annotations of the reified `owl:Axiom`s whose source is the entity, whose property is an annotation property
     (`entity-annotations.rq`'s test) and whose target isn't blank, and of the `owl:Annotation`s nested on them, one
@@ -1497,8 +1536,13 @@ fallback). The page's data is typed models, as every entity page's is (below).
     them), and each panel why they're left out, if they are (`annotations_left_out`), so the JSON API returns them too.
 - **Compact layout** (U-32): label column and value column in a two-column grid; tight line spacing within a group and a
   little more between groups. Multi-column values for long lists are Later (U-33). Each panel is a `<dl class="frame">`,
-  one `<dt>` per group and one `<dd>` per value; on a phone the values go below their label. The label column fits
-  its labels up to 20rem, so a long one, such as an IRI, wraps rather than squeezing the values. _(P-16a)_
+  one `<dt>` per group and one `<dd>` per value; in a narrow panel the values go below their label. The label
+  column fits its labels up to 12rem, so a long one, such as an IRI, wraps rather than squeezing the values.
+  _(P-16a)_ A panel (and the Usage tab) stacks its frame below 30rem of its own width, by a CSS container query, so a
+  panel narrowed by the hierarchy column or the panel beside it stacks even in a wide window. Stacked, each level is
+  indented `--frame-step` (0.75rem) under the one above: a value under its label, an individual's property under its
+  section label and its values under the property, a punned IRI's sections under their type's heading, a usage under
+  its subject. A wrapped line keeps its hanging indent. _(P-47)_
 
 **Panel data apart from its HTML** (for U-42): each panel and tab is built in two steps. First a function returns its
 content as typed data (Pydantic models), with no HTML in it: annotations grouped by property, axioms grouped by kind,
@@ -1529,7 +1573,8 @@ axioms of each.
      and lists, to a blank node nothing links to but an axiom annotation;
    - the triples where another named entity states a symmetric axiom with it as the object: `owl:disjointWith`,
      `owl:equivalentClass`, `owl:equivalentProperty`, `owl:propertyDisjointWith`, `owl:inverseOf`, `owl:sameAs`,
-     `owl:differentFrom`;
+     `owl:differentFrom`; and an anonymous individual's `owl:sameAs` or `owl:differentFrom` with it, as a bare triple,
+     since the first query drops a blank node linked from elsewhere _(P-47)_;
    - the named types of every IRI they mention, so the OWLAPI parses each as the kind of entity it is.
 
    Each query sees the imports when the ontology has any (`browl.fuseki.UNION_FROM`, 2.4).
@@ -1842,7 +1887,8 @@ CSS nesting gets the one-page view, without the toggle. _(P-16d)_
     "↳ organ (also above)", or "(also below)" where it's drawn further down. The entity is highlighted, with its
     direct children closed below it, paged as on the tree pages (`CHILD_PAGE`). So the column's size grows with the
     number of ancestors, not with the number of paths, which multiplies at every join. Each tree is headed "Local
-    hierarchy", as it shows the ancestors but not their siblings, then a "Full tree" link to its tree page.
+    hierarchy", as it shows the ancestors but not their siblings, then a "Full tree" link to its tree page, on a line
+    of its own if the heading doesn't fit the column, as a punned IRI's longer headings may not.
   - **Siblings:** after the entity's first parent's children shown (for a root, after the roots shown), "Show its
     siblings (12)" fetches that parent's children, or the roots, in their place: the page of them that holds the
     entity, which is shown open and marked, after a link to those before it (`siblings-of=` on the tree route's
@@ -1861,11 +1907,19 @@ CSS nesting gets the one-page view, without the toggle. _(P-16d)_
   - **Many ancestors:** the column reads at most 300 ancestors (`MAX_ANCESTORS`), nearest first, level by level, so a
     dense multiple-inheritance graph can't make every page in it large. Past that, those whose parents are all left
     out are drawn at the top, as roots are.
-  - **An individual's column** _(Proposed, P-47)_: its named types' ancestors as one merged tree, each drawn once,
-    with the individual beneath its types, and no children or siblings. Its types are the first level read, so they
-    count toward `MAX_ANCESTORS`; past it, the column says how many types are left out. An individual with no named
-    type (none, or only class expressions) has a column with the individual alone, marked "No named type". A punned
-    IRI gets this tree beside its other hierarchies' trees, as U-45 gives each hierarchy its own.
+  - **An individual's column** _(P-47)_: its named types' ancestors in the class hierarchy as one merged tree, each
+    drawn once, with the individual beneath its types, and no children or siblings; a type with no subclasses is open
+    above it. The individual's label leads with a diamond (◆), with "(named individual)" for screen readers, so it isn't
+    taken for a class. Its types are read from Fuseki (`individual-types.rq`, `hierarchy_column.fetch_types`: at most
+    one past `MAX_ANCESTORS`, with no ORDER BY, which would sort them all; the first `MAX_ANCESTORS` by IRI kept), while
+    the tab is read, as the derived database holds no types until P-48's `member`. They're the first level read, so they
+    count toward `MAX_ANCESTORS`; past it, the column says types are left out ("More types aren't shown."), not how
+    many, and which are kept is the store's choice.
+    An individual with no named type in the hierarchy (none, or only class expressions) has a column with the individual
+    alone, noted "No named type" unless types are left out. A punned IRI gets this tree after its other hierarchies'
+    trees, as U-45 gives each hierarchy its own, headed "Local hierarchy: Named individual"; its element ids start `hi`
+    (`trees.INDIVIDUAL_COLUMN_ID`). If the types can't be read, that's logged (a timeout without a traceback) and the
+    column has no tree for them.
   - **Only the column merges:** the tree pages (P-18) show a node under each of its parents.
   - **Nodes** are the tree pages': counts, expansion through `?node=`, keyboard use, rows that stick while their
     children scroll past, and deprecated entities struck through (U-46, P-39). The entity's node is marked as in its
@@ -1935,8 +1989,9 @@ too (P-38), and the JSON API's (P-33).
   eight; deeper ones share the last place, each covering its parent's. A shallower row is drawn over a deeper one, so
   an open node's row, pushed out as its children end (say an opened sibling's, above the page's entity), slides under
   its parents' rows. A stuck row is one line, cut short. On a tree page they stick below the navigation bar, whose
-  height `static/tree.js` measures; in the hierarchy column, below its heading. Plain CSS (`position: sticky` and
-  `z-index`, by a row's `data-depth`), so it works without JS, under a bar of about one line.
+  height `static/tree.js` measures; in the hierarchy column, below its heading, which it measures too, as the
+  heading may wrap. Plain CSS (`position: sticky` and `z-index`, by a row's `data-depth`), so it works without JS,
+  under a bar or heading of about one line.
 - **Keyboard** (U-17): the WAI-ARIA tree pattern, with roving `tabindex`; a node's link is the `treeitem`, its
   children's list its `group` (by `aria-owns`), and its counts its description. Departures from it: the toggles are
   the mouse's alone (`tabindex="-1"`, `aria-hidden`; a click on one leaves the focus on its item), and the "previous"
@@ -2226,9 +2281,10 @@ To settle when it's built:
 | Memory limit can't be reported reliably | Resolved by S-2: with `-XX:+ExitOnOutOfMemoryError`, a heap breach in any thread exits with status 3 and a fixed message; each other failure kind has its own ROBOT log line (2.4). |
 | Descendant counts too slow or memory-hungry at millions of classes | Resolved by S-3 for trees: roaring bitmaps, 4.2 s for NCBITaxon ([S-3 findings](../research/S-3/README.md)). |
 | A dense or adversarial hierarchy makes descendant counting hold too much memory | Found in P-12's review: merging a node's children only once it had them all held memory quadratic in a chain whose members all share one more parent, which a few MB of upload (or a host serving an import) can supply; the build runs in the app process, with no memory limit. P-12 merges each set into its parents as soon as it's complete, which makes that shape linear, and fails the stage once the sets hold more than `DESCENDANT_BUDGET` members (2.5, Distinct descendant counts). |
-| An ontology's anonymous individuals form a graph the owner map walks many times | Proposed for P-47: OWL's blank class expressions and lists are trees, but anonymous individuals can link each other freely, and each root's walk keeps its own visited set under one `WALK_BUDGET`, so 10 K referrers of a shared 1 K-node component would fail the load. A walk stops at an anonymous individual, a root of its own, so each is walked once; an adversarial test checks it (2.5). |
+| An ontology's anonymous individuals form a graph the owner map walks many times | Resolved by P-47: OWL's blank class expressions and lists are trees, but anonymous individuals can link each other freely, and each root's walk keeps its own visited set under one `WALK_BUDGET`, so 10 K referrers of a shared 1 K-node component would have failed the load. A walk stops at an anonymous individual, whose assertions are roots of their own, so each is walked once; a test with that shape passes with no budget to spare (2.5). |
 | Deep or cyclic nested axiom annotations | Resolved by P-49: each annotation node keeps one source, on the shallowest path to it, at most `MAX_ANNOTATION_DEPTH` deep, in the Overview's query and in every fragment before the OWLAPI parses it, whose parser overflows its stack on a cycle (2.8, Axiom annotations). |
-| An individual with very many types | Proposed for P-47 and P-48: a member line shows at most `MAX_MEMBER_TYPES` other types, and an individual's hierarchy column counts its types toward `MAX_ANCESTORS` (2.8, 2.9). |
+| An individual with very many types | An individual's hierarchy column reads at most one type past `MAX_ANCESTORS`, unsorted, as they count toward it, and says if it leaves any out (P-47). Proposed for P-48: a member line shows at most `MAX_MEMBER_TYPES` other types (2.8, 2.9). |
+| A subject with very many literal values of one property makes its Usage tab pages slow | Accepted (P-47): `usage-assertions.rq` and `usage-annotations.rq` find a literal by its digest, hashing each of the (subject, predicate)'s literals for each of a page's rows that names them, so at most `PAGE_USAGES` (50) times. Grouping the rows by (subject, predicate) would hash each once, at the cost of a more complex query; a query that takes too long fails at `browl.fuseki.QUERY_TIMEOUT_S`, and the page says its usages can't be shown, or shows them without their annotations (2.8). |
 | Loading a very large ontology takes minutes | Accepted for uploads (Q14a), shown on the status page. Restarts don't reload (2.4). NCBITaxon: about 5 minutes, estimated; Uberon: 7 s, measured ([S-4 findings](../research/S-4/README.md)). P-24 checks whether extracting the dictionary and edges by streaming the upload file, in parallel with the TDB2 load, is worth it; P-24a whether running pre-caching's bulk queries in parallel is ([#127](https://github.com/jclerman/browl/issues/127)). |
 | Fragment rendering misses axioms a full-ontology render would show | Resolved by P-15: a fragment adds the axioms rooted at blank nodes that reach the entity (n-ary disjointness and difference, negative property assertions, general class axioms), and the symmetric axioms other entities state. A test compares fragment with full-ontology rendering for every entity of a test ontology holding every kind of OWL 2 axiom; 598 of 598 Uberon entities and 305 of 305 NCBITaxon ones matched too (2.8). |
 | Heavily used classes make their pages slow | Finding a class's general class axioms walks back through every class expression it's in, and its subclasses; P-15 measured the cost, and the fallback if an ontology's hubs are much worse (2.8). |
@@ -2255,7 +2311,6 @@ flowchart LR
     subgraph P4["Phase 4: Browsing"]
         P39["P-39 Deprecated struck through"]
         P40["P-40 Shorter tree URLs"]
-        P47["P-47 Individuals' pages"]
         P48["P-48 Individuals tab and list"]
     end
     subgraph P5["Phase 5: Search, caching, auth"]
@@ -2277,8 +2332,6 @@ flowchart LR
     S5b["S-5b OLS4 comparison"]
 
     P39 --> P25
-    P47 --> P48
-    P47 --> P33
     P48 --> P33
     P48 --> P25
 ```
@@ -2344,7 +2397,7 @@ go into this document.
 | P-40 | Tree URLs name open nodes by CURIE, else IRI, about 4× shorter; an index on `entity.curie` (2.9, 2.13) | U-17 | P-18 | To do | [#125](https://github.com/jclerman/browl/issues/125) |
 | P-27 | Usage tab on entity pages: the blank-node owner map, streaming up to 20 K usages per request, and the usage table built in the background after a load (2.5, 2.8) | U-26 | P-9, P-16, S-4, S-7 | Done | [#41](https://github.com/jclerman/browl/issues/41) (sub-issues [#108](https://github.com/jclerman/browl/issues/108), [#109](https://github.com/jclerman/browl/issues/109), [#110](https://github.com/jclerman/browl/issues/110)) |
 | P-45 | Shared results pager: one pager model and macro for the Usage tab and the search results page, htmx optional; on the results page at the top, with "Page n of N", a form to go to any page, and the number of results counted up to `MAX_OFFSET + PAGE_SIZE + 1` IRIs, not by the autocomplete; measure the count's cost on NCBITaxon (2.6, 2.9) | U-10, U-17, U-26 | P-20, P-27, P-41 | Done | [#139](https://github.com/jclerman/browl/issues/139) |
-| P-47 | Individuals' pages: named individuals as entities, searchable, with their Overview sections, Usage tab and hierarchy column; anonymous individuals' assertions listed (2.5, 2.8, 2.9, Proposed) | U-10, U-18 | P-16, P-27, P-38, P-42 | To do | [#162](https://github.com/jclerman/browl/issues/162) |
+| P-47 | Individuals' pages: named individuals as entities, searchable, with their Overview sections, Usage tab and hierarchy column; anonymous individuals' assertions listed (2.5, 2.8, 2.9) | U-10, U-18 | P-16, P-27, P-38, P-42 | Done | [#162](https://github.com/jclerman/browl/issues/162) |
 | P-48 | Individuals tab on class pages and the navigation bar's list of all individuals, by name with P-45's pager, from one `member` table filled at pre-caching (2.5, 2.8, 2.9, Proposed) | U-18, U-27, U-28 | P-47, P-45 | To do | [#164](https://github.com/jclerman/browl/issues/164) |
 | P-49 | Axiom annotations inline, in muted bordered boxes, after the annotation value or axiom they annotate: on the Overview's panels and every Usage tab line (2.8) | U-35 | P-16, P-27 | Done | [#163](https://github.com/jclerman/browl/issues/163) |
 

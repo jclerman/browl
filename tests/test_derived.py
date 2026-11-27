@@ -125,6 +125,7 @@ COLUMNS = {
         ("owner", "INTEGER", 0, 0),
         ("owner_iri", "TEXT", 0, 0),
         ("predicate", "TEXT", 0, 0),
+        ("object", "TEXT", 0, 0),
     ],
 }
 """Each table's columns, as (name, type, not null, place in the primary key)."""

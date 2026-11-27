@@ -160,7 +160,9 @@ async def test_imports(fuseki_url: str, ntriples: bytes, settings: Settings) -> 
 async def test_anonymous_individuals(
     jvm: None, fuseki_url: str, settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Check that usages in triples with a blank subject the owner map lacks are counted, not listed, as streamed.
+    """Check that usages in triples with a blank subject are listed as streamed, or counted where the map lacks them.
+
+    Anonymous individuals' assertions are listed (P-47); one's with annotation assertions alone is counted, not listed.
 
     The tab's pages are of those listed: a page past them is a 404, not blank.
     """
@@ -169,6 +171,7 @@ async def test_anonymous_individuals(
         f"{a} {RDF_TYPE} {OWL_CLASS} .\n{remark} {RDF_TYPE} <{OWL}AnnotationProperty> .\n"
         f"{''.join(f'_:{blank} {RDF_TYPE} {a} .\n' for blank in 'wxyz')}"
         f'_:x {remark} "hi" .\n<{NS}B> {RDF_TYPE} {OWL_CLASS} .\n<{NS}B> {remark} {a} .\n'
+        f"_:v {remark} {a} .\n"  # annotations alone, which the owner map doesn't find
     )
     monkeypatch.setattr(browl.usage_tab, "PAGE_USAGES", 1)
     async with (
@@ -177,11 +180,11 @@ async def test_anonymous_individuals(
     ):
         await assert_table_matches(tabled, [f"{NS}A", f"{NS}remark"])
         page = await read_table_page(tabled, f"{NS}A", 0, 50)
-        assert page is not None and (page.count, page.listed) == (5, 1)
-        first = await tab_page(tabled, settings, f"{NS}A", 1)
-        assert (first.count, first.pages) == (5, 1)
+        assert page is not None and (page.count, page.listed) == (6, 5)
+        last = await tab_page(tabled, settings, f"{NS}A", 5)
+        assert (last.count, last.pages) == (6, 5)
         with pytest.raises(PageNotFoundError):
-            await tab_page(tabled, settings, f"{NS}A", 2)
+            await tab_page(tabled, settings, f"{NS}A", 6)
 
 
 async def test_several_values(jvm: None, fuseki_url: str, settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -284,6 +287,8 @@ async def test_kinds(store: UsageStore) -> None:
     assert await rows("note") == [
         ("Bladder", Source.ROOT, annotation, comment),
         ("Bladder", Source.ROOT, annotation, f"{OWL}disjointWith"),
+        ("carol", Source.ROOT, annotation, f"{NS}knows"),  # carol is an entity (P-47)
+        ("carol", Source.ROOT, annotation, f"{NS}weight"),
         ("Cat", Source.ROOT, annotation, subclass),
         ("Kidney", Source.ROOT, annotation, comment),
         ("Kidney", Source.ROOT, annotation, comment),
@@ -291,8 +296,7 @@ async def test_kinds(store: UsageStore) -> None:
         ("Liver", Source.ROOT, annotation, subclass),
         general,
         general,
-        (f"{NS}carol", Source.ROOT, annotation, f"{NS}knows"),  # individuals have no entity row until P-47
-        (f"{NS}carol", Source.ROOT, annotation, f"{NS}weight"),
+        (None, Source.ROOT, UsageKind.ASSERTION, f"{NS}likes"),  # on an anonymous individual's assertion
     ]
     animal = await rows("Animal")
     assert ("Dog", Source.OBJECT, UsageKind.TYPE, f"{RDF}type") in animal

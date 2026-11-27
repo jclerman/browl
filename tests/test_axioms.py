@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import TypeAdapter
 
+import browl.lookup
 import browl.overview
 from browl import axioms, frames, nesting, owl, owlapi
 from browl.derived import EntityType
@@ -869,3 +870,88 @@ def test_page(data_dir: Path, fuseki_url: str, dataset: str, monkeypatch: pytest
     assert mineral_link in annotations and "<mark>" not in annotations
     assert axioms.count(f"<mark>{mineral_link}</mark>") == 1  # in a general class axiom
     assert "<mark>" not in part_of
+
+
+INDIVIDUALS = [
+    *ENTITIES,
+    *((f"{NS}{name}", EntityType.NAMED_INDIVIDUAL) for name in ("alice", "bob", "carol", "dave", "rex", "tom", "Dog")),
+    *((f"{NS}{name}", EntityType.OBJECT_PROPERTY) for name in ("likes", "hasChild", "hates", "knows")),
+    *((f"{NS}{name}", EntityType.DATA_PROPERTY) for name in ("age", "name", "weight")),
+]
+
+
+def test_individual_page(data_dir: Path, fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check an individual's frame: its sections, each property's assertions under its name, and a punned IRI's."""
+    monkeypatch.setattr(browl.overview, "dataset_name", lambda generation: dataset)
+    app = make_app(FUSEKI_URL=fuseki_url)
+    with TestClient(app) as client:
+        app.state.jobs.register(Stage.PRE_CACHING, derived_stage(INDIVIDUALS))
+        client.portal.call(app.state.jobs.start)
+        client.portal.call(app.state.jobs.wait)
+        pages = {
+            name: client.get("/_browl/hash", params={"path": "/axioms", "fragment": name, "panel": "1"}).text
+            for name in ("alice", "bob", "carol", "Dog")
+        }
+    link = '<a href="/axioms#{0}"><bdi>http://example.org/axioms#{0}</bdi></a>'.format
+    keyword = '<span class="keyword">{}</span>'.format
+
+    def frame(name: str) -> str:
+        page = pages[name]
+        return re.sub(r">\s*\n\s*<", "><", page[page.index('<dl class="frame">') :].split("</dl>")[0].strip())
+
+    code = '<code dir="ltr">&lt;http://example.org/axioms#{}&gt;</code>'.format
+    heading, by = '<dt class="frame-heading">{}</dt>'.format, '<dt class="frame-property">{}</dt>'.format
+    value = '<dd class="frame-value" dir="ltr">'  # a property's, which a narrow window indents under it
+    assert frame("alice") == "".join(
+        [
+            '<dl class="frame">',
+            f'<dt>Types</dt><dd dir="ltr">{link("likes")} {keyword("some")} {code("Pet")}</dd>',
+            f'<dt>Different From</dt><dd dir="ltr">{link("bob")}</dd><dd dir="ltr">{link("carol")}, {link("tom")}</dd>',
+            heading("Object property assertions"),
+            f"{by(link('hasChild'))}{value}{link('bob')}</dd>",
+            f"{by(link('likes'))}{value}{link('rex')}</dd>",
+            heading("Data property assertions"),
+            f"{by(link('age'))}{value}<bdi>42</bdi></dd>",
+            f'<dt>Negative property assertions</dt><dd dir="ltr">{link("hates")} {link("rex")}</dd>',
+        ]
+    )
+    bob = frame("bob")
+    assert f"{by(f'<code dir="ltr">{NS}loves</code>')}{value}_:b1</dd>" in bob  # an anonymous object
+    assert f'<dt>Negative property assertions</dt><dd dir="ltr">{link("age")} <bdi>7</bdi></dd>' in bob
+    carol = frame("carol")
+    assert f'<dt>Same As</dt><dd dir="ltr">{link("dave")}</dd>' in carol
+    # An individual with no types has its Types section anyway, first, with a note; its other empty sections are left
+    # out, as alice's Same As is.
+    assert carol.startswith('<dl class="frame"><dt>Types</dt><dd class="note">None asserted.</dd><dt>Same As</dt>')
+    assert "Same As" not in frame("alice") and "None asserted." not in frame("alice")
+    assert f'{by(link("knows"))}{value}{link("dave")} <span class="axiom-annotations">' in carol
+    # Dog is a class and an individual: its sections are under a heading for each, the class's first, as in the header.
+    dog = re.sub(r">\s*\n\s*<", "><", pages["Dog"])
+    kind = '<div class="frame-kind" role="group" aria-labelledby="axioms-{0}"><h3 id="axioms-{0}">{1}</h3>'.format
+    class_start = dog.index(kind("class", "Class"))
+    individual_start = dog.index(kind("namedindividual", "Named individual"))
+    assert class_start < individual_start
+    as_class, as_individual = dog[class_start:individual_start], dog[individual_start:]
+    assert re.findall(r"<dt>([^<]*)</dt>", as_class) == ["SubClass Of", "Disjoint With", "General class axioms"]
+    assert re.findall(r"<dt>([^<]*)</dt>", as_individual) == ["Types"]
+    assert f'<dt>Types</dt><dd dir="ltr">{link("Animal")}</dd></dl></div>' in as_individual
+    # An individual alone has no heading over its sections.
+    assert all("frame-kind" not in pages[name] for name in ("alice", "bob", "carol"))
+    assert "Other axioms" not in "".join(pages.values())
+
+
+def test_individual_column(data_dir: Path, fuseki_url: str, dataset: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that an individual's full page reads its types from Fuseki for its column's tree."""
+    monkeypatch.setattr(browl.overview, "dataset_name", lambda generation: dataset)
+    monkeypatch.setattr(browl.lookup, "dataset_name", lambda generation: dataset)
+    app = make_app(FUSEKI_URL=fuseki_url)
+    with TestClient(app) as client:
+        edges = [(f"{NS}Dog", f"{RDFS}subClassOf", f"{NS}Animal")]
+        app.state.jobs.register(Stage.PRE_CACHING, derived_stage(INDIVIDUALS, edges=edges))
+        client.portal.call(app.state.jobs.start)
+        client.portal.call(app.state.jobs.wait)
+        page = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "rex"})
+    assert page.status_code == 200
+    column = page.text[page.text.index('<nav class="hierarchy-column"') :].split("</nav>")[0]
+    items = re.findall(r'<a role="treeitem" id="(hi[-\d]*)" href="([^"]*)"', column)
+    assert items == [("hi-0", "/axioms#Animal"), ("hi-0-0", "/axioms#Dog"), ("hi-0-0-0", "/axioms#rex")]

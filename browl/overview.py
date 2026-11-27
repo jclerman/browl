@@ -26,7 +26,7 @@ from browl.annotations import (
 )
 from browl.axioms import LeftOut, TooManyAxiomsError, entity_axioms, fetch_fragment
 from browl.derived import EntityType
-from browl.frames import AxiomGroup, frame_groups
+from browl.frames import AxiomGroup, KindGroups, by_kind, frame_groups
 from browl.fuseki import SparqlError
 from browl.jobs import JobState
 from browl.links import EntityLink, read_entity_links
@@ -85,6 +85,10 @@ class AxiomsPanel(BaseModel):
     too_many: bool = False
     more_equivalents: bool = False
     annotations_left_out: LeftOut | None = None
+
+    def kind_groups(self) -> list[KindGroups]:
+        """Return the sections under their kinds' headings, if a punned IRI has sections for several (`by_kind`)."""
+        return by_kind(self.groups or [])
 
 
 class Overview(BaseModel):
@@ -154,7 +158,7 @@ templates.env.globals["shown_name"] = shown_name
 templates.env.globals["page_annotations"] = page_annotations
 
 
-async def read_overview(request: Request, state: JobState, iri: str) -> Overview:
+async def read_overview(request: Request, state: JobState, iri: str, *, individual: bool = False) -> Overview:
     """Return an entity's Overview tab, from the store of the job state's ready generation.
 
     A failure to fetch or parse either panel's data fails only that panel, not the page: the full error is logged (for
@@ -165,6 +169,7 @@ async def read_overview(request: Request, state: JobState, iri: str) -> Overview
         request: The request.
         state: The job state the page read its entity with, so the panels show the same generation.
         iri: The entity's IRI.
+        individual: Whether the IRI is a named individual, whose Types section is shown even if it has no types.
 
     Raises:
         NotCurrentError: No generation is ready, or its derived database isn't current (`browl.pages.read_derived`).
@@ -190,7 +195,8 @@ async def read_overview(request: Request, state: JobState, iri: str) -> Overview
         more = len(equivalents) > MAX_EQUIVALENTS
         del equivalents[MAX_EQUIVALENTS:]
         links = read_entity_links(connection, [*mentioned, *equivalents], prefix, root)
-        return links, frame_groups(axioms, iri, equivalents, lambda each: shown_name(each, links)), more
+        groups = frame_groups(axioms, iri, equivalents, lambda each: shown_name(each, links), individual=individual)
+        return links, groups, more
 
     links, axiom_groups, more_equivalents = await read_derived(request, read_links, state)
     return Overview(

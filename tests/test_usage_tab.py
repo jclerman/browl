@@ -26,6 +26,7 @@ import browl.usage_tables
 import browl.usages
 from browl import nesting, owl, owlapi
 from browl.axioms import axioms_about, convert_axioms, entity_axioms, fetch_fragment, is_declaration
+from browl.derived import UsageRootKind
 from browl.frames import frame_groups
 from browl.jobs import JobContext, Stage
 from browl.links import EntityLink
@@ -34,7 +35,7 @@ from browl.owlapi import ntriples_ontology
 from browl.pager import PageLink
 from browl.pages import templates
 from browl.precache.stage import pre_cache
-from browl.rdf import IRI
+from browl.rdf import IRI, RDF
 from browl.settings import Settings
 from browl.usage_tab import (
     UsageFragments,
@@ -48,7 +49,7 @@ from browl.usage_tab import (
 from browl.usages import Usage, UsageSource, UsageStore, read_usages
 from tests.helpers import boxed, connect, fuseki_dataset, loaded, make_app, make_settings, ontology_ntriples
 from tests.test_axiom_annotations import AXIOM, CYCLE, depth, nested_chain, note
-from tests.test_usages import usage_triples
+from tests.test_usages import is_anonymous_assertion, usage_triples
 
 pytestmark = pytest.mark.anyio
 
@@ -90,13 +91,22 @@ def entity_iris(settings: Settings, store: UsageStore) -> list[str]:
         return sorted({iri for (iri,) in connection.execute("SELECT iri FROM entity")})
 
 
-def lone_axiom(ntriples: bytes) -> owl.AnyAxiom:
-    """Return the one axiom a usage's triples parse as, but unannotated declarations, without annotations."""
+def unlabelled(text: str) -> str:
+    """Return an axiom's text without its anonymous individuals' labels, which a page gives in order (`_:b1`, …)."""
+    return re.sub(r"_:b[0-9]+", "_:", text)
+
+
+def lone_axiom(ntriples: bytes, closure: bool = False) -> owl.AnyAxiom:
+    """Return the one axiom a usage's triples parse as, but unannotated declarations, without annotations.
+
+    With `closure`, the assertions of anonymous individuals the closure brings along are left out
+    (`tests.test_usages.parsed`).
+    """
     with ntriples_ontology(ntriples) as ontology:
         found = [
             axiom.getAxiomWithoutAnnotations()
             for axiom in ontology.getAxioms()
-            if axiom.isAnnotated() or not is_declaration(axiom)
+            if (axiom.isAnnotated() or not is_declaration(axiom)) and not (closure and is_anonymous_assertion(axiom))
         ]
     [node] = convert_axioms(found)
     return node
@@ -117,9 +127,10 @@ async def test_every_usage_once(
         ordered = await store.derived.read(store.generation, lambda c, found=usages: sorted_usages(c, found))
         expected: Counter[tuple[str | None, str]] = Counter()
         for usage in usages:
-            axiom = await owlapi.run_java(lone_axiom, await usage_triples(store, iri, usage))
+            closure = usage.root is not None and usage.root.kind != UsageRootKind.ASSERTION
+            axiom = await owlapi.run_java(lone_axiom, await usage_triples(store, iri, usage), closure)
             subject = usage.subject
-            expected[subject, (axiom if subject is None else axiom.with_first(subject)).manchester] += 1
+            expected[subject, unlabelled((axiom if subject is None else axiom.with_first(subject)).manchester)] += 1
         found: Counter[tuple[str | None, str]] = Counter()
         pages = max(1, math.ceil(len(usages) / size))
         for page in range(1, pages + 1):
@@ -130,7 +141,9 @@ async def test_every_usage_once(
             for group in groups:
                 on_page = sum(usage.subject == group.subject for usage in chunk)
                 assert len(group.axioms) == on_page, (iri, page, group)
-                found.update((group.subject, axiom.without_annotations().manchester) for axiom in group.axioms)
+                found.update(
+                    (group.subject, unlabelled(axiom.without_annotations().manchester)) for axiom in group.axioms
+                )
         assert found == expected, iri
 
 
@@ -287,25 +300,31 @@ def test_subjects(client: TestClient) -> None:
     columns.
     """
     dog = panel(client, "Dog").text
-    assert subjects_shown(dog) == [f"{NS}Cat", f"{NS}Pet", "No single subject", f"{NS}rex"]
+    # rex, a declared individual, is an entity, so among the named subjects (P-47).
+    assert subjects_shown(dog) == [f"{NS}Cat", f"{NS}Pet", f"{NS}rex", "No single subject"]
     assert lines_shown(dog) == [
         ":Cat :remark :Dog",  # an annotation assertion, by kind and text before Cat's other axiom
         ":Cat DisjointWith :Dog",
         ":Pet SubClassOf :Cat or :Dog",
+        ":rex Type :Dog",
         "DLSafeRule(Body(ClassAtom(<:Dog> Variable(<:x>))) Head(ClassAtom(<:Animal> Variable(<:x>))))",
-        "<:rex> Type :Dog",
     ]
     assert columns_shown(dog) == [
         (":remark", ":Dog"),
         ("DisjointWith", ":Dog"),
         ("SubClassOf", ":Cat or :Dog"),
-        "DLSafeRule(Body(ClassAtom(<:Dog> Variable(<:x>))) Head(ClassAtom(<:Animal> Variable(<:x>))))",
         ("Type", ":Dog"),
+        "DLSafeRule(Body(ClassAtom(<:Dog> Variable(<:x>))) Head(ClassAtom(<:Animal> Variable(<:x>))))",
     ]
     assert "5 usages" not in plain(dog) and "usage-count" not in dog  # the count is in the tab's label only
     age = panel(client, "age").text
-    assert subjects_shown(age) == [f"{NS}Person", "No single subject", f"{NS}alice"]
-    assert lines_shown(age)[2:] == ["not (<:bob> :age 7)", "<:alice> :age 42"]
+    assert subjects_shown(age) == [f"{NS}alice", f"{NS}Person", "No single subject"]
+    # An anonymous individual's two values, each a usage of its own, and a negative assertion.
+    assert lines_shown(age)[3:] == ["_:b1 :age 3", "_:b1 :age 4", "not (:bob :age 7)"]
+    # An undeclared IRI is no entity, so its axioms are after those with no single subject: an anonymous individual's.
+    aside = panel(client, "aside").text
+    assert subjects_shown(aside) == [f"{NS}Seed", "No single subject", f"{NS}ghost"]
+    assert lines_shown(aside) == [':Seed :aside "a seed\'s"', '_:b1 :aside "a dog\'s"', '<:ghost> :aside "a ghost\'s"']
     # By display name, case-folded: Heart's and Tricky's names start with "<b>" and "a <script>".
     assert subjects_shown(panel(client, "Animal").text)[:3] == [
         '<b>Heart</b> & "soul"',
@@ -327,19 +346,21 @@ def test_annotations(client: TestClient) -> None:
     plant = panel(client, "Plant").text
     assert annotations_shown(plant) == ["[:note: nested [:remark: :Plant]]"]
     assert lines_shown(plant)[1] == ":Liver SubClassOf :Organ"
-    # On Bladder's, Cat's, Kidney's and Liver's axioms, the n-ary DisjointClasses, the general class axiom, and carol's.
+    # On Bladder's, carol's, Cat's, Kidney's and Liver's axioms, the n-ary DisjointClasses, an anonymous individual's
+    # assertion, and the general class axiom.
     assert annotations_shown(panel(client, "note").text) == [
         "[:note: British]",
         "[:note: apart]",
+        "[:note: typed]",
+        "[:note: known]",
         "[:note: annotated]",
         "[:note: a source [:remark: :Bladder], second]",
         "[:note: en français]",
         "[:note: restricted]",
         "[:note: nested [:remark: :Plant]]",
         "[:note: n-ary] [:remark: :Mineral]",
+        "[:note: seen]",
         "[:note: general]",
-        "[:note: typed]",
-        "[:note: known]",
     ]
     # Written usages: literals matched by their digest, tagged ones too, nested annotations within.
     assert annotated_lines(panel(client, "comment").text)[:3] == [
@@ -347,9 +368,9 @@ def test_annotations(client: TestClient) -> None:
         (':Kidney :comment "filters blood"', "[:note: a source [:remark: :Bladder], second]"),
         (':Kidney :comment "rein"@fr', "[:note: en français]"),
     ]
-    assert annotated_lines(panel(client, "weight").text)[-1] == ("<:carol> :weight 5", "[:note: typed]")
+    assert annotated_lines(panel(client, "weight").text)[-1] == (":carol :weight 5", "[:note: typed]")
     # The entity as a written usage's predicate, with an IRI value; and as its object.
-    assert ("<:carol> :knows <:dave>", "[:note: known]") in annotated_lines(panel(client, "knows").text)
+    assert (":carol :knows :dave", "[:note: known]") in annotated_lines(panel(client, "knows").text)
     # Kidney's restriction of partOf to Organ isn't annotated, though the page fetches its other one's annotations.
     organ = annotated_lines(panel(client, "Organ").text)
     assert (":Kidney SubClassOf part of some :Organ", "") in organ
@@ -422,10 +443,10 @@ def test_pages(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     assert '<form method="get" action="/axioms#Dog" hx-get=' in first
     assert '<input type="hidden" name="tab" value="usage">' in first
     assert 'name="page" min="1" max="5" value="1"' in first
-    assert subjects_shown(last) == [f"{NS}rex"]
+    assert subjects_shown(last) == ["No single subject"]
     general = [panel(client, "hasPart", **({"page": page} if page else {})).text for page in ("", "2")]
     assert [subjects_shown(each) for each in general] == [["No single subject"], ["No single subject (continued)"]]
-    by_iri = client.get("/_browl/iri", params={"iri": f"{NS}rex", "tab": "usage"})  # not an entity
+    by_iri = client.get("/_browl/iri", params={"iri": f"{NS}ghost", "tab": "usage"})  # not an entity
     assert by_iri.status_code == 404
     params = {"iri": f"{NS}Pet", "tab": "usage", "page": "2"}
     fallback = client.get("/_browl/iri", params=params, follow_redirects=False)
@@ -605,7 +626,7 @@ def test_too_large(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: 
     monkeypatch.setattr(browl.usage_tab, "CONSTRUCT_MAX_BYTES", 40)
     assert TOO_LARGE in panel(client, "Animal").text  # its usages' triples, written in
     assert "bytes, more than 40" in caplog.text
-    assert TOO_LARGE in panel(client, "age").text  # `<:alice> :age 42`: its values, read first
+    assert TOO_LARGE in panel(client, "age").text  # `:alice :age 42`: its values, read first
     assert "the page's values are too large: the result is longer than 40 characters" in caplog.text
 
 
@@ -711,7 +732,7 @@ def test_annotations_query_fails(
 
 
 def test_unlisted(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Check that usages counted but not listed, such as anonymous individuals', make no pages past those listed.
+    """Check that usages counted but not listed, such as some in anonymous individuals, make no pages past those listed.
 
     An entity with none listed says so.
     """
@@ -730,7 +751,7 @@ def test_unlisted(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(browl.usage_tab, "read_usages", none)
     page = panel(client, "Dog").text
-    assert "None of these usages can be listed yet" in page
+    assert "None of these usages can be listed here." in page
     assert "<dl" not in page and '<nav class="pager"' not in page
     whole = client.get("/_browl/hash", params={"path": "/axioms", "fragment": "Dog", "tab": "usage"}).text
     assert 'hx-sync="#tab-panel:replace">Usage (5)</a>' in whole  # the count, unlisted usages included
@@ -995,6 +1016,7 @@ def test_columns(client: TestClient) -> None:
     note = panel(client, "note").text
     assert [line for line in columns_shown(note) if isinstance(line, str)] == [
         "DisjointClasses: :Animal, :Fungus, :Plant",
+        "_:b1 :likes :rex",  # an anonymous individual's assertion
         ':hasPart some <b>Heart</b> & "soul" SubClassOf :Vertebrate',
     ]
     assert "No single subject" in subjects_shown(note)
@@ -1044,6 +1066,79 @@ async def test_symmetric_on_both_tabs(jvm: None, fuseki_url: str, settings: Sett
     [section] = frame_groups(axioms, f"{NS}A", [], str)
     assert section.label == "Disjoint With"
     assert [owl.manchester_text(line.manchester_tokens()) for line in section.lines] == [f"<{NS}Z>"]
+
+
+@pytest.mark.parametrize(("predicate", "label"), [("sameAs", "Same As"), ("differentFrom", "Different From")])
+@pytest.mark.parametrize("link", ["property", "member"])
+async def test_linked_anonymous_same_or_different(
+    jvm: None, fuseki_url: str, settings: Settings, predicate: str, label: str, link: str
+) -> None:
+    """Check `_:x SameAs a`, `_:x` linked from elsewhere, on a's Overview, not its Usage tab, as an unlinked one is.
+
+    `_:x` is linked as `b knows _:x`, or as a member of an n-ary `DifferentIndividuals`.
+    """
+    declared = "".join(f"<{NS}{name}> {RDF_TYPE} <{OWL_NS}NamedIndividual> .\n" for name in "ab")
+    declared += f"<{NS}knows> {RDF_TYPE} <{OWL_NS}ObjectProperty> .\n"
+    if link == "property":
+        linked = f"<{NS}b> <{NS}knows> _:x .\n"
+    else:
+        linked = (
+            f"_:d {RDF_TYPE} <{OWL_NS}AllDifferent> .\n_:d <{OWL_NS}distinctMembers> _:l .\n"
+            f"_:l <{RDF}first> _:x .\n_:l <{RDF}rest> _:m .\n_:m <{RDF}first> <{NS}b> .\n_:m <{RDF}rest> <{RDF}nil> .\n"
+        )
+    triples = f"{declared}{linked}_:x <{OWL_NS}{predicate}> <{NS}a> .\n"
+    async with loaded(fuseki_url, settings, {None: triples.encode()}, "") as small:
+        assert await read_usages(small, f"{NS}a") == []
+        fragment = await fetch_fragment(small.sparql, small.dataset, f"{NS}a", small.dataset_clause)
+    axioms = await owlapi.run_java(entity_axioms, fragment.ntriples, f"{NS}a")
+    sections = frame_groups(axioms, f"{NS}a", [], str, individual=True)
+    shown = [
+        (each.label, [unlabelled(owl.manchester_text(line.manchester_tokens())) for line in each.lines])
+        for each in sections
+    ]
+    assert shown == [("Types", []), (label, ["_:"])]
+
+
+async def test_closures_stop_at_anonymous_individuals(jvm: None, fuseki_url: str, settings: Settings) -> None:
+    """Check that a class expression's closure doesn't bring the anonymous individuals in it's assertions onto a page.
+
+    p's usages are a general class axiom, `(p value _:x) SubClassOf C`, and `_:w Type p value _:z`; `_:x DifferentFrom
+    f` and `_:z Type D` are roots of their own, on f's Overview and D's Usage tab.
+    """
+    declared = f"<{NS}p> {RDF_TYPE} <{OWL_NS}ObjectProperty> .\n<{NS}f> {RDF_TYPE} <{OWL_NS}NamedIndividual> .\n"
+    declared += "".join(f"<{NS}{name}> {RDF_TYPE} <{OWL_NS}Class> .\n" for name in "CD")
+
+    def restriction(node: str, value: str) -> str:
+        return "".join(
+            f"{node} {predicate} {item} .\n"
+            for predicate, item in [
+                (RDF_TYPE, f"<{OWL_NS}Restriction>"),
+                (f"<{OWL_NS}onProperty>", f"<{NS}p>"),
+                (f"<{OWL_NS}hasValue>", value),
+            ]
+        )
+
+    triples = (
+        f"{declared}{restriction('_:r', '_:x')}_:r {SUBCLASS} <{NS}C> .\n_:x <{OWL_NS}differentFrom> <{NS}f> .\n"
+        f"_:w {RDF_TYPE} _:e .\n{restriction('_:e', '_:z')}_:z {RDF_TYPE} <{NS}D> .\n"
+    )
+    async with loaded(fuseki_url, settings, {None: triples.encode()}, "") as small:
+        lines = await usage_lines(small, f"{NS}p")
+    assert sorted(unlabelled(line) for line, _ in lines) == [
+        f"<{NS}p> value _: SubClassOf <{NS}C>",
+        f"_: Type <{NS}p> value _:",
+    ]
+
+
+async def test_anonymous_tagged_literal(jvm: None, fuseki_url: str, settings: Settings) -> None:
+    """Check an anonymous individual's assertion with a language-tagged literal, found by its digest, on the tab."""
+    triples = (
+        f"<{NS}C> {RDF_TYPE} <{OWL_NS}Class> .\n<{NS}name> {RDF_TYPE} <{OWL_NS}DatatypeProperty> .\n"
+        f'_:x {RDF_TYPE} <{NS}C> .\n_:x <{NS}name> "Colour"@en-GB .\n'
+    )
+    async with loaded(fuseki_url, settings, {None: triples.encode()}, "") as small:
+        lines = await usage_lines(small, f"{NS}name")
+    assert [unlabelled(line) for line, _ in lines] == [f'_: <{NS}name> "Colour"@en-gb']
 
 
 COPIED = (

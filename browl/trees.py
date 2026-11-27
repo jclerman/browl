@@ -90,6 +90,10 @@ COLUMN_IDS = {
 """Each hierarchy's prefix of the hierarchy column's element ids (`browl.hierarchy_column`), in place of `ROOT_ID`, so
 a punned IRI's trees can share the page."""
 
+INDIVIDUAL_COLUMN_ID = "hi"
+"""The prefix of the element ids of an individual's tree in the hierarchy column, its types' ancestors in the class
+hierarchy (`browl.hierarchy_column`), so a class punned as an individual can show both trees."""
+
 MAX_AT_CHARS = 256
 """The longest element id `at=…` may give, as each child's ids and links repeat it."""
 
@@ -99,7 +103,10 @@ _ELEMENT_ID = re.compile(r"[a-z]+(?:-[0-9]{1,9})+")
 _ROOTS_ID = re.compile(r"[a-z]+")
 """The prefix of the roots' ids `at=…` may give, without `node=`: one of `_ID_PREFIXES`."""
 
-_ID_PREFIXES = {ROOT_ID, *COLUMN_IDS.values()}
+_COLUMN_PREFIXES = frozenset({*COLUMN_IDS.values(), INDIVIDUAL_COLUMN_ID})
+"""The prefixes of the hierarchy column's element ids."""
+
+_ID_PREFIXES = {ROOT_ID, *_COLUMN_PREFIXES}
 """The prefixes of element ids: the tree pages', and the hierarchy column's."""
 
 router = APIRouter()
@@ -491,8 +498,8 @@ def fragment_link(
 
 
 def is_column_id(element_id: str) -> bool:
-    """Return whether an element id is the hierarchy column's (`COLUMN_IDS`), not a tree page's."""
-    return element_id.partition("-")[0] in COLUMN_IDS.values()
+    """Return whether an element id is the hierarchy column's (`_COLUMN_PREFIXES`), not a tree page's."""
+    return element_id.partition("-")[0] in _COLUMN_PREFIXES
 
 
 def first_path(connection: sqlite3.Connection, hierarchy: EntityType, node: int, prefix: str, root: str) -> list[str]:

@@ -1,5 +1,6 @@
 """Tests for the owner-map pre-caching hook (P-27a) on a stubbed Fuseki; tests/test_usages.py uses a real one."""
 
+from collections import Counter
 from collections.abc import Sequence
 from contextlib import closing
 from pathlib import Path
@@ -211,3 +212,127 @@ async def test_owner_map_walk_budget(settings: Settings, monkeypatch: pytest.Mon
     async with fuseki(ONTOLOGY_RESULT, entity_result((A, "Class"), (B, "Class")), shared) as http:
         with pytest.raises(StageError, match=r"share blank nodes too much, over 0 visits"):
             await pre_caching_stage(job(settings, 4), http, hooks=HOOKS_USED)
+
+
+async def test_owner_map_walk_stops_at_anonymous_individuals(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Check that walks stop at anonymous individuals, so many roots that reach a large component of them are cheap.
+
+    10,000 general class axioms, `(p value _:hub) SubClassOf A`, each reach a cycle of 1,000 anonymous individuals
+    linked by p. Walked into, the cycle would cost 10 million visits; with no budget past one visit per node, the stage
+    passes only as each walk stops at the hub, whose assertions are roots of their own.
+    """
+    monkeypatch.setattr(owner_map_module, "WALK_BUDGET", 0)
+    referrers, cycle = 10_000, 1_000
+    triples: list[tuple[str, str, str, str, str]] = []
+    for i in range(referrers):
+        triples += [
+            (f'"g{i}"', f"<{OWL}hasValue>", "", '"n0"', ""),
+            (f'"g{i}"', f"<{OWL}onProperty>", P, "", ""),
+            (f'"g{i}"', f"<{RDFS}subClassOf>", A, "", ""),
+        ]
+    triples += [(f'"n{i}"', P, "", f'"n{(i + 1) % cycle}"', "") for i in range(cycle)]
+    entity_rows = entity_result((A, "Class"), (P, "ObjectProperty"))
+    async with fuseki(ONTOLOGY_RESULT, entity_rows, rows(*triples)) as http:
+        await pre_caching_stage(job(settings, 9), http, hooks=HOOKS_USED)
+    roots, refs, _ = tables(settings, 9)
+    kinds = Counter(kind for _, kind, _, _, _, _ in roots)
+    assert kinds == {"general": referrers, "assertion": cycle}
+    # A's own general class axioms aren't its usages; each assertion names p, and the cycle's nodes nothing else.
+    assert Counter(iri for iri, _ in refs) == {P.strip("<>"): referrers + cycle}
+
+
+async def test_owner_map_owl_annotations_on_anonymous_individuals(settings: Settings) -> None:
+    """Check that OWL's built-in annotation properties leave a node an anonymous individual, as `rdfs:label` does.
+
+    `_:x Type A` and `_:x owl:deprecated true`, … are its assertions, so A's usage is listed, not one GENERAL root.
+    """
+    builtin = ("deprecated", "versionInfo", "priorVersion", "backwardCompatibleWith", "incompatibleWith")
+    owner_map_rows = rows(
+        ('"x"', f"<{RDF}type>", A, "", ""),
+        *(('"x"', f"<{OWL}{name}>", '"v"', "", "") for name in builtin),
+    )
+    async with fuseki(ONTOLOGY_RESULT, entity_result((A, "Class")), owner_map_rows) as http:
+        await pre_caching_stage(job(settings, 10), http, hooks=HOOKS_USED)
+    roots, refs, _ = tables(settings, 10)
+    assert [(kind, label, predicate) for _, kind, label, _, _, predicate in roots] == [("assertion", "x", f"{RDF}type")]
+    assert refs == [(A.strip("<>"), 1)]
+
+
+async def test_owner_map_anonymous_thing(settings: Settings) -> None:
+    """Check that a node typed `owl:Thing` is an anonymous individual: its assertions are roots, which name p and B."""
+    owner_map_rows = rows(
+        ('"x"', f"<{RDF}type>", f"<{OWL}Thing>", "", ""),
+        ('"x"', P, B, "", ""),
+    )
+    async with fuseki(ONTOLOGY_RESULT, entity_result((B, "Class"), (P, "ObjectProperty")), owner_map_rows) as http:
+        await pre_caching_stage(job(settings, 11), http, hooks=HOOKS_USED)
+    roots, refs, _ = tables(settings, 11)
+    assert [(kind, label, predicate) for _, kind, label, _, _, predicate in roots] == [
+        ("assertion", "x", P.strip("<>"))
+    ]
+    assert sorted(iri for iri, _ in refs) == [B.strip("<>"), P.strip("<>")]
+
+
+async def test_owner_map_annotated_class_expression_assertion(settings: Settings) -> None:
+    """Check that a reified axiom on an anonymous individual's class assertion to a class expression is left out.
+
+    Its target is a copy of the expression, which the Usage tab's query couldn't find (DESIGN.md §2.5), so the
+    assertion's root names what the expression does, p and B, but not C, in the reified axiom's annotation.
+    """
+    type_, source, property_, target = (
+        f"<{iri}>"
+        for iri in (f"{RDF}type", f"{OWL}annotatedSource", f"{OWL}annotatedProperty", f"{OWL}annotatedTarget")
+    )
+    restriction = [(f"<{OWL}onProperty>", P), (f"<{OWL}someValuesFrom>", B)]
+    owner_map_rows = rows(
+        ('"x"', type_, "", '"e"', ""),
+        *(('"e"', predicate, item, "", "") for predicate, item in restriction),
+        ('"c"', type_, f"<{OWL}Axiom>", "", ""),
+        ('"c"', source, "", '"x"', ""),
+        ('"c"', property_, type_, "", ""),
+        ('"c"', target, "", '"f"', ""),
+        ('"c"', N, C, "", ""),
+        *(('"f"', predicate, item, "", "") for predicate, item in restriction),
+    )
+    known = entity_result((B, "Class"), (C, "Class"), (P, "ObjectProperty"), (N, "AnnotationProperty"))
+    async with fuseki(ONTOLOGY_RESULT, known, owner_map_rows) as http:
+        await pre_caching_stage(job(settings, 12), http, hooks=HOOKS_USED)
+    roots, refs, _ = tables(settings, 12)
+    assert [(kind, label, predicate) for _, kind, label, _, _, predicate in roots] == [("assertion", "x", f"{RDF}type")]
+    assert sorted(iri for iri, _ in refs) == [B.strip("<>"), P.strip("<>")]
+
+
+class CountedEdges(set):
+    """A node's edges that count how many times they're iterated."""
+
+    iterations = 0
+
+    def __iter__(self):
+        """Count an iteration, and iterate."""
+        self.iterations += 1
+        return super().__iter__()
+
+
+def test_owner_map_reified_edges_scanned_once() -> None:
+    """Check that finding the roots scans each node's edges a few times, not once per edge of a reified axiom.
+
+    One reified axiom has 1,000 `owl:annotatedSource` edges to anonymous individuals, and 1,000 reified axioms each have
+    the same blank node as source.
+    """
+    many = 1_000
+    axiom, annotated = (f"{RDF}type", f"{OWL}Axiom"), f"{OWL}annotated"
+    triples = owner_map_module._Triples()
+    triples.children["c"] = CountedEdges(
+        {axiom, (f"{annotated}Property", f"{RDF}type"), (f"{annotated}Target", A.strip("<>"))}
+        | {(f"{annotated}Source", f"_:x{i}") for i in range(many)}
+    )
+    for i in range(many):
+        triples.children[f"x{i}"] = CountedEdges({(f"{RDF}type", A.strip("<>"))})
+        triples.children[f"a{i}"] = CountedEdges(
+            {axiom, (f"{annotated}Source", "_:s"), (f"{annotated}Property", f"{OWL}onProperty")}
+        )
+    triples.children["s"] = CountedEdges({(f"{OWL}onProperty", P.strip("<>"))})
+    owner_map_module._Walk(triples)
+    assert max(edges.iterations for edges in triples.children.values()) <= 4
