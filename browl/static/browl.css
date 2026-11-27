@@ -1,5 +1,6 @@
-/* browl's stylesheet (DESIGN.md §2.9): soft contrast, muted accents, a dark theme that follows the browser.
-   The palette is set once, as custom properties; every text color meets WCAG AA (4.5:1) on both backgrounds. */
+/* browl's stylesheet (DESIGN.md §2.9): soft contrast, muted accents, a dark theme that follows the browser, dense type,
+   and quiet link underlines. The palette, type sizes, spacing and radii are set once, as custom properties; every text
+   color meets WCAG AA (4.5:1) on both backgrounds. */
 
 :root {
   color-scheme: light dark;

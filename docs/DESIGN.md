@@ -2055,8 +2055,26 @@ too (P-38), and the JSON API's (P-33).
 - A system font stack for text and a monospace font for IRIs and CURIEs. Manchester keywords (`some`, `and`,
   `SubClassOf`) are styled lightly to set them apart from entity names.
 - A dark theme that follows the browser setting (`prefers-color-scheme`).
-- Generous but not wasteful spacing; works from phone width up.
-- Plain CSS with custom properties for the colors, so the palette can be tuned in one place. No CSS framework.
+- **Type** (#176): dense, as data-dense UIs are, on a scale of tokens every font size uses (icons excepted), in rem, so
+  the browser's font size scales them all: `--text-xs` 12px, `--text-sm` 13px, `--text-base` 14px, `--text-md` 16px,
+  `--text-lg` 20px, `--text-xl` 24px. The body is `--text-base`, with `--leading` 1.45; form controls inherit it.
+  Secondary text is `--text-xs`: tree counts, search hits' IDs, properties and types, table headings, language tags,
+  axiom annotations, the stepper's notes; smaller UI text (the IRI disclosure, the fold control, the one-page toggle,
+  the hierarchy column, sign-in, Advanced search) `--text-sm`. Headings are semibold (600): a page's `h1`
+  `--text-xl`, `h2` `--text-lg`, panel headings `--text-md`, a punned IRI's type headings and the hierarchy column's
+  heading `--text-base`; an entity's title 1.375rem (`--title-size`). Later: prose values, such as definitions, at
+  about 15px, which needs a template marker to tell them apart; `tabular-nums` for counts and pager numbers.
+- **Spacing** (#177): small gaps within a list, larger ones between sections, on a scale of tokens every gap and
+  padding uses: `--sp-1` … `--sp-6`, 4, 8, 12, 16, 24 and 32px (in rem). A frame's groups are 6px apart and a panel's
+  sides 12px. Radii: `--radius` (6px) for boxes, inputs and menus, `--radius-lg` (8px) for the stepper's boxes. Works
+  from phone width up.
+- **Links** (#178): in running text and axioms, a quiet underline, 1px, offset 0.2em, in the link's color at 45%,
+  full strength on hover and focus; it stays because the accent is only about 2.5:1 against `--fg`, below the 3:1
+  WCAG 1.4.1 needs to tell links by color alone. Where everything is a link (the navigation bar, tree items and
+  paging links, a frame's label column), none, but on hover and focus. The search box's suggestions get none even on
+  hover: the selected one is highlighted already, and its type isn't a link of its own.
+- Plain CSS with custom properties for the colors, type sizes, spacing and radii, so each can be tuned in one place.
+  No CSS framework.
 
 **Rendering names and IRIs** (from P-11's review, for P-14 and every page after it): display names, CURIEs and IRIs
 come from the uploaded ontology, so they're untrusted text. Autoescaping covers HTML text and quoted attributes, not
