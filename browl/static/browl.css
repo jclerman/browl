@@ -129,6 +129,7 @@ a:focus-visible {
 .tree [role="treeitem"],
 .tree-paging a,
 .frame dt a,
+.annotation-property a,
 .pager a {
   text-decoration-line: none;
 }
@@ -141,6 +142,8 @@ a:focus-visible {
 .tree-paging a:hover,
 .frame dt a:hover,
 .frame dt a:focus-visible,
+.annotation-property a:hover,
+.annotation-property a:focus-visible,
 .pager a:hover,
 .pager a:focus-visible {
   text-decoration-line: underline;
@@ -1130,13 +1133,17 @@ code {
   overflow-wrap: anywhere;
 }
 
-/* A label that links to its property's page looks like one that doesn't, the axioms', until hovered. */
-.frame dt a {
+/* A label that links to its property's page, a frame's or an axiom annotation's, looks like one that doesn't until
+   hovered or focused: in the label's color, and underlined then only (the link lists at the top). */
+.frame dt a,
+.annotation-property a {
   color: inherit;
 }
 
 .frame dt a:hover,
-.frame dt a:focus-visible {
+.frame dt a:focus-visible,
+.annotation-property a:hover,
+.annotation-property a:focus-visible {
   color: var(--accent);
 }
 
@@ -1236,22 +1243,11 @@ code {
 }
 
 /* Its property is a label, set apart from its values by weight and color, which a literal value's text can't fake:
-   semibold in the text color, not underlined until hovered or focused. A text value stays muted; an entity value is
-   a link, with its underline. */
+   semibold in the text color, a link to its page showing as one only when hovered or focused (above). A text value
+   stays muted; an entity value is a link, with its underline. */
 .annotation-property {
   color: var(--fg);
   font-weight: 600;
-}
-
-.annotation-property a {
-  color: inherit;
-  text-decoration-line: none;
-}
-
-.annotation-property a:hover,
-.annotation-property a:focus-visible {
-  color: var(--accent);
-  text-decoration-line: underline;
 }
 
 .axiom-annotation mark {
