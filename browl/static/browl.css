@@ -55,10 +55,11 @@
   --measure: 75ch;
   --title-size: 1.375rem;
   --title-leading: 1.25;
-  /* An entity page's header: a line of its types and IDs, then the title's lines. */
-  --meta-row: 1.5rem;
+  /* An entity page's header: the title's lines, then the line of its CURIE and IRI. */
   --title-lines: 1;
-  --header-height: calc(var(--meta-row) + var(--title-lines) * var(--title-size) * var(--title-leading));
+  --title-height: calc(var(--title-lines) * var(--title-size) * var(--title-leading));
+  --meta-row: 1.5rem;
+  --header-height: calc(var(--title-height) + var(--meta-row));
   --stepper-width: 60rem; /* the load's stepper, and the details below it */
 }
 
@@ -908,16 +909,16 @@ code {
   }
 }
 
-/* Its header (U-5): its types, as badges, then its name; under the name, its CURIE, with a button that copies
-   it, and its IRI and that IRI's copy button folded away, opening over what's below the header rather than pushing it
-   down, and never over the name. At least the window-filling frame's height, so turning that off doesn't move a short
-   name. */
+/* Its header (U-5, DESIGN.md §2.8). At least the window-filling frame's height, so turning that off doesn't move a
+   short name. */
 
 .entity-header {
   display: grid;
   grid-area: header;
   grid-template-columns: fit-content(40%) minmax(0, 1fr);
-  grid-template-rows: auto minmax(var(--meta-row), auto); /* fixed in the frame; in print, the opened IRI takes room */
+  /* The name, the CURIE's line, then room for types that wrap below them. Fixed in the frame; in print, the opened IRI
+     takes room. */
+  grid-template-rows: auto minmax(var(--meta-row), auto) 1fr;
   align-content: start;
   align-items: baseline;
   column-gap: var(--sp-2);
@@ -935,7 +936,7 @@ code {
 .entity-type {
   display: flex;
   flex-wrap: wrap;
-  grid-row: 1;
+  grid-row: 1 / span 3; /* wrapped, they don't push the CURIE's line from the name */
   grid-column: 1;
   gap: var(--sp-1);
   min-width: 0;
@@ -952,7 +953,6 @@ code {
   letter-spacing: 0.04em;
   line-height: 1.6;
   text-transform: uppercase;
-  white-space: nowrap;
 }
 
 /* The line under the name, from where the name starts. */
@@ -1003,7 +1003,7 @@ code {
 }
 
 .entity-iri {
-  position: static;
+  flex: none; /* a long CURIE is cut short instead */
 }
 
 .entity-iri summary {
@@ -1043,6 +1043,14 @@ code {
 }
 
 @media print {
+  .entity-meta {
+    align-items: baseline; /* the CURIE on the IRI's line, not centered beside the opened box */
+  }
+
+  .copy-button {
+    display: none;
+  }
+
   .entity-iri dl {
     position: static; /* printed, it would cover what's below */
     box-shadow: none;
@@ -1688,7 +1696,7 @@ code {
       /* One title line high (`--title-lines`), then the CURIE's, whatever the name; a longer one is cut, whole in its
          tooltip, as are many types. */
       & .entity-header {
-        grid-template-rows: calc(var(--header-height) - var(--meta-row)) var(--meta-row);
+        grid-template-rows: var(--title-height) var(--meta-row);
       }
 
       & .entity-header h1 {
@@ -1699,12 +1707,17 @@ code {
         line-clamp: var(--title-lines);
       }
 
-      /* Many types: as many badges as fit, on one line, all of them in the tooltip. */
+      /* Many types: one line, each badge cut short with "…" if need be, all of them in the tooltip. */
       & .entity-type {
         flex-wrap: nowrap;
+        overflow: hidden; /* past the badges' padding, which can't shrink, too many are clipped */
+        white-space: nowrap;
+      }
+
+      & .type-badge {
         min-width: 0;
         overflow: hidden;
-        white-space: nowrap;
+        text-overflow: ellipsis;
       }
 
       & .tab-bar {

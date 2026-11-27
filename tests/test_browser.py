@@ -2038,10 +2038,16 @@ def test_toggle_follows_changes(page: Page, varied: LiveServer) -> None:
     expect(one_page_toggle(page)).not_to_be_checked()
 
 
+def badges_right(page: Page) -> float:
+    """Return the right edge of the header's rightmost type badge."""
+    return max(each["x"] + each["width"] for each in map(box, page.locator(".type-badge").all()))
+
+
 def test_header_fixed_height(page: Page, varied: LiveServer) -> None:
     """Check that a long name is clamped to one line, whole in its tooltip, and the opened IRI covers what's below.
 
-    Neither moves the panels.
+    Many types take one line, at most 40% of the header's width, before the name, each badge cut short with "…".
+    None of these moves the panels.
     """
     page.set_viewport_size(MEDIUM)
     page.goto(f"{varied.url}/example.org/{FEW}")
@@ -2056,9 +2062,16 @@ def test_header_fixed_height(page: Page, varied: LiveServer) -> None:
     assert panels(page) == shown
     types = page.locator(".entity-type")
     type_line = box(types)["height"]
-    types.evaluate("(each) => { each.textContent = 'Class · '.repeat(30); }")
-    assert box(types)["height"] < 1.5 * type_line  # one line, cut short
-    assert types.evaluate("(each) => each.scrollWidth > each.clientWidth")
+    types.evaluate(f"(each) => {{ each.innerHTML = '{LONG_TYPES * 3}'; }}")
+    assert box(types)["height"] < 1.5 * type_line  # one line
+    assert box(types)["width"] <= 0.4 * box(page.locator(".entity-header"))["width"] + 1
+    assert badges_right(page) <= box(heading)["x"]
+    badge = page.locator(".type-badge").first
+    assert badge.evaluate("(each) => each.scrollWidth > each.clientWidth")  # cut short
+    assert badge.evaluate("(each) => getComputedStyle(each).textOverflow") == "ellipsis"
+    types.evaluate(f"(each) => {{ each.innerHTML = '{LONG_TYPES * 30}'; }}")  # more badges than their padding fits
+    assert box(types)["x"] + box(types)["width"] <= box(heading)["x"]
+    assert types.evaluate("(each) => getComputedStyle(each).overflowX") == "hidden"  # the rest clipped
     assert panels(page) == shown
     page.locator(".entity-iri summary").click()
     iri = page.locator(".entity-iri dd code")
@@ -2070,21 +2083,80 @@ def test_header_fixed_height(page: Page, varied: LiveServer) -> None:
     assert details["y"] >= box(heading)["y"] + box(heading)["height"]  # never over the name
 
 
-def test_header_one_page_types_whole(page: Page, varied: LiveServer) -> None:
-    """Check that the one-page view shows many types whole, wrapping in their column, clear of the name (#180)."""
-    page.set_viewport_size(MEDIUM)
+@pytest.mark.parametrize("size", [MEDIUM, NARROW], ids=["toggled", "narrow"])
+def test_header_one_page_whole(page: Page, varied: LiveServer, size: dict[str, int]) -> None:
+    """Check that the one-page view shows a long name whole, and many long types whole, wrapping in their column.
+
+    The types stay clear of the name, and the CURIE's line stays under the name, however many lines the types take.
+    """
+    page.set_viewport_size(size)
     page.goto(f"{varied.url}/example.org/{FEW}")
-    one_page_toggle(page).check()
-    types = page.locator(".entity-type")
-    line = box(types)["height"]
-    types.evaluate(
-        """(each) => { each.innerHTML = '<span class="type-badge">Annotation property</span>'.repeat(6); }"""
-    )
-    assert box(types)["height"] > 1.5 * line  # wrapped, not cut short
-    assert not types.evaluate("(each) => each.scrollWidth > each.clientWidth")
-    badges = types.locator(".type-badge")
-    right = max(box(badges.nth(index))["x"] + box(badges.nth(index))["width"] for index in range(6))
-    assert right <= box(page.locator("main h1"))["x"]
+    if size == MEDIUM:
+        one_page_toggle(page).check()
+    heading, types = page.locator("main h1"), page.locator(".entity-type")
+    line, type_line = box(heading)["height"], box(types)["height"]
+    heading.evaluate("(each) => { each.textContent = 'name '.repeat(12); }")
+    types.evaluate(f"(each) => {{ each.innerHTML = '{LONG_TYPES * 3}'; }}")
+    assert box(heading)["height"] > 1.5 * line  # wrapped, not clamped
+    assert not heading.evaluate("(each) => each.scrollHeight > each.clientHeight")
+    assert box(types)["height"] > 1.5 * type_line  # wrapped, not cut short
+    for each in [types, *page.locator(".type-badge").all()]:
+        assert not each.evaluate("(each) => each.scrollWidth > each.clientWidth")
+    assert badges_right(page) <= box(heading)["x"]
+    meta = box(page.locator(".entity-meta"))
+    assert 0 <= meta["y"] - (box(heading)["y"] + box(heading)["height"]) < 4
+    assert box(types)["y"] + box(types)["height"] > meta["y"] + meta["height"]  # the types go on below it
+
+
+@pytest.mark.parametrize("size", [WIDE, MEDIUM], ids=["wide", "medium"])
+def test_header_alike_across_pages(page: Page, headed: LiveServer, size: dict[str, int]) -> None:
+    """Check that the panels start at the same place with a CURIE and several types as with neither.
+
+    On both, the line under the name starts where the name starts.
+    """
+    page.set_viewport_size(size)
+    shown = []
+    for entity, curies, types in [(PUN, 1, 3), (FEW, 0, 1)]:
+        page.goto(f"{headed.url}/example.org/{entity}")
+        expect(page.locator(".entity-id")).to_have_count(curies)
+        expect(page.locator(".type-badge")).to_have_count(types)
+        first = page.locator(".entity-meta > *").first
+        assert abs(box(first)["x"] - box(page.locator("main h1"))["x"]) < 1
+        shown.append(panels(page))
+    assert shown[0] == shown[1]
+
+
+def test_long_curie_cut(page: Page, headed: LiveServer) -> None:
+    """Check that a long CURIE is cut short with "…", its copy button and the IRI's summary still in view."""
+    page.set_viewport_size(MEDIUM)
+    page.goto(f"{headed.url}/example.org/{PUN}")
+    line = box(page.locator(".entity-iri summary"))["height"]
+    curie = page.locator(".entity-id")
+    curie.evaluate("(each) => { each.textContent = 'ex:' + 'x'.repeat(300); }")
+    assert curie.evaluate("(each) => each.scrollWidth > each.clientWidth")
+    assert curie.evaluate("(each) => getComputedStyle(each).textOverflow") == "ellipsis"
+    header = box(page.locator(".entity-header"))
+    summary = page.locator(".entity-iri summary")
+    for each in (copy_button(page, "Copy the CURIE"), summary):
+        assert box(each)["x"] + box(each)["width"] <= header["x"] + header["width"]
+    assert box(summary)["height"] == line  # "▸ IRI" not squeezed onto two lines
+    summary.click()
+    assert_fits(page)
+
+
+def test_header_printed(page: Page, headed: LiveServer) -> None:
+    """Check that printed, the CURIE stays on the opened IRI's line, not beside its box, without copy buttons."""
+    page.set_viewport_size(WIDE)
+    page.emulate_media(media="print")
+    page.goto(f"{headed.url}/example.org/{PUN}")
+    page.locator(".entity-iri summary").click()
+    expect(page.locator(".entity-iri dd code")).to_be_visible()
+    summary = box(page.locator(".entity-iri summary"))
+    assert box(page.locator(".entity-id"))["y"] < summary["y"] + summary["height"]
+    expect(page.locator(".copy-button").first).to_be_hidden()
+    details = box(page.locator(".entity-iri dl"))
+    heading = box(page.locator("main h1"))
+    assert details["y"] >= heading["y"] + heading["height"]  # never over the name
 
 
 def test_right_to_left_name(page: Page, varied: LiveServer) -> None:
