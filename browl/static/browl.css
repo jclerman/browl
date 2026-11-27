@@ -1225,8 +1225,14 @@ code {
   font-size: 1em; /* not smaller again */
 }
 
-/* Its property is a label: muted and not underlined, as a frame's labels aren't, until hovered or focused. A value
-   that's a link keeps its underline. */
+/* Its property is a label, set apart from its values by weight and color, which a literal value's text can't fake:
+   semibold in the text color, not underlined until hovered or focused. A text value stays muted; an entity value is
+   a link, with its underline. */
+.annotation-property {
+  color: var(--fg);
+  font-weight: 600;
+}
+
 .annotation-property a {
   color: inherit;
   text-decoration-line: none;

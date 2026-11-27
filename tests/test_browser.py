@@ -1363,9 +1363,10 @@ def test_annotation_box_whole(page: Page, server: LiveServer, monkeypatch: pytes
 
 
 def test_annotation_property_quiet(page: Page, server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Check that an axiom annotation's property is muted and not underlined, but a value that's a link is (#179).
+    """Check that an axiom annotation's property is a semibold label, not underlined, but a value's link is.
 
-    One box's property has a page, so it's a link; the other's has none, so its value's link comes first in it.
+    The label is in the text color, unlike a muted text value and an accent link value. One box's property has a
+    page, so it's a link; the other's has none, so its value's link comes first in it.
     """
     comment = IRI(f"{RDFS}comment")
     value = LiteralValue(lexical="a value", datatype=IRI(f"{XSD}string"))
@@ -1396,8 +1397,15 @@ def test_annotation_property_quiet(page: Page, server: LiveServer, monkeypatch: 
     assert accent != muted
     for value_link in values:
         assert value_link.evaluate(style) == ["underline", accent]
+    fg = page.evaluate("getComputedStyle(document.body).color")
+    assert fg != muted
+    for label in page.locator(".annotation-property").all():
+        assert label.evaluate("each => [getComputedStyle(each).fontWeight, getComputedStyle(each).color]") == [
+            "600",
+            fg,
+        ]
     property_ = linked_box.locator(".annotation-property a")
-    assert property_.evaluate(style) == ["none", muted]
+    assert property_.evaluate(style) == ["none", fg]
     property_.hover()
     assert property_.evaluate(style) == ["underline", accent]
 
