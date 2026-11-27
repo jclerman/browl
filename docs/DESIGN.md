@@ -1486,18 +1486,20 @@ is (below). Uberon's 67 individuals' pages take 14 ms at p50 and 58 ms at p95, t
   - **Data:** each section (`AxiomGroup`) holds its label and lines; a line (`FrameLine`) its axiom, None for an
     implied equivalent, and the operands it shows, so the JSON API (U-42) returns the frame as the page shows it.
 - **Axiom annotations** _(P-49; U-35)_: an annotation value or a logical axiom shows its axiom's annotations after it,
-  on its line: a box per property, `property: value, value`, small and muted, tinted teal with a stronger teal border
-  (`--annotation-bg`, `--annotation-border`): `A hollow, muscular organ … ⟨database cross reference: PMID:1234,
-  ZFA:0000114⟩ ⟨has synonym type: plural form⟩`. Properties and values are sorted as the annotations panel's are, with
+  on its line: a box per property, `property: value, value`, small and muted, tinted teal, with no border but a 2px
+  teal rule on its left (`--annotation-bg`, `--annotation-border`; #179): `A hollow, muscular organ … ⟨database cross
+  reference: PMID:1234, ZFA:0000114⟩ ⟨has synonym type: plural form⟩`. The property is a label, as a frame's are: muted
+  and not underlined, in the accent and underlined on hover; the template marks it (`annotation-property`), so a value
+  that's a link keeps its underline. Properties and values are sorted as the annotations panel's are, with
   no language ranking (`browl.annotations.shown_annotations`). A box doesn't split across lines: it moves to the next if
   it doesn't fit, and one wider than its line wraps within it, its first line on the text's; its padding keeps the
-  border off the text, and its margin off the lines above and below. An annotation's own annotations are boxes within
+  rule off the text, and its margin off the lines above and below. An annotation's own annotations are boxes within
   its value's box. Values and links render as an annotation's do, and a blank value (an anonymous individual) is left
   out, as in the panel. The boxes are the template's markup (`annotations.html`'s `axiom_annotations`), outside each
   value's `<bdi>`, so a value's own text can't pass for an annotation; visually hidden brackets around each keep where
   it starts and ends in what screen readers read and in copied text. `--muted` and `--accent` are AA on the tint in both
-  themes, and the border is 3:1 or more against the page; the page's entity, marked where it's in them, is `--fg` on
-  `--mark-bg`, where `--muted` isn't AA in the dark theme.
+  themes, and the rule is 3:1 or more against the page and the cards; the page's entity, marked where it's in them, is
+  `--fg` on `--mark-bg`, where `--muted` isn't AA in the dark theme.
   - **Annotations panel:** a second query (`entity-value-annotations.rq`), run alongside the panel's, reads the
     annotations of the reified `owl:Axiom`s whose source is the entity, whose property is an annotation property
     (`entity-annotations.rq`'s test) and whose target isn't blank, and of the `owl:Annotation`s nested on them, one
@@ -1537,9 +1539,10 @@ is (below). Uberon's 67 individuals' pages take 14 ms at p50 and 58 ms at p95, t
 - **Compact layout** (U-32): label column and value column in a two-column grid; tight line spacing within a group and a
   little more between groups. Multi-column values for long lists are Later (U-33). Each panel is a `<dl class="frame">`,
   one `<dt>` per group and one `<dd>` per value; in a narrow panel the values go below their label. The label
-  column fits its labels up to 12rem, so a long one, such as an IRI, wraps rather than squeezing the values.
-  _(P-16a)_ A panel (and the Usage tab) stacks its frame below 30rem of its own width, by a CSS container query, so a
-  panel narrowed by the hierarchy column or the panel beside it stacks even in a wide window. Stacked, each level is
+  column fits its labels up to 12rem, so a long one, such as an IRI, wraps rather than squeezing the values. Labels
+  look the same in every panel: muted plain text, a link showing as one only on hover or focus (#179). _(P-16a)_
+  A panel (and the Usage tab) stacks its frame below 30rem of its own width, by a CSS container query, so a panel
+  narrowed by the hierarchy column or the panel beside it stacks even in a wide window. Stacked, each level is
   indented `--frame-step` (0.75rem) under the one above: a value under its label, an individual's property under its
   section label and its values under the property, a punned IRI's sections under their type's heading, a usage under
   its subject. A wrapped line keeps its hanging indent. _(P-47)_
@@ -1859,7 +1862,8 @@ CSS nesting gets the one-page view, without the toggle. _(P-16d)_
   moves in; storage that fails is ignored. The script isn't deferred, so the page isn't first drawn in the frame, and
   it also restores the state on a page from the back-forward cache and on another tab's change. No cookie, so the
   server's pages don't vary with it, and no URL parameter.
-- **The panels** have light borders, and their headings stay in view while they scroll. Each panel is a `<section>`,
+- **The panels** are cards (below, Visual design), and their headings, with no rule, stay in view while they scroll,
+  on the card's surface. Each panel is a `<section>`,
   named by its heading (`aria-labelledby`), with `tabindex="0"` and a visible focus ring, so the keyboard can scroll
   it.
 - **Hierarchy column** (U-45, P-38): a narrow column, which folds away, shows the entity's place in its hierarchy, on
@@ -2071,6 +2075,17 @@ too (P-38), and the JSON API's (P-33).
   and their paging links are underlined on hover only, since keyboard focus there shows an outline instead. The search
   box's suggestions get none even on hover: the selected one is highlighted already, and its type isn't a link of its
   own.
+- **Cards** (#179): structure comes from surfaces, type and spacing rather than nested borders. What's read sits on a
+  card, a surface a little lighter than the page, with a faint shadow (`--card-shadow`) and no border, radius
+  `--radius-lg`: the Overview's panels, the hierarchy column, a tree page's tree, the Usage tab's usages (its pager
+  stays above, on the page), the search filters' groups and the results, and the upload form's fields. The page is
+  `--bg` #f6f5f1 (dark #1a1c1e), a card's `--surface` #fff (dark #25282b); `--muted` and `--accent` stay AA on both
+  (5.2–5.3:1 on the page). A darker page, #f1f0eb, cut the hierarchy's contrast too much. What opens over the page (the
+  IRI box, the search suggestions) and the search box have the card's surface. A card sets `--layer` to its surface,
+  and what sticks within it (panel headings, the hierarchy column's heading and stuck tree rows, the results' table
+  head) takes it, so nothing scrolls through in the page's color. The hierarchy column's drag handle keeps its 1px line
+  beside the card, marking the one border that can be dragged, unlike the gap between the Overview's two cards.
+  Chosen over borderless panels (a heading over a hairline), compared side by side in #175's prototype.
 - Plain CSS with custom properties for the colors, type sizes, spacing and radii, so each can be tuned in one place.
   No CSS framework.
 
