@@ -2107,10 +2107,26 @@ COVERING = """(element) => {
   const rect = element.getBoundingClientRect();
   const width = document.documentElement.clientWidth;
   const height = document.documentElement.clientHeight;
+  const style = getComputedStyle(element);
+  // Each corner's radii, across and down, and whether a point lies outside its curve, or within 1px inside it,
+  // where anti-aliasing may draw what's below.
+  const corners = [["Top", "Left"], ["Top", "Right"], ["Bottom", "Left"], ["Bottom", "Right"]].map(([v, h]) => {
+    const [across, down = across] = style[`border${v}${h}Radius`].split(" ").map(parseFloat);
+    const cx = h === "Left" ? rect.left + across : rect.right - across;
+    const cy = v === "Top" ? rect.top + down : rect.bottom - down;
+    return (x, y) => {
+      const dx = h === "Left" ? cx - x : x - cx;
+      const dy = v === "Top" ? cy - y : y - cy;
+      return across > 1 && down > 1 && dx > 0 && dy > 0 && (dx / (across - 1)) ** 2 + (dy / (down - 1)) ** 2 > 1;
+    };
+  });
   const found = new Set();
-  // Every 16px across and 5px down, finer than a heading or a tree row; 1px in from the edges, which round.
+  // Every 16px across and 5px down, finer than a heading or a tree row; 1px in from the edges, and inside the corners.
   for (let x = rect.left + 1; x < Math.min(rect.right, width) - 1; x += 16) {
     for (let y = rect.top + 1; y < Math.min(rect.bottom, height) - 1; y += 5) {
+      if (corners.some((outside) => outside(x, y))) {
+        continue;
+      }
       const shown = document.elementFromPoint(x, y);
       if (shown && !element.contains(shown) && !shown.closest(".site-bar")) {
         found.add(`<${shown.localName}${[...shown.classList].map((each) => "." + each).join("")}>`);
