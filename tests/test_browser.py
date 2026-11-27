@@ -1336,24 +1336,29 @@ def test_annotations_layout(page: Page, annotated: LiveServer) -> None:
 BOX_TEXT = "a box of several words"
 
 
-def test_annotation_box_whole(page: Page, server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Check that an axiom annotation's box doesn't split across lines: after a value that wraps, at any phone width."""
+def annotate_comment(monkeypatch: pytest.MonkeyPatch, notes: tuple[owl.Annotation, ...], lexical: str) -> None:
+    """Make every entity's Overview show one `rdfs:comment`, with these axiom annotations on it, and no axioms."""
     comment = IRI(f"{RDFS}comment")
-    value = LiteralValue(lexical=LONG_VALUE, datatype=IRI(f"{XSD}string"))
-    note = owl.Annotation(
-        property=owl.Entity(kind=owl.EntityKind.ANNOTATION_PROPERTY, iri=f"{EX}/note"),
-        value=owl.Literal(lexical=BOX_TEXT, datatype=IRI(f"{XSD}string")),
-    )
+    value = LiteralValue(lexical=lexical, datatype=IRI(f"{XSD}string"))
 
     async def fetched(*args: object) -> list[tuple[IRI, AnnotationValue]]:
         return [(comment, value)]
 
     async def annotations(*args: object) -> dict[tuple[IRI, AnnotationValue], tuple[owl.Annotation, ...]]:
-        return {(comment, value): (note,)}
+        return {(comment, value): notes}
 
     monkeypatch.setattr(browl.overview, "fetch_annotations", fetched)
     monkeypatch.setattr(browl.overview, "fetch_value_annotations", annotations)
     monkeypatch.setattr(browl.overview, "_read_axioms", no_axioms)
+
+
+def test_annotation_box_whole(page: Page, server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that an axiom annotation's box doesn't split across lines: after a value that wraps, at any phone width."""
+    note = owl.Annotation(
+        property=owl.Entity(kind=owl.EntityKind.ANNOTATION_PROPERTY, iri=f"{EX}/note"),
+        value=owl.Literal(lexical=BOX_TEXT, datatype=IRI(f"{XSD}string")),
+    )
+    annotate_comment(monkeypatch, (note,), LONG_VALUE)
     page.goto(f"{server.url}/example.org/thing")
     annotation = page.locator(".axiom-annotation")
     expect(annotation).to_contain_text(BOX_TEXT)
@@ -1368,23 +1373,12 @@ def test_annotation_property_quiet(page: Page, server: LiveServer, monkeypatch: 
     The label is in the text color, unlike a muted text value and an accent link value. One box's property has a
     page, so it's a link; the other's has none, so its value's link comes first in it.
     """
-    comment = IRI(f"{RDFS}comment")
-    value = LiteralValue(lexical="a value", datatype=IRI(f"{XSD}string"))
     elsewhere = owl.IRIReference(iri="https://example.org/elsewhere")
     linked, unlinked = (
         owl.Entity(kind=owl.EntityKind.ANNOTATION_PROPERTY, iri=iri) for iri in (f"{EX}/thing", "urn:example:note")
     )
     notes = (owl.Annotation(property=linked, value=elsewhere), owl.Annotation(property=unlinked, value=elsewhere))
-
-    async def fetched(*args: object) -> list[tuple[IRI, AnnotationValue]]:
-        return [(comment, value)]
-
-    async def annotations(*args: object) -> dict[tuple[IRI, AnnotationValue], tuple[owl.Annotation, ...]]:
-        return {(comment, value): notes}
-
-    monkeypatch.setattr(browl.overview, "fetch_annotations", fetched)
-    monkeypatch.setattr(browl.overview, "fetch_value_annotations", annotations)
-    monkeypatch.setattr(browl.overview, "_read_axioms", no_axioms)
+    annotate_comment(monkeypatch, notes, "a value")
     page.goto(f"{server.url}/example.org/thing")
     boxes = page.locator(".axiom-annotation")
     expect(boxes).to_have_count(2)
