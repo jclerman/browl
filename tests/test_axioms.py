@@ -919,6 +919,10 @@ def test_individual_page(data_dir: Path, fuseki_url: str, dataset: str, monkeypa
     assert f'<dt>Negative property assertions</dt><dd dir="ltr">{link("age")} <bdi>7</bdi></dd>' in bob
     carol = frame("carol")
     assert f'<dt>Same As</dt><dd dir="ltr">{link("dave")}</dd>' in carol
+    # An individual with no types has its Types section anyway, first, with a note; its other empty sections are left
+    # out, as alice's Same As is.
+    assert carol.startswith('<dl class="frame"><dt>Types</dt><dd class="note">None asserted.</dd><dt>Same As</dt>')
+    assert "Same As" not in frame("alice") and "None asserted." not in frame("alice")
     assert f'{by(link("knows"))}{value}{link("dave")} <span class="axiom-annotations">' in carol
     # Dog is a class and an individual: its sections are under a heading for each, the class's first, as in the header.
     dog = re.sub(r">\s*\n\s*<", "><", pages["Dog"])

@@ -1431,7 +1431,7 @@ is (below). Uberon's 67 individuals' pages take 14 ms at p50 and 58 ms at p95, t
     characters as Fuseki sends them (`MAX_ANNOTATIONS_CHARS`, so huge values can't exhaust the app's memory), gets a
     note instead, as for too many axioms. A failed query fails only this panel, as the axioms' does (below).
 - **Logical-axioms panel:** grouped by axiom kind under familiar section names (Equivalent To, SubClass Of, …), in
-  frame style (below). Empty sections are omitted. _(P-16b, P-16c)_
+  frame style (below). Empty sections are omitted, but an individual's Types (below). _(P-16b, P-16c)_
   - **Classes:** Equivalent To, SubClass Of, Disjoint With, Disjoint Union Of, Keys, and General class axioms that
     mention the class.
   - **Properties** (U-31): Equivalent To, SubProperty Of, Domains, Ranges, Characteristics (functional, transitive,
@@ -1444,6 +1444,10 @@ is (below). Uberon's 67 individuals' pages take 14 ms at p50 and 58 ms at p95, t
     their property. Same As has a line per other member, Different From one per axiom, its others separated by commas,
     and a negative assertion is `property value`. A punned individual's assertions go under these sections, after its
     other kinds', not Other axioms; an assertion of an inverse property is shown whole there.
+    Its Types section is shown even if it has no types, with the note "None asserted.": it's where a reader looks
+    first, and the only place that says so when the hierarchy column ("No named type") is folded away. A type that's
+    a class expression is a type, so its Types aren't empty. Its other sections are omitted when empty, as every
+    entity's are.
   - **Frame-style lines** (`browl.frames`): a line shows an axiom by its operands that aren't the entity, from its
     named roles: on Heart's page, `Heart SubClassOf Organ` is `Organ` under SubClass Of.
     - An n-ary disjointness is one line, its other members separated by commas, as are a disjoint union's members and

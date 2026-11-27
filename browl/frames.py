@@ -189,7 +189,8 @@ class AxiomGroup(BaseModel):
         kind: The kind of entity it's a section for; None for `Section.OTHER`. An IRI with several types (punning) has
             sections for each, which the page shows under a heading for each kind (`by_kind`).
         label: The section's label, as the page shows it (`SECTION_LABELS`).
-        lines: Its lines, in the order shown (`frame_groups`).
+        lines: Its lines, in the order shown (`frame_groups`); none for the Types section of an individual with no
+            types, which the page shows anyway, as where a reader looks for them first.
         property: For an individual's object or data property assertions, the property whose values its lines show,
             as a section has a group for each, by the property's name; else None.
     """
@@ -240,7 +241,12 @@ def by_kind(groups: Sequence[AxiomGroup]) -> list[KindGroups]:
 
 
 def frame_groups(
-    axioms: Iterable[AnyAxiom], iri: str, equivalents: Iterable[IRI], shown_name: Callable[[str], str]
+    axioms: Iterable[AnyAxiom],
+    iri: str,
+    equivalents: Iterable[IRI],
+    shown_name: Callable[[str], str],
+    *,
+    individual: bool = False,
 ) -> list[AxiomGroup]:
     """Return an entity's axioms as a frame's sections, in the order the page shows them (DESIGN.md §2.8).
 
@@ -253,6 +259,7 @@ def frame_groups(
         equivalents: The other members of the class's equivalence group, if it's in one (the `equiv_group` table), not
             the entity itself.
         shown_name: The name the page shows for an IRI.
+        individual: Whether the entity is a named individual, whose Types section is shown even if it has no types.
     """
     # Each section's lines, by what makes them one: the line without annotations, or under Equivalent To and Same As
     # its equivalent, which several axioms, or the equivalence group, may state; with their annotations. A section by
@@ -268,6 +275,8 @@ def frame_groups(
         sections.setdefault((EntityKind.CLASS, Section.EQUIVALENT_TO, None), {}).setdefault(
             entity, (FrameLine(axiom=None, operands=(entity,)), {})
         )
+    if individual:
+        sections.setdefault((EntityKind.NAMED_INDIVIDUAL, Section.TYPES, None), {})
 
     def line_key(line: FrameLine) -> tuple[bool, str, str]:
         tokens = line.manchester_tokens()

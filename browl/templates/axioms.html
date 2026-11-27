@@ -18,11 +18,11 @@
 {%- endmacro %}
 
 {# An entity's logical axioms (`browl.overview.AxiomsPanel`), from `links`, as a frame in a two-column grid (U-32):
-   each section's label once, then one line per axiom, with its annotations; an equivalent only its equivalence group
-   implies is marked. An individual's property assertions are under their section's label, across both columns, then
-   each property's name, as an annotation's is (`browl.frames.AxiomGroup.property`). A punned IRI's sections are under
-   a heading for each of its kinds, its Other axioms after them (`browl.frames.by_kind`). The entity, `iri`, is
-   highlighted where a line shows it. #}
+   each section's label once, then one line per axiom, with its annotations, or a note if it has none (an individual's
+   Types); an equivalent only its equivalence group implies is marked. An individual's property assertions are under
+   their section's label, across both columns, then each property's name, as an annotation's is
+   (`browl.frames.AxiomGroup.property`). A punned IRI's sections are under a heading for each of its kinds, its Other
+   axioms after them (`browl.frames.by_kind`). The entity, `iri`, is highlighted where a line shows it. #}
 {% macro axiom_frame(panel, links, iri) -%}
 <section class="axioms panel" tabindex="0" aria-labelledby="axioms-heading">
   <h2 id="axioms-heading">Logical axioms</h2>
@@ -60,6 +60,8 @@
       {{- manchester(line.manchester_tokens(), links, iri) }}
       {%- if line.axiom is none %} <small class="implied">(implied)</small>{% endif -%}
       {{ axiom_annotations(line.annotations, links, iri) }}</dd>
+    {% else %}
+    <dd class="note">None asserted.</dd>
     {% endfor %}
     {% endfor %}
   </dl>

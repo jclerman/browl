@@ -393,3 +393,17 @@ def test_individual_frame() -> None:
         ("Named individual", ["Types"]),
         (None, ["Other axioms"]),
     ]
+
+
+def test_individual_types_always() -> None:
+    """Check that an individual's Types section is there, empty, if it has no types, and not for another entity."""
+    same = owl.SameIndividual(members=(Z, A))
+    [types, same_as] = frame_groups([same], Z.iri, [], shown_name, individual=True)
+    assert (types.label, types.kind, types.lines) == ("Types", EntityKind.NAMED_INDIVIDUAL, ())
+    assert text([same_as]) == [("Same As", [iri("A")])]
+    assert text(frame_groups([], Z.iri, [], shown_name, individual=True)) == [("Types", [])]
+    assert frame_groups([], Z.iri, [], shown_name) == []
+    some = owl.ClassAssertion(individual=Z, class_=owl.ObjectSomeValuesFrom(property=HAS_PART, filler=MUSCLE))
+    assert text(frame_groups([some], Z.iri, [], shown_name, individual=True)) == [
+        ("Types", [f"{iri('hasPart')} some {iri('M')}"])
+    ]

@@ -284,7 +284,8 @@ async def _page(
     context: dict[str, object] = {"entity": entity, "name": names[entity.iri], "types": types, "tab": tab}
     count = None
     if tab.slug == OVERVIEW:
-        context["overview"] = await read_overview(request, state, entity.iri)
+        individual = any(each.type == EntityType.NAMED_INDIVIDUAL for each in entities)
+        context["overview"] = await read_overview(request, state, entity.iri, individual=individual)
     elif tab.slug == USAGE:
         page = read_page(request)
         if page == 1 and PAGE_PARAM in request.query_params and not query.panel and at.panel is None:
