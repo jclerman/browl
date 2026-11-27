@@ -1540,10 +1540,11 @@ is (below). Uberon's 67 individuals' pages take 14 ms at p50 and 58 ms at p95, t
   little more between groups. Multi-column values for long lists are Later (U-33). Each panel is a `<dl class="frame">`,
   one `<dt>` per group and one `<dd>` per value; on a phone (under 40rem) the values go below their label. The label
   column fits its labels up to 20rem, so a long one, such as an IRI, wraps rather than squeezing the values.
-  _(P-16a)_ On a phone, the logical axioms' values are indented a step under their label, for every kind of entity,
-  so a value isn't taken for a label; a wrapped line keeps its hanging indent. A property assertion's values are a step
-  under the property, which is a step under its section's label; a punned IRI's headings for its types aren't
-  indented. The other panels' values aren't indented. _(P-47)_
+  _(P-16a)_ On a phone, every panel's values are indented a step under their label (the annotations panel, the
+  logical axioms for every kind of entity, and the home page's panels), so a value isn't taken for a label; a wrapped
+  line keeps its hanging indent. A property assertion's values are a step under the property, which is a step under
+  its section's label; a punned IRI's headings for its types aren't indented. The Usage tab's lines have their own
+  narrow layout. _(P-47)_
 
 **Panel data apart from its HTML** (for U-42): each panel and tab is built in two steps. First a function returns its
 content as typed data (Pydantic models), with no HTML in it: annotations grouped by property, axioms grouped by kind,

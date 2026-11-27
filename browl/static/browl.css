@@ -1059,9 +1059,10 @@ code {
     margin-top: 0;
   }
 
-  /* The logical axioms' values, each a step under its label, so they're told apart: a section's under its label; a
-     property's under its name, itself a step under its section's label (DESIGN.md §2.8). */
-  .axioms .frame dd {
+  /* Each value a step under its label, so they're told apart: an annotation's under its property, a logical axiom's
+     under its section's label, and an individual's assertion under its property's name, itself a step under its
+     section's label (DESIGN.md §2.8). The Usage tab's lines have their own narrow layout. */
+  .frame:not(.usage-frame) dd {
     margin-left: var(--space);
   }
 

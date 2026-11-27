@@ -1273,12 +1273,13 @@ def test_annotations_grid_wide(page: Page, annotated: LiveServer) -> None:
 
 
 def test_annotations_grid_narrow(page: Page, annotated: LiveServer) -> None:
-    """Check that on a phone each group's values go below its label, and nothing long makes the page scroll sideways."""
+    """Check that on a phone each group's values go below its label, a step in, and nothing scrolls sideways."""
     page.set_viewport_size(NARROW)
     page.goto(f"{annotated.url}/example.org/thing")
     term, value = box(page.locator(".annotations dt").first), box(page.locator(".annotations dd").first)
     assert value["y"] >= term["y"] + term["height"]
-    assert abs(value["x"] - term["x"]) < 2
+    char = page.evaluate("parseFloat(getComputedStyle(document.body).fontSize)")
+    assert value["x"] - term["x"] == pytest.approx(char, abs=1)  # a step (--space, 1rem) in
     assert_fits(page)
 
 
