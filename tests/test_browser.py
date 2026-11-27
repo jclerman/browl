@@ -740,7 +740,7 @@ def test_navigation_bar_sticky(page: Page, server: LiveServer) -> None:
     assert (box["x"], box["y"], box["width"]) == (0, 0, NARROW["width"])
 
 
-@pytest.mark.parametrize(("scheme", "background"), [("light", "rgb(250, 250, 247)"), ("dark", "rgb(29, 31, 33)")])
+@pytest.mark.parametrize(("scheme", "background"), [("light", "rgb(246, 245, 241)"), ("dark", "rgb(26, 28, 30)")])
 def test_theme_follows_browser(page: Page, server: LiveServer, scheme: str, background: str) -> None:
     """Check that the palette follows the browser's color scheme."""
     page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
@@ -1547,7 +1547,8 @@ def test_panel_scrolls(page: Page, varied: LiveServer) -> None:
     """Check that long panels scroll within themselves, by mouse and by keyboard, their headings staying in view.
 
     The keyboard reaches them with Tab after the tab panel, and they show a focus ring; the page itself doesn't move.
-    The panels have borders, and their headings a background, so the content scrolls out of sight under them.
+    The panels are cards, and their headings have the card's background, so the content scrolls out of sight under
+    them.
     """
     page.set_viewport_size(WIDE)
     page.goto(f"{varied.url}/example.org/{MANY}")
@@ -1566,9 +1567,9 @@ def test_panel_scrolls(page: Page, varied: LiveServer) -> None:
     assert abs(box(heading)["y"] - box(panel)["y"]) < 2  # the heading stays at the top
     expect(panel.get_by_text(f"comment {MANY_VALUES - 1}", exact=True)).to_be_in_viewport()
     assert page.evaluate("window.scrollY") == 0
-    assert panel.evaluate("(each) => getComputedStyle(each).borderTopStyle") == "solid"
-    assert heading.evaluate("(each) => getComputedStyle(each).backgroundColor") == page.evaluate(
-        "getComputedStyle(document.body).backgroundColor"
+    assert panel.evaluate("(each) => getComputedStyle(each).boxShadow") != "none"
+    assert heading.evaluate("(each) => getComputedStyle(each).backgroundColor") == panel.evaluate(
+        "(each) => getComputedStyle(each).backgroundColor"
     )
     axioms = page.get_by_role("region", name="Logical axioms")
     page.keyboard.press("Tab")

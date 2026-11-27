@@ -1,10 +1,13 @@
 /* browl's stylesheet (DESIGN.md §2.9): soft contrast, muted accents, a dark theme that follows the browser, dense
-   type, and quiet link underlines. The palette, type sizes, spacing and radii are set once, as custom properties;
-   every text color meets WCAG AA (4.5:1) on both backgrounds. */
+   type, quiet link underlines, and what's read on soft cards. The palette, type sizes, spacing and radii are set once,
+   as custom properties; every text color meets WCAG AA (4.5:1) on both the page and the cards' surface, in both
+   themes. */
 
 :root {
   color-scheme: light dark;
-  --bg: #fafaf7;
+  --bg: #f6f5f1; /* the page, under the cards: --muted 5.3:1, --accent 5.2:1 */
+  --surface: #fff; /* a card's (#179) */
+  --card-shadow: 0 0 0 1px rgb(0 0 0 / 4%), 0 1px 3px rgb(0 0 0 / 6%);
   --fg: #2b2b2b;
   --muted: #666660;
   --bar-bg: #ecebe4;
@@ -56,7 +59,9 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #1d1f21;
+    --bg: #1a1c1e;
+    --surface: #25282b; /* --muted 5.3:1, --fg 11:1 */
+    --card-shadow: 0 0 0 1px rgb(255 255 255 / 6%);
     --fg: #dcdcd6;
     --muted: #9a9a92;
     --bar-bg: #26292c;
@@ -826,7 +831,7 @@ code {
   margin: 0;
   font-size: var(--text-base);
   line-height: 1.75rem;
-  background: var(--bg);
+  background: var(--layer, var(--bg));
 }
 
 .hierarchy-full {
@@ -1035,10 +1040,57 @@ code {
   container: panel / inline-size;
 }
 
+/* Cards (#179): what's read sits on a surface a little lighter than the page, without a border: the panels, the
+   hierarchy column, a tree page's tree, the Usage tab's usages, the search filters and results, and the upload form.
+   `--layer` is a card's surface, which what sticks within it takes, to cover what scrolls beneath. */
+:is(.panel, .hierarchy-column, .tree-page > .tree, .usage-frame, .search-filters > fieldset, .results-body,
+    .upload-controls > fieldset) {
+  --layer: var(--surface);
+
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--card-shadow);
+}
+
 .panel {
+  padding: 0 var(--sp-4) var(--sp-3);
+}
+
+.hierarchy-column {
   padding: 0 var(--sp-3) var(--sp-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+}
+
+.tree-page > .tree,
+.usage-frame,
+.search-filters > fieldset,
+.upload-controls > fieldset {
+  padding: var(--sp-3) var(--sp-4);
+}
+
+/* The flexbox's gap spaces them. (Beside the results the filters were meant to be blocks, but the base rule, later,
+   overrides that, so a margin there would double the gap.) */
+.search-filters > fieldset {
+  margin: 0;
+}
+
+/* A legend inside its card, not on its edge. */
+.search-filters > fieldset > legend {
+  float: left;
+  width: 100%;
+  margin-bottom: var(--sp-2);
+  padding: 0;
+}
+
+.results-body {
+  padding: 0 var(--sp-3) var(--sp-2);
+}
+
+/* What opens over the page, and the search box, are surfaces too. */
+.entity-iri dl,
+.search-list,
+.site-search input {
+  background: var(--surface);
 }
 
 .panel + .panel {
@@ -1075,6 +1127,16 @@ code {
   min-width: 8rem;
   color: var(--muted);
   overflow-wrap: anywhere;
+}
+
+/* A label that links to its property's page looks like one that doesn't, the axioms' (#179), until hovered. */
+.frame dt a {
+  color: inherit;
+}
+
+.frame dt a:hover,
+.frame dt a:focus-visible {
+  color: var(--accent);
 }
 
 .frame dd {
@@ -1155,9 +1217,9 @@ code {
   display: inline-block;
   max-width: 100%;
   margin: 0.15em 0;
-  padding: 0.1em 0.45em;
-  border: 1px solid var(--annotation-border);
-  border-radius: var(--radius);
+  padding: 0.05em 0.5em;
+  border-left: 2px solid var(--annotation-border);
+  border-radius: 0 3px 3px 0;
   background: var(--annotation-bg);
   color: var(--muted);
   font-size: var(--text-xs);
@@ -1170,6 +1232,20 @@ code {
 .axiom-annotation .axiom-annotation {
   margin: 0 0 0 0.2em;
   font-size: 1em; /* not smaller again */
+}
+
+/* Its property, first, is a label: not underlined, as a frame's labels aren't, until hovered. (A value that's a link is
+   first when the property isn't one; the template would mark the property, to tell them apart.) */
+.axiom-annotation > a:first-of-type,
+.axiom-annotation > mark:first-of-type > a {
+  color: inherit;
+  text-decoration-line: none;
+}
+
+.axiom-annotation > a:first-of-type:hover,
+.axiom-annotation > mark:first-of-type > a:hover {
+  color: var(--accent);
+  text-decoration-line: underline;
 }
 
 .axiom-annotation mark {
@@ -1402,7 +1478,7 @@ code {
   line-height: var(--tree-row);
   white-space: nowrap;
   text-overflow: ellipsis;
-  background: var(--bg);
+  background: var(--layer, var(--bg));
 }
 
 .tree-row[data-depth="0"] { --tree-slot: 0; }
@@ -1589,7 +1665,8 @@ code {
       & .panel h2 {
         position: sticky;
         top: 0;
-        background: var(--bg);
+        z-index: 1;
+        background: var(--layer, var(--bg));
       }
 
       /* The Usage tab's paging stays in view as its usages scroll beneath it. It's pulled up over the tab panel's
@@ -1781,7 +1858,7 @@ code {
     .search-results thead th {
       position: sticky;
       top: 0;
-      background: var(--bg);
+      background: var(--layer, var(--bg));
     }
 
     /* Stacked, full width; as blocks, since a column flexbox that wraps sizes the multi-column properties box too
