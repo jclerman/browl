@@ -110,8 +110,9 @@ a:focus-visible {
   text-decoration-line: none;
 }
 
-.site-nav a:hover,
-.site-nav a:focus-visible,
+/* Not the search box's suggestions, in the bar too: the selected one is highlighted, and its type isn't a link. */
+.site-nav a:not(.search-list a):hover,
+.site-nav a:not(.search-list a):focus-visible,
 .tree [role="treeitem"]:hover,
 .tree-paging a:hover,
 .frame dt a:hover,
