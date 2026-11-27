@@ -7,7 +7,6 @@ their section, as annotations are under theirs (P-47).
 """
 
 import functools
-from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from enum import StrEnum
 from typing import Annotated, TypeGuard
@@ -66,6 +65,17 @@ SECTION_LABELS = {
 }
 """Each section's label, as the page shows it."""
 
+KIND_LABELS = {
+    EntityKind.CLASS: "Class",
+    EntityKind.DATATYPE: "Datatype",
+    EntityKind.OBJECT_PROPERTY: "Object property",
+    EntityKind.DATA_PROPERTY: "Data property",
+    EntityKind.ANNOTATION_PROPERTY: "Annotation property",
+    EntityKind.NAMED_INDIVIDUAL: "Named individual",
+}
+"""Each kind's heading over a punned IRI's sections for it (`by_kind`), as the page header and the hierarchy column
+name the kind (`browl.derived.TYPE_LABELS`)."""
+
 _CLASS_ORDER = (
     Section.EQUIVALENT_TO,
     Section.SUB_CLASS_OF,
@@ -99,14 +109,6 @@ _SECTION_INDEX = {
 _BY_PROPERTY = frozenset({Section.OBJECT_ASSERTIONS, Section.DATA_ASSERTIONS})
 """The sections whose lines are under their property's name, each property a group of its own."""
 _KIND_INDEX = {kind: index for index, kind in enumerate(EntityKind)}
-_KIND_WORDS = {
-    EntityKind.CLASS: "class",
-    EntityKind.DATATYPE: "datatype",
-    EntityKind.OBJECT_PROPERTY: "object property",
-    EntityKind.DATA_PROPERTY: "data property",
-    EntityKind.ANNOTATION_PROPERTY: "annotation property",
-    EntityKind.NAMED_INDIVIDUAL: "individual",
-}
 
 Operand = Annotated[
     owl.ClassExpression
@@ -185,9 +187,8 @@ class AxiomGroup(BaseModel):
     Attributes:
         section: The section.
         kind: The kind of entity it's a section for; None for `Section.OTHER`. An IRI with several types (punning) has
-            sections for each.
-        label: The section's label, as the page shows it: its `SECTION_LABELS` label, with the kind added if another
-            of the entity's sections has that label too ("Equivalent To (object property)").
+            sections for each, which the page shows under a heading for each kind (`by_kind`).
+        label: The section's label, as the page shows it (`SECTION_LABELS`).
         lines: Its lines, in the order shown (`frame_groups`).
         property: For an individual's object or data property assertions, the property whose values its lines show,
             as a section has a group for each, by the property's name; else None.
@@ -200,6 +201,42 @@ class AxiomGroup(BaseModel):
     label: str
     lines: tuple[FrameLine, ...]
     property: Entity | None = None
+
+
+class KindGroups(BaseModel):
+    """A punned IRI's sections for one of its kinds, under the kind's heading; or sections under no heading.
+
+    Attributes:
+        kind: The kind; None for sections under no heading: all of an IRI's with one kind, or a punned IRI's Other
+            axioms, after its kinds'.
+        groups: The sections, in the order shown.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: EntityKind | None
+    groups: tuple[AxiomGroup, ...]
+
+    @property
+    def label(self) -> str | None:
+        """Return the kind's heading (`KIND_LABELS`), or None for sections under no heading."""
+        return None if self.kind is None else KIND_LABELS[self.kind]
+
+
+def by_kind(groups: Sequence[AxiomGroup]) -> list[KindGroups]:
+    """Return a frame's sections (`frame_groups`) under their kinds' headings, if they're for more than one kind.
+
+    A punned IRI's sections for each kind are under its heading, in `frame_groups`' order, so a reader can tell which
+    of its types a section is for; its Other axioms, which aren't for one kind, follow, under none.
+    """
+    kinds = list(dict.fromkeys(group.kind for group in groups if group.kind is not None))
+    if len(kinds) < 2:
+        return [KindGroups(kind=None, groups=tuple(groups))] if groups else []
+    return [
+        KindGroups(kind=kind, groups=tuple(group for group in groups if group.kind == kind))
+        for kind in [*kinds, None]
+        if any(group.kind == kind for group in groups)
+    ]
 
 
 def frame_groups(
@@ -237,14 +274,11 @@ def frame_groups(
         named = len(line.operands) == 1 and isinstance(line.operands[0], Entity)
         return not named, _shown_text(tokens, shown_name).casefold(), owl.manchester_text(tokens)
 
-    keys = sorted(sections, key=lambda key: _section_key(key, shown_name))
-    labels = [SECTION_LABELS[section] for _, section, _ in keys]
-    counts = Counter(SECTION_LABELS[section] for _, section in dict.fromkeys(key[:2] for key in keys))
     return [
         AxiomGroup(
             section=section,
             kind=kind,
-            label=label if counts[label] == 1 or kind is None else f"{label} ({_KIND_WORDS[kind]})",
+            label=SECTION_LABELS[section],
             lines=tuple(
                 sorted(
                     (
@@ -256,7 +290,7 @@ def frame_groups(
             ),
             property=by,
         )
-        for (kind, section, by), label in zip(keys, labels, strict=True)
+        for kind, section, by in sorted(sections, key=lambda key: _section_key(key, shown_name))
     ]
 
 

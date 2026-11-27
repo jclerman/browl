@@ -26,7 +26,7 @@ from browl.annotations import (
 )
 from browl.axioms import LeftOut, TooManyAxiomsError, entity_axioms, fetch_fragment
 from browl.derived import EntityType
-from browl.frames import AxiomGroup, frame_groups
+from browl.frames import AxiomGroup, KindGroups, by_kind, frame_groups
 from browl.fuseki import SparqlError
 from browl.jobs import JobState
 from browl.links import EntityLink, read_entity_links
@@ -85,6 +85,10 @@ class AxiomsPanel(BaseModel):
     too_many: bool = False
     more_equivalents: bool = False
     annotations_left_out: LeftOut | None = None
+
+    def by_kind(self) -> list[KindGroups]:
+        """Return the sections under their kinds' headings, if a punned IRI has sections for several (`by_kind`)."""
+        return by_kind(self.groups or [])
 
 
 class Overview(BaseModel):

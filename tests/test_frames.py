@@ -4,7 +4,7 @@ import pytest
 from pydantic import TypeAdapter
 
 from browl import owl
-from browl.frames import AxiomGroup, FrameLine, Section, frame_groups
+from browl.frames import AxiomGroup, FrameLine, Section, by_kind, frame_groups
 from browl.owl import Entity, EntityKind
 
 NS = "http://example.org/onto#"
@@ -151,8 +151,13 @@ def test_data_and_annotation_properties() -> None:
     ]
 
 
+def headed(groups: list[AxiomGroup]) -> list[tuple[str | None, list[str]]]:
+    """Return sections under their kinds' headings (`by_kind`), as each heading and its sections' labels."""
+    return [(block.label, [group.label for group in block.groups]) for block in by_kind(groups)]
+
+
 def test_punned_labels() -> None:
-    """Check that sections of a punned IRI whose labels clash name their kind, and the others don't."""
+    """Check that a punned IRI's sections are under a heading for each kind, in order, their labels without it."""
     p = entity("p", EntityKind.OBJECT_PROPERTY)
     d = entity("p", EntityKind.DATA_PROPERTY)
     axioms = [
@@ -162,11 +167,10 @@ def test_punned_labels() -> None:
         owl.SubClassOf(sub=entity("p"), super=ORGAN),
     ]
     groups = frame_groups(axioms, p.iri, [], shown_name)
-    assert [group.label for group in groups] == [
-        "SubClass Of",
-        "Equivalent To (object property)",
-        "Domains",
-        "Equivalent To (data property)",
+    assert headed(groups) == [
+        ("Class", ["SubClass Of"]),
+        ("Object property", ["Equivalent To", "Domains"]),
+        ("Data property", ["Equivalent To"]),
     ]
 
 
@@ -180,11 +184,8 @@ def test_punned_equivalents() -> None:
         ),
     ]
     groups = frame_groups(axioms, p.iri, [q.iri], shown_name)  # q is also an equivalent class, by the group
-    assert text(groups) == [
-        ("Equivalent To (class)", [iri("q")]),
-        ("Equivalent To (object property)", [iri("q")]),
-        ("Equivalent To (data property)", [iri("q")]),
-    ]
+    assert text(groups) == [("Equivalent To", [iri("q")])] * 3
+    assert headed(groups) == [(heading, ["Equivalent To"]) for heading in ("Class", "Object property", "Data property")]
     assert groups[0].lines[0].axiom is None
 
 
@@ -283,15 +284,43 @@ def test_edge_cases(axiom: owl.AnyAxiom, page: Entity, expected: list[tuple[str,
 
 
 def test_class_and_property_labels() -> None:
-    """Check that a punned class's and property's clashing labels name their kind."""
+    """Check that a punned class's and object property's sections are under a heading for each."""
     axioms = [
         owl.DisjointClasses(members=(entity("p"), HEART)),
         owl.DisjointObjectProperties(members=(P, Q)),
     ]
-    assert [group.label for group in frame_groups(axioms, P.iri, [], shown_name)] == [
-        "Disjoint With (class)",
-        "Disjoint With (object property)",
+    assert headed(frame_groups(axioms, P.iri, [], shown_name)) == [
+        ("Class", ["Disjoint With"]),
+        ("Object property", ["Disjoint With"]),
     ]
+
+
+def test_object_and_annotation_property() -> None:
+    """Check that an object and annotation property's sections are under a heading for each, its other axioms after.
+
+    An inverse property's domain is shown whole, under Other axioms, which no heading is over.
+    """
+    note = entity("p", EntityKind.ANNOTATION_PROPERTY)
+    axioms = [
+        owl.AnnotationPropertyRange(property=note, range=owl.IRIReference(iri=f"{NS}Range")),
+        owl.ObjectPropertyDomain(property=owl.ObjectInverseOf(property=P), domain=HEART),
+        owl.SubObjectPropertyOf(sub=P, super=Q),
+    ]
+    assert headed(frame_groups(axioms, P.iri, [], shown_name)) == [
+        ("Object property", ["SubProperty Of"]),
+        ("Annotation property", ["Ranges"]),
+        (None, ["Other axioms"]),
+    ]
+
+
+def test_one_kind_unheaded() -> None:
+    """Check that an entity with one kind's sections, its Other axioms besides, has them all under no heading."""
+    axioms = [
+        owl.ObjectPropertyDomain(property=owl.ObjectInverseOf(property=P), domain=HEART),
+        owl.SubObjectPropertyOf(sub=P, super=Q),
+    ]
+    assert headed(frame_groups(axioms, P.iri, [], shown_name)) == [(None, ["SubProperty Of", "Other axioms"])]
+    assert by_kind([]) == []
 
 
 A, Z = entity("A", EntityKind.NAMED_INDIVIDUAL), entity("Z", EntityKind.NAMED_INDIVIDUAL)
@@ -359,3 +388,8 @@ def test_individual_frame() -> None:
     assert [group.property for group in groups[4:8]] == [knows, likes, zip_code, age]
     assert groups[0].kind == EntityKind.CLASS
     assert {group.kind for group in groups[1:-1]} == {EntityKind.NAMED_INDIVIDUAL}
+    assert [(heading, labels[:1]) for heading, labels in headed(groups)] == [
+        ("Class", ["SubClass Of"]),
+        ("Named individual", ["Types"]),
+        (None, ["Other axioms"]),
+    ]

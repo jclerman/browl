@@ -1464,8 +1464,13 @@ is (below). Uberon's 67 individuals' pages take 14 ms at p50 and 58 ms at p95, t
   - **Order:** a class's sections in the order above, then each property type's, then Other axioms. Within a section,
     lines that show one named entity come first, stated and implied alike, by the name the page shows for it,
     case-insensitively. Then come the others, by their text with the names the page shows, then by IRI.
-  - **Punning:** an IRI with several types has each type's sections; where two of them share a label, both add their
-    type ("Equivalent To (object property)").
+  - **Punning:** an IRI with sections for several types has each type's under a heading naming the type, as the
+    header and the hierarchy column name it ("Class", "Named individual"; `browl.frames.by_kind`), in the order above,
+    which is the column's; so "SubClass Of Animal" and "Types Animal" on `Dog`'s page are told apart. The headings are
+    `<h3>`s, each type's sections a `role="group"` labelled by its heading, so screen readers see the grouping too. A
+    section keeps its own label, which the heading makes unambiguous where two types share it (Equivalent To). Other
+    axioms, which are no one type's, come after the groups, under no heading. An IRI with one type's sections, Other
+    axioms besides or not, has no headings. _(P-47)_
   - **Symmetric axioms:** one stated on another entity shows the page's entity first. A section shows only the
     other members (`B` under Disjoint With on A's page); an axiom shown whole, such as an individual's `SameAs` under
     Other axioms, is written with the entity first (`browl.owl.Axiom.with_first`), as on the Usage tab. _(P-27b)_

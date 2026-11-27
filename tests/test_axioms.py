@@ -920,8 +920,16 @@ def test_individual_page(data_dir: Path, fuseki_url: str, dataset: str, monkeypa
     carol = frame("carol")
     assert f'<dt>Same As</dt><dd dir="ltr">{link("dave")}</dd>' in carol
     assert f'{by(link("knows"))}{value}{link("dave")} <span class="axiom-annotations">' in carol
-    # Dog is a class and an individual: its class assertion is in its own section, after the class's.
-    dog = frame("Dog")
-    assert dog.index("<dt>SubClass Of</dt>") < dog.index("<dt>General class axioms</dt>") < dog.index("<dt>Types</dt>")
-    assert f'<dt>Types</dt><dd dir="ltr">{link("Animal")}</dd>' in dog
+    # Dog is a class and an individual: its sections are under a heading for each, the class's first, as in the header.
+    dog = re.sub(r">\s*\n\s*<", "><", pages["Dog"])
+    kind = '<div class="frame-kind" role="group" aria-labelledby="axioms-{0}"><h3 id="axioms-{0}">{1}</h3>'.format
+    class_start = dog.index(kind("class", "Class"))
+    individual_start = dog.index(kind("namedindividual", "Named individual"))
+    assert class_start < individual_start
+    as_class, as_individual = dog[class_start:individual_start], dog[individual_start:]
+    assert re.findall(r"<dt>([^<]*)</dt>", as_class) == ["SubClass Of", "Disjoint With", "General class axioms"]
+    assert re.findall(r"<dt>([^<]*)</dt>", as_individual) == ["Types"]
+    assert f'<dt>Types</dt><dd dir="ltr">{link("Animal")}</dd></dl></div>' in as_individual
+    # An individual alone has no heading over its sections.
+    assert all("frame-kind" not in pages[name] for name in ("alice", "bob", "carol"))
     assert "Other axioms" not in "".join(pages.values())

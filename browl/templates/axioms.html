@@ -20,8 +20,9 @@
 {# An entity's logical axioms (`browl.overview.AxiomsPanel`), from `links`, as a frame in a two-column grid (U-32):
    each section's label once, then one line per axiom, with its annotations; an equivalent only its equivalence group
    implies is marked. An individual's property assertions are under their section's label, across both columns, then
-   each property's name, as an annotation's is (`browl.frames.AxiomGroup.property`). The entity, `iri`, is highlighted
-   where a line shows it. #}
+   each property's name, as an annotation's is (`browl.frames.AxiomGroup.property`). A punned IRI's sections are under
+   a heading for each of its kinds, its Other axioms after them (`browl.frames.by_kind`). The entity, `iri`, is
+   highlighted where a line shows it. #}
 {% macro axiom_frame(panel, links, iri) -%}
 <section class="axioms panel" tabindex="0" aria-labelledby="axioms-heading">
   <h2 id="axioms-heading">Logical axioms</h2>
@@ -32,8 +33,19 @@
   {% elif not panel.groups %}
   <p class="note">None.</p>
   {% else %}
+  {% set blocks = panel.by_kind() %}
+  {% set headed = blocks[0].label is not none %}
+  {% if headed %}
+  <div class="frame-kinds">
+  {% endif %}
+  {% for block in blocks %}
+  {% if block.label is not none %}
+  {% set heading_id = "axioms-" ~ block.kind | lower %}
+  <div class="frame-kind" role="group" aria-labelledby="{{ heading_id }}">
+  <h3 id="{{ heading_id }}">{{ block.label }}</h3>
+  {% endif %}
   <dl class="frame">
-    {% for group in panel.groups %}
+    {% for group in block.groups %}
     {% if group.property is none %}
     <dt>{{ group.label }}</dt>
     {% else %}
@@ -51,6 +63,13 @@
     {% endfor %}
     {% endfor %}
   </dl>
+  {% if block.label is not none %}
+  </div>
+  {% endif %}
+  {% endfor %}
+  {% if headed %}
+  </div>
+  {% endif %}
   {% if panel.annotations_left_out == "too_many" %}
   <p class="note">These axioms' annotations are too many to show here.</p>
   {% elif panel.annotations_left_out == "failed" %}
