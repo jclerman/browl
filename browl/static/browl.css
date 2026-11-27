@@ -6,7 +6,7 @@
 :root {
   color-scheme: light dark;
   --bg: #f6f5f1; /* the page, under the cards: --muted 5.3:1, --accent 5.2:1 */
-  --surface: #fff; /* a card's (#179) */
+  --surface: #fff; /* a card's */
   --card-shadow: 0 0 0 1px rgb(0 0 0 / 4%), 0 1px 3px rgb(0 0 0 / 6%);
   --fg: #2b2b2b;
   --muted: #666660;
@@ -1040,7 +1040,7 @@ code {
   container: panel / inline-size;
 }
 
-/* Cards (#179): what's read sits on a surface a little lighter than the page, without a border: the panels, the
+/* Cards: what's read sits on a surface a little lighter than the page, without a border: the panels, the
    hierarchy column, a tree page's tree, the Usage tab's usages, the search filters and results, and the upload form.
    `--layer` is a card's surface, which what sticks within it takes, to cover what scrolls beneath. */
 :is(.panel, .hierarchy-column, .tree-page > .tree, .usage-frame, .search-filters > fieldset, .results-body,
@@ -1123,7 +1123,7 @@ code {
   overflow-wrap: anywhere;
 }
 
-/* A label that links to its property's page looks like one that doesn't, the axioms' (#179), until hovered. */
+/* A label that links to its property's page looks like one that doesn't, the axioms', until hovered. */
 .frame dt a {
   color: inherit;
 }
@@ -1213,7 +1213,7 @@ code {
   margin: 0.15em 0;
   padding: 0.05em 0.5em;
   border-left: 2px solid var(--annotation-border);
-  border-radius: 0 3px 3px 0;
+  border-radius: 0 calc(var(--radius) / 2) calc(var(--radius) / 2) 0; /* round where it has no rule */
   background: var(--annotation-bg);
   color: var(--muted);
   font-size: var(--text-xs);
@@ -1773,7 +1773,7 @@ code {
   max-width: 60rem;
 }
 
-/* The filters' groups, cards (#179), side by side as they fit, the flexbox's gap between them; before the layout
+/* The filters' groups, cards, side by side as they fit, the flexbox's gap between them; before the layout
    beside the results, below, which makes them blocks. */
 .search-filters {
   display: flex;

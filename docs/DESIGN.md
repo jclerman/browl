@@ -1487,7 +1487,7 @@ is (below). Uberon's 67 individuals' pages take 14 ms at p50 and 58 ms at p95, t
     implied equivalent, and the operands it shows, so the JSON API (U-42) returns the frame as the page shows it.
 - **Axiom annotations** _(P-49; U-35)_: an annotation value or a logical axiom shows its axiom's annotations after it,
   on its line: a box per property, `property: value, value`, small and muted, tinted teal, with no border but a 2px
-  teal rule on its left (`--annotation-bg`, `--annotation-border`; #179): `A hollow, muscular organ … ⟨database cross
+  teal rule on its left (`--annotation-bg`, `--annotation-border`): `A hollow, muscular organ … ⟨database cross
   reference: PMID:1234, ZFA:0000114⟩ ⟨has synonym type: plural form⟩`. The property is a label, as a frame's are: muted
   and not underlined, in the accent and underlined on hover; the template marks it (`annotation-property`), so a value
   that's a link keeps its underline. Properties and values are sorted as the annotations panel's are, with
@@ -1540,7 +1540,7 @@ is (below). Uberon's 67 individuals' pages take 14 ms at p50 and 58 ms at p95, t
   little more between groups. Multi-column values for long lists are Later (U-33). Each panel is a `<dl class="frame">`,
   one `<dt>` per group and one `<dd>` per value; in a narrow panel the values go below their label. The label
   column fits its labels up to 12rem, so a long one, such as an IRI, wraps rather than squeezing the values. Labels
-  look the same in every panel: muted plain text, a link showing as one only on hover or focus (#179). _(P-16a)_
+  look the same in every panel: muted plain text, a link showing as one only on hover or focus. _(P-16a)_
   A panel (and the Usage tab) stacks its frame below 30rem of its own width, by a CSS container query, so a panel
   narrowed by the hierarchy column or the panel beside it stacks even in a wide window. Stacked, each level is
   indented `--frame-step` (0.75rem) under the one above: a value under its label, an individual's property under its
@@ -2075,7 +2075,7 @@ too (P-38), and the JSON API's (P-33).
   and their paging links are underlined on hover only, since keyboard focus there shows an outline instead. The search
   box's suggestions get none even on hover: the selected one is highlighted already, and its type isn't a link of its
   own.
-- **Cards** (#179): structure comes from surfaces, type and spacing rather than nested borders. What's read sits on a
+- **Cards**: structure comes from surfaces, type and spacing rather than nested borders. What's read sits on a
   card, a surface a little lighter than the page, with a faint shadow (`--card-shadow`) and no border, radius
   `--radius-lg`: the Overview's panels, the hierarchy column, a tree page's tree, the Usage tab's usages (its pager
   stays above, on the page), the search filters' groups and the results, and the upload form's fields. The page is
