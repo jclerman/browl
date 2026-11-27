@@ -23,6 +23,7 @@
   --font-text: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --space: 1rem;
+  --frame-step: 0.75rem; /* a level's indent in a stacked frame (DESIGN.md §2.8) */
   --measure: 75ch;
   --title-size: 1.75rem;
   --title-leading: 1.25;
@@ -950,9 +951,12 @@ code {
 
 /* The Overview tab's panels (U-30, U-32). A frame is a two-column grid: each label once, in the first column, and one
    line per value in the second, wrapped lines indented; lines tight within a group, a little apart between groups.
-   Prose, such as a definition, wraps within the readable measure. On a phone the values go below their label. */
+   Prose, such as a definition, wraps within the readable measure. In a narrow panel the values go below their label.
+   A panel is a container, so its frame stacks by the panel's own width, not the window's: side by side, or beside the
+   hierarchy column, a panel in a wide window can be narrow too. */
 
 .panel {
+  container: panel / inline-size;
   padding: 0 var(--space) calc(var(--space) / 2);
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -974,7 +978,7 @@ code {
 }
 
 /* The label column fits its labels up to 20rem, so a long unbroken one, such as an IRI, wraps rather than squeezing
-   the values. */
+   the values. The stacked layout, for a narrow panel, follows the Usage tab's rules, as it changes them too. */
 .frame {
   display: grid;
   grid-template-columns: fit-content(20rem) minmax(0, 1fr);
@@ -1042,33 +1046,6 @@ code {
 .frame-kind + .frame-kind,
 .frame-kind + .frame {
   margin-top: var(--space);
-}
-
-@media (max-width: 40rem) {
-  .frame,
-  .frame-kinds {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .frame dt,
-  .frame dd {
-    grid-column: 1;
-  }
-
-  .frame dt:not(:first-child) + dd {
-    margin-top: 0;
-  }
-
-  /* Each value a step under its label, so they're told apart: an annotation's under its property, a logical axiom's
-     under its section's label, and an individual's assertion under its property's name, itself a step under its
-     section's label (DESIGN.md §2.8). The Usage tab's lines have their own narrow layout. */
-  .frame:not(.usage-frame) dd {
-    margin-left: var(--space);
-  }
-
-  .axioms .frame dd.frame-value {
-    margin-left: calc(var(--space) * 2);
-  }
 }
 
 .lang,
@@ -1171,7 +1148,51 @@ code {
   }
 }
 
-@media (max-width: 40rem) {
+.usage {
+  container: panel / inline-size;
+}
+
+/* A frame in a panel narrower than 36rem stacks. Two columns then leave a value at least 15rem beside a label column
+   of up to 20rem; narrower, values beside a long label wrap mid-IRI. A panel the page's full width stacks just where
+   a phone's window (under 40rem) did. */
+@container panel (width < 36rem) {
+  .frame,
+  .frame-kinds {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .frame dt,
+  .frame dd {
+    grid-column: 1;
+  }
+
+  .frame dt:not(:first-child) + dd {
+    margin-top: 0;
+  }
+
+  /* Each level a small step under the one above, so a value isn't taken for a label: a punned IRI's sections under
+     their type's heading, a value under its label, an individual's assertions under their property's name, itself
+     under its section's label, and a usage under its subject (DESIGN.md §2.8). */
+  .frame-kind {
+    --frame-under: var(--frame-step);
+  }
+
+  .frame dt {
+    margin-left: var(--frame-under, 0px);
+  }
+
+  .frame dt.frame-property {
+    padding-left: var(--frame-step);
+  }
+
+  .frame dd {
+    margin-left: calc(var(--frame-under, 0px) + var(--frame-step));
+  }
+
+  .frame dd.frame-value {
+    margin-left: calc(var(--frame-under, 0px) + 2 * var(--frame-step));
+  }
+
   .frame.usage-frame {
     grid-template-columns: fit-content(40%) minmax(0, 1fr);
   }

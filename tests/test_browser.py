@@ -1272,14 +1272,30 @@ def test_annotations_grid_wide(page: Page, annotated: LiveServer) -> None:
     assert tag.evaluate("each => getComputedStyle(each).color") == muted
 
 
+def frame_step(page: Page) -> float:
+    """Return a level's indent in a stacked frame (`--frame-step`), in pixels: more than nothing, less than a rem."""
+    step: float = page.evaluate(
+        """() => {
+            const probe = document.createElement("div");
+            probe.style.width = "var(--frame-step)";
+            document.body.append(probe);
+            const width = probe.getBoundingClientRect().width;
+            probe.remove();
+            return width;
+        }"""
+    )
+    char = page.evaluate("parseFloat(getComputedStyle(document.documentElement).fontSize)")
+    assert 4 < step < char
+    return step
+
+
 def test_annotations_grid_narrow(page: Page, annotated: LiveServer) -> None:
     """Check that on a phone each group's values go below its label, a step in, and nothing scrolls sideways."""
     page.set_viewport_size(NARROW)
     page.goto(f"{annotated.url}/example.org/thing")
     term, value = box(page.locator(".annotations dt").first), box(page.locator(".annotations dd").first)
     assert value["y"] >= term["y"] + term["height"]
-    char = page.evaluate("parseFloat(getComputedStyle(document.body).fontSize)")
-    assert value["x"] - term["x"] == pytest.approx(char, abs=1)  # a step (--space, 1rem) in
+    assert value["x"] - term["x"] == pytest.approx(frame_step(page), abs=1)
     assert_fits(page)
 
 
@@ -1369,32 +1385,66 @@ def framed(server: LiveServer, monkeypatch: pytest.MonkeyPatch) -> LiveServer:
     return server
 
 
-def test_axioms_indented_narrow(page: Page, framed: LiveServer) -> None:
-    """Check that on a phone the logical axioms' values are a step under their label, a property's a step further.
+def assert_axioms_indented(page: Page) -> None:
+    """Check that the `framed` logical axioms are stacked, each level a step under the one above.
 
-    The headings for a punned IRI's types aren't indented, and a wrapped line keeps its hanging indent.
+    A punned IRI's type headings at the panel's edge; their sections' labels a step in, the property assertions'
+    heading too; a section's values, and the property's name, two steps in; the property's values three. A wrapped line
+    keeps its hanging indent.
     """
-    page.set_viewport_size(NARROW)
-    page.goto(f"{framed.url}/example.org/thing")
     panel = page.locator("section.axioms")
-    left = box(panel.locator(".frame dt").first)["x"]
-    assert abs(box(panel.locator(".frame-kind h3").first)["x"] - left) < 1
+    step = frame_step(page)
+    left = box(panel.locator(".frame-kind h3").first)["x"]
+    assert abs(box(panel.locator("h2"))["x"] - left) < 1
+    label = box(panel.locator(".frame dt").first)
     value = box(panel.locator(".frame dd").first)
-    step = value["x"] - left
-    assert step > 4
-    assert value["y"] >= box(panel.locator(".frame dt").first)["y"]
+    assert value["y"] >= label["y"] + label["height"]  # below its label
+    assert label["x"] - left == pytest.approx(step, abs=1)
+    assert value["x"] - left == pytest.approx(2 * step, abs=1)
     lines = panel.locator(".frame dd").first.evaluate(
         "(each) => { const range = document.createRange(); range.selectNodeContents(each);"
         " return [...range.getClientRects()].map((rect) => rect.x); }"
     )
     assert min(lines) == pytest.approx(value["x"], abs=1)  # the first line starts at the value's edge
     assert max(lines) > value["x"] + 4  # and the rest hang
-    assert abs(box(panel.locator("dt:not(.frame-heading):not(.frame-property)").nth(1))["x"] - left) < 1  # Types
-    named = box(panel.locator("dt.frame-property code"))
-    assert named["x"] - left == pytest.approx(step, abs=1)
-    assert box(panel.locator("dd.frame-value"))["x"] - left == pytest.approx(2 * step, abs=1)
+    types = panel.locator("dt:not(.frame-heading):not(.frame-property)").nth(1)
+    expect(types).to_have_text("Types")
+    assert box(types)["x"] - left == pytest.approx(step, abs=1)
+    assert box(panel.locator("dt.frame-heading"))["x"] - left == pytest.approx(step, abs=1)
+    assert box(panel.locator("dt.frame-property code"))["x"] - left == pytest.approx(2 * step, abs=1)
+    assert box(panel.locator("dd.frame-value"))["x"] - left == pytest.approx(3 * step, abs=1)
+
+
+def test_axioms_indented_narrow(page: Page, framed: LiveServer) -> None:
+    """Check that on a phone the logical axioms stack, each level indented; wide, the values line up in a column."""
+    page.set_viewport_size(NARROW)
+    page.goto(f"{framed.url}/example.org/thing")
+    assert_axioms_indented(page)
+    assert_fits(page)
     page.set_viewport_size(WIDE)
+    one_page_toggle(page).check()
+    panel = page.locator("section.axioms")
     assert box(panel.locator(".frame dd").first)["x"] == pytest.approx(box(panel.locator("dd.frame-value"))["x"])
+
+
+def test_frame_stacks_by_panel_width(page: Page, framed: LiveServer) -> None:
+    """Check that a frame stacks when its panel is narrow, though the window is wide, and not when the panel is wide.
+
+    At 1100px, the panels side by side beside the hierarchy column are each under 36rem; at 1800px, over it.
+    """
+    page.set_viewport_size({"width": 1100, "height": 800})
+    page.goto(f"{framed.url}/example.org/thing")
+    panel = page.locator("section.axioms")
+    char = page.evaluate("parseFloat(getComputedStyle(document.documentElement).fontSize)")
+    annotations, axioms = panels(page)
+    assert annotations["x"] + annotations["width"] < axioms["x"]  # side by side, in a wide window
+    assert panel.evaluate("(each) => each.clientWidth") < 36 * char
+    assert_axioms_indented(page)
+    page.set_viewport_size({"width": 1800, "height": 800})
+    assert panel.evaluate("(each) => each.clientWidth") >= 36 * char
+    label, value = box(panel.locator(".frame dt").first), box(panel.locator(".frame dd").first)
+    assert abs(label["y"] - value["y"]) < 2  # beside its label
+    assert value["x"] > label["x"] + label["width"]
 
 
 # The window-filling frame (P-16d, DESIGN.md §2.9, U-30, U-44)
@@ -1915,10 +1965,14 @@ def test_usage_tab_look(page: Page, paged: LiveServer) -> None:
 
 
 def test_usage_tab_narrow(page: Page, paged: LiveServer) -> None:
-    """Check that on a phone the Usage tab doesn't make the page scroll sideways."""
+    """Check that on a phone the Usage tab's lines are a step under their subject, and nothing scrolls sideways."""
     page.set_viewport_size(NARROW)
     page.goto(f"{paged.url}{THING}?tab=usage&page=2")
-    expect(page.locator(".usage-frame dt").first).to_be_visible()
+    subject = page.locator(".usage-frame dt").first
+    expect(subject).to_be_visible()
+    line = box(page.locator(".usage-frame dt + dd").first)
+    assert line["y"] >= box(subject)["y"] + box(subject)["height"]
+    assert line["x"] - box(subject)["x"] == pytest.approx(frame_step(page), abs=1)
     assert_fits(page)
 
 
