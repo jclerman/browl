@@ -1,6 +1,6 @@
 # Deploying on Kubernetes
 
-For operators deploying browl on Kubernetes, or on any platform other than Docker Compose. Read
+For operators deploying browl on Kubernetes, or on another container orchestrator. Read
 [Operating browl](operator.md) first: its settings, reverse proxy advice and troubleshooting apply here too.
 
 **Contents:**
