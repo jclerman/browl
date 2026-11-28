@@ -13,6 +13,7 @@ import urllib.parse
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 import rdflib
@@ -794,29 +795,31 @@ def test_narrow_bar_one_row(page: Page, server: LiveServer) -> None:
     assert abs(panel["x"] + panel["width"] - box(button)["x"] - box(button)["width"]) < 2
 
 
-def link_colors(page: Page, link: Locator) -> tuple[str, str, str]:
-    """Return a link's color as shown, hovered, and focused from the keyboard."""
-    color = "(each) => getComputedStyle(each).color"
+def link_states(page: Page, link: Locator, script: str) -> list[Any]:
+    """Return a script's result for a link as shown, hovered, and focused from the keyboard."""
     page.mouse.move(0, 0)
-    shown = link.evaluate(color)
+    shown = link.evaluate(script)
     link.hover()
-    hovered = link.evaluate(color)
+    hovered = link.evaluate(script)
     page.mouse.move(0, 0)
     page.keyboard.press("Shift")  # a key, so the focus that follows shows as from the keyboard
     link.focus()
     assert link.evaluate("(each) => each.matches(':focus-visible')")
-    focused = link.evaluate(color)
-    link.blur()
-    return shown, hovered, focused
+    focused = link.evaluate(script)
+    return [shown, hovered, focused]
+
+
+COLOR_AND_LINE = "(each) => [getComputedStyle(each).color, getComputedStyle(each).textDecorationLine]"
+"""JS returning an element's color and `text-decoration-line`."""
 
 
 @pytest.mark.parametrize("scheme", ["light", "dark"])
 @pytest.mark.parametrize("size", [WIDE, NARROW], ids=["wide", "narrow"])
 def test_bar_links_look(page: Page, trees: LiveServer, scheme: str, size: dict[str, int]) -> None:
-    """Check the bar's tree links, in the bar or the narrow menu's panel, and "Advanced search" (#181).
+    """Check the bar's tree links and Admin, in the bar or the narrow menu's panel, and "Advanced search" (#181).
 
-    The tree links are in the text's color, the accent on hover and focus; the tree page shown is bold, with the
-    accent's underline. "Advanced search" is small and muted.
+    The tree links and Admin are in the text's color, the accent and underlined on hover and focus; the tree page shown
+    is bold, with the accent's underline. "Advanced search" is small and muted.
     """
     page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
     page.set_viewport_size(size)
@@ -826,8 +829,10 @@ def test_bar_links_look(page: Page, trees: LiveServer, scheme: str, size: dict[s
         nav.locator(".site-menu summary").click()
     fg, accent, muted = (token_color(page, each) for each in ("fg", "accent", "muted"))
     current, other = nav.get_by_role("link", name="Classes"), nav.get_by_role("link", name="Object properties")
-    assert link_colors(page, other) == (fg, accent, accent)
-    assert link_colors(page, current) == (fg, accent, accent)
+    hovered_or_focused = [accent, "underline"]
+    for each in (other, nav.get_by_role("link", name="Admin")):
+        assert link_states(page, each, COLOR_AND_LINE) == [[fg, "none"], hovered_or_focused, hovered_or_focused]
+    assert link_states(page, current, COLOR_AND_LINE) == [[fg, "underline"], hovered_or_focused, hovered_or_focused]
     style = """(each) => { const style = getComputedStyle(each);
         return [style.fontWeight, style.textDecorationLine, style.textDecorationColor]; }"""
     page.mouse.move(0, 0)
@@ -1451,13 +1456,7 @@ def test_annotation_property_quiet(
             fg,
         ]
     property_ = linked_box.locator(".annotation-property a")
-    assert property_.evaluate(style) == ["none", fg]
-    property_.hover()
-    assert property_.evaluate(style) == ["underline", accent]
-    page.mouse.move(0, 0)
-    page.keyboard.press("Shift")  # a key, so the focus that follows shows as from the keyboard
-    property_.focus()
-    assert property_.evaluate(style) == ["underline", accent]
+    assert link_states(page, property_, style) == [["none", fg], ["underline", accent], ["underline", accent]]
 
 
 @pytest.mark.parametrize("scheme", ["light", "dark"])
@@ -4625,23 +4624,11 @@ def underlines(page: Page, link: Locator) -> tuple[str, ...]:
 
     For an underlined link, check too that its underline is faint until hovered or focused.
     """
-    style = "(each) => [getComputedStyle(each).textDecorationLine, getComputedStyle(each).textDecorationColor]"
-    color = link.evaluate("(each) => getComputedStyle(each).color")
-    lines, colors = [], []
-    page.mouse.move(0, 0)
-    for state in ("shown", "hovered", "focused"):
-        if state == "hovered":
-            link.hover()
-        elif state == "focused":
-            page.mouse.move(0, 0)
-            page.keyboard.press("Shift")  # a key, so the focus that follows shows as from the keyboard
-            link.focus()
-            assert link.evaluate("(each) => each.matches(':focus-visible')")
-        line, decoration = link.evaluate(style)
-        lines.append(line)
-        colors.append(decoration == color)
+    style = """(each) => { const style = getComputedStyle(each);
+        return [style.textDecorationLine, style.textDecorationColor === style.color]; }"""
+    lines, full = zip(*link_states(page, link, style), strict=True)
     if lines[0] == "underline":
-        assert colors == [False, True, True]  # faint, then at full strength
+        assert full == (False, True, True)  # faint, then at full strength
     return tuple(lines)
 
 
