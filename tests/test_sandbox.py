@@ -22,7 +22,7 @@ from browl.process import run_process
 from browl.robot import reasoning_stage
 from browl.settings import Settings
 from tests.conftest import find_robot_jar
-from tests.helpers import StaticServer, make_settings, running_in_group, serve_runs, wait_for
+from tests.helpers import StaticServer, left_in_group, make_settings, serve_runs, wait_for
 from tests.test_robot import job
 
 pytestmark = pytest.mark.anyio
@@ -36,15 +36,6 @@ async def sandboxed(socket: Path, script: str, **kwargs: object) -> tuple[browl.
     lines: list[str] = []
     completed = await run_process(["sh", "-c", script], lines.append, sandbox=socket, **{"timeout_s": 10, **kwargs})
     return completed, lines
-
-
-async def gone(pgid: int) -> bool:
-    """Return whether a process group stops within a few seconds."""
-    for _ in range(100):
-        if not running_in_group(pgid):
-            return True
-        await asyncio.sleep(0.05)
-    return False
 
 
 async def test_output_and_status(short_dir: Path) -> None:
@@ -76,7 +67,7 @@ async def test_time_limit_stops_group(short_dir: Path, monkeypatch: pytest.Monke
                 break
     assert completed.timed_out
     assert completed.status is not None
-    assert running_in_group(int(pid.read_text())) == []
+    assert await left_in_group(int(pid.read_text())) == []
 
 
 async def test_ended_run_stops_group(short_dir: Path) -> None:
@@ -84,7 +75,7 @@ async def test_ended_run_stops_group(short_dir: Path) -> None:
     async with serve_runs(short_dir) as socket:
         completed, lines = await sandboxed(socket, "sleep 60 >/dev/null 2>&1 & echo $$")
     assert completed.ok
-    assert running_in_group(int(lines[0])) == []
+    assert await left_in_group(int(lines[0])) == []
 
 
 async def test_hangup_stops_group(short_dir: Path) -> None:
@@ -96,7 +87,7 @@ async def test_hangup_stops_group(short_dir: Path) -> None:
         writer.write(json.dumps(request).encode() + b"\n")
         pgid = await wait_for(pid)
         writer.close()
-        assert await gone(pgid)
+        assert await left_in_group(pgid) == []
 
 
 async def test_unavailable(short_dir: Path) -> None:
@@ -275,7 +266,7 @@ async def test_runner_shutdown(runner_process: tuple[subprocess.Popen[bytes], Pa
     assert await asyncio.to_thread(process.wait, browl.process.TERM_GRACE_S / 2) == 0  # it didn't wait for SIGTERM
     with pytest.raises(StageError, match=r"^the tool sandbox closed the connection while process ran$"):
         await task
-    assert await gone(pgid)
+    assert await left_in_group(pgid) == []
 
 
 async def test_robot_in_sandbox(

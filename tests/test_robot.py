@@ -33,7 +33,7 @@ from browl.robot import (
 )
 from browl.settings import Settings
 from tests.conftest import DATA, find_robot_jar
-from tests.helpers import StaticServer, make_app, make_settings, running_in_group, serve_runs, wait_for
+from tests.helpers import StaticServer, left_in_group, make_app, make_settings, serve_runs, wait_for
 
 pytestmark = pytest.mark.anyio
 
@@ -284,7 +284,7 @@ async def test_stops_group_on_cancel(
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert running_in_group(int(pid_file.read_text())) == []
+    assert await left_in_group(int(pid_file.read_text())) == []
 
 
 async def test_stops_group_on_second_cancel(
@@ -301,7 +301,7 @@ async def test_stops_group_on_second_cancel(
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert running_in_group(int(pid_file.read_text())) == []
+    assert await left_in_group(int(pid_file.read_text())) == []
 
 
 async def test_failed_run_leaves_no_output(
@@ -329,7 +329,7 @@ async def test_time_limit_stops_group(
     context = job(settings, Reasoner.ELK, upload(data_dir, "ok.ofn"))
     with pytest.raises(StageError, match=r"^time limit: "):
         await reasoning_stage(context)
-    assert running_in_group(int(pid_file.read_text())) == []
+    assert await left_in_group(int(pid_file.read_text())) == []
     assert stored_files(context) == ["ontology.ofn"]
 
 
@@ -341,7 +341,7 @@ async def test_stops_group_after_robot_exits(
     fake_java(tmp_path, monkeypatch, f"echo $$ > {pid_file}; sleep 60 &")  # the sleep holds the output open
     with pytest.raises(StageError, match=r"^time limit: "):
         await run_robot([], tmp_path, make_settings(**where, REASONER_TIMEOUT_S=1))
-    assert running_in_group(int(pid_file.read_text())) == []
+    assert await left_in_group(int(pid_file.read_text())) == []
 
 
 async def test_low_space_stops(
@@ -361,7 +361,7 @@ async def test_low_space_stops(
         StageError, match=r"^disk space: a volume fell below 1,000,000,000 bytes free while reasoning ran$"
     ):
         await reasoning_stage(context)
-    assert running_in_group(int(pid_file.read_text())) == []
+    assert await left_in_group(int(pid_file.read_text())) == []
     assert stored_files(context) == ["ontology.ofn"]
 
 
