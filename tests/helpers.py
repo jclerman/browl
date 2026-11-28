@@ -206,6 +206,9 @@ async def serve_runs(directory: Path) -> AsyncIterator[Path]:
 WAIT_S = 10.0
 """How long `wait_for` waits."""
 
+GONE_S = 5.0
+"""How long `left_in_group` waits for a process group to empty."""
+
 AXIOMS_ONTOLOGY = Path(__file__).parent / "data" / "axioms.ofn"
 """A small ontology with every kind of OWL 2 axiom, in functional syntax."""
 
@@ -225,12 +228,21 @@ async def wait_for(path: Path, run: asyncio.Future[object] | None = None) -> int
     return int(path.read_text())
 
 
-def running_in_group(pgid: int) -> list[str]:
-    """Return the `ps` lines of the processes still running in the process group, ignoring zombies.
+async def left_in_group(pgid: int) -> list[str]:
+    """Wait up to `GONE_S` for a process group to empty, and return the `ps` lines of the processes still running in it.
 
-    A zombie has exited, but stays in its group until its parent reaps it: here a child of the killed shell, which is
-    reparented to a process that may never reap it (as on GitHub's runners), so `os.killpg(pgid, 0)` still succeeds.
+    Waiting allows for a killed process that is still exiting (`ps` shows it as `[name]`): `stop_group` waits for the
+    group's leader, not for the processes it started. Zombies are ignored: a zombie has exited, but stays in its group
+    until its parent reaps it, here a child of the killed shell, reparented to a process that may never reap it (as on
+    GitHub's runners).
     """
+    deadline = time.monotonic() + GONE_S
+    while (lines := _running_in_group(pgid)) and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    return lines
+
+
+def _running_in_group(pgid: int) -> list[str]:
     ps = subprocess.run(["ps", "-A", "-o", "pgid=,stat=,pid=,command="], check=True, capture_output=True, text=True)
     return [line for line in ps.stdout.splitlines() if int(line.split()[0]) == pgid and line.split()[1][0] != "Z"]
 
