@@ -108,14 +108,16 @@
     }
   });
 
-  // "/" jumps to the box from anywhere on the page, as on many sites; the box's hint shows it, and `aria-keyshortcuts`
-  // announces it. Not while typing, or choosing in a form's control, and not with a modifier, so the browser's and
-  // the system's shortcuts, and "/" typed in a field, are left alone. Shift isn't a modifier here: some layouts need it.
+  // "/" focuses the box from anywhere on the page (DESIGN.md §2.9, Search), but not in a field, where it's typed, nor
+  // with Ctrl, Meta or Alt, the browser's and the system's. Shift and AltGr (which Windows reports as Ctrl+Alt) aren't
+  // modifiers here, as some layouts need them for "/".
   const editable = (target) =>
     target instanceof Element && (target.matches("input, textarea, select") || target.isContentEditable);
+  const altGraph = (event) => event.getModifierState("AltGraph") || (event.ctrlKey && event.altKey);
+  const modified = (event) => event.metaKey || (!altGraph(event) && (event.ctrlKey || event.altKey));
 
   document.addEventListener("keydown", (event) => {
-    if (event.key !== "/" || event.ctrlKey || event.metaKey || event.altKey || event.isComposing) {
+    if (event.key !== "/" || modified(event) || event.isComposing) {
       return;
     }
     const { box } = parts();

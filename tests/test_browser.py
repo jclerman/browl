@@ -4205,6 +4205,60 @@ def test_slash_with_modifier(page: Page, searchable: LiveServer, key: str) -> No
     expect(search_box(page)).not_to_be_focused()
 
 
+SLASH = "(init) => document.body.dispatchEvent(new KeyboardEvent('keydown', {key: '/', bubbles: true, ...init}))"
+"""JS dispatching a `/` keydown on the page, with a `KeyboardEventInit`'s further fields, as Playwright can't type
+AltGr or compose."""
+
+
+@pytest.mark.parametrize(
+    "init",
+    [{"modifierAltGraph": True, "altKey": True}, {"ctrlKey": True, "altKey": True}],
+    ids=["AltGraph", "Ctrl+Alt"],
+)
+def test_slash_with_altgr(page: Page, searchable: LiveServer, init: dict[str, bool]) -> None:
+    """Check that `/` typed with AltGr, as some layouts need, focuses the box.
+
+    The browser gives AltGr's state, here with Alt's, or Windows reports it as Ctrl+Alt alone.
+    """
+    page.goto(f"{searchable.url}/_browl/search")
+    page.evaluate(SLASH, init)
+    expect(search_box(page)).to_be_focused()
+
+
+def test_slash_composing(page: Page, searchable: LiveServer) -> None:
+    """Check that a `/` keydown while an input method composes is left to it: the box isn't focused."""
+    page.goto(f"{searchable.url}/_browl/search")
+    page.evaluate(SLASH, {"isComposing": True})
+    expect(search_box(page)).not_to_be_focused()
+
+
+def test_slash_handled(page: Page, searchable: LiveServer) -> None:
+    """Check that a `/` another script has handled (`preventDefault`) is left to it: the box isn't focused."""
+    page.goto(f"{searchable.url}/_browl/search")
+    page.evaluate("document.body.addEventListener('keydown', (event) => event.preventDefault())")
+    page.locator("main h1").first.click()
+    page.keyboard.press("/")
+    expect(search_box(page)).not_to_be_focused()
+
+
+def test_slash_from_tree_link(page: Page, trees: LiveServer) -> None:
+    """Check that `/` focuses the box from a tree page, with the focus on one of its tree's links."""
+    page.goto(f"{trees.url}/_browl/tree/classes")
+    item = page.get_by_role("treeitem").first
+    item.focus()
+    page.keyboard.press("/")
+    expect(search_box(page)).to_be_focused()
+
+
+def test_slash_from_entity_link(page: Page, server: LiveServer) -> None:
+    """Check that `/` focuses the box from an entity page, with the focus on a link in it."""
+    page.goto(f"{server.url}/example.org/thing")
+    link = page.locator("main a[href]").first
+    link.focus()
+    page.keyboard.press("/")
+    expect(search_box(page)).to_be_focused()
+
+
 @pytest.mark.parametrize("field", ["box", "checkbox", "input", "textarea", "select", "editable"])
 def test_slash_while_typing(page: Page, searchable: LiveServer, field: str) -> None:
     """Check that `/` typed in a field, or pressed on a form's control, stays there: the box isn't focused.

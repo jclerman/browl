@@ -2038,10 +2038,10 @@ too (P-38), and the JSON API's (P-33).
   each URL has one response, for the page cache (2.10).
 - **The `/` shortcut**: pressing `/` anywhere on the page focuses the box and selects its text, without typing
   the `/`; not while typing in an input, textarea, select or editable element (the box, or the search page's filters,
-  included), and not with Ctrl, Meta or Alt, so the browser's and the system's shortcuts are left alone (Shift is
-  allowed, as some keyboard layouts need it for `/`). It's announced by the box's `aria-keyshortcuts="/"`, and shown
-  by the box's hint. Handled in `static/search.js`, so the Content-Security-Policy's `script-src 'self'`
-  still holds.
+  included), and not with Ctrl, Meta or Alt, so the browser's and the system's shortcuts are left alone (Shift and
+  AltGr, which Windows reports as Ctrl+Alt, are allowed, as some keyboard layouts need them for `/`). It's announced
+  by the box's `aria-keyshortcuts="/"`, and shown by the box's hint. Handled in `static/search.js`, so the
+  Content-Security-Policy's `script-src 'self'` still holds.
 - **A hit** shows the value that matched in italics, then "→" and the entity's display name, in the accent color and
   bold, if that's a different string; else the name alone, still styled as a name, so the reader can tell which
   they're looking at. The query's match is marked (`<mark>`) in whichever is shown: the shortest part of the value
