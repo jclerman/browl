@@ -1,4 +1,4 @@
-# browl manual
+# Manual
 
 ![browl](../../browl/static/browl-wordmark.svg)
 
