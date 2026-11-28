@@ -173,7 +173,7 @@ def test_search_box_shortcut(client: TestClient) -> None:
     assert 'aria-hidden="true"' in icon
     assert 'id="site-search-box"' in field
     assert 'aria-keyshortcuts="/"' in field
-    assert re.search(r'title="[^"]*shortcut: /[^"]*"', field)
+    assert "title=" not in field  # no tooltip: the hint shows the shortcut until the box is in use
     assert key == '<kbd class="search-key" aria-hidden="true">/</kbd>'
 
 
