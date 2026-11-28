@@ -35,6 +35,12 @@ implied by its IRI.
   SQLite. Rendered pages are kept in a small cache.
 - Deployed with Docker Compose, as three containers: the app, Fuseki and the sandbox.
 
+## Documentation
+
+The [manual](docs/manual/README.md) has a part for each kind of reader: [operators](docs/manual/operator.md), who
+deploy browl (with Docker Compose or Kubernetes); [admins](docs/manual/admin.md), who load the ontology; and
+[users](docs/manual/user.md), who browse it.
+
 ## Development
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the tools you need and how to set up, and
