@@ -18,6 +18,8 @@ The ontology's own page: its title, IRI and version, its annotations, its import
 how many triples it has, and whether a reasoner was applied, and which. An import that couldn't be loaded is listed in
 red, with the reason, as its entities are missing from the site.
 
+![The home page of a small demo ontology, the Companion Animals Ontology: its IRI, version, reasoner, entity and axiom counts, annotations, prefixes and imports](screenshots/home.png)
+
 ## The navigation bar
 
 On every page:
@@ -51,6 +53,10 @@ Below, in tabs:
 
 Every entity mentioned anywhere is a link to its page.
 
+![The page of the class "dog": its hierarchy column on the left, then its annotations (labels in three languages, a cross-reference, a definition with its source, synonyms) and its logical axioms](screenshots/entity-overview.png)
+
+![The Usage tab of the class "person": four axioms of other entities that mention it](screenshots/entity-usage.png)
+
 Beside the tabs, the **hierarchy column** shows where the entity sits: its ancestors, merged into one tree, and its
 direct children, with each node's number of children and of all descendants. It can show the entity's siblings, be
 widened by dragging its edge, or folded away. Deprecated entities are struck through.
@@ -61,6 +67,10 @@ on small screens and for printing, and your choice is remembered in your browser
 Some IRIs share a page address, typically the `http` and `https` forms of one IRI. Their address then shows a page for
 choosing between them.
 
+Named individuals' pages show their types and property assertions, and where they sit in the class hierarchy:
+
+![The page of the named individual "Rex": its types (pet, inferred by the reasoner, and retriever), and its object and data property assertions](screenshots/individual.png)
+
 ## Hierarchy trees
 
 The Browse menu's tree pages show each hierarchy from its roots. Each node shows how many children it has and how many
@@ -68,9 +78,13 @@ descendants in all; a class with two parents counts under both, but only once un
 classes appear as one node. Expand a node to load its children. The trees work from the keyboard: arrow keys move
 through them and open and close nodes.
 
+![The class tree, with living thing, animal, pet, vertebrate and mammal open, each node with its counts of children and descendants](screenshots/tree.png)
+
 ## Search
 
 Type in the search box for suggestions; choose one to go to its page, or press Enter for the full results.
+
+![Suggestions for "do": dog, cat (by its synonym "domestic cat") and house dog](screenshots/search-suggestions.png)
 
 - A value matches when it starts with what you typed, or one of its words does. Case and accents are ignored.
 - Exact matches come first, then matches of the whole value, then matches of a later word; within each, the site's
@@ -84,6 +98,8 @@ The **Advanced search** page lists every result, with filters:
   many. None checked means names, IDs and synonyms.
 - **Values**: direct values only, or also values entailed through sub-properties (e.g. a value of a sub-property of
   `rdfs:label` counts as a label).
+
+![The Advanced search page for "dog": filters by entity type, property and values on the left, results on the right](screenshots/search-results.png)
 
 Search finds named individuals too; there's no list of them all yet.
 

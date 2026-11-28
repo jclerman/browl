@@ -18,3 +18,7 @@ Other documents:
 - [`DESIGN.md`](../DESIGN.md): requirements, technical decisions and the plan. The manual describes what browl does;
   the design doc says why, and what's still to come.
 - [`CONTRIBUTING.md`](../../CONTRIBUTING.md): setting up to develop browl.
+
+The screenshots show a small demo ontology, [`screenshots/pets.ttl`](screenshots/pets.ttl), loaded with ELK.
+[`scripts/manual_screenshots.py`](../../scripts/manual_screenshots.py) retakes them; retake them when the pages they
+show change.

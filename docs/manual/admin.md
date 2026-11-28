@@ -55,6 +55,8 @@ On the **Upload** page:
 
 While a load runs, a second upload is refused. There's no way yet to cancel a load once it has started.
 
+![The Upload page: a reasoner chosen (ELK), a file chosen, the Upload button, and the last load's status below](screenshots/admin-upload.png)
+
 ## Following a load
 
 A load goes through these stages, which the **Status** page (and the upload page under its form) shows as a row of
@@ -68,6 +70,8 @@ boxes, with each stage's time and, for the running one, what it's doing:
 | **Loading** | The ontology is loaded into a new triple store, checked, and switched in |
 | **Pre-caching** | Display names, the hierarchies and their counts, and the search index are computed |
 | **Ready** | The new ontology is served |
+
+![The Status page of a finished load: six stages, each done, with ELK as the reasoner](screenshots/admin-status.png)
 
 Meanwhile, every page of the site shows a "loading" page with the load's progress, for visitors and search engines
 alike; the admin pages stay available. Small ontologies load in seconds; Uberon takes under a minute, and NCBITaxon
