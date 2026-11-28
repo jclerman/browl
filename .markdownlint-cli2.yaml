@@ -3,3 +3,6 @@ config:
     line_length: 120
     # Table rows can't be wrapped in Markdown.
     tables: false
+  MD041:
+    # Allows a logo above a document's first heading.
+    allow_preamble: true

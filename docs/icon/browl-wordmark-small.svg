@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="4 1 130 54" width="240" height="100" role="img" aria-label="browl">
+  <title>browl</title>
+  <!-- Concept 7, the lettermark. See README.md in this folder. Light from 1:30 (up-right). -->
+  <style>
+    :root { --ink: #1a2f5e; --pupil: #0f1a33; --wing-fill: url(#wing-light); --node-fill: url(#node-light); }
+    @media (prefers-color-scheme: dark) {
+      :root { --ink: #9dbcf0; --wing-fill: url(#wing-dark); --node-fill: url(#node-dark); }
+    }
+  </style>
+  <defs>
+    <radialGradient id="eye-shine" cx=".5" cy=".5" r=".5" fx=".68" fy=".32">
+      <stop offset="0" stop-color="#ffe9a8"/><stop offset=".45" stop-color="#f5b330"/>
+      <stop offset="1" stop-color="#c97a08"/>
+    </radialGradient>
+    <radialGradient id="node-light" cx=".5" cy=".5" r=".5" fx=".66" fy=".34">
+      <stop offset="0" stop-color="#4a6fb5"/><stop offset="1" stop-color="#28457f"/>
+    </radialGradient>
+    <radialGradient id="node-dark" cx=".5" cy=".5" r=".5" fx=".66" fy=".34">
+      <stop offset="0" stop-color="#e6effc"/><stop offset="1" stop-color="#adc4ec"/>
+    </radialGradient>
+    <linearGradient id="wing-light" x1="0" y1="0" x2=".3" y2="1">
+      <stop offset="0" stop-color="#3a5da2"/><stop offset="1" stop-color="#1d3770"/>
+    </linearGradient>
+    <linearGradient id="wing-dark" x1="0" y1="0" x2=".3" y2="1">
+      <stop offset="0" stop-color="#d4e3f9"/><stop offset="1" stop-color="#93b1e3"/>
+    </linearGradient>
+  </defs>
+
+  <!-- The brow: a node-edge path from the b, over the eye, to the l -->
+  <path d="M10 8 L72 17 L128 7" fill="none" style="stroke: var(--ink)" stroke-width="1.5"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- b, r, l -->
+  <g style="stroke: var(--ink)" fill="none" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M10 10 V50"/>
+    <circle cx="22" cy="38" r="12"/>
+    <path d="M44 50 V27 M44 35 Q46 27 56 27"/>
+    <path d="M128 10 V50"/>
+  </g>
+
+  <!-- w, shaded like folded wings -->
+  <path d="M87 27 L94.5 50 L102 34 L109.5 50 L117 27" fill="none" style="stroke: var(--wing-fill)" stroke-width="7"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- o, an owl eye -->
+  <circle cx="72" cy="38" r="12" fill="url(#eye-shine)" style="stroke: var(--ink)" stroke-width="5"/>
+  <circle cx="72" cy="38" r="5" style="fill: var(--pupil)"/>
+  <circle cx="74" cy="35.8" r="1.6" fill="#ffffff"/>
+
+  <!-- The brow's nodes -->
+  <g style="fill: var(--node-fill)">
+    <circle cx="10" cy="8" r="4"/><circle cx="72" cy="17" r="3.4"/><circle cx="128" cy="7" r="4"/>
+  </g>
+</svg>

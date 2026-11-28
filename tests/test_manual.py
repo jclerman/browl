@@ -1,4 +1,4 @@
-"""Tests that the manual (docs/manual/) keeps up with the settings."""
+"""Tests that the manual (docs/manual/) and its assets keep up with the code."""
 
 import re
 from pathlib import Path
@@ -26,3 +26,11 @@ def test_rebuild_settings_are_documented() -> None:
     named = set(re.findall(r"`([A-Z_]+)`", match.group(1)))
     declared = header.SETTINGS.union(*(hook.settings for hook in precache.HOOKS))
     assert named == {name.upper() for name in declared}
+
+
+def test_small_wordmark_is_a_copy() -> None:
+    """The documents' small wordmark is the app's wordmark, differing only in its size."""
+    root = OPERATOR.parents[2]
+    full = (root / "browl" / "static" / "browl-wordmark.svg").read_text()
+    small = (root / "docs" / "icon" / "browl-wordmark-small.svg").read_text()
+    assert small == full.replace('width="390" height="162"', 'width="240" height="100"', 1)

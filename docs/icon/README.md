@@ -1,16 +1,20 @@
 # browl logo and icons
 
-browl's visual identity is three hand-written SVGs, with no raster images or external resources:
+browl's visual identity is three hand-written SVGs, and a smaller copy of one, with no raster images or external
+resources:
 
 - [`browl/static/browl-logo.svg`](../../browl/static/browl-logo.svg), the **logo**: an owl on a branch, with a class
   tree for breast feathers. The app uses it as its favicon, and it suits any logo-sized spot.
 - [`browl/static/browl-wordmark.svg`](../../browl/static/browl-wordmark.svg), the **wordmark**: the name, with "owl"
   drawn into it. It heads the README, and credits browl in the app's navigation bar ("hosted with browl").
+- [`browl-wordmark-small.svg`](browl-wordmark-small.svg): the wordmark at 240 pixels wide, not 390, for documents
+  where the full size would crowd the page, such as the [manual](../manual/MANUAL.md). Markdown can't size an image, so
+  it's a copy that differs only in its `width` and `height`; a test keeps the two in step.
 - [`browl-tree.svg`](browl-tree.svg), the **tree illustration**: the owl as one entry in a class tree, for other
   documents.
 
-The logo and the wordmark live with the app's static files because the app serves them. The tree illustration is for
-documents only.
+The logo and the wordmark live with the app's static files because the app serves them. The tree illustration and the
+small wordmark are for documents only.
 
 ## Motivation
 

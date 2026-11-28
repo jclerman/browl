@@ -1,9 +1,14 @@
+![browl](../icon/browl-wordmark-small.svg)
+
 # Manual
 
-![browl](../../browl/static/browl-wordmark.svg)
+*For browl 0.1.0.*
 
 browl hosts one OWL ontology as a browsable website: every declared entity gets a page at a URL implied by its IRI.
-This manual covers browl 0.1.0. It has a part for each of the three kinds of people who deal with a browl site:
+This manual has a part for each of the three kinds of people who deal with a browl site. Setting up a new site? Start
+with [Operating browl](operator.md).
+
+## Contents
 
 | Part | For | Covers |
 | --- | --- | --- |
@@ -15,12 +20,14 @@ This manual covers browl 0.1.0. It has a part for each of the three kinds of peo
 Users need no account. Admins sign in with a Google account that an operator or another admin has listed. One person
 can of course be all three.
 
-Other documents:
+## Related documents
 
 - [`AUTHENTICATION.md`](../AUTHENTICATION.md): registering browl's Google sign-in, step by step. Operators need it.
 - [`DESIGN.md`](../DESIGN.md): requirements, technical decisions and the plan. The manual describes what browl does;
   the design doc says why, and what's still to come.
 - [`CONTRIBUTING.md`](../../CONTRIBUTING.md): setting up to develop browl.
+
+## About the screenshots
 
 The screenshots show a small demo ontology, [`screenshots/pets.ttl`](screenshots/pets.ttl), loaded with ELK.
 [`scripts/manual_screenshots.py`](../../scripts/manual_screenshots.py) retakes them; retake them when the pages they
