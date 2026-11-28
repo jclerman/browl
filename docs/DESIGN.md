@@ -1809,14 +1809,13 @@ Every page has the same frame (U-27, U-28, U-29):
   site. It is smaller and muted, so the ontology's name leads the bar. The logo (`static/browl-logo.svg`) is every
   page's favicon.
 - On narrow screens, the tree links collapse into a menu: a `<details>` element, so it opens without JS.
-- **Look**: a quiet bar on its own tint (`--bar-bg`). The tree links, and Admin, are in the text's color
-  (`--fg`), not underlined, and turn the accent color, underlined, on hover and focus, in the bar and in the narrow
-  screens' menu panel alike. "Advanced search" sits beside the box as words, small (`--text-sm`) and muted (4.8:1 on
-  the bar, dark 5.2:1): an unlabeled filter icon in the box was less discoverable for domain experts. The search box
-  has a magnifier at its start and, at its end, a hint of its `/` shortcut (below, Search), radius `--radius`; both are
-  decorative (`aria-hidden`), muted on the box's surface. The hint hides once the box has the focus or text, and on
-  touch screens (`hover: none`), which have no `/` key at hand. Chosen over a bar on the page's background or white,
-  and over cooler neutrals, as variant B of #181's prototype.
+- **Look**: a quiet bar on its own tint (`--bar-bg`), chosen over the page's background, white and cooler neutrals.
+  The tree links, and Admin, are in the text's color (`--fg`), not underlined, and turn the accent color, underlined,
+  on hover and focus, in the bar and in the narrow screens' menu panel alike. "Advanced search" sits beside the box as
+  words, small (`--text-sm`) and muted (4.8:1 on the bar, dark 5.2:1): an unlabeled filter icon in the box was less
+  discoverable for domain experts. The search box has a magnifier at its start and, at its end, a hint of its `/`
+  shortcut (below, Search); both are decorative (`aria-hidden`), muted on the box's surface. The hint hides once the
+  box has the focus or text, and on touch screens (`hover: none`), which have no `/` key at hand.
 - On a tree page, that tree's link is marked (`aria-current="page"`, bold, with an underline in the accent color),
   and the narrow screens' menu button names it ("Browse: Classes"), so the page is clear when scrolled.
 - The ontology name is its title, else its IRI, capped in length; it's read once per generation (`PageFrame`). The bar
@@ -2040,7 +2039,7 @@ too (P-38), and the JSON API's (P-33).
   the `/`; not while typing in an input, textarea, select or editable element (the box, or the search page's filters,
   included), and not with Ctrl, Meta or Alt, so the browser's and the system's shortcuts are left alone (Shift is
   allowed, as some keyboard layouts need it for `/`). It's announced by the box's `aria-keyshortcuts="/"`, and shown
-  by the box's hint and its title. Handled in `static/search.js`, so the Content-Security-Policy's `script-src 'self'`
+  by the box's hint. Handled in `static/search.js`, so the Content-Security-Policy's `script-src 'self'`
   still holds.
 - **A hit** shows the value that matched in italics, then "→" and the entity's display name, in the accent color and
   bold, if that's a different string; else the name alone, still styled as a name, so the reader can tell which
@@ -2096,13 +2095,13 @@ too (P-38), and the JSON API's (P-33).
   radii `--radius-sm`, `--radius` and `--radius-lg`. Gaps, paddings and radii use them, or a named step off the scale
   (a hairline, a frame's group gap, a tree's indent, which is its toggle's width); em gaps beside text, and pill and
   circle radii, are the exceptions. Works from phone width up.
-- **Links**: in running text and axioms, a quiet underline, 1px, offset 0.2em, in the link's color at 45%, full strength
-  on hover and focus; it stays because the accent is only about 2.5:1 against `--fg`, below the 3:1 WCAG 1.4.1 needs to
-  tell links by color alone. Where everything is a link (the navigation bar, whose tree links are in the text's color,
-  tree items and paging links, a frame's label column), and on a pager's Previous and Next, none, but on hover and
-  focus; tree items and their paging links are underlined on hover only, since keyboard focus there shows an outline
-  instead. The search box's suggestions get none even on hover: the selected one is highlighted already, and its type
-  isn't a link of its own.
+- **Links**: in running text and axioms, a quiet underline, 1px, offset 0.2em, in the link's color at 45%,
+  full strength on hover and focus; it stays because the accent is only about 2.5:1 against `--fg`, below the 3:1
+  WCAG 1.4.1 needs to tell links by color alone. Where everything is a link (the navigation bar, tree items and
+  paging links, a frame's label column), and on a pager's Previous and Next, none, but on hover and focus; tree items
+  and their paging links are underlined on hover only, since keyboard focus there shows an outline instead. The search
+  box's suggestions get none even on hover: the selected one is highlighted already, and its type isn't a link of its
+  own.
 - **Cards**: structure comes from surfaces, type and spacing rather than nested borders. What's read sits on a card, a
   surface a little lighter than the page, with a faint edge drawn inside it (`--card-ring`, an inset outline that
   scrolling parents can't clip and that takes no room) and shadow (`--card-shadow`) but no border, radius `--radius-lg`;
