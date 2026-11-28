@@ -1,7 +1,8 @@
 # Administering browl
 
 For admins: loading the ontology browl serves, and managing who else is an admin. Everything here is under the admin
-pages, `/_browl/admin/` on your site, linked as **Admin** from the navigation bar's Browse menu.
+pages, `/_browl/admin/` on your site, linked as **Admin** in the navigation bar (on a narrow screen, under its Browse
+menu).
 
 **Contents:**
 
@@ -64,17 +65,20 @@ boxes, with each stage's time and, for the running one, what it's doing:
 
 | Stage | What happens |
 | --- | --- |
-| **Uploading** | The file arrives |
-| **Imports** | The ontology's `owl:imports` are fetched ([Imports](#imports)); an OWL Functional Syntax file is converted to Turtle |
-| **Reasoning** | The chosen reasoner runs; skipped if none was chosen |
-| **Loading** | The ontology is loaded into a new triple store, checked, and switched in |
-| **Pre-caching** | Display names, the hierarchies and their counts, and the search index are computed |
-| **Ready** | The new ontology is served |
+| **Upload** | The file arrives |
+| **Read Ontology** | The ontology is parsed and its `owl:imports` fetched ([Imports](#imports)); an OWL Functional Syntax file is converted to Turtle |
+| **Infer Axioms** | The chosen reasoner runs; shown as **No Reasoner** if none was chosen |
+| **Store Triples** | The ontology is loaded into a new triple store and checked |
+| **Pre-Cache** | Display names, the hierarchies and their counts, and the search index are computed |
+| **Publish** | The site switches over to the new ontology |
+
+Each box's label says whether its stage is to come, running (e.g. "Storing Triples"), done ("Triples Stored") or
+failed ("Storing Failed").
 
 ![The Status page of a finished load: six stages, each done, with ELK as the reasoner](screenshots/admin-status.png)
 
 Meanwhile, every page of the site shows a "loading" page with the load's progress, for visitors and search engines
-alike; the admin pages stay available. Small ontologies load in seconds; Uberon takes under a minute, and NCBITaxon
+alike; the admin pages stay available. Small ontologies load in seconds, Uberon included, and NCBITaxon
 (2.6 million classes) several minutes. Reasoning can take much longer.
 
 After a load, browl keeps working in the background on the table behind each entity's **Usage** tab; the status
@@ -83,7 +87,7 @@ say "Preparing…"; everything else works.
 
 The site also shows "loading" when the operator has upgraded browl or changed a setting that changes how pages are
 built: browl then rebuilds its derived data from the ontology already loaded, which the status page shows as a
-pre-caching stage. No upload is needed.
+**Pre-Cache** stage. No upload is needed.
 
 ## Imports
 
@@ -93,8 +97,10 @@ their entities get pages and appear in the trees and search.
 - Only `http` and `https` IRIs at public addresses are fetched, with limits on size, time and the number of imports.
 - An import that can't be fetched or parsed is **dropped**: the load goes on without it, and the ontology's home page
   lists it in red, with the reason. Upload it merged into your ontology (e.g. with `robot merge`) if you need it.
-- With a reasoner, an import that browl didn't fetch makes the load fail, naming the import, as the reasoner would
-  otherwise go looking for it itself. Merge it into the upload, or remove the `owl:imports` statement.
+- With a reasoner, dropped imports are left out of reasoning too. Rarely, the reasoner finds an import that browl's
+  own reading of the file didn't (in a file written oddly, or crafted to hide one); the load then fails, naming the
+  import, rather than letting the reasoner fetch it. Merge that import into the upload, or remove its `owl:imports`
+  statement.
 
 The home page lists every import with its triple count, or why it was dropped.
 
@@ -113,7 +119,8 @@ upload the previous ontology to restore it. The common reasons:
 | Memory limit, or killed | The reasoner ran out of memory. Try ELK, or ask the operator to raise `REASONER_MAX_HEAP` |
 | Stack overflow | The reasoner hit very deeply nested expressions. Try the other reasoner |
 | Disk space | The server's disk filled; ask the operator |
-| An import names a missing file | See [Imports](#imports) |
+| An import the reasoner found but browl didn't | See [Imports](#imports) |
+| Interrupted by restart, or by shutdown | The server restarted during the load. Upload again |
 
 ## Managing admins
 

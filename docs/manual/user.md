@@ -27,8 +27,9 @@ On every page:
 - The ontology's name, linking to its home page.
 - The **search box**, with suggestions as you type ([Search](#search)). Press `/` anywhere to jump to it.
   **Advanced search** opens the full search page, with filters.
-- The **Browse** menu, with a tree page for each kind of entity that has a hierarchy: classes, object properties, data
-  properties and annotation properties.
+- Links to the tree pages, one for each kind of entity that has a hierarchy: **Classes**, **Object properties**,
+  **Data properties** and **Annotation properties**. On a narrow screen they're under a **Browse** menu.
+- **Admin sign-in**, for admins ([Administering browl](admin.md)); once signed in, **Admin** and **Sign out**.
 
 ## Entity pages
 
@@ -59,7 +60,7 @@ Every entity mentioned anywhere is a link to its page.
 
 Beside the tabs, the **hierarchy column** shows where the entity sits: its ancestors, merged into one tree, and its
 direct children, with each node's number of children and of all descendants. It can show the entity's siblings, be
-widened by dragging its edge, or folded away. Deprecated entities are struck through.
+widened by dragging its edge, or folded away.
 
 **Scroll as one page** puts the whole page in one scroll, with no panel scrolling on its own. It's used automatically
 on small screens and for printing, and your choice is remembered in your browser.
@@ -73,7 +74,7 @@ Named individuals' pages show their types and property assertions, and where the
 
 ## Hierarchy trees
 
-The Browse menu's tree pages show each hierarchy from its roots. Each node shows how many children it has and how many
+The tree pages show each hierarchy from its roots. Each node shows how many children it has and how many
 descendants in all; a class with two parents counts under both, but only once under an ancestor they share. Equivalent
 classes appear as one node. Expand a node to load its children. The trees work from the keyboard: arrow keys move
 through them and open and close nodes.

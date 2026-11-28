@@ -87,6 +87,9 @@ instructions specific to coding agents. Requirements and architecture are in [`D
 - **Keep internal documentation terse.** Don't document what the code makes obvious, or could with better naming or
   structure; improve the code instead. Comments explain why, not what.
 - When a change alters a design decision, update `docs/DESIGN.md` in the same PR.
+- When a change alters a setting, a deployment step or what a page shows, update the manual (`docs/manual/`) in the
+  same PR, and retake its screenshots if the pages they show changed (`scripts/manual_screenshots.py`). Remove a
+  manual's "not yet" note when the feature lands.
 
 ## Runtime conventions
 

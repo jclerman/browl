@@ -59,7 +59,7 @@ derived database. [DESIGN.md](../DESIGN.md#data-and-persistence) has the details
 
   Fuseki's store is memory-mapped, so spare memory makes pages faster.
 - **Disk**, roughly: the upload (up to 20 GB by default) and the reasoner's output, which can be much larger, on the
-  jobs volume, with 1 GB to spare; the TDB2 store, a few times the ontology's Turtle size (2.4 GB for NCBITaxon), on
+  jobs volume, with 1 GB to spare; the TDB2 store, a few times the ontology's Turtle size (3.7 GB for NCBITaxon), on
   the fuseki volume, twice over while a new upload replaces it; and the derived databases on the data volume.
 
 ## Deploying with Docker Compose
@@ -75,7 +75,9 @@ browl doesn't publish images yet; Compose builds them from the source.
    ```
 
 2. **Register Google sign-in** as [`AUTHENTICATION.md`](../AUTHENTICATION.md) says. The redirect URI to register is
-   your `BASE_URL` without its trailing `/`, then `/_browl/admin/oidc-callback`.
+   your `BASE_URL` without its trailing `/`, then `/_browl/admin/oidc-callback` (with your `RESERVED_PREFIX` in place
+   of `_browl`, if you change it), e.g. `https://ontology.example.org/_browl/admin/oidc-callback`. It must match
+   exactly.
 
 3. **Write `.env`** from the example, which Compose passes to the app:
 
@@ -90,11 +92,14 @@ browl doesn't publish images yet; Compose builds them from the source.
    OIDC_CLIENT_ID=1234567890-abc.apps.googleusercontent.com
    OIDC_CLIENT_SECRET=GOCSPX-…
    SEED_ADMINS='["you@example.org"]'
-   # and remove AUTH_DISABLED=true
    ```
 
-   `.env` holds a secret; keep it readable only by you (`chmod 600 .env`). For a local trial, the example as it is
-   (`AUTH_DISABLED=true`, everyone an admin) works without Google.
+   **Delete the line `AUTH_DISABLED=true`**, which the example has, or set it to `false`: with it, sign-in is off and
+   everyone who reaches the site is an admin. `.env` holds a secret; keep it readable only by you (`chmod 600 .env`).
+
+   For a local trial, the example as it is works without Google, with sign-in off. Then also set
+   `BROWL_PORT=127.0.0.1:8000`, so only your own computer can reach the site: Docker publishes ports on every network
+   interface by default, past firewalls such as ufw.
 
 4. **Start it:**
 
@@ -105,14 +110,17 @@ browl doesn't publish images yet; Compose builds them from the source.
    The first build downloads Java, ROBOT, Jena and Fuseki, and takes a few minutes. `docker compose ps` shows the
    three services as `healthy` once they're up.
 
-5. **Check it** at `BASE_URL`: with no ontology loaded, the site says it's not available. Sign in from the "Admin
-   sign-in" link (or open `/_browl/admin/upload`) and upload an ontology ([Administering browl](admin.md)).
+5. **Check it** at `BASE_URL`: with no ontology loaded, the site says it's not available. Opening
+   `/_browl/admin/upload` should send you to Google to sign in; if it shows the upload form instead, sign-in is off.
+   Sign in and upload an ontology ([Administering browl](admin.md)).
 
 `docker compose stop` and `start` stop and restart the containers; `down` also removes them, but keeps the volumes.
 `docker compose down -v` **deletes the volumes**, and with them the ontology and the admin list.
 
-Compose's project name, `browl`, prefixes the volumes (`browl_data`, …). To run a second deployment on one host, use
-another directory or `docker compose -p <name>`, and another `BROWL_PORT`.
+The Compose project's name, `browl` (set in `docker-compose.yml`), prefixes the volumes: `browl_data`, …. A second
+deployment on the same host needs a name of its own, even from another directory, or it takes over the first one's
+volumes: run its every command as `docker compose -p <name> …` (or set `COMPOSE_PROJECT_NAME=<name>` in its `.env`),
+with another `BROWL_PORT`. Its volumes are then `<name>_data`, ….
 
 ## Settings
 
@@ -145,13 +153,16 @@ Compose itself reads a few more from `.env`, which aren't browl settings:
 | `FUSEKI_MEM_LIMIT` | none | A memory limit for Fuseki's container: the heap plus about 0.5 GiB, e.g. `1536m`. Optional; it contains a runaway Fuseki |
 | `SANDBOX_MEM_LIMIT` | none | A memory limit for the sandbox's container: `REASONER_MAX_HEAP` plus about 0.5 GiB, e.g. `8704m` |
 
-The rest (`FUSEKI_URL`, `SANDBOX_SOCKET`, `DATA_DIR`, `FUSEKI_BASE`, `ROBOT_JAR`, `JENA_HOME`) are set by the image and
-`docker-compose.yml`; change them only when deploying another way. [DESIGN.md §2.12](../DESIGN.md#212-configuration)
-lists them all.
+The rest (`FUSEKI_URL`, `SANDBOX_SOCKET`, `DATA_DIR`, `FUSEKI_BASE`, `ROBOT_JAR`, `JENA_HOME`) have defaults that suit
+the images, or are set by `docker-compose.yml`; change them only when deploying another way.
+[DESIGN.md §2.12](../DESIGN.md#212-configuration) lists them all.
 
-After changing `.env`, run `docker compose up -d` to recreate the containers with the new settings. A change to
-`NAME_PROPERTIES`, `LANGUAGE_RANKING` or `EXTRA_PREFIXES` makes the app rebuild its derived data from the served
-ontology at startup, with the site on its "loading" page meanwhile; no upload is needed.
+After changing `.env`, run `docker compose up -d` to recreate the containers with the new settings. **Don't do it while
+a load runs**: recreating the app fails the load ("interrupted by restart"). A change to `BASE_URL`,
+`RESERVED_PREFIX`, `NAME_PROPERTIES`, `LANGUAGE_RANKING` or `EXTRA_PREFIXES` makes the app rebuild its derived data
+from the served ontology at startup, with the site on its "loading" page meanwhile; no upload is needed. Don't restart
+the app during that rebuild either: an interrupted rebuild isn't retried, and the site stays unavailable until an
+admin uploads the ontology again. The reasoner settings and `MATERIALIZE_PROPERTIES` take effect from the next upload.
 
 ## HTTPS and reverse proxies
 
@@ -187,6 +198,9 @@ server {
 
 Caddy needs no extra settings: `ontology.example.org { reverse_proxy 127.0.0.1:8000 }`.
 
+With the proxy on the same host, set `BROWL_PORT=127.0.0.1:8000`, so browl's plain-HTTP port isn't reachable from
+other machines: Docker publishes ports on every interface by default, past host firewalls such as ufw and firewalld.
+
 ## Upgrading
 
 Check out the new release and rebuild:
@@ -198,31 +212,47 @@ docker compose up -d --build
 ```
 
 The volumes are kept. If the new release computes its derived data differently, the app rebuilds it from the served
-ontology at startup, with the site on its "loading" page meanwhile; that takes about as long as a load's last stage.
-Read the release notes before upgrading; back up first.
+ontology at startup, with the site on its "loading" page meanwhile; that takes about as long as a load's Pre-Cache
+stage. Upgrade when no load is running, and don't restart the app during the rebuild ([Settings](#settings) says
+why). Read the release notes on the [Releases page](https://github.com/jclerman/browl/releases) before upgrading, and
+[back up](#backups) first.
 
 ## Backups
 
 The volumes live in Docker's data root (on Docker Desktop, inside its VM), so host backups don't cover them. Back up
-`data` and `fuseki`; `jobs` and `sandbox` need none. With the stack stopped, so the files are consistent:
+`data` and `fuseki`; `jobs` and `sandbox` need none.
+
+**A backup of `data` is a secret.** It holds the key that signs sign-in cookies (`session.key`), with which anyone can
+sign in as an admin, and the admins' email addresses. Keep backups outside the git checkout, readable only by you, and
+store them as you would a password. (Leaving `session.key` out, with `--exclude=./session.key`, is also fine: browl
+makes a new one, and everyone signs in again.)
+
+With the stack stopped, so the files are consistent:
 
 ```sh
-docker compose stop
+project=browl                # the Compose project's name
+backups="$HOME/browl-backups"  # outside the checkout
+mkdir -p -m 700 "$backups"
+docker compose -p "$project" stop
 for v in data fuseki; do
-  docker run --rm -v browl_$v:/volume:ro -v "$PWD":/backup debian:trixie-slim \
-    tar -czf /backup/browl_$v.tar.gz -C /volume .
+  docker run --rm -v "${project}_$v":/volume:ro -v "$backups":/backup debian:trixie-slim \
+    sh -c "umask 077 && tar -czf /backup/${project}_$v.tar.gz -C /volume ."
 done
-docker compose start
+docker compose -p "$project" start
 ```
 
-To restore, into a stack whose containers exist but are stopped (`docker compose up --no-start`, or `stop`):
+To restore, which **replaces everything on the two volumes**: stop the stack (or create it without starting it,
+`docker compose up --no-start`), check both archives, then restore them:
 
 ```sh
+docker compose -p "$project" stop
+docker run --rm -v "$backups":/backup:ro debian:trixie-slim \
+  gzip -t "/backup/${project}_data.tar.gz" "/backup/${project}_fuseki.tar.gz" &&
 for v in data fuseki; do
-  docker run --rm -v browl_$v:/volume -v "$PWD":/backup debian:trixie-slim \
-    sh -c "find /volume -mindepth 1 -delete && tar -xzpf /backup/browl_$v.tar.gz -C /volume"
+  docker run --rm -v "${project}_$v":/volume -v "$backups":/backup:ro debian:trixie-slim \
+    sh -c "find /volume -mindepth 1 -delete && tar -xzpf /backup/${project}_$v.tar.gz -C /volume"
 done
-docker compose start
+docker compose -p "$project" start
 ```
 
 Restore both from the same backup: the job state on `data` names the store on `fuseki`. Instead of backing up
@@ -247,22 +277,30 @@ them against your cluster. Any platform must provide what Compose does:
    before its replacement starts.
 2. **Shared volumes.** The app and Fuseki share the `fuseki` volume, and the app and sandbox share `jobs` and
    `sandbox` (a Unix socket, which works only on a local file system). The simplest arrangement that keeps the sandbox
-   isolated: the app and Fuseki in one pod, the sandbox in a second pod scheduled on the same node, sharing
+   isolated: the app and Fuseki in one pod, the sandbox in a second pod, both pinned to one node, sharing
    `ReadWriteOnce` volumes. `ReadWriteOnce` admits several pods on one node; `ReadWriteOncePod` doesn't, so don't use
-   it for `jobs` or `sandbox`.
-3. **No network for the sandbox.** Pods in one pod share its network, so the sandbox can't be a container in the app's
-   pod. Give its pod a NetworkPolicy that denies all ingress and egress, which needs a network plugin that enforces
-   NetworkPolicy (Calico, Cilium, …). Without one, the sandbox isn't isolated; don't run it so in production.
-4. **Fuseki reachable from the app only.** In one pod, the app reaches it at `http://localhost:3030`. Fuseki still
-   listens on the pod's address, so the pod's NetworkPolicy admits ingress only to port 8000.
+   it for `jobs` or `sandbox`. Pin both pods to the node with a label: without that, a recreated app pod can land on
+   another node and wait forever for volumes the sandbox's pod holds ("Multi-Attach error").
+3. **No network for the sandbox.** Containers in one pod share its network, so the sandbox can't be a container in the
+   app's pod. Give its pod a NetworkPolicy that denies all ingress and egress, which needs a network plugin that
+   enforces NetworkPolicy (Calico, Cilium, …); some clusters' defaults don't, and then ignore the policy without an
+   error. Without one, the sandbox isn't isolated; don't run it so in production. [Check it](#checking-the-isolation)
+   once deployed.
+4. **Fuseki reachable from the app only.** In one pod, the app reaches it at `http://localhost:3030`. Set
+   `FUSEKI_HOST=127.0.0.1` on Fuseki's container, so it listens only inside the pod, whatever the network plugin; the
+   pod's NetworkPolicy, which admits ingress only to port 8000, is a second line of defense.
 5. **uid 10001 throughout.** The app writes stores that Fuseki opens and deletes, and the sandbox's socket admits only
    its own user. Set `runAsUser`, `runAsGroup` and `fsGroup` to 10001, so new volumes are writable.
 6. **The sandbox's other restrictions**: a read-only root file system with a 256 MiB in-memory `/tmp`, no capabilities,
-   no privilege escalation, no service account token and no service environment variables. Compose's `init: true`
-   reaps the tools' orphaned processes; `shareProcessNamespace: true` does the same here, since the pod's pause
-   process is then PID 1. Compose also caps its processes and open files; in Kubernetes, the process limit is the
-   kubelet's `podPidsLimit`.
-7. **A reverse proxy that admits large uploads**, as [above](#https-and-reverse-proxies).
+   no privilege escalation, no service account token and no service links. Compose's `init: true` reaps the tools'
+   orphaned processes; `shareProcessNamespace: true` does the same here, since the pod's pause process is then PID 1.
+   Compose also caps its processes and open files; in Kubernetes, the process limit is the kubelet's `podPidsLimit`,
+   and the open-files limit the container runtime's.
+7. **No Kubernetes API access for the app either.** The app parses uploaded ontologies, so give its pod no service
+   account token.
+8. **Probes that don't restart a container mid-load.** A restart fails a running load, and an interrupted rebuild
+   isn't retried. Give probes Compose's 5 s timeout and room for a busy moment.
+9. **A reverse proxy that admits large uploads**, as [above](#https-and-reverse-proxies).
 
 ### Images
 
@@ -284,6 +322,16 @@ The settings, then the volumes, the two pods, their network policies, and the se
 figures are placeholders, from the defaults above; set them for your ontology. Fuseki runs as a native sidecar
 (Kubernetes 1.29 or later), so it's answering before the app starts, as Compose's `depends_on` ensures.
 
+First label the node both pods run on (and keep the OIDC secret out of any file you commit):
+
+```sh
+kubectl label node <node-name> browl.example.org/node=true
+kubectl create secret generic browl-secrets \
+  --from-literal=OIDC_CLIENT_ID=1234567890-abc.apps.googleusercontent.com \
+  --from-literal=OIDC_CLIENT_SECRET='GOCSPX-…' \
+  --from-literal=SEED_ADMINS='["you@example.org"]'
+```
+
 ```yaml
 apiVersion: v1
 kind: ConfigMap
@@ -293,15 +341,7 @@ data:
   BASE_URL: https://ontology.example.org/
   # Any other settings, e.g.
   # NAME_PROPERTIES: '["rdfs:label", "skos:prefLabel"]'
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: browl-secrets
-stringData:
-  OIDC_CLIENT_ID: 1234567890-abc.apps.googleusercontent.com
-  OIDC_CLIENT_SECRET: GOCSPX-…
-  SEED_ADMINS: '["you@example.org"]'
+
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -349,10 +389,14 @@ spec:
     metadata:
       labels: {app.kubernetes.io/name: browl, app.kubernetes.io/component: app}
     spec:
+      nodeSelector: {browl.example.org/node: "true"}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
       securityContext:
         runAsUser: 10001
         runAsGroup: 10001
         fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch # else a recursive chown of the store at every start
         runAsNonRoot: true
         seccompProfile: {type: RuntimeDefault}
       initContainers:
@@ -362,18 +406,24 @@ spec:
           env:
             - name: JDK_JAVA_OPTIONS
               value: -Xmx1g -XX:MaxDirectMemorySize=128m
+            - name: FUSEKI_HOST # only the pod's own containers can reach it
+              value: 127.0.0.1
           resources:
             requests: {memory: 1536Mi}
             limits: {memory: 1536Mi}
           volumeMounts:
             - {name: fuseki, mountPath: /fuseki}
+          # Probes run in the container, as Fuseki listens only on 127.0.0.1.
           startupProbe:
-            httpGet: {path: /$/ping, port: 3030}
+            exec: {command: [curl, -fsS, "http://127.0.0.1:3030/$/ping"]}
             periodSeconds: 2
+            timeoutSeconds: 5
             failureThreshold: 60
           livenessProbe:
-            httpGet: {path: /$/ping, port: 3030}
+            exec: {command: [curl, -fsS, "http://127.0.0.1:3030/$/ping"]}
             periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
       containers:
         - name: app
           image: registry.example.org/browl-app:0.1.0
@@ -395,11 +445,13 @@ spec:
           startupProbe:
             httpGet: {path: /_browl/health, port: http}
             periodSeconds: 2
+            timeoutSeconds: 5
             failureThreshold: 60
           livenessProbe:
             httpGet: {path: /_browl/health, port: http}
             periodSeconds: 30
             timeoutSeconds: 5
+            failureThreshold: 6
       volumes:
         - {name: data, persistentVolumeClaim: {claimName: browl-data}}
         - {name: jobs, persistentVolumeClaim: {claimName: browl-jobs}}
@@ -420,12 +472,7 @@ spec:
     metadata:
       labels: {app.kubernetes.io/name: browl, app.kubernetes.io/component: sandbox}
     spec:
-      affinity:
-        podAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            - topologyKey: kubernetes.io/hostname
-              labelSelector:
-                matchLabels: {app.kubernetes.io/name: browl, app.kubernetes.io/component: app}
+      nodeSelector: {browl.example.org/node: "true"}
       automountServiceAccountToken: false
       enableServiceLinks: false
       shareProcessNamespace: true # the pause process reaps orphaned tool processes
@@ -454,11 +501,12 @@ spec:
             - {name: jobs, mountPath: /data/uploads}
             - {name: sandbox, mountPath: /sandbox}
             - {name: tmp, mountPath: /tmp}
-          readinessProbe: &socket-probe
+          # Readiness only: a liveness failure would restart the runner, failing a load's reasoning.
+          readinessProbe:
             exec:
               command: [python, -c, "import socket; socket.socket(socket.AF_UNIX).connect('/sandbox/runner.sock')"]
             periodSeconds: 30
-          livenessProbe: *socket-probe
+            timeoutSeconds: 5
       volumes:
         - {name: jobs, persistentVolumeClaim: {claimName: browl-jobs}}
         - {name: sandbox, persistentVolumeClaim: {claimName: browl-sandbox}}
@@ -521,12 +569,24 @@ spec:
 
 Notes:
 
-- The sandbox's pod is scheduled only once the app's is running, onto its node. Until the sandbox is up, a load that
-  needs it (a reasoner, or an OWL Functional Syntax file) fails; browsing doesn't need it.
-- If the app's pod moves to another node, the sandbox's must follow: delete it, and it's rescheduled beside the app.
-  Volumes that can attach only in one zone keep both pods in it.
-- Back up the `browl-data` and `browl-fuseki` volumes, as [above](#backups), with your cluster's volume snapshots or
-  backup tool, ideally with the app scaled to 0.
+- Until the sandbox is up, a load that needs it (a reasoner, or an OWL Functional Syntax file or import) fails;
+  browsing doesn't need it.
+- To move browl to another node, scale both Deployments to 0, move the label, and scale them back to 1.
+- Back up the `browl-data` and `browl-fuseki` volumes with your cluster's volume snapshots or backup tool, ideally with
+  the app scaled to 0. As [above](#backups), a backup of `browl-data` holds the session key: store it as a secret.
+
+### Checking the isolation
+
+A NetworkPolicy that isn't enforced fails silently, so check the sandbox once deployed. This must fail, with a timeout
+or an unreachable network:
+
+```sh
+kubectl exec deploy/browl-sandbox -- \
+  python -c "import socket; socket.create_connection(('1.1.1.1', 443), 3)"
+```
+
+If it connects, the sandbox has network access: enable NetworkPolicy enforcement in your cluster before uploading
+ontologies.
 
 ## Troubleshooting
 
@@ -535,7 +595,10 @@ Notes:
 | The app exits at startup with a validation error | A setting is missing or invalid; the error names it. Without sign-in configured, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` and `SEED_ADMINS` are required |
 | The app exits at startup, saying `session.key` is damaged | The session key file was emptied or cut short, perhaps by a bad restore; check the volume's other files too. Delete it (`docker compose run --rm --no-deps app rm /data/session.key`) and start again; everyone must sign in again |
 | The log warns that `SANDBOX_SOCKET` is unset | The app runs ROBOT itself, unsandboxed. Expected only outside Compose and the manifests above; don't run like this in production |
-| Google says `redirect_uri_mismatch` | The OAuth client doesn't list this deployment's callback exactly: `BASE_URL` without its trailing `/`, then `/_browl/admin/oidc-callback` ([`AUTHENTICATION.md`](../AUTHENTICATION.md)) |
+| Google says `redirect_uri_mismatch` | The OAuth client doesn't list this deployment's redirect URI exactly, as [Deploying with Docker Compose](#deploying-with-docker-compose), step 2, gives it |
+| A load fails, "interrupted by restart" or "interrupted by shutdown" | The app was restarted or recreated during the load. Upload again, and don't restart the app while a load runs |
+| The site stays "not available" after a restart, and the status page says the rebuild was interrupted | An interrupted rebuild isn't retried. Upload the ontology again |
+| Kubernetes: the app's pod hangs in `ContainerCreating` with a "Multi-Attach error" | The app's pod and the sandbox's are on different nodes. Pin both to one node, as the manifests do |
 | Fuseki restarts during a load or under load, logging `OutOfMemoryError` | Raise `FUSEKI_HEAP`, and `FUSEKI_MEM_LIMIT` with it if set |
 | A load fails at reasoning with "memory limit" | Raise `REASONER_MAX_HEAP`, and `SANDBOX_MEM_LIMIT` (or the sandbox's memory limit) with it |
 | A load fails at reasoning with "killed" | The sandbox's container limit is below `REASONER_MAX_HEAP` plus about 0.5 GiB; raise it |
