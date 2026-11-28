@@ -13,6 +13,7 @@ import urllib.parse
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 import rdflib
@@ -794,6 +795,56 @@ def test_narrow_bar_one_row(page: Page, server: LiveServer) -> None:
     assert abs(panel["x"] + panel["width"] - box(button)["x"] - box(button)["width"]) < 2
 
 
+def link_states(page: Page, link: Locator, script: str) -> list[Any]:
+    """Return a script's result for a link as shown, hovered, and focused from the keyboard."""
+    page.mouse.move(0, 0)
+    shown = link.evaluate(script)
+    link.hover()
+    hovered = link.evaluate(script)
+    page.mouse.move(0, 0)
+    page.keyboard.press("Shift")  # a key, so the focus that follows shows as from the keyboard
+    link.focus()
+    assert link.evaluate("(each) => each.matches(':focus-visible')")
+    focused = link.evaluate(script)
+    return [shown, hovered, focused]
+
+
+COLOR_AND_LINE = "(each) => [getComputedStyle(each).color, getComputedStyle(each).textDecorationLine]"
+"""JS returning an element's color and `text-decoration-line`."""
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+@pytest.mark.parametrize("size", [WIDE, NARROW], ids=["wide", "narrow"])
+def test_bar_links_look(page: Page, trees: LiveServer, scheme: str, size: dict[str, int]) -> None:
+    """Check the bar's tree links and Admin, in the bar or the narrow menu's panel, and "Advanced search" (#181).
+
+    The tree links and Admin are in the text's color, the accent and underlined on hover and focus; the tree page shown
+    is bold, with the accent's underline. "Advanced search" is small and muted.
+    """
+    page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
+    page.set_viewport_size(size)
+    page.goto(f"{trees.url}/_browl/tree/classes")
+    nav = page.get_by_role("navigation", name="Site")
+    if size == NARROW:
+        nav.locator(".site-menu summary").click()
+    fg, accent, muted = (token_color(page, each) for each in ("fg", "accent", "muted"))
+    current, other = nav.get_by_role("link", name="Classes"), nav.get_by_role("link", name="Object properties")
+    hovered_or_focused = [accent, "underline"]
+    for each in (other, nav.get_by_role("link", name="Admin")):
+        assert link_states(page, each, COLOR_AND_LINE) == [[fg, "none"], hovered_or_focused, hovered_or_focused]
+    assert link_states(page, current, COLOR_AND_LINE) == [[fg, "underline"], hovered_or_focused, hovered_or_focused]
+    style = """(each) => { const style = getComputedStyle(each);
+        return [style.fontWeight, style.textDecorationLine, style.textDecorationColor]; }"""
+    page.mouse.move(0, 0)
+    assert current.evaluate(style) == ["600", "underline", accent]
+    assert other.evaluate(style)[:2] == ["400", "none"]
+    advanced = nav.get_by_role("link", name="Advanced search")
+    assert advanced.evaluate("(each) => getComputedStyle(each).color") == muted
+    size_of = "(each) => parseFloat(getComputedStyle(each).fontSize)"
+    assert advanced.evaluate(size_of) < page.locator("body").evaluate(size_of)
+    assert_fits(page)
+
+
 def test_fonts_and_measure(page: Page, server: LiveServer) -> None:
     """Check the system font for text, a monospace font for IRIs, and that paragraphs are capped at a readable width."""
     page.set_viewport_size(WIDE)
@@ -1405,13 +1456,7 @@ def test_annotation_property_quiet(
             fg,
         ]
     property_ = linked_box.locator(".annotation-property a")
-    assert property_.evaluate(style) == ["none", fg]
-    property_.hover()
-    assert property_.evaluate(style) == ["underline", accent]
-    page.mouse.move(0, 0)
-    page.keyboard.press("Shift")  # a key, so the focus that follows shows as from the keyboard
-    property_.focus()
-    assert property_.evaluate(style) == ["underline", accent]
+    assert link_states(page, property_, style) == [["none", fg], ["underline", accent], ["underline", accent]]
 
 
 @pytest.mark.parametrize("scheme", ["light", "dark"])
@@ -1961,10 +2006,13 @@ ONE_PAGE_KEY = "browl.onePage"
 """Where `static/entity-page.js` remembers the toggle."""
 
 
+STORAGE_BLOCKED = "Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('blocked'); } });"
+"""JS blocking `localStorage`, as a browser may: a script to run before each page's."""
+
 STORAGE_FAILS = pytest.mark.parametrize(
     ("storage", "script"),
     [
-        ("blocked", "Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('blocked'); } });"),
+        ("blocked", STORAGE_BLOCKED),
         (
             "full",
             (
@@ -4030,6 +4078,343 @@ def typed(page: Page, server: LiveServer, text: str) -> Locator:
     return box
 
 
+def hint(page: Page) -> Locator:
+    """Return the search box's hint of its `/` shortcut."""
+    return page.locator(".site-search .search-key")
+
+
+def icon(page: Page) -> Locator:
+    """Return the search box's magnifier."""
+    return page.locator(".site-search .search-icon")
+
+
+def text_end(search: Locator) -> float:
+    """Return where a box's text can run to: its content's end, inside its end padding and border (left to right)."""
+    end: float = search.evaluate(
+        """(each) => { const style = getComputedStyle(each);
+        return each.getBoundingClientRect().right - parseFloat(style.paddingRight) - parseFloat(style.borderRightWidth);
+        }"""
+    )
+    return end
+
+
+def end_padding(search: Locator) -> str:
+    """Return a box's end padding, e.g. `8px`."""
+    padding: str = search.evaluate("(each) => getComputedStyle(each).paddingInlineEnd")
+    return padding
+
+
+@pytest.mark.parametrize("size", [WIDE, NARROW], ids=["wide", "narrow"])
+def test_search_box_icon_and_hint(page: Page, searchable: LiveServer, size: dict[str, int]) -> None:
+    """Check the box's magnifier at its start and its `/` hint at its end, hidden on focus and with text (#181).
+
+    Both are muted, and the text runs from after the icon to before the hint; with the hint hidden, to the box's end
+    padding. The suggestions still open under the box, from its start.
+    """
+    page.set_viewport_size(size)
+    page.goto(f"{searchable.url}/_browl/search")
+    search = search_box(page)
+    expect(icon(page)).to_be_visible()
+    expect(hint(page)).to_have_text("/")
+    muted = token_color(page, "muted")
+    assert [each.evaluate("(each) => getComputedStyle(each).color") for each in (icon(page), hint(page))] == [muted] * 2
+    field, at_start, at_end = box(search), box(icon(page)), box(hint(page))
+    assert field["x"] < at_start["x"] < at_start["x"] + at_start["width"] < field["x"] + field["width"] / 4
+    assert (
+        field["x"] + field["width"] * 3 / 4 < at_end["x"] < at_end["x"] + at_end["width"] < field["x"] + field["width"]
+    )
+    text_start = search.evaluate(
+        "(each) => each.getBoundingClientRect().x + parseFloat(getComputedStyle(each).paddingLeft)"
+    )
+    assert text_start >= at_start["x"] + at_start["width"]  # the text starts after the icon
+    assert text_end(search) <= at_end["x"]  # and ends before the hint
+    hint_room = end_padding(search)
+    search.focus()
+    expect(hint(page)).to_be_hidden()
+    assert end_padding(search) == "8px"  # --sp-2
+    search.blur()
+    expect(hint(page)).to_be_visible()
+    assert end_padding(search) == hint_room
+    search.fill("myo")
+    search.blur()
+    expect(hint(page)).to_be_hidden()
+    assert end_padding(search) == "8px"  # no gap after the clear button
+    search.focus()
+    expect(page.get_by_role("option")).to_have_count(3)
+    assert abs(box(page.get_by_role("listbox"))["x"] - field["x"]) < 1
+    assert_fits(page)
+
+
+def test_search_box_width(page: Page, searchable: LiveServer) -> None:
+    """Check that on a wide screen the box fills the form, beside "Advanced search" (#181)."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{searchable.url}/_browl/search")
+    form, field = box(page.locator(".site-search")), box(search_box(page))
+    link = box(page.get_by_role("link", name="Advanced search"))
+    gap = rem(page) / 2  # --sp-2
+    assert abs(field["x"] - form["x"]) < 1
+    assert abs(link["x"] - gap - (field["x"] + field["width"])) < 1
+    assert abs(link["x"] + link["width"] - (form["x"] + form["width"])) < 1
+
+
+def test_search_hint_query_shown(page: Page, searchable: LiveServer) -> None:
+    """Check that on the search page, whose box holds the query, the hint is hidden."""
+    page.goto(f"{searchable.url}/_browl/search?q=myo")
+    expect(search_box(page)).to_have_value("myo")
+    expect(hint(page)).to_be_hidden()
+
+
+@pytest.mark.browser_context_args(has_touch=True, is_mobile=True)
+def test_search_hint_touch(page: Page, searchable: LiveServer) -> None:
+    """Check that a touch screen, which has no `/` key at hand, doesn't show the hint, nor keep its room."""
+    page.goto(f"{searchable.url}/_browl/search")
+    assert page.evaluate("matchMedia('(hover: none)').matches")
+    expect(icon(page)).to_be_visible()
+    expect(hint(page)).to_be_hidden()
+    assert end_padding(search_box(page)) == "8px"  # --sp-2
+
+
+def test_search_hint_printed(page: Page, searchable: LiveServer) -> None:
+    """Check that printed, where a keycap means nothing, the hint is hidden, and the box keeps no room for it."""
+    page.goto(f"{searchable.url}/_browl/search")
+    expect(hint(page)).to_be_visible()
+    page.emulate_media(media="print")
+    expect(hint(page)).to_be_hidden()
+    assert end_padding(search_box(page)) == "8px"  # --sp-2
+
+
+def test_slash_focuses_box(page: Page, searchable: LiveServer) -> None:
+    """Check that `/` focuses the box from the page, selecting its text, without typing a "/" (#181)."""
+    watch_policy(page)
+    page.goto(f"{searchable.url}/_browl/search?q=myo")
+    box = search_box(page)
+    page.locator("main h1").first.click()
+    page.keyboard.press("/")
+    expect(box).to_be_focused()
+    expect(box).to_have_value("myo")
+    assert box.evaluate("(each) => [each.selectionStart, each.selectionEnd]") == [0, 3]
+    page.keyboard.type("heart")
+    expect(box).to_have_value("heart")
+    assert violations(page) == []
+
+
+@pytest.mark.parametrize("key", ["Control+/", "Meta+/", "Alt+/"])
+def test_slash_with_modifier(page: Page, searchable: LiveServer, key: str) -> None:
+    """Check that `/` with a modifier is left to the browser and the system: the box isn't focused."""
+    page.goto(f"{searchable.url}/_browl/search")
+    page.locator("main h1").first.click()
+    page.keyboard.press(key)
+    expect(search_box(page)).not_to_be_focused()
+
+
+SLASH = "(init) => document.body.dispatchEvent(new KeyboardEvent('keydown', {key: '/', bubbles: true, ...init}))"
+"""JS dispatching a `/` keydown on the page, with a `KeyboardEventInit`'s further fields, as Playwright can't type
+AltGr or compose."""
+
+
+@pytest.mark.parametrize(
+    "init",
+    [{"modifierAltGraph": True, "altKey": True}, {"ctrlKey": True, "altKey": True}],
+    ids=["AltGraph", "Ctrl+Alt"],
+)
+def test_slash_with_altgr(page: Page, searchable: LiveServer, init: dict[str, bool]) -> None:
+    """Check that `/` typed with AltGr, as some layouts need, focuses the box.
+
+    The browser gives AltGr's state, here with Alt's, or Windows reports it as Ctrl+Alt alone.
+    """
+    page.goto(f"{searchable.url}/_browl/search")
+    page.evaluate(SLASH, init)
+    expect(search_box(page)).to_be_focused()
+
+
+def test_slash_composing(page: Page, searchable: LiveServer) -> None:
+    """Check that a `/` keydown while an input method composes is left to it: the box isn't focused."""
+    page.goto(f"{searchable.url}/_browl/search")
+    page.evaluate(SLASH, {"isComposing": True})
+    expect(search_box(page)).not_to_be_focused()
+
+
+def test_slash_handled(page: Page, searchable: LiveServer) -> None:
+    """Check that a `/` another script has handled (`preventDefault`) is left to it: the box isn't focused."""
+    page.goto(f"{searchable.url}/_browl/search")
+    page.evaluate("document.body.addEventListener('keydown', (event) => event.preventDefault())")
+    page.locator("main h1").first.click()
+    page.keyboard.press("/")
+    expect(search_box(page)).not_to_be_focused()
+
+
+def test_slash_from_tree_link(page: Page, trees: LiveServer) -> None:
+    """Check that `/` focuses the box from a tree page, with the focus on one of its tree's links."""
+    page.goto(f"{trees.url}/_browl/tree/classes")
+    item = page.get_by_role("treeitem").first
+    item.focus()
+    page.keyboard.press("/")
+    expect(search_box(page)).to_be_focused()
+
+
+def test_slash_from_entity_link(page: Page, server: LiveServer) -> None:
+    """Check that `/` focuses the box from an entity page, with the focus on a link in it."""
+    page.goto(f"{server.url}/example.org/thing")
+    link = page.locator("main a[href]").first
+    link.focus()
+    page.keyboard.press("/")
+    expect(search_box(page)).to_be_focused()
+
+
+@pytest.mark.parametrize("field", ["box", "checkbox", "input", "textarea", "select", "editable"])
+def test_slash_while_typing(page: Page, searchable: LiveServer, field: str) -> None:
+    """Check that `/` typed in a field, or pressed on a form's control, stays there: the box isn't focused.
+
+    The fields are the box itself, a filter of the search page, and others added to the page.
+    """
+    page.goto(f"{searchable.url}/_browl/search")
+    page.evaluate(
+        """() => document.querySelector('main').insertAdjacentHTML('beforeend', '<input id="t-input">'
+        + '<textarea id="t-textarea"></textarea><select id="t-select"><option>a</option></select>'
+        + '<div id="t-editable" contenteditable="true"></div>')"""
+    )
+    target = {
+        "box": search_box(page),
+        "checkbox": page.locator("input[name=type]").first,
+    }.get(field, page.locator(f"#t-{field}"))
+    target.focus()
+    page.keyboard.press("/")
+    expect(target).to_be_focused()
+    if field in ("box", "input", "textarea"):
+        expect(target).to_have_value("/")
+    elif field == "editable":
+        expect(target).to_have_text("/")
+
+
+# The `/` shortcut's setting (WCAG 2.1.4, DESIGN.md §2.9 "Search")
+
+SHORTCUT_KEY = "browl.slashShortcut"
+"""Where `static/search.js` keeps the `/` shortcut's setting."""
+
+
+def shortcut_setting(page: Page) -> Locator:
+    """Return the search page's "Press / to search" checkbox."""
+    return page.get_by_role("group", name="In this browser").get_by_role("checkbox", name="Press / to search")
+
+
+def expect_shortcut(page: Page, on: bool) -> None:
+    """Check that the `/` shortcut is on or off: the hint, the box's `aria-keyshortcuts`, and `/` from the page."""
+    search = search_box(page)
+    expect(hint(page)).to_be_visible(visible=on)
+    if on:
+        expect(search).to_have_attribute("aria-keyshortcuts", "/")
+    else:
+        expect(search).not_to_have_attribute("aria-keyshortcuts", re.compile(".*"))
+        assert end_padding(search) == "8px"  # --sp-2: no room kept for the hint
+    page.locator("main h1").first.click()
+    page.keyboard.press("/")
+    if on:
+        expect(search).to_be_focused()
+        search.blur()
+    else:
+        expect(search).not_to_be_focused()
+
+
+def test_shortcut_setting_on(page: Page, searchable: LiveServer) -> None:
+    """Check that the `/` shortcut is on by default, and its setting on the search page checked."""
+    page.goto(f"{searchable.url}/_browl/search")
+    expect(shortcut_setting(page)).to_be_checked()
+    expect_shortcut(page, on=True)
+
+
+def test_shortcut_setting_off(page: Page, searchable: LiveServer) -> None:
+    """Check that turning the `/` shortcut off disables it, across a reload and on other pages, and back on restores it.
+
+    Off, the hint is hidden, and the box doesn't announce the shortcut.
+    """
+    watch_policy(page)
+    page.goto(f"{searchable.url}/_browl/search")
+    shortcut_setting(page).uncheck()
+    expect_shortcut(page, on=False)
+    page.reload()
+    expect(shortcut_setting(page)).not_to_be_checked()
+    expect_shortcut(page, on=False)
+    page.goto(f"{searchable.url}/_browl/tree/classes")
+    expect_shortcut(page, on=False)
+    page.goto(f"{searchable.url}/_browl/search")
+    shortcut_setting(page).check()
+    expect_shortcut(page, on=True)
+    page.reload()
+    expect_shortcut(page, on=True)
+    assert violations(page) == []
+
+
+def test_shortcut_setting_before_drawn(page: Page, searchable: LiveServer) -> None:
+    """Check that the setting is applied before the page has been parsed, so the hint isn't drawn first."""
+    page.add_init_script(f"localStorage.setItem('{SHORTCUT_KEY}', 'false')")
+    held: list[Route] = []
+    page.route("**/search.js", lambda route: held.append(route))
+    page.goto(f"{searchable.url}/_browl/search", wait_until="commit")
+    wait_until(page, lambda: bool(held), "the script's request")
+    # The parser waits for the script: it hasn't gone past it, to entity-page.js's.
+    assert page.evaluate("document.querySelector('script[src$=\"/entity-page.js\"]')") is None
+    held[0].continue_()
+    expect(shortcut_setting(page)).not_to_be_checked()
+    expect(hint(page)).to_be_hidden()
+
+
+def test_shortcut_setting_follows_changes(page: Page, searchable: LiveServer) -> None:
+    """Check that the setting follows another tab's change, and is applied on a page from the back-forward cache."""
+    page.goto(f"{searchable.url}/_browl/tree/classes")
+    other = page.context.new_page()
+    other.goto(f"{searchable.url}/_browl/search")
+    shortcut_setting(other).uncheck()
+    expect(hint(page)).to_be_hidden()
+    page.evaluate(f"localStorage.setItem('{SHORTCUT_KEY}', 'true')")  # a page gets no storage event of its own
+    page.evaluate("window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))")
+    expect(hint(page)).to_be_visible()
+
+
+def test_shortcut_setting_storage_blocked(page: Page, searchable: LiveServer) -> None:
+    """Check that with `localStorage` blocked the shortcut is on, without script errors, and can be turned off.
+
+    Off only on that page, as it can't be kept.
+    """
+    errors: list[PlaywrightError] = []
+    page.on("pageerror", lambda error: errors.append(error))
+    page.add_init_script(STORAGE_BLOCKED)
+    page.goto(f"{searchable.url}/_browl/search")
+    expect(shortcut_setting(page)).to_be_checked()
+    expect_shortcut(page, on=True)
+    shortcut_setting(page).uncheck()
+    expect_shortcut(page, on=False)
+    page.reload()
+    expect_shortcut(page, on=True)
+    assert errors == []
+
+
+@NO_JS
+def test_shortcut_setting_no_js(page: Page, searchable: LiveServer) -> None:
+    """Check that without JS, which the shortcut and its setting need, the setting isn't shown."""
+    page.goto(f"{searchable.url}/_browl/search")
+    expect(page.locator(".search-settings")).to_be_hidden()
+    expect(page.locator("#slash-shortcut")).to_be_hidden()
+
+
+@pytest.mark.parametrize("on", [True, False], ids=["on", "off"])
+def test_shortcut_setting_not_searched(page: Page, searchable: LiveServer, on: bool) -> None:
+    """Check that the setting isn't one of the search's parameters: not in the suggestions' requests, nor submitted."""
+    page.goto(f"{searchable.url}/_browl/search")
+    shortcut_setting(page).set_checked(on)
+    page.locator("input[name=type]").first.check()
+    with page.expect_request(SUGGEST) as suggested:
+        search_box(page).fill("myo")
+    expect(page.get_by_role("option")).to_have_count(2)  # a filter's still applied: Myoblast, all results
+    search_box(page).press("Escape")
+    search_box(page).press("Enter")
+    page.wait_for_url(re.compile(r"[?&]q=myo"))
+    for url in (suggested.value.url, page.url):
+        names = set(urllib.parse.parse_qs(urllib.parse.urlsplit(url).query))
+        assert names <= {"q", "type", "property", "values", "suggest"}, url
+        assert "type" in names, url
+    expect(shortcut_setting(page)).to_be_checked(checked=on)
+
+
 def test_search_suggests_and_keys(page: Page, searchable: LiveServer) -> None:
     """Check the combobox pattern's keys, pointer and focus, and the status region (U-17).
 
@@ -4371,23 +4756,11 @@ def underlines(page: Page, link: Locator) -> tuple[str, ...]:
 
     For an underlined link, check too that its underline is faint until hovered or focused.
     """
-    style = "(each) => [getComputedStyle(each).textDecorationLine, getComputedStyle(each).textDecorationColor]"
-    color = link.evaluate("(each) => getComputedStyle(each).color")
-    lines, colors = [], []
-    page.mouse.move(0, 0)
-    for state in ("shown", "hovered", "focused"):
-        if state == "hovered":
-            link.hover()
-        elif state == "focused":
-            page.mouse.move(0, 0)
-            page.keyboard.press("Shift")  # a key, so the focus that follows shows as from the keyboard
-            link.focus()
-            assert link.evaluate("(each) => each.matches(':focus-visible')")
-        line, decoration = link.evaluate(style)
-        lines.append(line)
-        colors.append(decoration == color)
+    style = """(each) => { const style = getComputedStyle(each);
+        return [style.textDecorationLine, style.textDecorationColor === style.color]; }"""
+    lines, full = zip(*link_states(page, link, style), strict=True)
     if lines[0] == "underline":
-        assert colors == [False, True, True]  # faint, then at full strength
+        assert full == (False, True, True)  # faint, then at full strength
     return tuple(lines)
 
 

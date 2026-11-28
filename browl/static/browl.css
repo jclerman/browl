@@ -230,16 +230,32 @@ code {
   max-width: 32rem;
 }
 
+/* Small and muted, so the box and the tree links lead: --muted is 4.8:1 on --bar-bg, dark 5.2:1. */
 .search-page-link {
   flex: none;
+  color: var(--muted);
   font-size: var(--text-sm);
   white-space: nowrap;
+}
+
+/* The box, with a magnifier at its start and the `/` shortcut's hint at its end (`static/search.js`). The text's room
+   at each end: the icon's or the hint's width, at --sp-2 from the box's edge and from the text. */
+.search-box {
+  --icon-room: calc(var(--sp-2) * 2 + 14px); /* the magnifier's width */
+  --hint-room: calc(var(--sp-2) * 2 + 1.25em); /* about the hint's: "/", its padding and its border */
+
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  min-width: 0;
 }
 
 .site-search input {
   box-sizing: border-box;
   width: 100%;
-  padding: var(--sp-1) var(--sp-2);
+  padding-block: var(--sp-1);
+  padding-inline: var(--icon-room) var(--hint-room);
   color: var(--fg);
   font: inherit;
   background: var(--surface);
@@ -247,11 +263,66 @@ code {
   border-radius: var(--radius);
 }
 
+.search-icon {
+  position: absolute;
+  inset-inline-start: var(--sp-2);
+  display: flex;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+/* Muted on the box's --surface: 5.8:1, dark 5.2:1. Hidden once the box has the focus or text, on touch screens,
+   which have no `/` key at hand, in print, and with the shortcut turned off (`static/search.js`); the text then has
+   the hint's room too, so there's no gap after the clear button. */
+.search-key {
+  position: absolute;
+  inset-inline-end: var(--sp-2);
+  padding: 0 0.35em;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  pointer-events: none;
+}
+
+.site-search input:focus ~ .search-key,
+.site-search input:not(:placeholder-shown) ~ .search-key,
+:root[data-slash-shortcut="off"] .search-key {
+  display: none;
+}
+
+.site-search input:focus,
+.site-search input:not(:placeholder-shown),
+:root[data-slash-shortcut="off"] .site-search input {
+  padding-inline-end: var(--sp-2);
+}
+
+@media (hover: none), print {
+  .search-key {
+    display: none;
+  }
+
+  .site-search input {
+    padding-inline-end: var(--sp-2);
+  }
+}
+
 .site-nav a {
   padding: var(--sp-1) 0;
 }
 
-/* The tree page shown: its link in the bar, bold and underlined in the accent color. */
+/* The tree links (and Admin): in the text's color, the accent on hover and focus. */
+.site-menu a {
+  color: var(--fg);
+}
+
+.site-menu a:hover,
+.site-menu a:focus-visible {
+  color: var(--accent);
+}
+
+/* The tree page shown: its link in the bar, bold, with an underline in the accent color. */
 .site-menu a[aria-current="page"] {
   font-weight: 600;
   text-decoration: underline 2px var(--accent);
@@ -1145,6 +1216,7 @@ code {
 .tree-page .tree,
 .usage-frame,
 .search-filters > fieldset,
+.search-settings,
 .results-body,
 .upload-controls > fieldset {
   --layer: var(--surface);
@@ -1170,12 +1242,14 @@ code {
 .tree-page .tree,
 .usage-frame,
 .search-filters > fieldset,
+.search-settings,
 .upload-controls > fieldset {
   padding: var(--sp-3) var(--sp-4);
 }
 
 /* A legend inside its card, not on its edge. */
 .search-filters > fieldset > legend,
+.search-settings > legend,
 .upload-controls > fieldset > legend {
   float: left;
   width: 100%;
@@ -1887,8 +1961,14 @@ code {
   margin: 0;
 }
 
-.search-filters label {
+.search-filters label,
+.search-settings label {
   display: block;
+}
+
+/* Under the filters, as their last card; the search page's settings kept in the browser (`static/search.js`). */
+.search-settings {
+  margin: var(--sp-4) 0 0;
 }
 
 /* A wide, tall enough window: the form in a column on the left and the results in a panel on the right, each

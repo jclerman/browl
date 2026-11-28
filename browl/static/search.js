@@ -1,9 +1,32 @@
-// The navigation bar's search box: a WAI-ARIA combobox over htmx's suggestions (U-10, U-17; DESIGN.md §2.9, Search).
+// The navigation bar's search box: a WAI-ARIA combobox over htmx's suggestions (U-10, U-17; DESIGN.md §2.9, Search),
+// its `/` shortcut, and the search page's settings, kept in this browser. Not deferred, so a setting is applied before
+// the page is first drawn.
 (() => {
   "use strict";
   const BOX = "site-search-box";
   const LIST = "site-search-list";
   const STATUS = "site-search-status";
+  const SETTINGS = ".search-settings"; // the search page's settings, hidden in the markup as they need this script
+  const SHORTCUT = { key: "browl.slashShortcut", control: "slash-shortcut" };
+
+  // Settings, each stored as JSON under its `browl.…` key. A setting's value is its fallback if none is stored, if
+  // what is isn't JSON, or if storage fails, e.g. blocked; storing it then fails silently.
+  function setting(key, fallback) {
+    try {
+      const value = localStorage.getItem(key);
+      return value === null ? fallback : JSON.parse(value);
+    } catch {
+      return fallback;
+    }
+  }
+
+  function setSetting(key, value) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      // not remembered
+    }
+  }
   // Whether Escape closed the list since the box's text last changed: an answer to a request already pending, or
   // still waiting out its pause, mustn't reopen it.
   let dismissed = false;
@@ -108,6 +131,77 @@
     }
   });
 
+  // The `/` shortcut, unless turned off on the search page (WCAG 2.1.4). Off, <html>'s `data-slash-shortcut` hides
+  // the box's hint (the stylesheet), and the box no longer announces it.
+  function applyShortcut(on) {
+    if (on) {
+      delete document.documentElement.dataset.slashShortcut;
+    } else {
+      document.documentElement.dataset.slashShortcut = "off";
+    }
+    const { box } = parts();
+    if (box) {
+      if (on) {
+        box.setAttribute("aria-keyshortcuts", "/");
+      } else {
+        box.removeAttribute("aria-keyshortcuts");
+      }
+    }
+    const control = document.getElementById(SHORTCUT.control);
+    if (control) {
+      control.checked = on;
+    }
+  }
+
+  // The stored settings; only `false` turns the shortcut off.
+  function applySettings() {
+    applyShortcut(setting(SHORTCUT.key, true) !== false);
+    for (const group of document.querySelectorAll(`${SETTINGS}[hidden]`)) {
+      group.hidden = false;
+    }
+  }
+
+  document.addEventListener("change", (event) => {
+    if (event.target.id === SHORTCUT.control) {
+      setSetting(SHORTCUT.key, event.target.checked);
+      applyShortcut(event.target.checked); // on this page, even if storage fails
+    }
+  });
+
+  // A page from the back-forward cache, or another tab's change, may show a stale setting.
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) {
+      applySettings();
+    }
+  });
+  window.addEventListener("storage", (event) => {
+    if (event.key === SHORTCUT.key || event.key === null) {
+      applySettings();
+    }
+  });
+
+  // "/" focuses the box from anywhere on the page (DESIGN.md §2.9, Search), but not in a field, where it's typed, nor
+  // with Ctrl, Meta or Alt, the browser's and the system's. Shift and AltGr (which Windows reports as Ctrl+Alt) aren't
+  // modifiers here, as some layouts need them for "/".
+  const editable = (target) =>
+    target instanceof Element && (target.matches("input, textarea, select") || target.isContentEditable);
+  const altGraph = (event) => event.getModifierState("AltGraph") || (event.ctrlKey && event.altKey);
+  const modified = (event) => event.metaKey || (!altGraph(event) && (event.ctrlKey || event.altKey));
+
+  document.addEventListener("keydown", (event) => {
+    const off = document.documentElement.dataset.slashShortcut === "off";
+    if (event.key !== "/" || off || modified(event) || event.isComposing) {
+      return;
+    }
+    const { box } = parts();
+    if (!box || event.defaultPrevented || editable(event.target)) {
+      return;
+    }
+    event.preventDefault(); // so the "/" isn't typed into the box, nor starts the browser's quick find
+    box.focus();
+    box.select(); // so typing replaces a query already there, as on the search page
+  });
+
   // A new list replaces the old: shown if it has options, with nothing active, and its size announced.
   document.addEventListener("htmx:afterSwap", (event) => {
     const { box, list, status } = parts();
@@ -163,4 +257,6 @@
       setActive(box, list, option);
     }
   });
+
+  applySettings();
 })();

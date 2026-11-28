@@ -419,7 +419,7 @@ def test_prose_not_searchable(client: TestClient) -> None:
 
 
 class Checked(html.parser.HTMLParser):
-    """A form's checked inputs, as (name, value).
+    """The navigation bar's form's checked inputs (`form="site-search"`), as (name, value).
 
     Attributes:
         checked: The checked inputs, in order.
@@ -434,7 +434,7 @@ class Checked(html.parser.HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Note a checked input."""
         at = dict(attrs)
-        if tag == "input" and "checked" in at:
+        if tag == "input" and "checked" in at and at.get("form") == "site-search":
             self.checked.append((at.get("name"), at.get("value")))
 
 
@@ -775,12 +775,14 @@ def test_query_kept_in_box(client: TestClient, text: str) -> None:
 
 
 def test_page_filters_belong_to_the_bar(client: TestClient) -> None:
-    """Check that the search page's one box is the bar's, holding its query, and that its filters belong to its form."""
+    """Check that the search page's one box is the bar's, holding its query, and that its filters belong to its form.
+
+    Its setting kept in the browser, "Press / to search", doesn't: it has no name, and no `form=`.
+    """
     text = client.get(SEARCH, params=[("q", "myo"), ("property", LABEL)]).text
     assert 'id="search-text"' not in text
     assert re.search(r'<input id="site-search-box"[^>]*value="myo"', text)
-    inputs = re.findall(r'<input type="(?:checkbox|radio)" name="(\w+)"[^>]*>', text)
-    assert inputs and all(
-        'form="site-search"' in tag for tag in re.findall(r'<input type="(?:checkbox|radio)"[^>]*>', text)
-    )
+    inputs = re.findall(r'<input type="(?:checkbox|radio)" name="\w+"[^>]*>', text)
+    assert inputs and all('form="site-search"' in tag for tag in inputs)
+    assert '<input type="checkbox" id="slash-shortcut" autocomplete="off" checked>' in text
     assert '<button type="submit" form="site-search">Search</button>' in text

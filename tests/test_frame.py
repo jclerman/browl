@@ -55,11 +55,13 @@ SPACING = re.compile(r"(row-|column-)?gap|padding(-\w+)*|border(-\w+)*-radius")
 
 
 class Frame(html.parser.HTMLParser):
-    """A page's frame: its navigation bar's links, as (href, text), and text, and whether it has a footer.
+    """A page's frame: its navigation bar's links, as (href, text), its text and search box, and if it has a footer.
 
     Attributes:
         nav: The navigation bar's links.
         nav_text: The navigation bar's text, with entities decoded.
+        search_box: The elements in the search box's `<span class="search-box">`, in order, as (tag, attributes).
+        search_box_text: That span's text.
         footer: Whether the page has a `<footer>`.
     """
 
@@ -68,13 +70,21 @@ class Frame(html.parser.HTMLParser):
         super().__init__()
         self.nav: list[tuple[str, str]] = []
         self.nav_text = ""
+        self.search_box: list[tuple[str, dict[str, str | None]]] = []
+        self.search_box_text = ""
         self.footer = False
+        self._box_depth = 0  # of `<span>`s, in the search box's
         self._part: list[tuple[str, str]] | None = None
         self._link: tuple[str, list[str]] | None = None
         self.feed(page)
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        """Start a part, or a link in one."""
+        """Start a part, or a link in one, or the search box or an element in it."""
+        if self._box_depth:
+            self.search_box.append((tag, dict(attrs)))
+            self._box_depth += tag == "span"
+        elif tag == "span" and dict(attrs).get("class") == "search-box":
+            self._box_depth = 1
         if tag == "header":
             self._part = self.nav
         elif tag == "footer":
@@ -83,7 +93,9 @@ class Frame(html.parser.HTMLParser):
             self._link = (dict(attrs).get("href") or "", [])
 
     def handle_endtag(self, tag: str) -> None:
-        """End a part, or a link in one."""
+        """End a part, or a link in one, or a `<span>` in the search box."""
+        if self._box_depth and tag == "span":
+            self._box_depth -= 1
         if tag == "header":
             self._part = None
         elif tag == "a" and self._link is not None and self._part is not None:
@@ -91,7 +103,9 @@ class Frame(html.parser.HTMLParser):
             self._link = None
 
     def handle_data(self, data: str) -> None:
-        """Collect a link's text, and the bar's."""
+        """Collect a link's text, the bar's, and the search box's."""
+        if self._box_depth:
+            self.search_box_text += data
         if self._link is not None:
             self._link[1].append(data)
         if self._part is self.nav:
@@ -161,6 +175,25 @@ def test_frame_on_every_page(client: TestClient, path: str) -> None:
     assert not [link for link, _ in page.nav if link.startswith("#")]
 
 
+def test_search_box_shortcut(client: TestClient) -> None:
+    """Check that the box announces its `/` shortcut, and that its magnifier and hint are hidden from assistive tech.
+
+    The hint follows the box, so the stylesheet can hide it once the box has the focus or text (#181).
+    """
+    page = frame(client, "/onto")
+    parts = page.search_box
+    tags = [tag for tag, _ in parts]
+    assert tags.index("span") < tags.index("input") < tags.index("kbd") == len(tags) - 1
+    icon, field, key = (dict(parts)[tag] for tag in ("span", "input", "kbd"))
+    assert icon["class"] == "search-icon"
+    assert icon["aria-hidden"] == "true"
+    assert field["id"] == "site-search-box"
+    assert field["aria-keyshortcuts"] == "/"
+    assert "title" not in field  # no tooltip: the hint shows the shortcut until the box is in use
+    assert key == {"class": "search-key", "aria-hidden": "true"}
+    assert page.search_box_text.strip() == "/"
+
+
 @pytest.mark.parametrize("loaded", [False, True])
 def test_frame_on_unavailable_pages(app: FastAPI, loaded: bool) -> None:
     """Check that "not available" has the frame and policy, without the ontology; "loading" keeps the served one's."""
@@ -203,7 +236,8 @@ def test_no_ontology_iri(app: FastAPI) -> None:
         page = frame(client)
         assert page.nav == [ADVANCED, *TREE_LINKS, ADMIN_LINK, CREDIT]
         labels = " ".join(tree.label for tree in TREES).split()
-        words = ["Search", "the", "ontology", "Advanced", "search", "Browse", *labels, "Admin", "hosted", "with"]
+        # The "/" is the search box's shortcut hint.
+        words = ["Search", "the", "ontology", "/", "Advanced", "search", "Browse", *labels, "Admin", "hosted", "with"]
         assert page.nav_text.split() == words
 
 
