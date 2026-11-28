@@ -1,5 +1,7 @@
 # browl manual
 
+![browl](../../browl/static/browl-wordmark.svg)
+
 browl hosts one OWL ontology as a browsable website: every declared entity gets a page at a URL implied by its IRI.
 This manual covers browl 0.1.0. It has a part for each of the three kinds of people who deal with a browl site:
 
