@@ -2006,10 +2006,13 @@ ONE_PAGE_KEY = "browl.onePage"
 """Where `static/entity-page.js` remembers the toggle."""
 
 
+STORAGE_BLOCKED = "Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('blocked'); } });"
+"""JS blocking `localStorage`, as a browser may: a script to run before each page's."""
+
 STORAGE_FAILS = pytest.mark.parametrize(
     ("storage", "script"),
     [
-        ("blocked", "Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('blocked'); } });"),
+        ("blocked", STORAGE_BLOCKED),
         (
             "full",
             (
@@ -4281,6 +4284,135 @@ def test_slash_while_typing(page: Page, searchable: LiveServer, field: str) -> N
         expect(target).to_have_value("/")
     elif field == "editable":
         expect(target).to_have_text("/")
+
+
+# The `/` shortcut's setting (WCAG 2.1.4, DESIGN.md §2.9 "Search")
+
+SHORTCUT_KEY = "browl.slashShortcut"
+"""Where `static/search.js` keeps the `/` shortcut's setting."""
+
+
+def shortcut_setting(page: Page) -> Locator:
+    """Return the search page's "Press / to search" checkbox."""
+    return page.get_by_role("group", name="In this browser").get_by_role("checkbox", name="Press / to search")
+
+
+def expect_shortcut(page: Page, on: bool) -> None:
+    """Check that the `/` shortcut is on or off: the hint, the box's `aria-keyshortcuts`, and `/` from the page."""
+    search = search_box(page)
+    expect(hint(page)).to_be_visible(visible=on)
+    if on:
+        expect(search).to_have_attribute("aria-keyshortcuts", "/")
+    else:
+        expect(search).not_to_have_attribute("aria-keyshortcuts", re.compile(".*"))
+        assert end_padding(search) == "8px"  # --sp-2: no room kept for the hint
+    page.locator("main h1").first.click()
+    page.keyboard.press("/")
+    if on:
+        expect(search).to_be_focused()
+        search.blur()
+    else:
+        expect(search).not_to_be_focused()
+
+
+def test_shortcut_setting_on(page: Page, searchable: LiveServer) -> None:
+    """Check that the `/` shortcut is on by default, and its setting on the search page checked."""
+    page.goto(f"{searchable.url}/_browl/search")
+    expect(shortcut_setting(page)).to_be_checked()
+    expect_shortcut(page, on=True)
+
+
+def test_shortcut_setting_off(page: Page, searchable: LiveServer) -> None:
+    """Check that turning the `/` shortcut off disables it, across a reload and on other pages, and back on restores it.
+
+    Off, the hint is hidden, and the box doesn't announce the shortcut.
+    """
+    watch_policy(page)
+    page.goto(f"{searchable.url}/_browl/search")
+    shortcut_setting(page).uncheck()
+    expect_shortcut(page, on=False)
+    page.reload()
+    expect(shortcut_setting(page)).not_to_be_checked()
+    expect_shortcut(page, on=False)
+    page.goto(f"{searchable.url}/_browl/tree/classes")
+    expect_shortcut(page, on=False)
+    page.goto(f"{searchable.url}/_browl/search")
+    shortcut_setting(page).check()
+    expect_shortcut(page, on=True)
+    page.reload()
+    expect_shortcut(page, on=True)
+    assert violations(page) == []
+
+
+def test_shortcut_setting_before_drawn(page: Page, searchable: LiveServer) -> None:
+    """Check that the setting is applied before the page has been parsed, so the hint isn't drawn first."""
+    page.add_init_script(f"localStorage.setItem('{SHORTCUT_KEY}', 'false')")
+    held: list[Route] = []
+    page.route("**/search.js", lambda route: held.append(route))
+    page.goto(f"{searchable.url}/_browl/search", wait_until="commit")
+    wait_until(page, lambda: bool(held), "the script's request")
+    # The parser waits for the script: it hasn't gone past it, to entity-page.js's.
+    assert page.evaluate("document.querySelector('script[src$=\"/entity-page.js\"]')") is None
+    held[0].continue_()
+    expect(shortcut_setting(page)).not_to_be_checked()
+    expect(hint(page)).to_be_hidden()
+
+
+def test_shortcut_setting_follows_changes(page: Page, searchable: LiveServer) -> None:
+    """Check that the setting follows another tab's change, and is applied on a page from the back-forward cache."""
+    page.goto(f"{searchable.url}/_browl/tree/classes")
+    other = page.context.new_page()
+    other.goto(f"{searchable.url}/_browl/search")
+    shortcut_setting(other).uncheck()
+    expect(hint(page)).to_be_hidden()
+    page.evaluate(f"localStorage.setItem('{SHORTCUT_KEY}', 'true')")  # a page gets no storage event of its own
+    page.evaluate("window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))")
+    expect(hint(page)).to_be_visible()
+
+
+def test_shortcut_setting_storage_blocked(page: Page, searchable: LiveServer) -> None:
+    """Check that with `localStorage` blocked the shortcut is on, without script errors, and can be turned off.
+
+    Off only on that page, as it can't be kept.
+    """
+    errors: list[PlaywrightError] = []
+    page.on("pageerror", lambda error: errors.append(error))
+    page.add_init_script(STORAGE_BLOCKED)
+    page.goto(f"{searchable.url}/_browl/search")
+    expect(shortcut_setting(page)).to_be_checked()
+    expect_shortcut(page, on=True)
+    shortcut_setting(page).uncheck()
+    expect_shortcut(page, on=False)
+    page.reload()
+    expect_shortcut(page, on=True)
+    assert errors == []
+
+
+@NO_JS
+def test_shortcut_setting_no_js(page: Page, searchable: LiveServer) -> None:
+    """Check that without JS, which the shortcut and its setting need, the setting isn't shown."""
+    page.goto(f"{searchable.url}/_browl/search")
+    expect(page.locator(".search-settings")).to_be_hidden()
+    expect(page.locator("#slash-shortcut")).to_be_hidden()
+
+
+@pytest.mark.parametrize("on", [True, False], ids=["on", "off"])
+def test_shortcut_setting_not_searched(page: Page, searchable: LiveServer, on: bool) -> None:
+    """Check that the setting isn't one of the search's parameters: not in the suggestions' requests, nor submitted."""
+    page.goto(f"{searchable.url}/_browl/search")
+    shortcut_setting(page).set_checked(on)
+    page.locator("input[name=type]").first.check()
+    with page.expect_request(SUGGEST) as suggested:
+        search_box(page).fill("myo")
+    expect(page.get_by_role("option")).to_have_count(2)  # a filter's still applied: Myoblast, all results
+    search_box(page).press("Escape")
+    search_box(page).press("Enter")
+    page.wait_for_url(re.compile(r"[?&]q=myo"))
+    for url in (suggested.value.url, page.url):
+        names = set(urllib.parse.parse_qs(urllib.parse.urlsplit(url).query))
+        assert names <= {"q", "type", "property", "values", "suggest"}, url
+        assert "type" in names, url
+    expect(shortcut_setting(page)).to_be_checked(checked=on)
 
 
 def test_search_suggests_and_keys(page: Page, searchable: LiveServer) -> None:

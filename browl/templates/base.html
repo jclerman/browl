@@ -14,7 +14,6 @@
   <script src="{{ url_for('static', path='links.js').path }}" defer></script>
   <script src="{{ url_for('static', path='tabs.js').path }}" defer></script>
   <script src="{{ url_for('static', path='tree.js').path }}" defer></script>
-  <script src="{{ url_for('static', path='search.js').path }}" defer></script>
   {% if hash_script is defined and hash_script %}
   <script src="{{ url_for('static', path='hash.js').path }}" data-lookup="{{ hash_script.lookup }}"
           data-path="{{ hash_script.path }}" data-prefix-only="{{ hash_script.prefix_only }}" defer></script>
@@ -83,7 +82,9 @@
   <main class="content">
     {% block content %}{% endblock %}
   </main>
-  {# Not deferred, so a remembered "Scroll as one page" is restored before the page is first drawn. #}
+  {# Not deferred, so the search settings and a remembered "Scroll as one page" are applied before the page is first
+     drawn. #}
+  <script src="{{ url_for('static', path='search.js').path }}"></script>
   <script src="{{ url_for('static', path='entity-page.js').path }}"></script>
 </body>
 </html>

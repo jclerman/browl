@@ -272,8 +272,8 @@ code {
 }
 
 /* Muted on the box's --surface: 5.8:1, dark 5.2:1. Hidden once the box has the focus or text, on touch screens,
-   which have no `/` key at hand, and in print; the text then has the hint's room too, so there's no gap after the
-   clear button. */
+   which have no `/` key at hand, in print, and with the shortcut turned off (`static/search.js`); the text then has
+   the hint's room too, so there's no gap after the clear button. */
 .search-key {
   position: absolute;
   inset-inline-end: var(--sp-2);
@@ -287,12 +287,14 @@ code {
 }
 
 .site-search input:focus ~ .search-key,
-.site-search input:not(:placeholder-shown) ~ .search-key {
+.site-search input:not(:placeholder-shown) ~ .search-key,
+:root[data-slash-shortcut="off"] .search-key {
   display: none;
 }
 
 .site-search input:focus,
-.site-search input:not(:placeholder-shown) {
+.site-search input:not(:placeholder-shown),
+:root[data-slash-shortcut="off"] .site-search input {
   padding-inline-end: var(--sp-2);
 }
 
@@ -1214,6 +1216,7 @@ code {
 .tree-page .tree,
 .usage-frame,
 .search-filters > fieldset,
+.search-settings,
 .results-body,
 .upload-controls > fieldset {
   --layer: var(--surface);
@@ -1239,12 +1242,14 @@ code {
 .tree-page .tree,
 .usage-frame,
 .search-filters > fieldset,
+.search-settings,
 .upload-controls > fieldset {
   padding: var(--sp-3) var(--sp-4);
 }
 
 /* A legend inside its card, not on its edge. */
 .search-filters > fieldset > legend,
+.search-settings > legend,
 .upload-controls > fieldset > legend {
   float: left;
   width: 100%;
@@ -1956,8 +1961,14 @@ code {
   margin: 0;
 }
 
-.search-filters label {
+.search-filters label,
+.search-settings label {
   display: block;
+}
+
+/* Under the filters, as their last card; the search page's settings kept in the browser (`static/search.js`). */
+.search-settings {
+  margin: var(--sp-4) 0 0;
 }
 
 /* A wide, tall enough window: the form in a column on the left and the results in a panel on the right, each
