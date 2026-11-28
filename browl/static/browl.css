@@ -238,15 +238,61 @@ code {
   white-space: nowrap;
 }
 
+/* The box, with a magnifier at its start and the `/` shortcut's hint at its end (`static/search.js`). */
+.search-box {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  min-width: 0;
+}
+
 .site-search input {
   box-sizing: border-box;
   width: 100%;
-  padding: var(--sp-1) var(--sp-2);
+  padding-block: var(--sp-1);
+  padding-inline: 2em 2.25em; /* room for the icon and the hint, each at --sp-2 from the box's edge */
   color: var(--fg);
   font: inherit;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+}
+
+.search-icon {
+  position: absolute;
+  inset-inline-start: var(--sp-2);
+  display: flex;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+/* Muted on the box's --surface: 5.8:1, dark 5.2:1. Hidden once the box has the focus or text, and on touch screens,
+   which have no `/` key at hand. */
+.search-key {
+  position: absolute;
+  inset-inline-end: var(--sp-2);
+  padding: 0 0.35em;
+  color: var(--muted);
+  font: var(--text-xs) / 1.4 var(--font-mono);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  pointer-events: none;
+}
+
+.site-search input:focus ~ .search-key,
+.site-search input:not(:placeholder-shown) ~ .search-key {
+  display: none;
+}
+
+@media (hover: none) {
+  .search-key {
+    display: none;
+  }
+
+  .site-search input {
+    padding-inline-end: var(--sp-2);
+  }
 }
 
 .site-nav a {

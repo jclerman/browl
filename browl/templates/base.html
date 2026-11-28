@@ -35,11 +35,20 @@
       {# On the search page, the page's filters belong to this form, and the box holds the page's query. #}
       <form id="site-search" class="site-search" action="{{ frame.search }}" method="get" role="search">
         <label for="site-search-box" class="visually-hidden">Search the ontology</label>
-        <input id="site-search-box" type="search" name="q" placeholder="Search" maxlength="{{ frame.max_query_chars }}"
-               value="{{ search_text | default('') }}" hx-include="[form='site-search']"
-               autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false"
-               aria-controls="site-search-list" hx-get="{{ frame.suggest }}" hx-trigger="input changed delay:150ms"
-               hx-target="#site-search-list" hx-swap="innerHTML" hx-sync="this:replace">
+        {# The magnifier and the `/` shortcut's hint are decorative: the label names the box, and `aria-keyshortcuts`
+           and the title give the shortcut. The hint follows the box, so the stylesheet hides it on focus or with text. #}
+        <span class="search-box">
+          <span class="search-icon" aria-hidden="true"><svg viewBox="0 0 16 16" width="14" height="14" fill="none"
+            stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"/><path
+            d="M10.5 10.5 14 14"/></svg></span>
+          <input id="site-search-box" type="search" name="q" placeholder="Search" maxlength="{{ frame.max_query_chars }}"
+                 value="{{ search_text | default('') }}" hx-include="[form='site-search']" aria-keyshortcuts="/"
+                 title="Search the ontology (shortcut: /)"
+                 autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false"
+                 aria-controls="site-search-list" hx-get="{{ frame.suggest }}" hx-trigger="input changed delay:150ms"
+                 hx-target="#site-search-list" hx-swap="innerHTML" hx-sync="this:replace">
+          <kbd class="search-key" aria-hidden="true">/</kbd>
+        </span>
         <ul id="site-search-list" class="search-list" role="listbox" aria-label="Suggestions" hidden></ul>
         <span id="site-search-status" class="visually-hidden" role="status"></span>
         {# The full results page, with its filters, without having to search first. #}

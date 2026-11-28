@@ -108,6 +108,25 @@
     }
   });
 
+  // "/" jumps to the box from anywhere on the page, as on many sites; the box's hint shows it, and `aria-keyshortcuts`
+  // announces it. Not while typing, or choosing in a form's control, and not with a modifier, so the browser's and
+  // the system's shortcuts, and "/" typed in a field, are left alone. Shift isn't a modifier here: some layouts need it.
+  const editable = (target) =>
+    target instanceof Element && (target.matches("input, textarea, select") || target.isContentEditable);
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "/" || event.ctrlKey || event.metaKey || event.altKey || event.isComposing) {
+      return;
+    }
+    const { box } = parts();
+    if (!box || event.defaultPrevented || editable(event.target)) {
+      return;
+    }
+    event.preventDefault(); // so the "/" isn't typed into the box, nor starts the browser's quick find
+    box.focus();
+    box.select(); // so typing replaces a query already there, as on the search page
+  });
+
   // A new list replaces the old: shown if it has options, with nothing active, and its size announced.
   document.addEventListener("htmx:afterSwap", (event) => {
     const { box, list, status } = parts();

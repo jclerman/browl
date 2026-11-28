@@ -4076,6 +4076,109 @@ def typed(page: Page, server: LiveServer, text: str) -> Locator:
     return box
 
 
+def hint(page: Page) -> Locator:
+    """Return the search box's hint of its `/` shortcut."""
+    return page.locator(".site-search .search-key")
+
+
+@pytest.mark.parametrize("size", [WIDE, NARROW], ids=["wide", "narrow"])
+def test_search_box_icon_and_hint(page: Page, searchable: LiveServer, size: dict[str, int]) -> None:
+    """Check the box's magnifier at its start and its `/` hint at its end, hidden on focus and with text (#181).
+
+    The suggestions still open under the box, from its start.
+    """
+    page.set_viewport_size(size)
+    page.goto(f"{searchable.url}/_browl/search")
+    search, icon = search_box(page), page.locator(".site-search .search-icon")
+    expect(icon).to_be_visible()
+    expect(hint(page)).to_have_text("/")
+    field, at_start, at_end = box(search), box(icon), box(hint(page))
+    assert field["x"] < at_start["x"] < at_start["x"] + at_start["width"] < field["x"] + field["width"] / 4
+    assert (
+        field["x"] + field["width"] * 3 / 4 < at_end["x"] < at_end["x"] + at_end["width"] < field["x"] + field["width"]
+    )
+    text_start = search.evaluate(
+        "(each) => each.getBoundingClientRect().x + parseFloat(getComputedStyle(each).paddingLeft)"
+    )
+    assert text_start >= at_start["x"] + at_start["width"]  # the text starts after the icon
+    search.focus()
+    expect(hint(page)).to_be_hidden()
+    search.blur()
+    expect(hint(page)).to_be_visible()
+    search.fill("myo")
+    search.blur()
+    expect(hint(page)).to_be_hidden()
+    search.focus()
+    expect(page.get_by_role("option")).to_have_count(3)
+    assert abs(box(page.get_by_role("listbox"))["x"] - field["x"]) < 1
+    assert_fits(page)
+
+
+def test_search_hint_query_shown(page: Page, searchable: LiveServer) -> None:
+    """Check that on the search page, whose box holds the query, the hint is hidden."""
+    page.goto(f"{searchable.url}/_browl/search?q=myo")
+    expect(search_box(page)).to_have_value("myo")
+    expect(hint(page)).to_be_hidden()
+
+
+@pytest.mark.browser_context_args(has_touch=True, is_mobile=True)
+def test_search_hint_touch(page: Page, searchable: LiveServer) -> None:
+    """Check that a touch screen, which has no `/` key at hand, doesn't show the hint."""
+    page.goto(f"{searchable.url}/_browl/search")
+    assert page.evaluate("matchMedia('(hover: none)').matches")
+    expect(page.locator(".site-search .search-icon")).to_be_visible()
+    expect(hint(page)).to_be_hidden()
+
+
+def test_slash_focuses_box(page: Page, searchable: LiveServer) -> None:
+    """Check that `/` focuses the box from the page, selecting its text, without typing a "/" (#181)."""
+    watch_policy(page)
+    page.goto(f"{searchable.url}/_browl/search?q=myo")
+    box = search_box(page)
+    page.locator("main h1").first.click()
+    page.keyboard.press("/")
+    expect(box).to_be_focused()
+    expect(box).to_have_value("myo")
+    assert box.evaluate("(each) => [each.selectionStart, each.selectionEnd]") == [0, 3]
+    page.keyboard.type("heart")
+    expect(box).to_have_value("heart")
+    assert violations(page) == []
+
+
+@pytest.mark.parametrize("key", ["Control+/", "Meta+/", "Alt+/"])
+def test_slash_with_modifier(page: Page, searchable: LiveServer, key: str) -> None:
+    """Check that `/` with a modifier is left to the browser and the system: the box isn't focused."""
+    page.goto(f"{searchable.url}/_browl/search")
+    page.locator("main h1").first.click()
+    page.keyboard.press(key)
+    expect(search_box(page)).not_to_be_focused()
+
+
+@pytest.mark.parametrize("field", ["box", "checkbox", "input", "textarea", "select", "editable"])
+def test_slash_while_typing(page: Page, searchable: LiveServer, field: str) -> None:
+    """Check that `/` typed in a field, or pressed on a form's control, stays there: the box isn't focused.
+
+    The fields are the box itself, a filter of the search page, and others added to the page.
+    """
+    page.goto(f"{searchable.url}/_browl/search")
+    page.evaluate(
+        """() => document.querySelector('main').insertAdjacentHTML('beforeend', '<input id="t-input">'
+        + '<textarea id="t-textarea"></textarea><select id="t-select"><option>a</option></select>'
+        + '<div id="t-editable" contenteditable="true"></div>')"""
+    )
+    target = {
+        "box": search_box(page),
+        "checkbox": page.locator("input[name=type]").first,
+    }.get(field, page.locator(f"#t-{field}"))
+    target.focus()
+    page.keyboard.press("/")
+    expect(target).to_be_focused()
+    if field in ("box", "input", "textarea"):
+        expect(target).to_have_value("/")
+    elif field == "editable":
+        expect(target).to_have_text("/")
+
+
 def test_search_suggests_and_keys(page: Page, searchable: LiveServer) -> None:
     """Check the combobox pattern's keys, pointer and focus, and the status region (U-17).
 

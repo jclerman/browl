@@ -161,6 +161,22 @@ def test_frame_on_every_page(client: TestClient, path: str) -> None:
     assert not [link for link, _ in page.nav if link.startswith("#")]
 
 
+def test_search_box_shortcut(client: TestClient) -> None:
+    """Check that the box announces its `/` shortcut, and that its magnifier and hint are hidden from assistive tech.
+
+    The hint follows the box, so the stylesheet can hide it once the box has the focus or text (#181).
+    """
+    page = client.get("/onto").text
+    match = re.search(r'<span class="search-box">(.*?)</span>\s*<ul id="site-search-list"', page, re.DOTALL)
+    assert match is not None
+    icon, field, key = re.findall(r'<span class="search-icon"[^>]*>|<input [^>]*>|<kbd [^>]*>/</kbd>', match[1])
+    assert 'aria-hidden="true"' in icon
+    assert 'id="site-search-box"' in field
+    assert 'aria-keyshortcuts="/"' in field
+    assert re.search(r'title="[^"]*shortcut: /[^"]*"', field)
+    assert key == '<kbd class="search-key" aria-hidden="true">/</kbd>'
+
+
 @pytest.mark.parametrize("loaded", [False, True])
 def test_frame_on_unavailable_pages(app: FastAPI, loaded: bool) -> None:
     """Check that "not available" has the frame and policy, without the ontology; "loading" keeps the served one's."""
@@ -203,7 +219,8 @@ def test_no_ontology_iri(app: FastAPI) -> None:
         page = frame(client)
         assert page.nav == [ADVANCED, *TREE_LINKS, ADMIN_LINK, CREDIT]
         labels = " ".join(tree.label for tree in TREES).split()
-        words = ["Search", "the", "ontology", "Advanced", "search", "Browse", *labels, "Admin", "hosted", "with"]
+        # The "/" is the search box's shortcut hint.
+        words = ["Search", "the", "ontology", "/", "Advanced", "search", "Browse", *labels, "Admin", "hosted", "with"]
         assert page.nav_text.split() == words
 
 
