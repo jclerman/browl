@@ -794,6 +794,52 @@ def test_narrow_bar_one_row(page: Page, server: LiveServer) -> None:
     assert abs(panel["x"] + panel["width"] - box(button)["x"] - box(button)["width"]) < 2
 
 
+def link_colors(page: Page, link: Locator) -> tuple[str, str, str]:
+    """Return a link's color as shown, hovered, and focused from the keyboard."""
+    color = "(each) => getComputedStyle(each).color"
+    page.mouse.move(0, 0)
+    shown = link.evaluate(color)
+    link.hover()
+    hovered = link.evaluate(color)
+    page.mouse.move(0, 0)
+    page.keyboard.press("Shift")  # a key, so the focus that follows shows as from the keyboard
+    link.focus()
+    assert link.evaluate("(each) => each.matches(':focus-visible')")
+    focused = link.evaluate(color)
+    link.blur()
+    return shown, hovered, focused
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+@pytest.mark.parametrize("size", [WIDE, NARROW], ids=["wide", "narrow"])
+def test_bar_links_look(page: Page, trees: LiveServer, scheme: str, size: dict[str, int]) -> None:
+    """Check the bar's tree links, in the bar or the narrow menu's panel, and "Advanced search" (#181).
+
+    The tree links are in the text's color, the accent on hover and focus; the tree page shown is bold, with the
+    accent's underline. "Advanced search" is small and muted.
+    """
+    page.emulate_media(color_scheme=scheme)  # type: ignore[arg-type]
+    page.set_viewport_size(size)
+    page.goto(f"{trees.url}/_browl/tree/classes")
+    nav = page.get_by_role("navigation", name="Site")
+    if size == NARROW:
+        nav.locator(".site-menu summary").click()
+    fg, accent, muted = (token_color(page, each) for each in ("fg", "accent", "muted"))
+    current, other = nav.get_by_role("link", name="Classes"), nav.get_by_role("link", name="Object properties")
+    assert link_colors(page, other) == (fg, accent, accent)
+    assert link_colors(page, current) == (fg, accent, accent)
+    style = """(each) => { const style = getComputedStyle(each);
+        return [style.fontWeight, style.textDecorationLine, style.textDecorationColor]; }"""
+    page.mouse.move(0, 0)
+    assert current.evaluate(style) == ["600", "underline", accent]
+    assert other.evaluate(style)[:2] == ["400", "none"]
+    advanced = nav.get_by_role("link", name="Advanced search")
+    assert advanced.evaluate("(each) => getComputedStyle(each).color") == muted
+    size_of = "(each) => parseFloat(getComputedStyle(each).fontSize)"
+    assert advanced.evaluate(size_of) < page.locator("body").evaluate(size_of)
+    assert_fits(page)
+
+
 def test_fonts_and_measure(page: Page, server: LiveServer) -> None:
     """Check the system font for text, a monospace font for IRIs, and that paragraphs are capped at a readable width."""
     page.set_viewport_size(WIDE)

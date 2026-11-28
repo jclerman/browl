@@ -230,8 +230,10 @@ code {
   max-width: 32rem;
 }
 
+/* Small and muted, so the box and the tree links lead: --muted is 4.8:1 on --bar-bg, dark 5.2:1. */
 .search-page-link {
   flex: none;
+  color: var(--muted);
   font-size: var(--text-sm);
   white-space: nowrap;
 }
@@ -251,7 +253,17 @@ code {
   padding: var(--sp-1) 0;
 }
 
-/* The tree page shown: its link in the bar, bold and underlined in the accent color. */
+/* The tree links (and Admin): in the text's color, the accent on hover and focus. */
+.site-menu a {
+  color: var(--fg);
+}
+
+.site-menu a:hover,
+.site-menu a:focus-visible {
+  color: var(--accent);
+}
+
+/* The tree page shown: its link in the bar, bold, with an underline in the accent color. */
 .site-menu a[aria-current="page"] {
   font-weight: 600;
   text-decoration: underline 2px var(--accent);
