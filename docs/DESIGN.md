@@ -1815,7 +1815,8 @@ Every page has the same frame (U-27, U-28, U-29):
   words, small (`--text-sm`) and muted (4.8:1 on the bar, dark 5.2:1): an unlabeled filter icon in the box was less
   discoverable for domain experts. The search box has a magnifier at its start and, at its end, a hint of its `/`
   shortcut (below, Search); both are decorative (`aria-hidden`), muted on the box's surface. The hint hides once the
-  box has the focus or text, and on touch screens (`hover: none`), which have no `/` key at hand.
+  box has the focus or text, on touch screens (`hover: none`), which have no `/` key at hand, and in print; the
+  box's text then has its room too.
 - On a tree page, that tree's link is marked (`aria-current="page"`, bold, with an underline in the accent color),
   and the narrow screens' menu button names it ("Browse: Classes"), so the page is clear when scrolled.
 - The ontology name is its title, else its IRI, capped in length; it's read once per generation (`PageFrame`). The bar

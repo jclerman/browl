@@ -238,8 +238,12 @@ code {
   white-space: nowrap;
 }
 
-/* The box, with a magnifier at its start and the `/` shortcut's hint at its end (`static/search.js`). */
+/* The box, with a magnifier at its start and the `/` shortcut's hint at its end (`static/search.js`). The text's room
+   at each end: the icon's or the hint's width, at --sp-2 from the box's edge and from the text. */
 .search-box {
+  --icon-room: calc(var(--sp-2) * 2 + 14px); /* the magnifier's width */
+  --hint-room: calc(var(--sp-2) * 2 + 1.25em); /* about the hint's: "/", its padding and its border */
+
   position: relative;
   display: flex;
   flex: 1 1 auto;
@@ -251,7 +255,7 @@ code {
   box-sizing: border-box;
   width: 100%;
   padding-block: var(--sp-1);
-  padding-inline: 2em 2.25em; /* room for the icon and the hint, each at --sp-2 from the box's edge */
+  padding-inline: var(--icon-room) var(--hint-room);
   color: var(--fg);
   font: inherit;
   background: var(--surface);
@@ -267,14 +271,16 @@ code {
   pointer-events: none;
 }
 
-/* Muted on the box's --surface: 5.8:1, dark 5.2:1. Hidden once the box has the focus or text, and on touch screens,
-   which have no `/` key at hand. */
+/* Muted on the box's --surface: 5.8:1, dark 5.2:1. Hidden once the box has the focus or text, on touch screens,
+   which have no `/` key at hand, and in print; the text then has the hint's room too, so there's no gap after the
+   clear button. */
 .search-key {
   position: absolute;
   inset-inline-end: var(--sp-2);
   padding: 0 0.35em;
   color: var(--muted);
-  font: var(--text-xs) / 1.4 var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.4;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   pointer-events: none;
@@ -285,7 +291,12 @@ code {
   display: none;
 }
 
-@media (hover: none) {
+.site-search input:focus,
+.site-search input:not(:placeholder-shown) {
+  padding-inline-end: var(--sp-2);
+}
+
+@media (hover: none), print {
   .search-key {
     display: none;
   }

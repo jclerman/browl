@@ -4081,18 +4081,42 @@ def hint(page: Page) -> Locator:
     return page.locator(".site-search .search-key")
 
 
+def icon(page: Page) -> Locator:
+    """Return the search box's magnifier."""
+    return page.locator(".site-search .search-icon")
+
+
+def text_end(search: Locator) -> float:
+    """Return where a box's text can run to: its content's end, inside its end padding and border (left to right)."""
+    end: float = search.evaluate(
+        """(each) => { const style = getComputedStyle(each);
+        return each.getBoundingClientRect().right - parseFloat(style.paddingRight) - parseFloat(style.borderRightWidth);
+        }"""
+    )
+    return end
+
+
+def end_padding(search: Locator) -> str:
+    """Return a box's end padding, e.g. `8px`."""
+    padding: str = search.evaluate("(each) => getComputedStyle(each).paddingInlineEnd")
+    return padding
+
+
 @pytest.mark.parametrize("size", [WIDE, NARROW], ids=["wide", "narrow"])
 def test_search_box_icon_and_hint(page: Page, searchable: LiveServer, size: dict[str, int]) -> None:
     """Check the box's magnifier at its start and its `/` hint at its end, hidden on focus and with text (#181).
 
-    The suggestions still open under the box, from its start.
+    Both are muted, and the text runs from after the icon to before the hint; with the hint hidden, to the box's end
+    padding. The suggestions still open under the box, from its start.
     """
     page.set_viewport_size(size)
     page.goto(f"{searchable.url}/_browl/search")
-    search, icon = search_box(page), page.locator(".site-search .search-icon")
-    expect(icon).to_be_visible()
+    search = search_box(page)
+    expect(icon(page)).to_be_visible()
     expect(hint(page)).to_have_text("/")
-    field, at_start, at_end = box(search), box(icon), box(hint(page))
+    muted = token_color(page, "muted")
+    assert [each.evaluate("(each) => getComputedStyle(each).color") for each in (icon(page), hint(page))] == [muted] * 2
+    field, at_start, at_end = box(search), box(icon(page)), box(hint(page))
     assert field["x"] < at_start["x"] < at_start["x"] + at_start["width"] < field["x"] + field["width"] / 4
     assert (
         field["x"] + field["width"] * 3 / 4 < at_end["x"] < at_end["x"] + at_end["width"] < field["x"] + field["width"]
@@ -4101,17 +4125,34 @@ def test_search_box_icon_and_hint(page: Page, searchable: LiveServer, size: dict
         "(each) => each.getBoundingClientRect().x + parseFloat(getComputedStyle(each).paddingLeft)"
     )
     assert text_start >= at_start["x"] + at_start["width"]  # the text starts after the icon
+    assert text_end(search) <= at_end["x"]  # and ends before the hint
+    hint_room = end_padding(search)
     search.focus()
     expect(hint(page)).to_be_hidden()
+    assert end_padding(search) == "8px"  # --sp-2
     search.blur()
     expect(hint(page)).to_be_visible()
+    assert end_padding(search) == hint_room
     search.fill("myo")
     search.blur()
     expect(hint(page)).to_be_hidden()
+    assert end_padding(search) == "8px"  # no gap after the clear button
     search.focus()
     expect(page.get_by_role("option")).to_have_count(3)
     assert abs(box(page.get_by_role("listbox"))["x"] - field["x"]) < 1
     assert_fits(page)
+
+
+def test_search_box_width(page: Page, searchable: LiveServer) -> None:
+    """Check that on a wide screen the box fills the form, beside "Advanced search" (#181)."""
+    page.set_viewport_size(WIDE)
+    page.goto(f"{searchable.url}/_browl/search")
+    form, field = box(page.locator(".site-search")), box(search_box(page))
+    link = box(page.get_by_role("link", name="Advanced search"))
+    gap = rem(page) / 2  # --sp-2
+    assert abs(field["x"] - form["x"]) < 1
+    assert abs(link["x"] - gap - (field["x"] + field["width"])) < 1
+    assert abs(link["x"] + link["width"] - (form["x"] + form["width"])) < 1
 
 
 def test_search_hint_query_shown(page: Page, searchable: LiveServer) -> None:
@@ -4123,11 +4164,21 @@ def test_search_hint_query_shown(page: Page, searchable: LiveServer) -> None:
 
 @pytest.mark.browser_context_args(has_touch=True, is_mobile=True)
 def test_search_hint_touch(page: Page, searchable: LiveServer) -> None:
-    """Check that a touch screen, which has no `/` key at hand, doesn't show the hint."""
+    """Check that a touch screen, which has no `/` key at hand, doesn't show the hint, nor keep its room."""
     page.goto(f"{searchable.url}/_browl/search")
     assert page.evaluate("matchMedia('(hover: none)').matches")
-    expect(page.locator(".site-search .search-icon")).to_be_visible()
+    expect(icon(page)).to_be_visible()
     expect(hint(page)).to_be_hidden()
+    assert end_padding(search_box(page)) == "8px"  # --sp-2
+
+
+def test_search_hint_printed(page: Page, searchable: LiveServer) -> None:
+    """Check that printed, where a keycap means nothing, the hint is hidden, and the box keeps no room for it."""
+    page.goto(f"{searchable.url}/_browl/search")
+    expect(hint(page)).to_be_visible()
+    page.emulate_media(media="print")
+    expect(hint(page)).to_be_hidden()
+    assert end_padding(search_box(page)) == "8px"  # --sp-2
 
 
 def test_slash_focuses_box(page: Page, searchable: LiveServer) -> None:
