@@ -47,3 +47,11 @@ repos:
     rev: v0.24.1
     hooks:
       - id: markdownlint-cli2
+
+  - repo: https://github.com/lycheeverse/lychee
+    rev: lychee-v0.24.2
+    hooks:
+      # Links within the repo, and their #anchors, in Markdown; --offline skips web links, which change on their own.
+      - id: lychee
+        args: [--offline, --include-fragments, --no-progress]
+        types: [markdown]

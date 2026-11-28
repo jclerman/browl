@@ -34,6 +34,7 @@ instructions specific to coding agents. Requirements and architecture are in [`D
 - **mypy** for type checking (see [Typing](#typing)).
 - **yamllint** (strict, line length 120) and **actionlint** for YAML and GitHub Actions workflows.
 - **markdownlint-cli2** for Markdown, line length 120 (tables exempt).
+- **lychee** for Markdown's links within the repo and their `#` anchors (`--offline`: web links aren't checked).
 - HTML templates, CSS and JavaScript aren't linted yet. Add linters for them once there's more than a little of each.
 
 ## Typing

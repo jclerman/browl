@@ -14,8 +14,9 @@ For anyone browsing an ontology on a browl site. No account or sign-in is needed
 
 ## The home page
 
-The ontology's own page: its title, IRI and version, its annotations, its imports, how many entities of each kind and
-how many triples it has, and whether a reasoner was applied, and which. An import that couldn't be loaded is listed in
+The ontology's own page: its title, IRI and version, whether a reasoner was applied, and which, when it was loaded, how
+many classes and properties of each kind it has, how many axioms and triples, its annotations, the CURIE prefixes the
+site uses, and its imports. An import that couldn't be loaded is listed in
 red, with the reason, as its entities are missing from the site.
 
 ![The home page of a small demo ontology, the Companion Animals Ontology: its IRI, version, reasoner, entity and axiom counts, annotations, prefixes and imports](screenshots/home.png)
@@ -25,7 +26,8 @@ red, with the reason, as its entities are missing from the site.
 On every page:
 
 - The ontology's name, linking to its home page.
-- The **search box**, with suggestions as you type ([Search](#search)). Press `/` anywhere to jump to it.
+- The **search box**, with suggestions as you type ([Search](#search)). Press `/` anywhere to jump to it; the
+  Advanced search page's "In this browser" section turns that shortcut off.
   **Advanced search** opens the full search page, with filters.
 - Links to the tree pages, one for each kind of entity that has a hierarchy: **Classes**, **Object properties**,
   **Data properties** and **Annotation properties**. On a narrow screen they're under a **Browse** menu.
@@ -60,10 +62,13 @@ Every entity mentioned anywhere is a link to its page.
 
 Beside the tabs, the **hierarchy column** shows where the entity sits: its ancestors, merged into one tree, and its
 direct children, with each node's number of children and of all descendants. It can show the entity's siblings, be
-widened by dragging its edge, or folded away.
+widened by dragging its edge, or folded away. An IRI that's in more than one hierarchy (say, both a class and an
+individual) gets a tree for each.
 
 **Scroll as one page** puts the whole page in one scroll, with no panel scrolling on its own. It's used automatically
 on small screens and for printing, and your choice is remembered in your browser.
+
+Equivalent classes each keep their own page, and each page lists the others under **Equivalent To**.
 
 Some IRIs share a page address, typically the `http` and `https` forms of one IRI. Their address then shows a page for
 choosing between them.

@@ -1,8 +1,8 @@
 # Operating browl
 
 For operators: deploying browl, configuring it, and keeping it running. [Docker Compose](#deploying-with-docker-compose)
-is the supported deployment; [Kubernetes](#deploying-on-kubernetes) describes what any other platform must provide,
-with example manifests.
+is the supported deployment. For Kubernetes, or any other platform, read this page first, then
+[Deploying on Kubernetes](kubernetes.md), which says what a platform must provide, with example manifests.
 
 **Contents:**
 
@@ -14,7 +14,6 @@ with example manifests.
 - [Upgrading](#upgrading)
 - [Backups](#backups)
 - [Logs and health](#logs-and-health)
-- [Deploying on Kubernetes](#deploying-on-kubernetes)
 - [Troubleshooting](#troubleshooting)
 
 ## What you're deploying
@@ -49,18 +48,20 @@ derived database. [DESIGN.md](../DESIGN.md#data-and-persistence) has the details
 - **A domain name and HTTPS** for anything but a local trial: Google sign-in accepts `http` only for `localhost`.
 - **A Google OAuth client**, which you register yourself ([`AUTHENTICATION.md`](../AUTHENTICATION.md)). It's free and
   needs no billing.
-- **Memory**, which depends on the ontology:
+- **Memory**, which depends on the ontology. Figures are in GiB and MiB (a heap setting's `g` and `m` mean the same);
+  disk sizes below are in GB.
 
   | Container | Needs | Default settings |
   | --- | --- | --- |
   | fuseki | Its heap (`FUSEKI_HEAP`) plus about 0.5 GiB. NCBITaxon (2.6 M classes) needs about 500 MiB of heap | 1.5 GiB |
-  | sandbox | `REASONER_MAX_HEAP` plus about 0.5 GiB, only while a reasoner runs. ELK needs about 1 GB for Uberon and 16 GB for NCBITaxon | 8.5 GiB while reasoning |
-  | app | Its JVM's heap (`APP_JVM_MAX_HEAP`, 1 GB) plus the Python process, which builds the derived data after each load | Not yet measured; watch `docker stats` during your ontology's first load |
+  | sandbox | `REASONER_MAX_HEAP` plus about 0.5 GiB, only while a reasoner runs. ELK needs about 1 GiB for Uberon and 16 GiB for NCBITaxon | 8.5 GiB while reasoning |
+  | app | Its JVM's heap (`APP_JVM_MAX_HEAP`, 1 GiB) plus the Python process, which builds the derived data after each load | Not yet measured; watch `docker stats` during your ontology's first load |
 
   Fuseki's store is memory-mapped, so spare memory makes pages faster.
-- **Disk**, roughly: the upload (up to 20 GB by default) and the reasoner's output, which can be much larger, on the
-  jobs volume, with 1 GB to spare; the TDB2 store, a few times the ontology's Turtle size (3.7 GB for NCBITaxon), on
-  the fuseki volume, twice over while a new upload replaces it; and the derived databases on the data volume.
+- **Disk**, roughly: on the jobs volume, the upload (up to 20 GB by default), its fetched imports, and the reasoner's
+  output, which can be much larger, with 1 GB to spare; on the fuseki volume, the TDB2 store, a few times the
+  ontology's Turtle size (3.7 GB for NCBITaxon), twice over while a new upload replaces it; and on the data volume, the
+  derived databases, also twice over during a load.
 
 ## Deploying with Docker Compose
 
@@ -171,22 +172,34 @@ load balancer). Set `BASE_URL` to the public `https` address. browl builds its s
 `BASE_URL`, not from the request, so the proxy needn't pass forwarding headers, and session cookies are marked `Secure`
 when `BASE_URL` is `https`.
 
-Uploads can be many gigabytes, so the proxy must let them through:
+Uploads can be many gigabytes, so the proxy must let them through to the upload page, `/_browl/admin/upload`:
 
-- no limit on the request body below `MAX_UPLOAD_BYTES`;
+- no limit on the request body below `MAX_UPLOAD_BYTES` (browl enforces that limit itself, as the file streams in);
 - stream the body to browl rather than buffering it first, so the upload's progress shows and the proxy needs no disk
   for it;
 - long enough timeouts for the upload to arrive.
 
-With nginx, for example:
+Lift the limits for that path only, so the rest of the site keeps the proxy's defaults. Also redirect `http` to
+`https`, and send HSTS, so browsers use `https` from then on. With nginx, for example:
 
 ```nginx
+server {
+    listen 80;
+    server_name ontology.example.org;
+    return 301 https://$host$request_uri;
+}
+
 server {
     listen 443 ssl;
     server_name ontology.example.org;
     # ssl_certificate …
+    add_header Strict-Transport-Security "max-age=31536000" always;
 
     location / {
+        proxy_pass http://127.0.0.1:8000;
+    }
+
+    location = /_browl/admin/upload {
         proxy_pass http://127.0.0.1:8000;
         client_max_body_size 0;
         proxy_request_buffering off;
@@ -196,7 +209,9 @@ server {
 }
 ```
 
-Caddy needs no extra settings: `ontology.example.org { reverse_proxy 127.0.0.1:8000 }`.
+Caddy redirects to `https` itself and has no body limit by default:
+`ontology.example.org { reverse_proxy 127.0.0.1:8000 }`. Add a `header Strict-Transport-Security max-age=31536000`
+line for HSTS.
 
 With the proxy on the same host, set `BROWL_PORT=127.0.0.1:8000`, so browl's plain-HTTP port isn't reachable from
 other machines: Docker publishes ports on every interface by default, past host firewalls such as ufw and firewalld.
@@ -261,332 +276,19 @@ Restore both from the same backup: the job state on `data` names the store on `f
 ## Logs and health
 
 `docker compose logs -f app` follows the app's log, which records each load's stages and any errors; `fuseki` and
-`sandbox` log too. Docker keeps the logs until a container is removed.
+`sandbox` log too. Docker keeps the logs until a container is removed, and by default never rotates them, so on a
+long-running host, cap them in Docker's `/etc/docker/daemon.json` (then restart Docker):
+
+```json
+{
+  "log-driver": "json-file",
+  "log-opts": {"max-size": "10m", "max-file": "5"}
+}
+```
 
 `/_browl/health` answers `{"status":"ok","fuseki":"up"}` while the app is up, with `"down"` if Fuseki doesn't answer.
 It answers even while the site is loading or unavailable, so use it for uptime checks. Each container has its own
 health check, which `docker compose ps` shows.
-
-## Deploying on Kubernetes
-
-browl's CI tests only the Compose deployment, so treat this section, and its manifests, as a starting point: check
-them against your cluster. Any platform must provide what Compose does:
-
-1. **One replica of each container, never two.** browl keeps its state in SQLite and runs one worker process; a
-   second app replica would corrupt its job state. Use `replicas: 1` and the `Recreate` strategy, so an old pod is gone
-   before its replacement starts.
-2. **Shared volumes.** The app and Fuseki share the `fuseki` volume, and the app and sandbox share `jobs` and
-   `sandbox` (a Unix socket, which works only on a local file system). The simplest arrangement that keeps the sandbox
-   isolated: the app and Fuseki in one pod, the sandbox in a second pod, both pinned to one node, sharing
-   `ReadWriteOnce` volumes. `ReadWriteOnce` admits several pods on one node; `ReadWriteOncePod` doesn't, so don't use
-   it for `jobs` or `sandbox`. Pin both pods to the node with a label: without that, a recreated app pod can land on
-   another node and wait forever for volumes the sandbox's pod holds ("Multi-Attach error").
-3. **No network for the sandbox.** Containers in one pod share its network, so the sandbox can't be a container in the
-   app's pod. Give its pod a NetworkPolicy that denies all ingress and egress, which needs a network plugin that
-   enforces NetworkPolicy (Calico, Cilium, …); some clusters' defaults don't, and then ignore the policy without an
-   error. Without one, the sandbox isn't isolated; don't run it so in production. [Check it](#checking-the-isolation)
-   once deployed.
-4. **Fuseki reachable from the app only.** In one pod, the app reaches it at `http://localhost:3030`. Set
-   `FUSEKI_HOST=127.0.0.1` on Fuseki's container, so it listens only inside the pod, whatever the network plugin; the
-   pod's NetworkPolicy, which admits ingress only to port 8000, is a second line of defense.
-5. **uid 10001 throughout.** The app writes stores that Fuseki opens and deletes, and the sandbox's socket admits only
-   its own user. Set `runAsUser`, `runAsGroup` and `fsGroup` to 10001, so new volumes are writable.
-6. **The sandbox's other restrictions**: a read-only root file system with a 256 MiB in-memory `/tmp`, no capabilities,
-   no privilege escalation, no service account token and no service links. Compose's `init: true` reaps the tools'
-   orphaned processes; `shareProcessNamespace: true` does the same here, since the pod's pause process is then PID 1.
-   Compose also caps its processes and open files; in Kubernetes, the process limit is the kubelet's `podPidsLimit`,
-   and the open-files limit the container runtime's.
-7. **No Kubernetes API access for the app either.** The app parses uploaded ontologies, so give its pod no service
-   account token.
-8. **Probes that don't restart a container mid-load.** A restart fails a running load, and an interrupted rebuild
-   isn't retried. Give probes Compose's 5 s timeout and room for a busy moment.
-9. **A reverse proxy that admits large uploads**, as [above](#https-and-reverse-proxies).
-
-### Images
-
-Build the images from the release and push them to a registry your cluster can pull from:
-
-```sh
-git checkout v0.1.0
-docker build -t registry.example.org/browl-app:0.1.0 .
-docker build -t registry.example.org/browl-fuseki:0.1.0 docker/fuseki
-docker push registry.example.org/browl-app:0.1.0
-docker push registry.example.org/browl-fuseki:0.1.0
-```
-
-Build on, or for (`docker buildx build --platform …`), your nodes' architecture.
-
-### Manifests
-
-The settings, then the volumes, the two pods, their network policies, and the service and ingress. Sizes and memory
-figures are placeholders, from the defaults above; set them for your ontology. Fuseki runs as a native sidecar
-(Kubernetes 1.29 or later), so it's answering before the app starts, as Compose's `depends_on` ensures.
-
-First label the node both pods run on (and keep the OIDC secret out of any file you commit):
-
-```sh
-kubectl label node <node-name> browl.example.org/node=true
-kubectl create secret generic browl-secrets \
-  --from-literal=OIDC_CLIENT_ID=1234567890-abc.apps.googleusercontent.com \
-  --from-literal=OIDC_CLIENT_SECRET='GOCSPX-…' \
-  --from-literal=SEED_ADMINS='["you@example.org"]'
-```
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: browl-config
-data:
-  BASE_URL: https://ontology.example.org/
-  # Any other settings, e.g.
-  # NAME_PROPERTIES: '["rdfs:label", "skos:prefLabel"]'
-
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: browl-data
-spec:
-  accessModes: [ReadWriteOnce]
-  resources: {requests: {storage: 20Gi}}
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: browl-fuseki
-spec:
-  accessModes: [ReadWriteOnce]
-  resources: {requests: {storage: 50Gi}}
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: browl-jobs
-spec:
-  accessModes: [ReadWriteOnce]
-  resources: {requests: {storage: 50Gi}}
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: browl-sandbox
-spec:
-  accessModes: [ReadWriteOnce]
-  resources: {requests: {storage: 1Gi}}
----
-# The app, with Fuseki beside it.
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: browl
-spec:
-  replicas: 1
-  strategy: {type: Recreate}
-  selector:
-    matchLabels: {app.kubernetes.io/name: browl, app.kubernetes.io/component: app}
-  template:
-    metadata:
-      labels: {app.kubernetes.io/name: browl, app.kubernetes.io/component: app}
-    spec:
-      nodeSelector: {browl.example.org/node: "true"}
-      automountServiceAccountToken: false
-      enableServiceLinks: false
-      securityContext:
-        runAsUser: 10001
-        runAsGroup: 10001
-        fsGroup: 10001
-        fsGroupChangePolicy: OnRootMismatch # else a recursive chown of the store at every start
-        runAsNonRoot: true
-        seccompProfile: {type: RuntimeDefault}
-      initContainers:
-        - name: fuseki
-          image: registry.example.org/browl-fuseki:0.1.0
-          restartPolicy: Always # a native sidecar: started, and up, before the app
-          env:
-            - name: JDK_JAVA_OPTIONS
-              value: -Xmx1g -XX:MaxDirectMemorySize=128m
-            - name: FUSEKI_HOST # only the pod's own containers can reach it
-              value: 127.0.0.1
-          resources:
-            requests: {memory: 1536Mi}
-            limits: {memory: 1536Mi}
-          volumeMounts:
-            - {name: fuseki, mountPath: /fuseki}
-          # Probes run in the container, as Fuseki listens only on 127.0.0.1.
-          startupProbe:
-            exec: {command: [curl, -fsS, "http://127.0.0.1:3030/$/ping"]}
-            periodSeconds: 2
-            timeoutSeconds: 5
-            failureThreshold: 60
-          livenessProbe:
-            exec: {command: [curl, -fsS, "http://127.0.0.1:3030/$/ping"]}
-            periodSeconds: 30
-            timeoutSeconds: 5
-            failureThreshold: 6
-      containers:
-        - name: app
-          image: registry.example.org/browl-app:0.1.0
-          ports:
-            - {name: http, containerPort: 8000}
-          envFrom:
-            - configMapRef: {name: browl-config}
-            - secretRef: {name: browl-secrets}
-          env:
-            - {name: FUSEKI_URL, value: "http://localhost:3030"}
-            - {name: SANDBOX_SOCKET, value: /sandbox/runner.sock}
-          resources:
-            requests: {memory: 2Gi}
-          volumeMounts:
-            - {name: data, mountPath: /data}
-            - {name: jobs, mountPath: /data/uploads}
-            - {name: sandbox, mountPath: /sandbox}
-            - {name: fuseki, mountPath: /fuseki}
-          startupProbe:
-            httpGet: {path: /_browl/health, port: http}
-            periodSeconds: 2
-            timeoutSeconds: 5
-            failureThreshold: 60
-          livenessProbe:
-            httpGet: {path: /_browl/health, port: http}
-            periodSeconds: 30
-            timeoutSeconds: 5
-            failureThreshold: 6
-      volumes:
-        - {name: data, persistentVolumeClaim: {claimName: browl-data}}
-        - {name: jobs, persistentVolumeClaim: {claimName: browl-jobs}}
-        - {name: sandbox, persistentVolumeClaim: {claimName: browl-sandbox}}
-        - {name: fuseki, persistentVolumeClaim: {claimName: browl-fuseki}}
----
-# The sandbox: on the app's node, to share its volumes; no network (the NetworkPolicy below).
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: browl-sandbox
-spec:
-  replicas: 1
-  strategy: {type: Recreate}
-  selector:
-    matchLabels: {app.kubernetes.io/name: browl, app.kubernetes.io/component: sandbox}
-  template:
-    metadata:
-      labels: {app.kubernetes.io/name: browl, app.kubernetes.io/component: sandbox}
-    spec:
-      nodeSelector: {browl.example.org/node: "true"}
-      automountServiceAccountToken: false
-      enableServiceLinks: false
-      shareProcessNamespace: true # the pause process reaps orphaned tool processes
-      securityContext:
-        runAsUser: 10001
-        runAsGroup: 10001
-        fsGroup: 10001
-        runAsNonRoot: true
-        seccompProfile: {type: RuntimeDefault}
-      containers:
-        - name: sandbox
-          image: registry.example.org/browl-app:0.1.0
-          command: [python, -m, browl.sandbox, /sandbox/runner.sock]
-          workingDir: /tmp
-          env:
-            - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
-          securityContext:
-            readOnlyRootFilesystem: true
-            allowPrivilegeEscalation: false
-            capabilities: {drop: [ALL]}
-          resources:
-            # REASONER_MAX_HEAP plus about 0.5 GiB.
-            requests: {memory: 8704Mi}
-            limits: {memory: 8704Mi}
-          volumeMounts:
-            - {name: jobs, mountPath: /data/uploads}
-            - {name: sandbox, mountPath: /sandbox}
-            - {name: tmp, mountPath: /tmp}
-          # Readiness only: a liveness failure would restart the runner, failing a load's reasoning.
-          readinessProbe:
-            exec:
-              command: [python, -c, "import socket; socket.socket(socket.AF_UNIX).connect('/sandbox/runner.sock')"]
-            periodSeconds: 30
-            timeoutSeconds: 5
-      volumes:
-        - {name: jobs, persistentVolumeClaim: {claimName: browl-jobs}}
-        - {name: sandbox, persistentVolumeClaim: {claimName: browl-sandbox}}
-        - {name: tmp, emptyDir: {medium: Memory, sizeLimit: 256Mi}}
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: browl-sandbox-isolated
-spec:
-  podSelector:
-    matchLabels: {app.kubernetes.io/name: browl, app.kubernetes.io/component: sandbox}
-  policyTypes: [Ingress, Egress] # no rules: nothing in, nothing out, not even DNS
----
-# Only the website's port is reachable; Fuseki's isn't. Egress stays open, to fetch imports and for Google sign-in.
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: browl-app-ingress
-spec:
-  podSelector:
-    matchLabels: {app.kubernetes.io/name: browl, app.kubernetes.io/component: app}
-  policyTypes: [Ingress]
-  ingress:
-    - ports:
-        - {port: 8000}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: browl
-spec:
-  selector: {app.kubernetes.io/name: browl, app.kubernetes.io/component: app}
-  ports:
-    - {name: http, port: 80, targetPort: http}
----
-# For ingress-nginx; other controllers have their own ways to lift the body limit and buffering.
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: browl
-  annotations:
-    nginx.ingress.kubernetes.io/proxy-body-size: "0"
-    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-spec:
-  rules:
-    - host: ontology.example.org
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service: {name: browl, port: {name: http}}
-  tls:
-    - hosts: [ontology.example.org]
-      secretName: browl-tls
-```
-
-Notes:
-
-- Until the sandbox is up, a load that needs it (a reasoner, or an OWL Functional Syntax file or import) fails;
-  browsing doesn't need it.
-- To move browl to another node, scale both Deployments to 0, move the label, and scale them back to 1.
-- Back up the `browl-data` and `browl-fuseki` volumes with your cluster's volume snapshots or backup tool, ideally with
-  the app scaled to 0. As [above](#backups), a backup of `browl-data` holds the session key: store it as a secret.
-
-### Checking the isolation
-
-A NetworkPolicy that isn't enforced fails silently, so check the sandbox once deployed. This must fail, with a timeout
-or an unreachable network:
-
-```sh
-kubectl exec deploy/browl-sandbox -- \
-  python -c "import socket; socket.create_connection(('1.1.1.1', 443), 3)"
-```
-
-If it connects, the sandbox has network access: enable NetworkPolicy enforcement in your cluster before uploading
-ontologies.
 
 ## Troubleshooting
 
@@ -598,7 +300,6 @@ ontologies.
 | Google says `redirect_uri_mismatch` | The OAuth client doesn't list this deployment's redirect URI exactly, as [Deploying with Docker Compose](#deploying-with-docker-compose), step 2, gives it |
 | A load fails, "interrupted by restart" or "interrupted by shutdown" | The app was restarted or recreated during the load. Upload again, and don't restart the app while a load runs |
 | The site stays "not available" after a restart, and the status page says the rebuild was interrupted | An interrupted rebuild isn't retried. Upload the ontology again |
-| Kubernetes: the app's pod hangs in `ContainerCreating` with a "Multi-Attach error" | The app's pod and the sandbox's are on different nodes. Pin both to one node, as the manifests do |
 | Fuseki restarts during a load or under load, logging `OutOfMemoryError` | Raise `FUSEKI_HEAP`, and `FUSEKI_MEM_LIMIT` with it if set |
 | A load fails at reasoning with "memory limit" | Raise `REASONER_MAX_HEAP`, and `SANDBOX_MEM_LIMIT` (or the sandbox's memory limit) with it |
 | A load fails at reasoning with "killed" | The sandbox's container limit is below `REASONER_MAX_HEAP` plus about 0.5 GiB; raise it |

@@ -5,7 +5,8 @@ This manual covers browl 0.1.0. It has a part for each of the three kinds of peo
 
 | Part | For | Covers |
 | --- | --- | --- |
-| [Operating browl](operator.md) | **Operators**, who deploy and configure the service | Requirements, deploying with Docker Compose or Kubernetes, settings, HTTPS, upgrades, backups, troubleshooting |
+| [Operating browl](operator.md) | **Operators**, who deploy and configure the service | Requirements, deploying with Docker Compose, settings, HTTPS, upgrades, backups, troubleshooting |
+| [Deploying on Kubernetes](kubernetes.md) | **Operators** using Kubernetes or another platform | What a platform must provide, images, example manifests, checking the sandbox's isolation |
 | [Administering browl](admin.md) | **Admins**, who sign in to manage the ontology | Signing in, uploading an ontology, reasoning, following a load, imports, managing admins |
 | [Using browl](user.md) | **Users**, who browse the ontology | Entity pages, hierarchy trees, search, URLs |
 

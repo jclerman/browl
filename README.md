@@ -38,8 +38,8 @@ implied by its IRI.
 ## Documentation
 
 The [manual](docs/manual/README.md) has a part for each kind of reader: [operators](docs/manual/operator.md), who
-deploy browl (with Docker Compose or Kubernetes); [admins](docs/manual/admin.md), who load the ontology; and
-[users](docs/manual/user.md), who browse it.
+deploy browl (with Docker Compose or [Kubernetes](docs/manual/kubernetes.md)); [admins](docs/manual/admin.md), who
+load the ontology; and [users](docs/manual/user.md), who browse it.
 
 ## Development
 
