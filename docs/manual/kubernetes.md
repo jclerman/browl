@@ -55,7 +55,7 @@ against your cluster. Any platform must provide what Compose does:
 Build the images from the release and push them to a registry your cluster can pull from:
 
 ```sh
-git checkout v0.1.0
+git checkout 0.1.0
 docker build -t registry.example.org/browl-app:0.1.0 .
 docker build -t registry.example.org/browl-fuseki:0.1.0 docker/fuseki
 docker push registry.example.org/browl-app:0.1.0

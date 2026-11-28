@@ -72,7 +72,7 @@ browl doesn't publish images yet; Compose builds them from the source.
    ```sh
    git clone https://github.com/jclerman/browl.git
    cd browl
-   git checkout v0.1.0
+   git checkout 0.1.0
    ```
 
 2. **Register Google sign-in** as [`AUTHENTICATION.md`](../AUTHENTICATION.md) says. The redirect URI to register is
@@ -222,7 +222,7 @@ Check out the new release and rebuild:
 
 ```sh
 git fetch --tags
-git checkout v0.2.0   # the release you're upgrading to
+git checkout 0.2.0   # the release you're upgrading to
 docker compose up -d --build
 ```
 
