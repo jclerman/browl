@@ -61,8 +61,9 @@ cp .env.example .env    # development settings: sign-in off
 docker compose up --build
 ```
 
-The site is then at <http://localhost:8000/>. The settings are described in `.env.example` and
-[`docs/DESIGN.md`](docs/DESIGN.md) §2.12. To try sign-in itself, register a Google OAuth client as
+The site is then at <http://localhost:8000/>. The settings are described in the operator manual
+([`docs/manual/operator.md`](docs/manual/operator.md#settings)), and all of them in [`docs/DESIGN.md`](docs/DESIGN.md)
+§2.12. To try sign-in itself, register a Google OAuth client as
 [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md) says.
 
 ## Making changes

@@ -1,0 +1,224 @@
+# A small demo ontology for the manual's screenshots (scripts/manual_screenshots.py): a title, labels, synonyms,
+# definitions with a source, a deprecated class, a property hierarchy, a defined class for the reasoner, and
+# individuals.
+@prefix : <https://example.org/pets/> .
+@prefix pets: <https://example.org/pets/> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix obo: <http://purl.obolibrary.org/obo/> .
+@prefix oboInOwl: <http://www.geneontology.org/formats/oboInOwl#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<https://example.org/pets> a owl:Ontology ;
+    dcterms:title "Companion Animals Ontology"@en ;
+    dcterms:description "A small ontology of pets, their owners and what they eat, for browl's manual."@en ;
+    dcterms:license <https://creativecommons.org/publicdomain/zero/1.0/> ;
+    owl:versionInfo "2026-11-27" .
+
+obo:IAO_0000115 a owl:AnnotationProperty ;
+    rdfs:label "definition"@en .
+
+oboInOwl:hasExactSynonym a owl:AnnotationProperty ;
+    rdfs:label "has exact synonym"@en .
+
+oboInOwl:hasDbXref a owl:AnnotationProperty ;
+    rdfs:label "database cross-reference"@en .
+
+# Properties
+
+:relatedTo a owl:ObjectProperty ;
+    rdfs:label "related to"@en .
+
+:hasOwner a owl:ObjectProperty ;
+    rdfs:subPropertyOf :relatedTo ;
+    rdfs:label "has owner"@en ;
+    rdfs:domain :Animal ;
+    rdfs:range :Person ;
+    owl:inverseOf :owns .
+
+:owns a owl:ObjectProperty ;
+    rdfs:subPropertyOf :relatedTo ;
+    rdfs:label "owns"@en .
+
+:eats a owl:ObjectProperty ;
+    rdfs:subPropertyOf :relatedTo ;
+    rdfs:label "eats"@en ;
+    rdfs:domain :Animal .
+
+:hasPart a owl:ObjectProperty , owl:TransitiveProperty ;
+    rdfs:label "has part"@en .
+
+:hasAge a owl:DatatypeProperty , owl:FunctionalProperty ;
+    rdfs:label "has age"@en ;
+    rdfs:range xsd:nonNegativeInteger .
+
+:hasName a owl:DatatypeProperty ;
+    rdfs:label "has name"@en ;
+    rdfs:range xsd:string .
+
+# Classes
+
+:LivingThing a owl:Class ;
+    rdfs:label "living thing"@en ;
+    oboInOwl:hasExactSynonym "organism"@en .
+
+:Animal a owl:Class ;
+    rdfs:subClassOf :LivingThing ;
+    rdfs:label "animal"@en , "animal"@fr , "Tier"@de ;
+    obo:IAO_0000115 "A living thing that feeds on organic matter and can move of its own accord."@en .
+
+:Person a owl:Class ;
+    rdfs:subClassOf :Mammal ;
+    rdfs:label "person"@en ;
+    oboInOwl:hasExactSynonym "human"@en .
+
+:Vertebrate a owl:Class ;
+    rdfs:subClassOf :Animal ;
+    rdfs:label "vertebrate"@en .
+
+:Mammal a owl:Class ;
+    rdfs:subClassOf :Vertebrate ;
+    rdfs:label "mammal"@en ;
+    obo:IAO_0000115 "A vertebrate that feeds its young with milk."@en .
+
+:Bird a owl:Class ;
+    rdfs:subClassOf :Vertebrate ;
+    rdfs:label "bird"@en .
+
+:Fish a owl:Class ;
+    rdfs:subClassOf :Vertebrate ;
+    rdfs:label "fish"@en .
+
+:Reptile a owl:Class ;
+    rdfs:subClassOf :Vertebrate ;
+    rdfs:label "reptile"@en .
+
+:Dog a owl:Class ;
+    rdfs:subClassOf :Mammal , [ a owl:Restriction ; owl:onProperty :eats ; owl:someValuesFrom :PetFood ] ;
+    rdfs:label "dog"@en , "chien"@fr , "Hund"@de ;
+    oboInOwl:hasExactSynonym "domestic dog"@en , "Canis familiaris"@la ;
+    oboInOwl:hasDbXref "NCBITaxon:9615" ;
+    obo:IAO_0000115 "A domesticated mammal descended from the wolf, kept as a pet or for work."@en .
+
+# The definition's source, as an axiom annotation.
+[] a owl:Axiom ;
+    owl:annotatedSource :Dog ;
+    owl:annotatedProperty obo:IAO_0000115 ;
+    owl:annotatedTarget "A domesticated mammal descended from the wolf, kept as a pet or for work."@en ;
+    oboInOwl:hasDbXref "https://en.wikipedia.org/wiki/Dog" .
+
+:Cat a owl:Class ;
+    rdfs:subClassOf :Mammal , [ a owl:Restriction ; owl:onProperty :eats ; owl:someValuesFrom :PetFood ] ;
+    rdfs:label "cat"@en , "chat"@fr , "Katze"@de ;
+    oboInOwl:hasExactSynonym "domestic cat"@en , "Felis catus"@la ;
+    obo:IAO_0000115 "A small domesticated carnivorous mammal."@en ;
+    owl:disjointWith :Dog .
+
+:Rabbit a owl:Class ;
+    rdfs:subClassOf :Mammal ;
+    rdfs:label "rabbit"@en .
+
+:Hamster a owl:Class ;
+    rdfs:subClassOf :Mammal ;
+    rdfs:label "hamster"@en .
+
+:Parrot a owl:Class ;
+    rdfs:subClassOf :Bird ;
+    rdfs:label "parrot"@en .
+
+:Canary a owl:Class ;
+    rdfs:subClassOf :Bird ;
+    rdfs:label "canary"@en .
+
+:Goldfish a owl:Class ;
+    rdfs:subClassOf :Fish ;
+    rdfs:label "goldfish"@en .
+
+:Tortoise a owl:Class ;
+    rdfs:subClassOf :Reptile ;
+    rdfs:label "tortoise"@en .
+
+:Puppy a owl:Class ;
+    rdfs:subClassOf :Dog ;
+    rdfs:label "puppy"@en ;
+    obo:IAO_0000115 "A young dog."@en .
+
+:Kitten a owl:Class ;
+    rdfs:subClassOf :Cat ;
+    rdfs:label "kitten"@en ;
+    obo:IAO_0000115 "A young cat."@en .
+
+:Hound a owl:Class ;
+    rdfs:subClassOf :Dog ;
+    rdfs:label "hound"@en .
+
+:Terrier a owl:Class ;
+    rdfs:subClassOf :Dog ;
+    rdfs:label "terrier"@en .
+
+:Retriever a owl:Class ;
+    rdfs:subClassOf :Dog ;
+    rdfs:label "retriever"@en .
+
+# Defined by its owner: the reasoner finds the animals that are pets.
+:Pet a owl:Class ;
+    owl:equivalentClass [
+        a owl:Class ;
+        owl:intersectionOf ( :Animal [ a owl:Restriction ; owl:onProperty :hasOwner ; owl:someValuesFrom :Person ] )
+    ] ;
+    rdfs:label "pet"@en ;
+    oboInOwl:hasExactSynonym "companion animal"@en ;
+    obo:IAO_0000115 "An animal that has an owner."@en .
+
+:HouseDog a owl:Class ;
+    rdfs:subClassOf :Dog , [ a owl:Restriction ; owl:onProperty :hasOwner ; owl:someValuesFrom :Person ] ;
+    rdfs:label "house dog"@en .
+
+:Food a owl:Class ;
+    rdfs:label "food"@en .
+
+:PetFood a owl:Class ;
+    rdfs:subClassOf :Food ;
+    rdfs:label "pet food"@en .
+
+:Kibble a owl:Class ;
+    rdfs:subClassOf :PetFood ;
+    rdfs:label "kibble"@en ;
+    oboInOwl:hasExactSynonym "dry food"@en .
+
+:Tail a owl:Class ;
+    rdfs:label "tail"@en .
+
+:Whisker a owl:Class ;
+    rdfs:label "whisker"@en .
+
+:Hamster rdfs:subClassOf [ a owl:Restriction ; owl:onProperty :eats ; owl:someValuesFrom :PetFood ] .
+:Cat rdfs:subClassOf [ a owl:Restriction ; owl:onProperty :hasPart ; owl:someValuesFrom :Whisker ] .
+:Mammal rdfs:subClassOf [ a owl:Restriction ; owl:onProperty :hasPart ; owl:someValuesFrom :Tail ] .
+
+:Lapdog a owl:Class ;
+    rdfs:subClassOf :Dog ;
+    rdfs:label "lapdog"@en ;
+    owl:deprecated true ;
+    rdfs:comment "Obsolete: not a breed group. Use dog."@en .
+
+# Individuals
+
+:alice a owl:NamedIndividual , :Person ;
+    rdfs:label "Alice"@en ;
+    :hasName "Alice" .
+
+:rex a owl:NamedIndividual , :Retriever ;
+    rdfs:label "Rex"@en ;
+    :hasOwner :alice ;
+    :hasAge 4 ;
+    :eats :kibbleBag .
+
+:tom a owl:NamedIndividual , :Cat ;
+    rdfs:label "Tom"@en ;
+    :hasOwner :alice ;
+    :hasAge 7 .
+
+:kibbleBag a owl:NamedIndividual , :Kibble ;
+    rdfs:label "bag of kibble"@en .

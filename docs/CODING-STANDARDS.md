@@ -34,6 +34,7 @@ instructions specific to coding agents. Requirements and architecture are in [`D
 - **mypy** for type checking (see [Typing](#typing)).
 - **yamllint** (strict, line length 120) and **actionlint** for YAML and GitHub Actions workflows.
 - **markdownlint-cli2** for Markdown, line length 120 (tables exempt).
+- **lychee** for Markdown's links within the repo and their `#` anchors (`--offline`: web links aren't checked).
 - HTML templates, CSS and JavaScript aren't linted yet. Add linters for them once there's more than a little of each.
 
 ## Typing
@@ -87,6 +88,9 @@ instructions specific to coding agents. Requirements and architecture are in [`D
 - **Keep internal documentation terse.** Don't document what the code makes obvious, or could with better naming or
   structure; improve the code instead. Comments explain why, not what.
 - When a change alters a design decision, update `docs/DESIGN.md` in the same PR.
+- When a change alters a setting, a deployment step or what a page shows, update the manual (`docs/manual/`) in the
+  same PR, and retake its screenshots if the pages they show changed (`scripts/manual_screenshots.py`). Remove a
+  manual's "not yet" note when the feature lands.
 
 ## Runtime conventions
 
